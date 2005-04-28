@@ -51,10 +51,41 @@ to be moved to a permanent storage device.
 This normally results in all in-core modified copies
 of buffers for the associated file to be written to a disk.
 .Pp
-.Fn Fsync
-should be used by programs that require a file to be
-in a known state, for example, in building a simple transaction
-facility.
+Note that while
+.Fn fsync
+will flush all data from the host
+to the drive (i.e. the "permanent storage
+device"), the
+drive itself may not physically
+write the data to the
+platters for quite some time
+and it may be written in an
+out-of-order sequence.
+.Pp
+Specifically, if the drive loses power
+or the OS crashes,
+the application
+may find that only some or none of their data was
+written.  The disk drive may also re-order
+the data so that later writes
+may be present while earlier writes are not.
+.Pp
+This is not a theoretical
+edge case.  This scenario is easily reproduced
+with real world workloads and drive
+power failures.
+.Pp
+For applications that require tighter guarantess about
+the integrity of their data, MacOS X provides the
+F_FULLFSYNC fcntl.  The F_FULLFSYNC fcntl asks the
+drive to flush all buffered data to permanent
+storage.  Applications such as databases that require
+a strict ordering of writes should use F_FULLFSYNC to
+ensure their data is written in the order they expect.
+Please see
+.Xr fcntl 2
+for more detail.
+.Pp
 .Sh RETURN VALUES
 A 0 value is returned on success.  A -1 value indicates
 an error.
@@ -75,7 +106,8 @@ An I/O error occurred while reading from or writing to the file system.
 .Sh SEE ALSO
 .Xr sync 2 ,
 .Xr sync 8 ,
-.Xr update 8
+.Xr update 8 ,
+.Xr fcntl 2
 .Sh HISTORY
 The
 .Fn fsync

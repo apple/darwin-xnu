@@ -53,8 +53,10 @@
 #include <sys/mbuf.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
+#include <net/if_dl.h>
 #include <sys/socketvar.h>
 #include <sys/malloc.h>
+#include <sys/domain.h>
 #include <sys/sockio.h>
 #include <vm/vm_kern.h>         /* for kernel_map */
 
@@ -125,6 +127,7 @@ extern asp_scb_t *scb_used_list;
 extern CCB *adsp_inputQ[];
 extern CCB *ccb_used_list;
 extern at_ddp_stats_t at_ddp_stats;
+extern lck_mtx_t * atalk_mutex;
 
 /* protos */
 extern snmpAarpEnt_t * getAarp(int *);
@@ -305,7 +308,7 @@ int elap_wput(gref, m)
 	register ioc_t		*iocbp;
 	register at_if_cfg_t	*cfgp;
 	at_elap_stats_t		*statsp;
-	int error, i;
+	int 		i;
 	int			(*func)();
 	gbuf_t		*tmpm;
 	at_ifaddr_t *patp;
@@ -774,7 +777,7 @@ elap_dataput(m, elapp, addr_flag, addr)
      char *addr;
 {
 	register int		size;
-	int			error;
+	int			error = 0;
 	extern	int		zip_type_packet();
 	struct	etalk_addr	dest_addr;
 	struct	atalk_addr	dest_at_addr;
@@ -901,9 +904,11 @@ static int elap_online1(elapp)
 		return ENOENT;
 
 	elapp->startup_inprogress = TRUE;
-	if (! (elapp->startup_error = re_aarp(elapp)))
-		(void)tsleep(&elapp->startup_inprogress, PSOCK | PCATCH, 
+	if (! (elapp->startup_error = re_aarp(elapp))) {
+		lck_mtx_assert(atalk_mutex, LCK_MTX_ASSERT_OWNED);
+		(void)msleep(&elapp->startup_inprogress, atalk_mutex, PSOCK | PCATCH, 
 			     "elap_online1", 0);
+	}
 
 	/* then later, after some timeouts AARPwakeup() is called */
 
@@ -1004,7 +1009,8 @@ int elap_online3(elapp)
 
 	/* then later, after some timeouts AARPwakeup() is called */
 
-	(void)tsleep(&elapp->startup_inprogress, PSOCK | PCATCH, 
+	lck_mtx_assert(atalk_mutex, LCK_MTX_ASSERT_OWNED);
+	(void)msleep(&elapp->startup_inprogress, atalk_mutex, PSOCK | PCATCH, 
 		     "elap_online3", 0);
 	return(elapp->startup_error);
 } /* elap_online3 */
@@ -1041,6 +1047,7 @@ void elap_offline(elapp)
 		ATENABLE(s, ddpinp_lock);
 
 		/* make sure no zip timeouts are left running */
+		elapp->ifGNIScheduled = 0;
 		untimeout(zip_sched_getnetinfo, elapp);
 	}
 	ddp_rem_if(elapp);
@@ -1251,6 +1258,7 @@ int routerStart(keP)
 {
 	register at_ifaddr_t *ifID;
 	int error;
+	struct timespec ts;
 
 	if (! ifID_home)
 		return(EINVAL);
@@ -1274,12 +1282,18 @@ int routerStart(keP)
 	dPrintf(D_M_ELAP, D_L_STARTUP_INFO,
 		("router_start: waiting 20 sec before starting up\n"));
 
+	lck_mtx_assert(atalk_mutex, LCK_MTX_ASSERT_OWNED);
 	/* sleep for 20 seconds */
+
+	/* the vaue of 10n terms of hz is 100ms */
+	ts.tv_sec = 20;
+	ts.tv_nsec = 0;
+	
 	if ((error = 
 	     /* *** eventually this will be the ifID for the interface
 		being brought up in router mode *** */
-	     tsleep(&ifID_home->startup_inprogress, 
-		    PSOCK | PCATCH, "routerStart", 20 * SYS_HZ))
+		msleep(&ifID_home->startup_inprogress, atalk_mutex,
+		    PSOCK | PCATCH, "routerStart", &ts))
 	    != EWOULDBLOCK) {
 /*
 		if (!error)
@@ -1428,7 +1442,9 @@ static int elap_trackMcast(patp, func, addr)
 	u_char c;
 	switch(patp->aa_ifp->if_type) {
 	case IFT_ETHER: 
-	case IFT_FDDI: 
+	case IFT_FDDI:
+	case IFT_L2VLAN:
+	case IFT_IEEE8023ADLAG: /* bonded ethernet */
 		/* set addr to point to unique part of addr */
 		c = addr[5];
 
@@ -1515,6 +1531,8 @@ static getSnmpCfg(snmp)
 			ifc->ifc_addrSize = getPhysAddrSize(i);
 			switch (elapp->aa_ifp->if_type) {
 				case IFT_ETHER:
+                                case IFT_L2VLAN:
+				case IFT_IEEE8023ADLAG: /* bonded ethernet */
 					ifc->ifc_type = SNMP_TYPE_ETHER2;
 					break;
 				case IFT_ISO88025: /* token ring */
@@ -1570,7 +1588,7 @@ int at_reg_mcast(ifID, data)
      caddr_t data;
 {
 	struct ifnet *nddp = ifID->aa_ifp;
-	struct sockaddr sa;
+	struct sockaddr_dl sdl;
 
 	if (*(int *)data) {
 		if (!nddp) {
@@ -1582,16 +1600,22 @@ int at_reg_mcast(ifID, data)
 			return(0);
 
 		/* this is for ether_output */
-		sa.sa_family = AF_UNSPEC;
-		sa.sa_len = 2 + sizeof(struct etalk_addr);
-		bcopy (data, &sa.sa_data[0], sizeof(struct etalk_addr));
+		bzero(&sdl, sizeof(sdl));
+		sdl.sdl_family = AF_LINK;
+		sdl.sdl_alen = sizeof(struct etalk_addr);
+		sdl.sdl_len = offsetof(struct sockaddr_dl, sdl_data) 
+		    + sizeof(struct etalk_addr);
+		bcopy(data, sdl.sdl_data, sizeof(struct etalk_addr));
+		/* these next two lines should not really be needed XXX */
+		sdl.sdl_index = nddp->if_index;
+		sdl.sdl_type = IFT_ETHER;
 
 		dPrintf(D_M_PAT, D_L_STARTUP,
 			("pat_mcast: adding multicast %08x%04x ifID:0x%x\n",
 			 *(unsigned*)data, (*(unsigned *)(data+2))&0x0000ffff, 
 			 (unsigned)ifID));
 
-		if (if_addmulti(nddp, &sa, 0))
+		if (if_addmulti(nddp, &sdl, 0))
 			return -1;
 	}
 	return 0;
@@ -1603,7 +1627,7 @@ int at_unreg_mcast(ifID, data)
      caddr_t data;
 {
 	struct ifnet *nddp = ifID->aa_ifp;
-	struct sockaddr sa;
+	struct sockaddr_dl sdl;
 
 	if (*(int *)data) {
 		if (!nddp) {
@@ -1614,9 +1638,15 @@ int at_unreg_mcast(ifID, data)
 		elap_trackMcast(ifID, MCAST_TRACK_DELETE, data);
 
 		/* this is for ether_output */
-		sa.sa_family = AF_UNSPEC;
-		sa.sa_len = 2 + sizeof(struct etalk_addr);
-		bcopy (data, &sa.sa_data[0], sizeof(struct etalk_addr));
+		bzero(&sdl, sizeof(sdl));
+		sdl.sdl_family = AF_LINK;
+		sdl.sdl_alen = sizeof(struct etalk_addr);
+		sdl.sdl_len = offsetof(struct sockaddr_dl, sdl_data) 
+		    + sizeof(struct etalk_addr);
+		bcopy(data, sdl.sdl_data, sizeof(struct etalk_addr));
+		/* these next two lines should not really be needed XXX */
+		sdl.sdl_index = nddp->if_index;
+		sdl.sdl_type = IFT_ETHER;
 
 		dPrintf(D_M_PAT, D_L_STARTUP,
 			("pat_mcast: deleting multicast %08x%04x ifID:0x%x\n",
@@ -1624,7 +1654,7 @@ int at_unreg_mcast(ifID, data)
 			 (unsigned)ifID));
 		bzero(data, sizeof(struct etalk_addr));
 
-		if (if_delmulti(nddp, &sa))
+		if (if_delmulti(nddp, &sdl))
 			return -1;
 	}
 	return 0;

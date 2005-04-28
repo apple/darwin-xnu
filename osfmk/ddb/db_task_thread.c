@@ -70,7 +70,7 @@
 #define DB_MAX_PSETS	0x10000		/* max # of processor sets */
 
 task_t		db_default_task;	/* default target task */
-thread_act_t	db_default_act;		/* default target thr_act */
+thread_t	db_default_act;		/* default target thr_act */
 
 
 
@@ -78,7 +78,7 @@ thread_act_t	db_default_act;		/* default target thr_act */
  */
 task_t db_lookup_task_id(register int task_id);
 
-static thread_act_t db_lookup_act_id(
+static thread_t db_lookup_act_id(
 	task_t	 task,
 	register int thread_id);
 
@@ -115,15 +115,15 @@ db_lookup_task(task_t target_task)
 int
 db_lookup_task_act(
 	task_t		task,
-	thread_act_t	target_act)
+	thread_t	target_act)
 {
-	register thread_act_t thr_act;
+	register thread_t thr_act;
 	register int act_id;
 
 	act_id = 0;
 	if (queue_first(&task->threads) == 0)
 	    return(-1);
-	queue_iterate(&task->threads, thr_act, thread_act_t, task_threads) {
+	queue_iterate(&task->threads, thr_act, thread_t, task_threads) {
 	    if (target_act == thr_act)
 		return(act_id);
 	    if (act_id++ >= DB_MAX_THREADID)
@@ -137,7 +137,7 @@ db_lookup_task_act(
  * as the thread id.
  */
 int
-db_lookup_act(thread_act_t target_act)
+db_lookup_act(thread_t target_act)
 {
 	register int act_id;
 	register task_t task;
@@ -166,7 +166,7 @@ db_lookup_act(thread_act_t target_act)
  */
 int force_act_lookup = 0;
 boolean_t
-db_check_act_address_valid(thread_act_t thr_act)
+db_check_act_address_valid(thread_t thr_act)
 {
 	if (!force_act_lookup && db_lookup_act(thr_act) < 0) {
 	    db_printf("Bad thr_act address 0x%x\n", thr_act);
@@ -202,23 +202,23 @@ db_lookup_task_id(register task_id)
 /*
  * convert (task_id, act_id) pair to thr_act address
  */
-static thread_act_t
+static thread_t
 db_lookup_act_id(
 	task_t	 task,
 	register int act_id)
 {
-	register thread_act_t thr_act;
+	register thread_t thr_act;
 
 	
 	if (act_id > DB_MAX_THREADID)
-	    return(THR_ACT_NULL);
+	    return(THREAD_NULL);
 	if (queue_first(&task->threads) == 0)
-	    return(THR_ACT_NULL);
-	queue_iterate(&task->threads, thr_act, thread_act_t, task_threads) {
+	    return(THREAD_NULL);
+	queue_iterate(&task->threads, thr_act, thread_t, task_threads) {
 	    if (act_id-- <= 0)
 		return(thr_act);
 	}
-	return(THR_ACT_NULL);
+	return(THREAD_NULL);
 }
 
 /*
@@ -227,15 +227,15 @@ db_lookup_act_id(
  */
 boolean_t
 db_get_next_act(
-	thread_act_t	*actp,
+	thread_t	*actp,
 	int		position)
 {
 	db_expr_t	value;
-	thread_act_t	thr_act;
+	thread_t	thr_act;
 
-	*actp = THR_ACT_NULL;
+	*actp = THREAD_NULL;
 	if (db_expression(&value)) {
-	    thr_act = (thread_act_t) value;
+	    thr_act = (thread_t) value;
 	    if (!db_check_act_address_valid(thr_act)) {
 		db_flush_lex();
 		return(FALSE);
@@ -256,7 +256,7 @@ void
 db_init_default_act(void)
 {
 	if (db_lookup_act(db_default_act) < 0) {
-	    db_default_act = THR_ACT_NULL;
+	    db_default_act = THREAD_NULL;
 	    db_default_task = TASK_NULL;
 	} else
 	    db_default_task = db_default_act->task;
@@ -273,7 +273,7 @@ db_set_default_act(
 	int			flag,
 	db_var_aux_param_t	ap)			/* unused */
 {
-	thread_act_t	thr_act;
+	thread_t	thr_act;
 	int		task_id;
 	int		act_id;
 
@@ -293,8 +293,8 @@ db_set_default_act(
 	    *valuep = (db_expr_t) db_default_act;
 	    return(0);
 	}
-	thr_act = (thread_act_t) *valuep;
-	if (thr_act != THR_ACT_NULL && !db_check_act_address_valid(thr_act))
+	thr_act = (thread_t) *valuep;
+	if (thr_act != THREAD_NULL && !db_check_act_address_valid(thr_act))
 	    db_error(0);
 	    /* NOTREACHED */
 	db_default_act = thr_act;
@@ -314,7 +314,7 @@ db_get_task_act(
 	db_var_aux_param_t	ap)
 {
 	task_t	 		task;
-	thread_act_t		thr_act;
+	thread_t		thr_act;
 	int	 		task_id;
 
 	if (flag == DB_VAR_SHOW) {
@@ -338,7 +338,7 @@ db_get_task_act(
 	    *valuep = (db_expr_t) task;
 	    return(0);
 	}
-	if ((thr_act = db_lookup_act_id(task, ap->suffix[1])) == THR_ACT_NULL){
+	if ((thr_act = db_lookup_act_id(task, ap->suffix[1])) == THREAD_NULL){
 	    db_printf("no such thr_act($task%d.%d)\n", 
 					ap->suffix[0], ap->suffix[1]);
 	    db_error(0);

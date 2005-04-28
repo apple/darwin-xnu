@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -30,13 +30,13 @@
  *			machine-independent clock service layer.
  */
 
-#include <cpus.h>
 #include <mach_host.h>
 
+#include <mach/mach_types.h>
 #include <mach/boolean.h>
 #include <mach/processor_info.h>
 #include <mach/vm_param.h>
-#include <machine/mach_param.h>
+
 #include <kern/cpu_number.h>
 #include <kern/misc_protos.h>
 #include <kern/lock.h>
@@ -44,15 +44,20 @@
 #include <kern/spl.h>
 #include <kern/sched_prim.h>
 #include <kern/thread.h>
-#include <kern/thread_swap.h>
 #include <kern/ipc_host.h>
 #include <kern/clock.h>
 #include <kern/zalloc.h>
+
+#include <ipc/ipc_types.h>
 #include <ipc/ipc_port.h>
 
-#include <mach/mach_syscalls.h>
+#include <mach/mach_traps.h>
 #include <mach/clock_reply.h>
 #include <mach/mach_time.h>
+
+#include <mach/clock_server.h>
+#include <mach/clock_priv_server.h>
+#include <mach/host_priv_server.h>
 
 /*
  * Exported interface
@@ -72,13 +77,9 @@ static thread_call_data_t	alarm_deliver;
 decl_simple_lock_data(static,calend_adjlock)
 
 static timer_call_data_t	calend_adjcall;
-static uint64_t				calend_adjinterval, calend_adjdeadline;
+static uint64_t				calend_adjdeadline;
 
 static thread_call_data_t	calend_wakecall;
-
-/* backwards compatibility */
-int             hz = HZ;                /* GET RID OF THIS !!! */
-int             tick = (1000000 / HZ);  /* GET RID OF THIS !!! */
 
 /* external declarations */
 extern	struct clock	clock_list[];
@@ -127,8 +128,9 @@ void	calend_dowakeup(
 	splx(s);
 
 /*
- * Configure the clock system. (Not sure if we need this,
- * as separate from clock_init()).
+ *	clock_config:
+ *
+ *	Called once at boot to configure the clock subsystem.
  */
 void
 clock_config(void)
@@ -136,13 +138,12 @@ clock_config(void)
 	clock_t			clock;
 	register int 	i;
 
-	if (cpu_number() != master_cpu)
-		panic("clock_config");
+	assert(cpu_number() == master_cpu);
 
-	simple_lock_init(&ClockLock, ETAP_MISC_CLOCK);
+	simple_lock_init(&ClockLock, 0);
 	thread_call_setup(&alarm_deliver, clock_alarm_deliver, NULL);
 
-	simple_lock_init(&calend_adjlock, ETAP_MISC_CLOCK);
+	simple_lock_init(&calend_adjlock, 0);
 	timer_call_setup(&calend_adjcall, calend_adjust_call, NULL);
 
 	thread_call_setup(&calend_wakecall, calend_dowakeup, NULL);
@@ -158,12 +159,19 @@ clock_config(void)
 		}
 	}
 
+	/*
+	 * Initialize the timer callouts.
+	 */
+	timer_call_initialize();
+
 	/* start alarm sequence numbers at 0 */
 	alrm_seqno = 0;
 }
 
 /*
- * Initialize the clock system.
+ *	clock_init:
+ *
+ *	Called on a processor each time started.
  */
 void
 clock_init(void)
@@ -176,7 +184,7 @@ clock_init(void)
 	 */
 	for (i = 0; i < clock_count; i++) {
 		clock = &clock_list[i];
-		if (clock->cl_ops)
+		if (clock->cl_ops && clock->cl_ops->c_init)
 			(*clock->cl_ops->c_init)();
 	}
 }
@@ -284,15 +292,10 @@ clock_get_attributes(
 	clock_attr_t			attr,		/* OUT */
 	mach_msg_type_number_t	*count)		/* IN/OUT */
 {
-	kern_return_t	(*getattr)(
-						clock_flavor_t			flavor,
-						clock_attr_t			attr,
-						mach_msg_type_number_t	*count);
-
 	if (clock == CLOCK_NULL)
 		return (KERN_INVALID_ARGUMENT);
-	if (getattr = clock->cl_ops->c_getattr)
-		return((*getattr)(flavor, attr, count));
+	if (clock->cl_ops->c_getattr)
+		return(clock->cl_ops->c_getattr(flavor, attr, count));
 	else
 		return (KERN_FAILURE);
 }
@@ -306,12 +309,10 @@ clock_set_time(
 	mach_timespec_t	new_time)
 {
 	mach_timespec_t	*clock_time;
-	kern_return_t	(*settime)(
-						mach_timespec_t		*clock_time);
 
 	if (clock == CLOCK_NULL)
 		return (KERN_INVALID_ARGUMENT);
-	if ((settime = clock->cl_ops->c_settime) == 0)
+	if (clock->cl_ops->c_settime == NULL)
 		return (KERN_FAILURE);
 	clock_time = &new_time;
 	if (BAD_MACH_TIMESPEC(clock_time))
@@ -325,7 +326,7 @@ clock_set_time(
 	/*
 	 * Set the new time.
 	 */
-	return ((*settime)(clock_time));
+	return (clock->cl_ops->c_settime(clock_time));
 }
 
 /*
@@ -338,15 +339,10 @@ clock_set_attributes(
 	clock_attr_t			attr,
 	mach_msg_type_number_t	count)
 {
-	kern_return_t	(*setattr)(
-						clock_flavor_t			flavor,
-						clock_attr_t			attr,
-						mach_msg_type_number_t	count);
-
 	if (clock == CLOCK_NULL)
 		return (KERN_INVALID_ARGUMENT);
-	if (setattr = clock->cl_ops->c_setattr)
-		return ((*setattr)(flavor, attr, count));
+	if (clock->cl_ops->c_setattr)
+		return (clock->cl_ops->c_setattr(flavor, attr, count));
 	else
 		return (KERN_FAILURE);
 }
@@ -424,12 +420,13 @@ clock_alarm(
  */
 kern_return_t
 clock_sleep_trap(
-	mach_port_name_t	clock_name,
-	sleep_type_t		sleep_type,
-	int					sleep_sec,
-	int					sleep_nsec,
-	mach_timespec_t		*wakeup_time)
+	struct clock_sleep_trap_args *args)
 {
+	mach_port_name_t	clock_name = args->clock_name;
+	sleep_type_t		sleep_type = args->sleep_type;
+	int					sleep_sec = args->sleep_sec;
+	int					sleep_nsec = args->sleep_nsec;
+	mach_vm_address_t	wakeup_time_addr = args->wakeup_time;  
 	clock_t				clock;
 	mach_timespec_t		swtime;
 	kern_return_t		rvalue;
@@ -454,8 +451,7 @@ clock_sleep_trap(
 	 * Return current time as wakeup time.
 	 */
 	if (rvalue != KERN_INVALID_ARGUMENT && rvalue != KERN_FAILURE) {
-		copyout((char *)&swtime, (char *)wakeup_time,
-			sizeof(mach_timespec_t));
+		copyout((char *)&swtime, wakeup_time_addr, sizeof(mach_timespec_t));
 	}
 	return (rvalue);
 }	
@@ -529,7 +525,7 @@ clock_sleep_internal(
 			LOCK_CLOCK(s);
 			if (alarm->al_status != ALARM_DONE) {
 				assert(wait_result != THREAD_AWAKENED);
-				if ((alarm->al_prev)->al_next = alarm->al_next)
+				if (((alarm->al_prev)->al_next = alarm->al_next) != NULL)
 					(alarm->al_next)->al_prev = alarm->al_prev;
 				rvalue = KERN_ABORTED;
 			}
@@ -579,7 +575,7 @@ clock_alarm_intr(
 
 	LOCK_CLOCK(s);
 	alrm1 = (alarm_t) &clock->cl_alarm;
-	while (alrm2 = alrm1->al_next) {
+	while ((alrm2 = alrm1->al_next) != NULL) {
 		alarm_time = &alrm2->al_time;
 		if (CMP_MACH_TIMESPEC(alarm_time, clock_time) > 0)
 			break;
@@ -588,7 +584,7 @@ clock_alarm_intr(
 		 * Alarm has expired, so remove it from the
 		 * clock alarm list.
 		 */  
-		if (alrm1->al_next = alrm2->al_next)
+		if ((alrm1->al_next = alrm2->al_next) != NULL)
 			(alrm1->al_next)->al_prev = alrm1;
 
 		/*
@@ -609,7 +605,7 @@ clock_alarm_intr(
 		 */
 		else {
 			assert(alrm2->al_status == ALARM_CLOCK);
-			if (alrm2->al_next = alrmdone)
+			if ((alrm2->al_next = alrmdone) != NULL)
 				alrmdone->al_prev = alrm2;
 			else
 				thread_call_enter(&alarm_deliver);
@@ -635,16 +631,16 @@ clock_alarm_intr(
 
 static void
 clock_alarm_deliver(
-	thread_call_param_t		p0,
-	thread_call_param_t		p1)
+	__unused thread_call_param_t		p0,
+	__unused thread_call_param_t		p1)
 {
 	register alarm_t	alrm;
 	kern_return_t		code;
 	spl_t				s;
 
 	LOCK_CLOCK(s);
-	while (alrm = alrmdone) {
-		if (alrmdone = alrm->al_next)
+	while ((alrm = alrmdone) != NULL) {
+		if ((alrmdone = alrm->al_next) != NULL)
 			alrmdone->al_prev = (alarm_t) &alrmdone;
 		UNLOCK_CLOCK(s);
 
@@ -691,11 +687,11 @@ flush_alarms(
 	 */
 	LOCK_CLOCK(s);
 	alrm1 = (alarm_t) &clock->cl_alarm;
-	while (alrm2 = alrm1->al_next) {
+	while ((alrm2 = alrm1->al_next) != NULL) {
 		/*
 		 * Remove alarm from the clock alarm list.
 		 */  
-		if (alrm1->al_next = alrm2->al_next)
+		if ((alrm1->al_next = alrm2->al_next) != NULL)
 			(alrm1->al_next)->al_prev = alrm1;
 
 		/*
@@ -713,7 +709,7 @@ flush_alarms(
 			 * kernel alarm_thread to service the alarm.
 			 */
 			assert(alrm2->al_status == ALARM_CLOCK);
-			if (alrm2->al_next = alrmdone)
+			if ((alrm2->al_next = alrmdone) != NULL)
 				alrmdone->al_prev = alrm2;
 			else
 				thread_wakeup((event_t)&alrmdone);
@@ -745,7 +741,7 @@ post_alarm(
 	 */
 	alarm_time = &alarm->al_time;
 	alrm1 = (alarm_t) &clock->cl_alarm;
-	while (alrm2 = alrm1->al_next) {
+	while ((alrm2 = alrm1->al_next) != NULL) {
 		queue_time = &alrm2->al_time;
 		if (CMP_MACH_TIMESPEC(queue_time, alarm_time) > 0)
 			break;
@@ -834,55 +830,105 @@ clock_deadline_for_periodic_event(
 }
 
 void
-mk_timebase_info(
-	uint32_t			*delta,
-	uint32_t			*abs_to_ns_numer,
-	uint32_t			*abs_to_ns_denom,
-	uint32_t			*proc_to_abs_numer,
-	uint32_t			*proc_to_abs_denom)
+mk_timebase_info_trap(
+	struct mk_timebase_info_trap_args *args)
 {
+	uint32_t					*delta = args->delta;
+	uint32_t					*abs_to_ns_numer = args->abs_to_ns_numer;
+	uint32_t					*abs_to_ns_denom = args->abs_to_ns_denom;
+	uint32_t					*proc_to_abs_numer = args->proc_to_abs_numer;
+	uint32_t					*proc_to_abs_denom = args->proc_to_abs_denom;
 	mach_timebase_info_data_t	info;
 	uint32_t					one = 1;
 
 	clock_timebase_info(&info);
 
-	copyout((void *)&one, (void *)delta, sizeof (uint32_t));
+	copyout((void *)&one, CAST_USER_ADDR_T(delta), sizeof (uint32_t));
 
-	copyout((void *)&info.numer, (void *)abs_to_ns_numer, sizeof (uint32_t));
-	copyout((void *)&info.denom, (void *)abs_to_ns_denom, sizeof (uint32_t));
+	copyout((void *)&info.numer, CAST_USER_ADDR_T(abs_to_ns_numer), sizeof (uint32_t));
+	copyout((void *)&info.denom, CAST_USER_ADDR_T(abs_to_ns_denom), sizeof (uint32_t));
 
-	copyout((void *)&one, (void *)proc_to_abs_numer, sizeof (uint32_t));
-	copyout((void *)&one, (void *)proc_to_abs_denom, sizeof (uint32_t));
+	copyout((void *)&one, CAST_USER_ADDR_T(proc_to_abs_numer), sizeof (uint32_t));
+	copyout((void *)&one, CAST_USER_ADDR_T(proc_to_abs_denom), sizeof (uint32_t));
 }
 
 kern_return_t
-mach_timebase_info(
-	mach_timebase_info_t	out_info)
+mach_timebase_info_trap(
+	struct mach_timebase_info_trap_args *args)
 {
+	mach_vm_address_t 			out_info_addr = args->info;
 	mach_timebase_info_data_t	info;
 
 	clock_timebase_info(&info);
 
-	copyout((void *)&info, (void *)out_info, sizeof (info));
+	copyout((void *)&info, out_info_addr, sizeof (info));
 
 	return (KERN_SUCCESS);
 }
 
+static void
+mach_wait_until_continue(
+	__unused void	*parameter,
+	wait_result_t	wresult)
+{
+	thread_syscall_return((wresult == THREAD_INTERRUPTED)? KERN_ABORTED: KERN_SUCCESS);
+	/*NOTREACHED*/
+}
+
 kern_return_t
-mach_wait_until(
+mach_wait_until_trap(
+	struct mach_wait_until_trap_args	*args)
+{
+	uint64_t		deadline = args->deadline;
+	wait_result_t	wresult;
+
+	wresult = assert_wait_deadline((event_t)mach_wait_until_trap, THREAD_ABORTSAFE, deadline);
+	if (wresult == THREAD_WAITING)
+		wresult = thread_block(mach_wait_until_continue);
+
+	return ((wresult == THREAD_INTERRUPTED)? KERN_ABORTED: KERN_SUCCESS);
+}
+
+/*
+ * Delay primitives.
+ */
+void
+clock_delay_until(
 	uint64_t		deadline)
 {
-	int				wait_result;
+	uint64_t		now = mach_absolute_time();
 
-	wait_result = assert_wait((event_t)&mach_wait_until, THREAD_ABORTSAFE);
-	if (wait_result == THREAD_WAITING) {
-		thread_set_timer_deadline(deadline);
-		wait_result = thread_block(THREAD_CONTINUE_NULL);
-		if (wait_result != THREAD_TIMED_OUT)
-			thread_cancel_timer();
+	if (now >= deadline)
+		return;
+
+	if (	(deadline - now) < (8 * sched_cswtime)	||
+			get_preemption_level() != 0				||
+			ml_get_interrupts_enabled() == FALSE	)
+		machine_delay_until(deadline);
+	else {
+		assert_wait_deadline((event_t)clock_delay_until, THREAD_UNINT, deadline - sched_cswtime);
+
+		thread_block(THREAD_CONTINUE_NULL);
 	}
+}
 
-	return ((wait_result == THREAD_INTERRUPTED)? KERN_ABORTED: KERN_SUCCESS);
+void
+delay_for_interval(
+	uint32_t		interval,
+	uint32_t		scale_factor)
+{
+	uint64_t		end;
+
+	clock_interval_to_deadline(interval, scale_factor, &end);
+
+	clock_delay_until(end);
+}
+
+void
+delay(
+	int		usec)
+{
+	delay_for_interval((usec < 0)? -usec: usec, NSEC_PER_USEC);
 }
 
 void
@@ -914,8 +960,8 @@ clock_adjtime(
 
 static void
 calend_adjust_call(
-	timer_call_param_t		p0,
-	timer_call_param_t		p1)
+	__unused timer_call_param_t		p0,
+	__unused timer_call_param_t		p1)
 {
 	uint32_t	interval;
 	spl_t		s;
@@ -941,12 +987,13 @@ clock_wakeup_calendar(void)
 	thread_call_enter(&calend_wakecall);
 }
 
+extern	void		IOKitResetTime(void); /* XXX */
+
 static void
 calend_dowakeup(
-	thread_call_param_t		p0,
-	thread_call_param_t		p1)
+	__unused thread_call_param_t		p0,
+	__unused thread_call_param_t		p1)
 {
-	void		IOKitResetTime(void);
 
 	IOKitResetTime();
 }

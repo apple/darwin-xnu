@@ -21,12 +21,11 @@
  */
 #ifndef _NETAT_ADSP_INTERNAL_H_
 #define _NETAT_ADSP_INTERNAL_H_
-#include <sys/appleapiopts.h>
 
 #include <sys/types.h>
 
-#ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
+#ifdef __APPLE_API_OBSOLETE
+#ifdef KERNEL_PRIVATE
 
 /* from h/adsp_portab.h */
 
@@ -141,9 +140,8 @@ typedef struct TNetworkTransition {
     ProcPtr netValidProc;	/* pointer to the network valid procedure */
 } TNetworkTransition, *TPNetworkTransition;
 
-typedef long (*NetworkTransitionProcPtr)();
-				/* (TPNetworkTransition nettrans, 
-				   unsigned long thenet); */
+typedef long (*NetworkTransitionProcPtr)(TPNetworkTransition nettrans, 
+				   unsigned long thenet);
 /*
  * This is the connection control block
  */
@@ -309,34 +307,33 @@ typedef struct {
 
 /* fron h/adsp_supp.h */
 
-void	CallUserRoutine();	/* (CCB FPTR sp); */
+void	CallUserRoutine(CCBPtr sp);	/* (CCB FPTR sp); */
 
 
 /*
  *	Add queue element to end of queue.  Pass Address of ptr to 
  *	1st element of queue
+int	qAddToEnd(struct qlink **qhead, struct qlink *qelem);
  */
-int	qAddToEnd(); /* (void FPTR FPTR qhead, void FPTR qelem); */
+		/* (void FPTR FPTR qhead, void FPTR qelem); */
 
 /*
  *	Hunt down a linked list of queue elements looking for an element with
  *	'data' at 'offset' bytes into the queue element.
  */
-void *qfind_b();		/* (void *qhead, word offset, word data); */ 
-void *qfind_w();		/* (void *qhead, word offset, word data); */
-void *qfind_p();		/* (void *qhead, word offset, void *ptr); */
-void *qfind_o();		/* (void *qhead, word offset, void *ptr); */
-void *qfind_m();		/* (void *qhead, void *match, 
-				   ProcPtr compare_fnx); */
+void *qfind_b(void *qhead, word offset, word data);
+void *qfind_w(void *qhead, word offset, word data);
+void *qfind_p(void *qhead, word offset, void *ptr);
+void *qfind_o(void *qhead, word offset, void *ptr);
+void *qfind_m(CCBPtr qhead, void *match, ProcPtr compare_fnx);
 
 
 /*
  * Routines to handle sorted timer queues
  */
-void InsertTimerElem();		/* (TimerElemPtr *qhead, TimerElemPtr t, 
-				   word val); */
-void RemoveTimerElem();		/* (TimerElemPtr *qhead, TimerElemPtr t); */
-void TimerQueueTick();		/* (TimerElemPtr *qhead);*/
+void InsertTimerElem(TimerElemPtr *qhead, TimerElemPtr t, int val);
+void RemoveTimerElem(TimerElemPtr *qhead, TimerElemPtr t);
+void TimerQueueTick(TimerElemPtr *qhead);
 
 /* from h/adsp_global.h */
 
@@ -355,7 +352,7 @@ extern GLOBAL adspGlobal;
 /* Address of ptr to list of ccb's */
 #define AT_ADSP_STREAMS ((CCB **)&(adspGlobal.ccbList))
 
-#endif /* __APPLE_API_PRIVATE */
-#endif /* KERNEL */
+#endif /* KERNEL_PRIVATE */
+#endif /* __APPLE_API_OBSOLETE */
 
 #endif /* _NETAT_ADSP_INTERNAL_H_ */

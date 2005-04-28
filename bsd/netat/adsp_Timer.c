@@ -179,9 +179,9 @@ send:
 
 void TimerTick_funnel(void *arg)
 {
-        thread_funnel_set(network_flock, TRUE);
+	atalk_lock();
 	TimerTick();
-        thread_funnel_set(network_flock, FALSE);
+	atalk_unlock();
 }
 
 static StopTimer;

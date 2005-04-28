@@ -277,13 +277,15 @@ void atp_rcb_timer()
 	register struct atp_rcb *next_rcbp;
 	extern   struct atp_rcb_qhead atp_need_rel;
 	extern struct atp_trans *trp_tmo_rcb;
+	struct timeval timenow;
 
 l_again:
 	ATDISABLE(s, atpgen_lock);
+	getmicrouptime(&timenow);
 	for (rcbp = atp_need_rel.head; rcbp; rcbp = next_rcbp) {
 	        next_rcbp = rcbp->rc_tlist.next;
 
-	        if (abs(time.tv_sec - rcbp->rc_timestamp) > 30) {
+	        if (abs(timenow.tv_sec - rcbp->rc_timestamp) > 30) {
 		        ATENABLE(s, atpgen_lock);
 		        atp_rcb_free(rcbp);
 		        goto l_again;

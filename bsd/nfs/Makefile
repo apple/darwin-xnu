@@ -21,8 +21,8 @@ EXPINC_SUBDIRS_I386 = \
 
 DATAFILES = \
 	krpc.h nfs.h nfsdiskless.h nfsm_subs.h nfsmount.h nfsnode.h \
-	nlminfo.h nfs_lock.h \
-	nfsproto.h nfsrtt.h nfsrvcache.h nqnfs.h rpcv2.h xdr_subs.h
+	nfs_lock.h \
+	nfsproto.h nfsrtt.h nfsrvcache.h rpcv2.h xdr_subs.h
 
 
 INSTALL_MI_LIST	= ${DATAFILES}

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -37,18 +37,24 @@
 
 typedef	memory_object_default_t	default_pager_t;
 
-#ifdef MACH_KERNEL_PRIVATE
-
 /*
  *	Remember to update the mig type definitions
  *	in default_pager_types.defs when adding/removing fields.
  */
 
 typedef struct default_pager_info {
-	vm_size_t dpi_total_space;	/* size of backing store */
-	vm_size_t dpi_free_space;	/* how much of it is unused */
-	vm_size_t dpi_page_size;	/* the pager's vm page size */
+	vm_size_t 	dpi_total_space; /* size of backing store */
+	vm_size_t	dpi_free_space;	 /* how much of it is unused */
+	vm_size_t	dpi_page_size;	 /* the pager's vm page size */
 } default_pager_info_t;
+
+typedef struct default_pager_info_64 {
+	memory_object_size_t 	dpi_total_space; /* size of backing store */
+	memory_object_size_t	dpi_free_space;	 /* how much of it is unused */
+	vm_size_t		dpi_page_size;	 /* the pager's vm page size */
+	int			dpi_flags;
+#define DPI_ENCRYPTED	0x1	/* swap files are encrypted */
+} default_pager_info_64_t;
 
 typedef integer_t *backing_store_info_t;
 typedef int	backing_store_flavor_t;
@@ -92,12 +98,12 @@ typedef struct default_pager_page {
 
 typedef default_pager_page_t *default_pager_page_array_t;
 
-#endif /* MACH_KERNEL_PRIVATE */
-
 #define DEFAULT_PAGER_BACKING_STORE_MAXPRI	4
 
-#define HI_WAT_ALERT	1
-#define LO_WAT_ALERT	2
+#define HI_WAT_ALERT		0x01
+#define LO_WAT_ALERT		0x02
+#define SWAP_ENCRYPT_ON		0x04
+#define SWAP_ENCRYPT_OFF	0x08
 
 #endif /* __APPLE_API_UNSTABLE */
 

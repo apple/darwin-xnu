@@ -37,7 +37,13 @@
 #include <pexpert/pexpert.h>
 #include <sys/kdebug.h>
 
-perfTrap perfIntHook = 0;						/* Pointer to performance trap hook routine */
+perfCallback perfIntHook = 0;						/* Pointer to CHUD trap hook routine */
+
+void unresolved_kernel_trap(int trapno,
+				   struct savearea *ssp,
+				   unsigned int dsisr,
+				   addr64_t dar,
+				   const char *message);
 
 struct savearea * interrupt(
         int type,
@@ -46,8 +52,9 @@ struct savearea * interrupt(
 	unsigned int dar)
 {
 	int	current_cpu;
+	struct per_proc_info	*proc_info;
 	uint64_t		now;
-	thread_act_t	act;
+	thread_t		thread;
 
 	disable_preemption();
 
@@ -61,9 +68,10 @@ struct savearea * interrupt(
 		fctx_test();
 	}
 #endif
-	
-	
+
+
 	current_cpu = cpu_number();
+	proc_info = getPerProc();
 
 	switch (type) {
 
@@ -73,18 +81,18 @@ struct savearea * interrupt(
 	
 #if 0
 			if (pcsample_enable) {
-				if (find_user_regs(current_act()))
-				  add_pcsamples (user_pc(current_act()));
+				if (find_user_regs(current_thread()))
+				  add_pcsamples (user_pc(current_thread()));
 			}
 #endif
 
-			act = current_act();					/* Find ourselves */
-			if(act->mact.qactTimer != 0) {	/* Is the timer set? */
+			thread = current_thread();					/* Find ourselves */
+			if(thread->machine.qactTimer != 0) {	/* Is the timer set? */
 				clock_get_uptime(&now);				/* Find out what time it is */
-				if (act->mact.qactTimer <= now) {	/* It is set, has it popped? */
-					act->mact.qactTimer = 0;		/* Clear single shot timer */
-					if((unsigned int)act->mact.vmmControl & 0xFFFFFFFE) {	/* Are there any virtual machines? */
-						vmm_timer_pop(act);			/* Yes, check out them out... */
+				if (thread->machine.qactTimer <= now) {	/* It is set, has it popped? */
+					thread->machine.qactTimer = 0;		/* Clear single shot timer */
+					if((unsigned int)thread->machine.vmmControl & 0xFFFFFFFE) {	/* Are there any virtual machines? */
+						vmm_timer_pop(thread);			/* Yes, check out them out... */
 					}
 				}
 			}
@@ -99,11 +107,11 @@ struct savearea * interrupt(
 			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_INTR, 0) | DBG_FUNC_START,
 			   current_cpu, (unsigned int)ssp->save_srr0, 0, 0, 0);
 	
-			per_proc_info[current_cpu].interrupt_handler(
-				per_proc_info[current_cpu].interrupt_target, 
-				per_proc_info[current_cpu].interrupt_refCon,
-				per_proc_info[current_cpu].interrupt_nub, 
-				per_proc_info[current_cpu].interrupt_source);
+			proc_info->interrupt_handler(
+				proc_info->interrupt_target, 
+				proc_info->interrupt_refCon,
+				proc_info->interrupt_nub, 
+				proc_info->interrupt_source);
 	
 			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_INTR, 0) | DBG_FUNC_END,
 			   0, 0, 0, 0, 0);
@@ -122,11 +130,10 @@ struct savearea * interrupt(
 	
 				
 		default:
-	#if     MACH_KDP || MACH_KDB
-			(void)Call_Debugger(type, ssp);
-	#else
-			panic("Invalid interrupt type %x\n", type);
-	#endif
+#if     MACH_KDP || MACH_KDB
+                        if (!Call_Debugger(type, ssp))
+#endif
+                        unresolved_kernel_trap(type, ssp, dsisr, dar, NULL);
 			break;
 	}
 

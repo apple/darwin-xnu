@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -25,7 +25,6 @@
 
 #define __APPLE_API_PRIVATE
 
-#include <cpus.h>
 #include <mach_kdb.h>
 #include <mach_kdp.h>
 #include <mach_kgdb.h>
@@ -35,6 +34,10 @@
 #include <machine/cpu_capabilities.h>
 #include <mach/ppc/vm_param.h>
 #include <assym.s>
+
+
+; Definitions of the processor type table format, which drives this code.
+; The table ("processor_types") is assembled in at the end of this file.
 	
 #define ptFilter	0
 #define ptVersion	4
@@ -52,6 +55,9 @@
 #define ptMaxVAddr	48
 #define ptMaxPAddr	52
 #define ptSize		56
+
+
+; We use cr2 for flags:
 
 #define bootCPU 10
 #define firstInit 9
@@ -86,7 +92,12 @@ ENTRY(resetPOR,TAG_NO_FRAME_USED)
 ENTRY(_start_cpu,TAG_NO_FRAME_USED)
 			crclr	bootCPU								; Set non-boot processor
 			crclr	firstInit							; Set not first time init
-			mr		r30,r3								; Set current per_proc	
+			lwz		r30,ppe_paddr(r3)					; Set current per_proc
+			lwz		r28,ppe_paddr+4(r3)					; Set current per_proc
+			rlwinm	r30,r30,0,1,0						; Copy low 32 bits to top 32 
+			rlwimi	r30,r28,0,0,31						; Insert low part of 64-bit address in bottom 32 bits
+			subi	r29,r3,(ACT_PER_PROC-ppe_vaddr)		; Substract mact.PerProc offset
+			mr		r3,r30								; Set current per_proc
 			
 ;
 ;			Note that we are just trying to get close.  The real TB sync will take
@@ -108,8 +119,13 @@ ENTRY(_start,TAG_NO_FRAME_USED)
 
 startJoin:
 			mflr		r2					; Save the return address
-			lis		r30,hi16(EXT(per_proc_info))		; Set current per_proc
-			ori		r30,r30,lo16(EXT(per_proc_info))	; Set current per_proc
+			lis		r28,hi16(EXT(PerProcTable))			; Set PerProcTable
+			lis		r30,hi16(EXT(BootProcInfo))			; Set current per_proc
+			ori		r28,r28,lo16(EXT(PerProcTable))		; Set PerProcTable
+			ori		r30,r30,lo16(EXT(BootProcInfo))		; Set current per_proc
+			stw		r30,ppe_paddr+4(r28)				; Set per_proc_entry
+			stw		r30,ppe_vaddr(r28)					; Set per_proc_entry
+			subi	r29,r28,(ACT_PER_PROC-ppe_vaddr)	; Substract mact.PerProc offset
 			crset	bootCPU								; Set boot processor
 			
 			lwz		r17,pfAvailable(r30)				; Get the available bits
@@ -130,10 +146,10 @@ allstart:
 
 			crand	firstBoot,bootCPU,firstInit			; Indicate if we are on the initial first processor startup
 
-			mtsprg	0,r30								; Set the per_proc
+			mtsprg	0,r30								; Set per_proc paddr
+			mtsprg	1,r29								; Set spr1
 
 			li		r9,0								; Clear out a register
-			mtsprg	1,r9								; Clear the SPRGs
 			mtsprg	2,r9
 			mtsprg	3,r9
 
@@ -192,18 +208,23 @@ donePVR:	lwz		r20,ptInitRout(r26)					; Grab the special init routine
 			stw		r13,pfMaxVAddr(r30)					; Save it
 			lwz		r13,ptMaxPAddr(r26)					; Get max physical address
 			stw		r13,pfMaxPAddr(r30)					; Save it
+
+            
+;           Go through the patch table, changing performance sensitive kernel routines based on the
+;           processor type or other things.
+
 			lis		r11,hi16(EXT(patch_table))
 			ori		r11,r11,lo16(EXT(patch_table))
 			lwz		r19,ptPatch(r26)					; Get ptPatch field
-			li		r12,PATCH_TABLE_SIZE
-			mtctr   r12
 patch_loop:
 			lwz		r16,patchType(r11)					; Load the patch type
 			lwz		r15,patchValue(r11)					; Load the patch value
 			cmplwi	cr1,r16,PATCH_FEATURE				; Is it a patch feature entry
+            cmplwi  cr7,r16,PATCH_END_OF_TABLE          ; end of table?
 			and.	r14,r15,r19							; Is it set in the patch feature
 			crandc	cr0_eq,cr1_eq,cr0_eq				; Do we have a match
-			beq		patch_apply							; Yes, patch memory
+            beq     cr7,doOurInit                       ; end of table, Go do processor specific initialization
+			beq		patch_apply							; proc feature matches, so patch memory
 			cmplwi	cr1,r16,PATCH_PROCESSOR				; Is it a patch processor entry
 			cmplw	cr0,r15,r18							; Check matching processor
 			crand	cr0_eq,cr1_eq,cr0_eq				; Do we have a match
@@ -219,8 +240,10 @@ patch_apply:
 			sync										; Hang out some more...
 patch_skip:
 			addi	r11,r11,peSize						; Point to the next patch entry
-			bdnz    patch_loop							; Loop if in the range
-			b		doOurInit							; Go do processor specific initialization...
+			b       patch_loop							; handle next
+
+
+;           Additional processors join here after skipping above code.
 
 notFirst:	lwz		r17,pfAvailable(r30)				; Get our features
 
@@ -231,33 +254,7 @@ doOurInit:	mr.		r20,r20								; See if initialization routine
 			ori		r17,r17,lo16(pfValid)				; Set the valid bit
 			stw		r17,pfAvailable(r30)				; Set the available features
 
-			bf		firstBoot,nofeatcpy					; Skip feature propagate if not first time boot...
-
-			li		r2,NCPUS							; Get number of CPUs
-			lis		r23,hi16(EXT(per_proc_info))		; Set base per_proc
-			ori		r23,r23,lo16(EXT(per_proc_info))	; Set base per_proc
-			addi	r6,r23,ppSize						; Point to the next one
-			
-cpyFCpu:	addic.	r2,r2,-1							; Count down
-			la		r8,pfAvailable(r23)					; Point to features of boot processor
-			la		r7,pfAvailable(r6)					; Point to features of our processor
-			li		r9,pfSize/4							; Get size of a features area
-			ble--	nofeatcpy							; Copied all we need
-			
-cpyFeat:	subi	r9,r9,1								; Count word
-			lwz		r0,0(r8)							; Get boot cpu features
-			stw		r0,0(r7)							; Copy to ours
-			mr.		r9,r9								; Finished?
-			addi	r7,r7,4								; Next out
-			addi	r8,r8,4								; Next in
-			bgt		cpyFeat								; Copy all boot cpu features to us...
-
-			lwz		r17,pfAvailable(r6)					; Get our newly initialized features			
-			addi	r6,r6,ppSize						; Point to the next one
-			b		cpyFCpu								; Do the next per_proc...
-			
-
-nofeatcpy:	rlwinm.	r0,r17,0,pf64Bitb,pf64Bitb			; Is this a 64-bit machine?
+			rlwinm.	r0,r17,0,pf64Bitb,pf64Bitb			; Is this a 64-bit machine?
 			mtsprg	2,r17								; Remember the feature flags
 
 			bne++	start64								; Skip following if 64-bit...
@@ -297,9 +294,9 @@ nofeatcpy:	rlwinm.	r0,r17,0,pf64Bitb,pf64Bitb			; Is this a 64-bit machine?
 start64:	lis		r5,hi16(startcommon)				; Get top of address of continue point
 			mfspr	r6,hid0								; Get the HID0
 			ori		r5,r5,lo16(startcommon)				; Get low of address of continue point
-			lis		r9,hi16(MASK(MSR_HV))				; ?
+			lis		r9,hi16(MASK(MSR_HV)|MASK(MSR_SF))	; ?
 			lis		r20,hi16(dozem|napm|sleepm)			; Get mask of power saving features	
-			li		r7,MSR_VM_OFF						; Get real mode MSR, 64-bit off	
+			li		r7,MSR_VM_OFF						; Get real mode MSR
 			sldi	r9,r9,32							; Slide into position
 			sldi	r20,r20,32							; Slide power stuff into position
 			or		r9,r9,r7							; Form initial MSR
@@ -422,29 +419,29 @@ noFloat:	rlwinm.	r0,r17,0,pfAltivecb,pfAltivecb		; See if there is Altivec
 			mtmsr	r0
 			isync
 
-noVector:	rlwinm.	r0,r17,0,pfSMPcapb,pfSMPcapb		; See if we can do SMP
-			beq-	noSMP								; Nope...
-			
-			lhz		r13,PP_CPU_NUMBER(r30)				; Get the CPU number
-			mtspr	pir,r13								; Set the PIR
-			
-noSMP:
-			
+noVector:
 			bl		EXT(cacheInit)						; Initializes all caches (including the TLB)
 
+			bt		bootCPU,run32					
+
+			mfsprg	r30,0								; Phys per proc
+			bl	EXT(hw_setup_trans)						; Set up hardware needed for translation
+			bl	EXT(hw_start_trans)						; Start translating 
+
+run32:
 			rlwinm.	r0,r17,0,pf64Bitb,pf64Bitb			; Is this a 64-bit machine?
 			beq++	isnot64								; Skip following if not 64-bit...
 			
 			mfmsr	r29									; Get the MSR
-			rlwinm	r29,r29,0,0,31						; Make sure that 64-bit mode is off
+			rldicl	r29,r29,0,MSR_SF_BIT+1				; turn 64-bit mode off
 			mtmsrd	r29									; Set it
 			isync										; Make sure
 			
 isnot64:	bf		bootCPU,callcpu					
 
-			lis		r29,HIGH_ADDR(EXT(intstack_top_ss))	; move onto interrupt stack
-			ori		r29,r29,LOW_ADDR(EXT(intstack_top_ss))
-			lwz		r29,0(r29)
+			lis		r29,HIGH_ADDR(EXT(intstack))		; move onto interrupt stack
+			ori		r29,r29,LOW_ADDR(EXT(intstack))
+			addi	r29,r29,INTSTACK_SIZE-FM_SIZE
 
 			li		r28,0
 			stw		r28,FM_BACKPTR(r29) 				; store a null frame backpointer
@@ -458,16 +455,17 @@ isnot64:	bf		bootCPU,callcpu
 			BREAKPOINT_TRAP
 
 callcpu:
+			mfsprg	r31,1								; Fake activation pointer
+			lwz		r31,ACT_PER_PROC(r31)				; Load per_proc
 			lwz		r29,PP_INTSTACK_TOP_SS(r31)			; move onto interrupt stack
 
 			li		r28,0
 			stw		r28,FM_BACKPTR(r29) 				; store a null frame backpointer
 
-
 			mr		r1,r29								; move onto new stack
 			mr		r3,r31								; Restore any arguments we may have trashed
 
-;			Note that we exit from here with translation still off
+;			Note that we exit from here with translation on
 
 			bl		EXT(ppc_init_cpu)					; Jump into cpu init code
 			BREAKPOINT_TRAP								; Should never return
@@ -763,11 +761,24 @@ init7450done:
 			b	init745X							; Continue with standard init
 
 
-init970:	
-			li		r20,0								; Clear this
-			mtspr	hior,r20							; Make sure that 0 is interrupt prefix
+init970:
+			lis		r20,8								; Set up for 512K L2
+init970x:
+			li		r0,0								; Clear this
+			mtspr	hior,r0								; Make sure that 0 is interrupt prefix
 			bf		firstBoot,init970nb					; No init for wakeup or second processor....
 
+
+;
+;			We can not query or change the L2 size.  We will just
+;			phoney up a L2CR to make sysctl "happy" and set the
+;			L2 size to 512K.
+;
+
+			lis		r0,0x8000							; Synthesize a "valid" but non-existant L2CR
+			stw		r0,pfl2crOriginal(r30)				; Set a dummy L2CR
+			stw		r0,pfl2cr(r30)						; Set a dummy L2CR
+			stw		r20,pfl2Size(r30)					; Set the L2 size
 
 			mfspr	r11,hid0							; Get original hid0
 			std		r11,pfHID0(r30)						; Save original
@@ -792,17 +803,9 @@ init970:
 			mfspr	r11,hid0							; Get it
 			isync
 
-;
-;			We can not query or change the L2 size.  We will just
-;			phoney up a L2CR to make sysctl "happy" and set the
-;			L2 size to 512K.
-;
-
-			lis		r0,0x8000							; Synthesize a "valid" but non-existant L2CR
-			stw		r0,pfl2crOriginal(r30)				; Set a dummy L2CR
-			stw		r0,pfl2cr(r30)						; Set a dummy L2CR
-			lis		r0,8								; Get 512K
-			stw		r0,pfl2Size(r30)					; Set the L2 size
+			lis		r0,(pcfValid|pcfLarge|pcfDedSeg)<<8	; Set the valid bit, dedicated segment, and large page flags
+			ori		r0,r0,(24<<8)|24					; Add in the 16M page size
+			stw		r0,lgpPcfg+(pcfSize*pcfLargePcfg)(0)	; Set the 16M primary large page configuration entry
 
 			blr
 			
@@ -868,7 +871,8 @@ inin970ki:	icbi	0,r11								; Kill I$
 			isync
 
 			blr											; Leave...
-		
+
+
 
 ;			Unsupported Processors
 initUnsupported:
@@ -1242,6 +1246,7 @@ processor_types:
 			.long	128
 			.long	65
 			.long	42
+
 
 ;	All other processors are not supported
 

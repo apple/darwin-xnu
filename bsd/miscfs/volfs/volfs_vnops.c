@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -19,22 +19,6 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
-/*
- * Copyright (c) 1998-1999 Apple Computer, Inc. All Rights Reserved.
- *
- *	Modification History:
- *
- *	  2/10/2000     Clark Warner    Added copyfile	
- *	  5/24/1999	Don Brady	Fixed security hole in get_fsvnode.
- *	 11/18/1998 Don Brady		Special case 2 to mean the root of a file system.
- *	  9/28/1998	Umesh Vaishampayan	Use the default vnode ops. Cleanup 
- *									header includes.
- *	11/12/1998	Scott Roberts	validfsnode only checks to see if the volfs mount flag is set
- *	  8/5/1998	Don Brady	fix validfsnode logic to handle a "bad" VFS_GET
- *	  7/5/1998	Don Brady	In volfs_reclaim set vp->v_data to NULL after private data is free (VFS expects a NULL).
- *	  4/5/1998	Don Brady	Changed lockstatus calls to VOP_ISLOCKED (radar #2231108);
- *	 3/25/1998	Pat Dirks	Added include for sys/attr.h, which is no longer included indirectly.
- */
 
 #include <mach/mach_types.h>
 
@@ -45,21 +29,24 @@
 #include <sys/file.h>
 #include <sys/filedesc.h>
 #include <sys/stat.h>
-#include <sys/buf.h>
-#include <sys/proc.h>
+#include <sys/proc_internal.h>	/* for p_fd */
+#include <sys/kauth.h>
 #include <sys/conf.h>
-#include <sys/mount.h>
-#include <sys/vnode.h>
+#include <sys/mount_internal.h>
+#include <sys/vnode_internal.h>
 #include <sys/malloc.h>
 #include <sys/dirent.h>
 #include <sys/namei.h>
 #include <sys/attr.h>
 #include <sys/kdebug.h>
 #include <sys/queue.h>
+#include <sys/uio_internal.h>
 
 #include <sys/vm.h>
 #include <sys/errno.h>
 #include <vfs/vfs_support.h>
+
+#include <kern/locks.h>
 
 #include "volfs.h"
 
@@ -92,72 +79,74 @@
  * a similar mechanism.
  */
 
+static int  volfs_reclaim  (struct vnop_reclaim_args*);
+static int  volfs_getattr  (struct vnop_getattr_args *);
+static int  volfs_select   (struct vnop_select_args *);
+static int  volfs_rmdir    (struct vnop_rmdir_args *);
+static int  volfs_readdir  (struct vnop_readdir_args *);
+static int  volfs_pathconf (struct vnop_pathconf_args *);
+static int  volfs_lookup   (struct vnop_lookup_args *);
+
+static int volfs_readdir_callback(mount_t, void *);
+static int get_filevnode(struct mount *parent_fs, u_int id, vnode_t *ret_vnode, vfs_context_t context);
+static int get_fsvnode(struct mount *our_mount, int id, vnode_t *ret_vnode);
+
+/* for the call back function in volfs_readdir */
+struct volfs_rdstruct {
+	int 		validindex;
+	vnode_t 	vp;
+	int 		rec_offset;
+	struct uio * uio;
+};
+
 #define VOPFUNC int (*)(void *)
 
 /* Global vfs data structures for volfs. */
 int                 (**volfs_vnodeop_p) (void *);
 struct vnodeopv_entry_desc volfs_vnodeop_entries[] = {
-    {&vop_default_desc, (VOPFUNC)vn_default_error},
-    {&vop_strategy_desc, (VOPFUNC)err_strategy},	/* strategy */
-    {&vop_bwrite_desc, (VOPFUNC)err_bwrite},		/* bwrite */
-    {&vop_lookup_desc, (VOPFUNC)volfs_lookup},		/* lookup */
-    {&vop_create_desc, (VOPFUNC)err_create},		/* create */
-    {&vop_whiteout_desc, (VOPFUNC)err_whiteout},	/* whiteout */
-    {&vop_mknod_desc, (VOPFUNC)err_mknod},		/* mknod */
-    {&vop_mkcomplex_desc, (VOPFUNC)err_mkcomplex},	/* mkcomplex */
-    {&vop_open_desc, (VOPFUNC)nop_open},		/* open */
-    {&vop_close_desc, (VOPFUNC)nop_close},		/* close */
-    {&vop_access_desc, (VOPFUNC)volfs_access},		/* access */
-    {&vop_getattr_desc, (VOPFUNC)volfs_getattr},	/* getattr */
-    {&vop_setattr_desc, (VOPFUNC)err_setattr},		/* setattr */
-    {&vop_getattrlist_desc, (VOPFUNC)err_getattrlist},	/* getattrlist */
-    {&vop_setattrlist_desc, (VOPFUNC)err_setattrlist},	/* setattrlist */
-    {&vop_read_desc, (VOPFUNC)err_read},		/* read */
-    {&vop_write_desc, (VOPFUNC)err_write},		/* write */
-    {&vop_lease_desc, (VOPFUNC)err_lease},		/* lease */
-    {&vop_ioctl_desc, (VOPFUNC)err_ioctl},		/* ioctl */
-    {&vop_select_desc, (VOPFUNC)volfs_select},		/* select */
-    {&vop_exchange_desc, (VOPFUNC)err_exchange},	/* exchange */
-    {&vop_revoke_desc, (VOPFUNC)nop_revoke},		/* revoke */
-    {&vop_mmap_desc, (VOPFUNC)err_mmap},		/* mmap */
-    {&vop_fsync_desc, (VOPFUNC)err_fsync},		/* fsync */
-    {&vop_seek_desc, (VOPFUNC)nop_seek},		/* seek */
-    {&vop_remove_desc, (VOPFUNC)err_remove},		/* remove */
-    {&vop_link_desc, (VOPFUNC)err_link},		/* link */
-    {&vop_rename_desc, (VOPFUNC)err_rename},		/* rename */
-    {&vop_mkdir_desc, (VOPFUNC)err_mkdir},		/* mkdir */
-    {&vop_rmdir_desc, (VOPFUNC)volfs_rmdir},		/* rmdir */
-    {&vop_symlink_desc, (VOPFUNC)err_symlink},		/* symlink */
-    {&vop_readdir_desc, (VOPFUNC)volfs_readdir},	/* readdir */
-    {&vop_readdirattr_desc, (VOPFUNC)err_readdirattr},	/* readdirattr */
-    {&vop_readlink_desc, (VOPFUNC)err_readlink},	/* readlink */
-    {&vop_abortop_desc, (VOPFUNC)err_abortop},		/* abortop */
-    {&vop_inactive_desc, (VOPFUNC)err_inactive},	/* inactive */
-    {&vop_reclaim_desc, (VOPFUNC)volfs_reclaim},	/* reclaim */
-    {&vop_lock_desc, (VOPFUNC)volfs_lock},		/* lock */
-    {&vop_unlock_desc, (VOPFUNC)volfs_unlock},		/* unlock */
-    {&vop_bmap_desc, (VOPFUNC)err_bmap},		/* bmap */
-    {&vop_print_desc, (VOPFUNC)err_print},		/* print */
-    {&vop_islocked_desc, (VOPFUNC)volfs_islocked},	/* islocked */
-    {&vop_pathconf_desc, (VOPFUNC)volfs_pathconf},	/* pathconf */
-    {&vop_advlock_desc, (VOPFUNC)err_advlock},		/* advlock */
-    {&vop_blkatoff_desc, (VOPFUNC)err_blkatoff},	/* blkatoff */
-    {&vop_valloc_desc, (VOPFUNC)err_valloc},		/* valloc */
-    {&vop_reallocblks_desc, (VOPFUNC)err_reallocblks},	/* reallocblks */
-    {&vop_vfree_desc, (VOPFUNC)err_vfree},		/* vfree */
-    {&vop_truncate_desc, (VOPFUNC)err_truncate},	/* truncate */
-    {&vop_allocate_desc, (VOPFUNC)err_allocate},	/* allocate */
-    {&vop_update_desc, (VOPFUNC)err_update},		/* update */
-	{&vop_pgrd_desc, (VOPFUNC)err_pgrd},		/* pgrd */
-	{&vop_pgwr_desc, (VOPFUNC)err_pgwr},		/* pgwr */
-	{&vop_pagein_desc, (VOPFUNC)err_pagein},	/* pagein */
-	{&vop_pageout_desc, (VOPFUNC)err_pageout},	/* pageout */
-	{&vop_devblocksize_desc, (VOPFUNC)err_devblocksize},	/* devblocksize */
-	{&vop_searchfs_desc, (VOPFUNC)err_searchfs},	/* searchfs */
-        {&vop_copyfile_desc, (VOPFUNC)err_copyfile },	/* Copyfile */
-	{&vop_blktooff_desc, (VOPFUNC)err_blktooff},	/* blktooff */
-	{&vop_offtoblk_desc, (VOPFUNC)err_offtoblk },	/* offtoblk */
- 	{&vop_cmap_desc, (VOPFUNC)err_cmap },		/* cmap */
+    {&vnop_default_desc, (VOPFUNC)vn_default_error},
+    {&vnop_strategy_desc, (VOPFUNC)err_strategy},	/* strategy */
+    {&vnop_bwrite_desc, (VOPFUNC)err_bwrite},		/* bwrite */
+    {&vnop_lookup_desc, (VOPFUNC)volfs_lookup},		/* lookup */
+    {&vnop_create_desc, (VOPFUNC)err_create},		/* create */
+    {&vnop_whiteout_desc, (VOPFUNC)err_whiteout},	/* whiteout */
+    {&vnop_mknod_desc, (VOPFUNC)err_mknod},		/* mknod */
+    {&vnop_open_desc, (VOPFUNC)nop_open},		/* open */
+    {&vnop_close_desc, (VOPFUNC)nop_close},		/* close */
+    {&vnop_getattr_desc, (VOPFUNC)volfs_getattr},	/* getattr */
+    {&vnop_setattr_desc, (VOPFUNC)err_setattr},		/* setattr */
+    {&vnop_getattrlist_desc, (VOPFUNC)err_getattrlist},	/* getattrlist */
+    {&vnop_setattrlist_desc, (VOPFUNC)err_setattrlist},	/* setattrlist */
+    {&vnop_read_desc, (VOPFUNC)err_read},		/* read */
+    {&vnop_write_desc, (VOPFUNC)err_write},		/* write */
+    {&vnop_ioctl_desc, (VOPFUNC)err_ioctl},		/* ioctl */
+    {&vnop_select_desc, (VOPFUNC)volfs_select},		/* select */
+    {&vnop_exchange_desc, (VOPFUNC)err_exchange},	/* exchange */
+    {&vnop_revoke_desc, (VOPFUNC)nop_revoke},		/* revoke */
+    {&vnop_mmap_desc, (VOPFUNC)err_mmap},		/* mmap */
+    {&vnop_fsync_desc, (VOPFUNC)err_fsync},		/* fsync */
+    {&vnop_remove_desc, (VOPFUNC)err_remove},		/* remove */
+    {&vnop_link_desc, (VOPFUNC)err_link},		/* link */
+    {&vnop_rename_desc, (VOPFUNC)err_rename},		/* rename */
+    {&vnop_mkdir_desc, (VOPFUNC)err_mkdir},		/* mkdir */
+    {&vnop_rmdir_desc, (VOPFUNC)volfs_rmdir},		/* rmdir */
+    {&vnop_symlink_desc, (VOPFUNC)err_symlink},		/* symlink */
+    {&vnop_readdir_desc, (VOPFUNC)volfs_readdir},	/* readdir */
+    {&vnop_readdirattr_desc, (VOPFUNC)err_readdirattr},	/* readdirattr */
+    {&vnop_readlink_desc, (VOPFUNC)err_readlink},	/* readlink */
+    {&vnop_inactive_desc, (VOPFUNC)err_inactive},	/* inactive */
+    {&vnop_reclaim_desc, (VOPFUNC)volfs_reclaim},	/* reclaim */
+    {&vnop_pathconf_desc, (VOPFUNC)volfs_pathconf},	/* pathconf */
+    {&vnop_advlock_desc, (VOPFUNC)err_advlock},		/* advlock */
+    {&vnop_allocate_desc, (VOPFUNC)err_allocate},	/* allocate */
+	{&vnop_pagein_desc, (VOPFUNC)err_pagein},	/* pagein */
+	{&vnop_pageout_desc, (VOPFUNC)err_pageout},	/* pageout */
+	{&vnop_devblocksize_desc, (VOPFUNC)err_devblocksize},	/* devblocksize */
+	{&vnop_searchfs_desc, (VOPFUNC)err_searchfs},	/* searchfs */
+	{&vnop_copyfile_desc, (VOPFUNC)err_copyfile },	/* Copyfile */
+	{&vnop_blktooff_desc, (VOPFUNC)err_blktooff},	/* blktooff */
+	{&vnop_offtoblk_desc, (VOPFUNC)err_offtoblk },	/* offtoblk */
+ 	{&vnop_blockmap_desc, (VOPFUNC)err_blockmap },		/* blockmap */
    {(struct vnodeop_desc *) NULL, (int (*) ()) NULL}
 };
 
@@ -168,7 +157,6 @@ struct vnodeopv_entry_desc volfs_vnodeop_entries[] = {
 struct vnodeopv_desc volfs_vnodeop_opv_desc =
 {&volfs_vnodeop_p, volfs_vnodeop_entries};
 
-static char gDot[] = ".";
 static char gDotDot[] = "..";
 
 struct finfo {
@@ -180,326 +168,149 @@ struct finfoattrbuf {
     struct finfo fi;
 };
 
-static int validfsnode(struct mount *fsnode);
 
-struct volfs_PLCEntry
-{
-	LIST_ENTRY(volfs_PLCEntry) vplc_hash_link;	/* entry's hash chain */
-	TAILQ_ENTRY(volfs_PLCEntry) vplc_lru_link;	/* entry's LRU chain link */
-	int32_t			vplc_fsid;
-	u_int			vplc_item_id;
-	uid_t			vplc_uid;
-    pid_t			vplc_pid;
-};
-
-#define VOLFSPLCHASH(fsid, inum) ((((unsigned long)fsid) + (unsigned long)(inum)) & volfs_PLCHashMask)
-
-static struct slock volfs_PLChashtable_slock;
-static TAILQ_HEAD(volfs_PLCLRUListHead, volfs_PLCEntry) volfs_PLCLRUList;
-static TAILQ_HEAD(volfs_PLCFreeListHead, volfs_PLCEntry) volfs_PLCFreeList;
-static LIST_HEAD(, volfs_PLCEntry) *volfs_PLCHashTable;
-static u_long volfs_PLCHashMask;		/* size of hash table - 1 */
-static u_long volfs_PLCEntryCount;
-
-#if DBG_VOP_TEST_LOCKS
-static void DbgVopTest (int max, int error, VopDbgStoreRec *VopDbgStore, char *funcname);
-#endif /* DBG_VOP_TEST_LOCKS */
-
-
-/*
- * volfs_PLChashinit
- */
-__private_extern__ void
-volfs_PLChashinit(void)
-{
-	int i;
-	
-	TAILQ_INIT(&volfs_PLCLRUList);
-	TAILQ_INIT(&volfs_PLCFreeList);
-	simple_lock_init(&volfs_PLChashtable_slock);
-#if MAXPLCENTRIES
-	volfs_PLCHashTable = hashinit(PLCHASHSIZE, M_TEMP, &volfs_PLCHashMask);
-
-	for (i = 0; i < PLCHASHSIZE; ++i) {
-		LIST_INIT(&volfs_PLCHashTable[i]);
-	};
-#endif
-	volfs_PLCEntryCount = 0;
-}
-
-
-
-__private_extern__ void
-volfs_PLC_reclaim_entries(int entrycount)
-{
-#if MAXPLCENTRIES
-	int i;
-	struct volfs_PLCEntry *reclaim_target;
-	
-	simple_lock(&volfs_PLChashtable_slock);
-
-	for (i = entrycount; i > 0; --i) {
-        if (TAILQ_EMPTY(&volfs_PLCLRUList)) break;
-        
-        /* Pick the next entry to be recycled and free it: */
-        reclaim_target = TAILQ_FIRST(&volfs_PLCLRUList);
-		TAILQ_REMOVE(&volfs_PLCLRUList, reclaim_target, vplc_lru_link);
-		LIST_REMOVE(reclaim_target, vplc_hash_link);
-        TAILQ_INSERT_TAIL(&volfs_PLCFreeList, reclaim_target, vplc_lru_link);
-	};
-	
-	simple_unlock(&volfs_PLChashtable_slock);
-#endif
-}
-
-
-
-#if MAXPLCENTRIES
-/*
- * volfs_PLCLookup
- *
- * Look up a PLC entry in the hash
- */
-static int
-volfs_PLCLookup(int32_t fsid, u_int target_id, uid_t uid, pid_t pid)
-{
-	struct volfs_PLCEntry *hash_entry;
-	int result = 0;
-	
-	simple_lock(&volfs_PLChashtable_slock);
-	LIST_FOREACH(hash_entry, &volfs_PLCHashTable[VOLFSPLCHASH(fsid, target_id)], vplc_hash_link) {
-		if ((hash_entry->vplc_item_id == target_id) &&
-			(hash_entry->vplc_pid == pid) &&
-			(hash_entry->vplc_uid == uid) &&
-			(hash_entry->vplc_fsid == fsid)) {
-				result = 1;
-#if 0
-				if (hash_entry != TAILQ_LAST(&volfs_PLCLRUList, volfs_PLCLRUListHead)) {
-					TAILQ_REMOVE(&volfs_PLCLRUList, hash_entry, vplc_lru_link);
-					TAILQ_INSERT_TAIL(&volfs_PLCLRUList, hash_entry, vplc_lru_link);
-				};
-#endif
-				break;
-		};
-	};
-	simple_unlock(&volfs_PLChashtable_slock);
-	return result;
-}
-
-
-static void
-volfs_PLCEnter(int32_t fsid, u_int target_id, uid_t uid, pid_t pid)
-{
-	struct volfs_PLCEntry *new_entry;
-	
-	simple_lock(&volfs_PLChashtable_slock);
-    if (!TAILQ_EMPTY(&volfs_PLCFreeList)) {
-        new_entry = TAILQ_FIRST(&volfs_PLCFreeList);
-        TAILQ_REMOVE(&volfs_PLCFreeList, new_entry, vplc_lru_link);
-    } else {
-        /*
-        * Allocate up to the predetermined maximum number of new entries:
-        * [must be done now to avoid blocking in MALLOC() with volfs_PLChashtable_slock held locked]
-        */
-        if (volfs_PLCEntryCount < MAXPLCENTRIES) {
-            simple_unlock(&volfs_PLChashtable_slock);
-            new_entry = MALLOC(new_entry, struct volfs_PLCEntry *, sizeof(struct volfs_PLCEntry), M_TEMP, M_WAITOK);
-            simple_lock(&volfs_PLChashtable_slock);
-            ++volfs_PLCEntryCount;
-        } else {
-            new_entry = TAILQ_FIRST(&volfs_PLCLRUList);
-			TAILQ_REMOVE(&volfs_PLCLRUList, new_entry, vplc_lru_link);
-			LIST_REMOVE(new_entry, vplc_hash_link);
-        };
-    };
-	
-    new_entry->vplc_fsid = fsid;
-	new_entry->vplc_item_id = target_id;
-	new_entry->vplc_uid = uid;
-    new_entry->vplc_pid = pid;
-	
-	/* Link the new entry on the hash list for the fsid/target_id as well as the tail of the LRU list: */
-	LIST_INSERT_HEAD(&volfs_PLCHashTable[VOLFSPLCHASH(fsid, target_id)], new_entry, vplc_hash_link);
-	TAILQ_INSERT_TAIL(&volfs_PLCLRUList, new_entry, vplc_lru_link);
-	simple_unlock(&volfs_PLChashtable_slock);
-}
-#endif
+static int volfs_getattr_callback(mount_t, void *);
 
 
 /*
  * volfs_reclaim - Reclaim a vnode so that it can be used for other purposes.
- *
- * Locking policy: ignored
  */
-int
+static int
 volfs_reclaim(ap)
-    struct vop_reclaim_args /* { struct vnode *a_vp; struct proc *a_p; } */ *ap;
+    struct vnop_reclaim_args /* { struct vnode *a_vp; vfs_context_t a_context; } */ *ap;
 {
-    struct vnode *vp = ap->a_vp;
-    void *data = vp->v_data;
-
-    DBG_FUNC_NAME("volfs_reclaim");
-    DBG_VOP_LOCKS_DECL(1);
-    DBG_VOP_PRINT_FUNCNAME();DBG_VOP_PRINT_VNODE_INFO(ap->a_vp);DBG_VOP(("\n"));
-
-    DBG_VOP_LOCKS_INIT(0, vp, VOPDBG_UNLOCKED, VOPDBG_IGNORE, VOPDBG_IGNORE, VOPDBG_ZERO);
+	struct vnode *vp = ap->a_vp;
+	void *data = vp->v_data;
 
 	vp->v_data = NULL;
-    FREE(data, M_VOLFSNODE);
+	FREE(data, M_VOLFSNODE);
 
-    DBG_VOP_LOCKS_TEST(0);
-    return (0);
+	return (0);
 }
 
-/*
- * volfs_access - same access policy for all vnodes and all users (file/directory vnodes
- * 		for the actual file systems are handled by actual file system)
- *
- * Locking policy: a_vp locked on input and output
- */
-int
-volfs_access(ap)
-    struct vop_access_args	/* { struct vnode *a_vp; int  a_mode; struct
-        ucred *a_cred; struct proc *a_p; } */ *ap;
+struct volfsgetattr_struct{
+	int 	numMounts;
+	vnode_t	a_vp;
+};
+
+static int
+volfs_getattr_callback(mount_t mp, void * arg)
 {
-    int 	ret_err;
-    DBG_FUNC_NAME("volfs_access");
-    DBG_VOP_LOCKS_DECL(1);
-    DBG_VOP_PRINT_FUNCNAME();DBG_VOP_PRINT_VNODE_INFO(ap->a_vp);DBG_VOP(("\n"));
+	struct volfsgetattr_struct *vstrp = (struct volfsgetattr_struct *)arg;
 
-    DBG_VOP_LOCKS_INIT(0,ap->a_vp, VOPDBG_LOCKED, VOPDBG_LOCKED, VOPDBG_LOCKED, VOPDBG_POS);
-
-    /*
-     * We don't need to check credentials!  FS is read-only for everyone
-     */
-    if ((ap->a_mode & ~(VREAD | VEXEC)) == 0)
-        ret_err = 0;
-    else
-        ret_err = EACCES;
-
-    DBG_VOP_LOCKS_TEST(ret_err);
-    return (ret_err);
+	if (mp != vnode_mount(vstrp->a_vp) && validfsnode(mp))
+		vstrp->numMounts++;
+	return(VFS_RETURNED);
 }
 
 /*
  * volfs_getattr - fill in the attributes for this vnode
- *
- * Locking policy: don't change anything
  */
-int
+static int
 volfs_getattr(ap)
-    struct vop_getattr_args	/* { struct vnode *a_vp; struct vattr *a_vap;
-        struct ucred *a_cred; struct proc *a_p; } */ *ap;
+    struct vnop_getattr_args	/* { struct vnode *a_vp; struct vnode_attr *a_vap;
+        vfs_context_t a_context; } */ *ap;
 {
     struct volfs_vndata *priv_data;
-    struct vnode       *a_vp;
-    struct vattr       *a_vap;
+    struct vnode		*a_vp;
+    struct vnode_attr	*a_vap;
     int                 numMounts = 0;
-    DBG_FUNC_NAME("volfs_getattr");
-    DBG_VOP_LOCKS_DECL(1);
-    DBG_VOP_PRINT_FUNCNAME();DBG_VOP_PRINT_VNODE_INFO(ap->a_vp);DBG_VOP(("\n"));
-
-    DBG_VOP_LOCKS_INIT(0,ap->a_vp, VOPDBG_SAME, VOPDBG_SAME, VOPDBG_SAME, VOPDBG_POS);
+    struct volfsgetattr_struct vstr;
+    struct timespec ts;
 
     a_vp = ap->a_vp;
     a_vap = ap->a_vap;
 
     priv_data = a_vp->v_data;
 
-    a_vap->va_type = VDIR;
-    a_vap->va_mode = 0444;	/* Yup, hard - coded to read - only */
-    a_vap->va_nlink = 2;
-    a_vap->va_uid = 0;		/* Always owned by root */
-    a_vap->va_gid = 0;		/* Always part of group 0 */
-    a_vap->va_fsid = (int) a_vp->v_mount->mnt_stat.f_fsid.val[0];
-    a_vap->va_fileid = priv_data->nodeID;
+    VATTR_RETURN(a_vap, va_type, VDIR);
+    VATTR_RETURN(a_vap, va_mode, 0555);
+    VATTR_RETURN(a_vap, va_nlink, 2);
+    VATTR_RETURN(a_vap, va_uid, 0);
+    VATTR_RETURN(a_vap, va_gid, 0);
+    VATTR_RETURN(a_vap, va_fsid, (int) a_vp->v_mount->mnt_vfsstat.f_fsid.val[0]);
+    VATTR_RETURN(a_vap, va_fileid, (uint64_t)((u_long)priv_data->nodeID));
+    VATTR_RETURN(a_vap, va_acl, NULL);
 
     /*
      * If it's the root vnode calculate its size based on the number of eligible
      * file systems
      */
-    if (priv_data->vnode_type == VOLFS_ROOT)
-      {
-        register struct mount *mp, *nmp;
+    if (priv_data->vnode_type == VOLFS_ROOT) {
+	    vstr.numMounts = 0;
+	    vstr.a_vp = a_vp;
 
-        simple_lock(&mountlist_slock);
-        for (mp = mountlist.cqh_first; mp != (void *)&mountlist; mp = nmp) {
-            if (vfs_busy(mp, LK_NOWAIT, &mountlist_slock, ap->a_p)) {
-                nmp = mp->mnt_list.cqe_next;
-                continue;
-            }
+	    vfs_iterate(LK_NOWAIT, volfs_getattr_callback, (void *)&vstr);
 
-            if (mp != a_vp->v_mount && validfsnode(mp))
-                numMounts++;
+	    numMounts = vstr.numMounts;
 
-            simple_lock(&mountlist_slock);
-            nmp = mp->mnt_list.cqe_next;
-            vfs_unbusy(mp, ap->a_p);
-        }
-        simple_unlock(&mountlist_slock);
+	    VATTR_RETURN(a_vap, va_data_size, (numMounts + 2) * VLFSDIRENTLEN);
+    } else {
+	    VATTR_RETURN(a_vap, va_data_size, 2 * VLFSDIRENTLEN);
+    }
 
-        DBG_VOP(("found %d file systems that volfs can support\n", numMounts));
-        a_vap->va_size = (numMounts + 2) * VLFSDIRENTLEN;
-      }
-    else
-      {
-        a_vap->va_size = 2 * VLFSDIRENTLEN;
-      }
-    DBG_VOP(("va_size = %d, VLFSDIRENTLEN = %ld\n", (int) a_vap->va_size, VLFSDIRENTLEN));
-    a_vap->va_blocksize = 512;
+    VATTR_RETURN(a_vap, va_iosize, 512);
+    ts.tv_sec = boottime_sec();
+    ts.tv_nsec = 0;
+    VATTR_RETURN(a_vap, va_access_time, ts);
+    VATTR_RETURN(a_vap, va_modify_time, ts);
+    VATTR_RETURN(a_vap, va_change_time, ts);
 
-    a_vap->va_atime.tv_sec = boottime.tv_sec;
-    a_vap->va_atime.tv_nsec = 0;
+    VATTR_RETURN(a_vap, va_gen, 0);
+    VATTR_RETURN(a_vap, va_flags, 0);
+    VATTR_RETURN(a_vap, va_rdev, 0);
+    VATTR_RETURN(a_vap, va_filerev, 0);
 
-    a_vap->va_mtime.tv_sec = boottime.tv_sec;
-    a_vap->va_mtime.tv_nsec = 0;
-
-    a_vap->va_ctime.tv_sec = boottime.tv_sec;
-    a_vap->va_ctime.tv_nsec = 0;
-
-    a_vap->va_gen = 0;
-    a_vap->va_flags = 0;
-    a_vap->va_rdev = 0;
-    a_vap->va_bytes = a_vap->va_size;
-    a_vap->va_filerev = 0;
-    a_vap->va_vaflags = 0;
-
-    DBG_VOP_LOCKS_TEST(0);
     return (0);
 }
 
 /*
  * volfs_select - just say OK.  Only possible op is readdir
- *
- * Locking policy: ignore
  */
-int
-volfs_select(ap)
-    struct vop_select_args	/* { struct vnode *a_vp; int  a_which; int
-				 * a_fflags; struct ucred *a_cred; void * a_wql; struct
-        proc *a_p; } */ *ap;
+static int
+volfs_select(__unused struct vnop_select_args *ap)
 {
-    DBG_VOP(("volfs_select called\n"));
-
-    return (1);
+	return (1);
 }
 
 /*
  * vofls_rmdir - not possible to remove directories in volfs
- *
- * Locking policy: a_dvp & a_vp - locked on entry, unlocked on exit
  */
-int
+static int
 volfs_rmdir(ap)
-    struct vop_rmdir_args	/* { struct vnode *a_dvp; struct vnode *a_vp;
-        struct componentname *a_cnp; } */ *ap;
+    struct vnop_rmdir_args	/* { struct vnode *a_dvp; struct vnode *a_vp;
+        struct componentname *a_cnp; vfs_context_t a_context; } */ *ap;
 {
-    DBG_VOP(("volfs_rmdir called\n"));
     if (ap->a_dvp == ap->a_vp) {
 		(void) nop_rmdir(ap);
 		return (EINVAL);
     } else
 		return (err_rmdir(ap));
+}
+
+
+
+static int
+volfs_readdir_callback(mount_t mp, void * v)
+{
+	struct volfs_rdstruct * vcsp = (struct volfs_rdstruct *)v;
+	struct dirent       local_dir;
+	int error;
+
+            if ((mp != vnode_mount(vcsp->vp)) && validfsnode(mp))
+				vcsp->validindex++;
+
+            if (vcsp->rec_offset == vcsp->validindex)
+              {
+                local_dir.d_fileno = mp->mnt_vfsstat.f_fsid.val[0];
+                local_dir.d_type = DT_DIR;
+                local_dir.d_reclen = VLFSDIRENTLEN;
+                local_dir.d_namlen = sprintf(&local_dir.d_name[0], "%d", mp->mnt_vfsstat.f_fsid.val[0]);
+                error = uiomove((char *) &local_dir, VLFSDIRENTLEN, vcsp->uio);
+                vcsp->rec_offset++;
+              }
+
+		return(VFS_RETURNED);
 }
 
 /*
@@ -511,14 +322,12 @@ volfs_rmdir(ap)
  * equivalent of the f_fsid.val[0] from their mount structure (typically
  * the device id of the volume).  The maximum length for a name, then is
  * 10 characters.
- *
- * Locking policy: a_vp locked on entry and exit
  */
-int
+static int
 volfs_readdir(ap)
-    struct vop_readdir_args	/* { struct vnode *a_vp; struct uio *a_uio;
-				 * struct ucred *a_cred; int *a_eofflag; int
-        *ncookies; u_long **a_cookies; } */ *ap;
+    struct vnop_readdir_args	/* { struct vnode *a_vp; struct uio *a_uio;
+				 * int *a_eofflag; int
+        *ncookies; u_long **a_cookies; vfs_context_t a_context; } */ *ap;
 {
     struct volfs_vndata *priv_data;
     register struct uio *uio = ap->a_uio;
@@ -529,52 +338,42 @@ volfs_readdir(ap)
     int                 i;
     int					starting_resid;
     off_t               off;
-    DBG_FUNC_NAME("volfs_readdir");
-    DBG_VOP_LOCKS_DECL(1);
-
-    DBG_VOP_LOCKS_INIT(0,ap->a_vp, VOPDBG_LOCKED, VOPDBG_LOCKED, VOPDBG_LOCKED, VOPDBG_POS);
-    DBG_VOP_PRINT_FUNCNAME();DBG_VOP_PRINT_VNODE_INFO(ap->a_vp);DBG_VOP(("\n"));
-
-    DBG_VOP(("\tuio_offset = %d, uio_resid = %d\n", (int) uio->uio_offset, uio->uio_resid));
-	/* We assume it's all one big buffer... */
-    if (uio->uio_iovcnt > 1)
-    	DBG_VOP(("\tuio->uio_iovcnt = %d?\n", uio->uio_iovcnt));
-
+	struct volfs_rdstruct vcs;
+    
 	off = uio->uio_offset;
     priv_data = ap->a_vp->v_data;
-    starting_resid = uio->uio_resid;
-    count = uio->uio_resid;
+	// LP64todo - fix this!
+    starting_resid = count = uio_resid(uio);
  
     /* Make sure we don't return partial entries. */
     count -= (uio->uio_offset + count) & (VLFSDIRENTLEN - 1);
-    if (count <= 0)
-		{
-        DBG_VOP(("volfs_readdir: Not enough buffer to read in entries\n"));
-        DBG_VOP_LOCKS_TEST(EINVAL);
-        return (EINVAL);
-		}
+	if (count <= 0) {
+		return (EINVAL);
+	}
     /*
      * Make sure we're starting on a directory boundary
      */
-    if (off & (VLFSDIRENTLEN - 1))
-        {
-        DBG_VOP_LOCKS_TEST(EINVAL);
-        return (EINVAL);
-        }
+	if (off & (VLFSDIRENTLEN - 1)) {
+		return (EINVAL);
+	}
     rec_offset = off / VLFSDIRENTLEN;
-    lost = uio->uio_resid - count;
-    uio->uio_resid = count;
-    uio->uio_iov->iov_len = count;
+	// LP64todo - fix this!
+    lost = uio_resid(uio) - count;
+    uio_setresid(uio, count);
+    uio_iov_len_set(uio, count); 
+#if LP64_DEBUG
+	if (IS_VALID_UIO_SEGFLG(uio->uio_segflg) == 0) {
+		panic("%s :%d - invalid uio_segflg\n", __FILE__, __LINE__); 
+	}
+#endif /* LP64_DEBUG */
 
     local_dir.d_reclen = VLFSDIRENTLEN;
     /*
      * We must synthesize . and ..
      */
-    DBG_VOP(("\tstarting ... uio_offset = %d, uio_resid = %d\n",
-            (int) uio->uio_offset, uio->uio_resid));
+
     if (rec_offset == 0)
       {
-        DBG_VOP(("\tAdding .\n"));
         /*
          * Synthesize .
          */
@@ -585,13 +384,10 @@ volfs_readdir(ap)
         for (i = 1; i < MAXVLFSNAMLEN; i++)
             local_dir.d_name[i] = 0;
         error = uiomove((char *) &local_dir, VLFSDIRENTLEN, uio);
-        DBG_VOP(("\t   after adding ., uio_offset = %d, uio_resid = %d\n",
-                (int) uio->uio_offset, uio->uio_resid));
         rec_offset++;
       }
     if (rec_offset == 1)
       {
-        DBG_VOP(("\tAdding ..\n"));
         /*
          * Synthesize ..
          * We only have two levels in the volfs hierarchy.  Root's
@@ -607,8 +403,6 @@ volfs_readdir(ap)
             local_dir.d_name[i] = 0;
         error = uiomove((char *) &local_dir, VLFSDIRENTLEN, uio);
         rec_offset++;
-        DBG_VOP(("\t   after adding .., uio_offset = %d, uio_resid = %d\n",
-                (int) uio->uio_offset, uio->uio_resid));
       }
 
     /*
@@ -619,58 +413,26 @@ volfs_readdir(ap)
     if (priv_data->vnode_type == VOLFS_FSNODE)
         {
         *ap->a_eofflag = 1;	/* we got all the way to the end */
-        DBG_VOP_LOCKS_TEST(error);
         return (error);
         }
 
     if (rec_offset > 1) {
-        register struct mount *mp, *nmp;
-        int					validnodeindex;
-        struct proc 		*p = uio->uio_procp;
+		vcs.validindex = 1;		/* we always have "." and ".." */
+		vcs.rec_offset = rec_offset;
+		vcs.vp = ap->a_vp;
+		vcs.uio = uio;
+		
+	
+		vfs_iterate(0, volfs_readdir_callback, &vcs);
 
-        validnodeindex = 1;	/* we always have "." and ".." */
-
-        simple_lock(&mountlist_slock);
-        for (mp = mountlist.cqh_first; mp != (void *)&mountlist; mp = nmp) {
-            if (vfs_busy(mp, LK_NOWAIT, &mountlist_slock, p)) {
-                nmp = mp->mnt_list.cqe_next;
-                continue;
-            }
-
-            if (mp != ap->a_vp->v_mount && validfsnode(mp))
-                validnodeindex++;
-
-            if (rec_offset == validnodeindex)
-              {
-                local_dir.d_fileno = mp->mnt_stat.f_fsid.val[0];
-                local_dir.d_type = DT_DIR;
-                local_dir.d_reclen = VLFSDIRENTLEN;
-                DBG_VOP(("\tAdding dir entry %d for offset %d\n", mp->mnt_stat.f_fsid.val[0], rec_offset));
-                local_dir.d_namlen = sprintf(&local_dir.d_name[0], "%d", mp->mnt_stat.f_fsid.val[0]);
-                error = uiomove((char *) &local_dir, VLFSDIRENTLEN, uio);
-                DBG_VOP(("\t   after adding entry '%s', uio_offset = %d, uio_resid = %d\n",
-                         &local_dir.d_name[0], (int) uio->uio_offset, uio->uio_resid));
-                rec_offset++;
-              }
-
-            simple_lock(&mountlist_slock);
-            nmp = mp->mnt_list.cqe_next;
-            vfs_unbusy(mp, p);
-        }
-        simple_unlock(&mountlist_slock);
-
-        if (mp == (void *) &mountlist)
+        //if (mp == (void *) &mountlist)
             *ap->a_eofflag = 1;	/* we got all the way to the end */
     }
+    uio_setresid(uio, (uio_resid(uio) + lost));
 
-    uio->uio_resid += lost;
-    if (starting_resid == uio->uio_resid)
+    if (starting_resid == uio_resid(uio))
         uio->uio_offset = 0;
 
-    DBG_VOP(("\tExiting, uio_offset = %d, uio_resid = %d, ap->a_eofflag = %d\n",
-            (int) uio->uio_offset, uio->uio_resid, *ap->a_eofflag));
-
-    DBG_VOP_LOCKS_TEST(error);
     return (error);
 }
 
@@ -680,7 +442,7 @@ volfs_readdir(ap)
  *
  * This can cause context switching, so caller should be lock safe
  */
-static int
+int
 validfsnode(struct mount *fsnode)
 {
 
@@ -696,108 +458,13 @@ validfsnode(struct mount *fsnode)
 }
 
 /*
- * volfs_lock - Lock an inode.
- * If its already locked, set the WANT bit and sleep.
- *
- * Locking policy: handled by lockmgr
- */
-int
-volfs_lock(ap)
-    struct vop_lock_args	/* { struct vnode *a_vp; int a_flags; struct
-        proc *a_p; } */ *ap;
-{	
-    int                 retval;
-    struct volfs_vndata *priv_data;
-    DBG_FUNC_NAME("volfs_lock");
-    DBG_VOP_LOCKS_DECL(1);
-#if 0
-	KERNEL_DEBUG((FSDBG_CODE(DBG_FSVN, 0)) | DBG_FUNC_START,
-		     (unsigned int)ap->a_vp, (unsigned int)ap->a_flags, (unsigned int)ap->a_p, 0, 0);
-#endif
-    DBG_VOP_PRINT_FUNCNAME();DBG_VOP_PRINT_VNODE_INFO(ap->a_vp);DBG_VOP(("\n"));
-
-    DBG_VOP_LOCKS_INIT(0,ap->a_vp, VOPDBG_UNLOCKED, VOPDBG_LOCKED, VOPDBG_UNLOCKED, VOPDBG_ZERO);
-    
-    priv_data = (struct volfs_vndata *) ap->a_vp->v_data;
-    retval = lockmgr(&priv_data->lock, ap->a_flags, &ap->a_vp->v_interlock, ap->a_p);
-    DBG_VOP_LOCKS_TEST(retval);
-#if 0
-	KERNEL_DEBUG((FSDBG_CODE(DBG_FSVN, 0)) | DBG_FUNC_END,
-		     (unsigned int)ap->a_vp, (unsigned int)ap->a_flags, (unsigned int)ap->a_p, retval, 0);
-#endif
-    return (retval);
-}
-
-/*
- * volfs_unlock - Unlock an inode.
- *
- * Locking policy: handled by lockmgr
- */
-int
-volfs_unlock(ap)
-    struct vop_unlock_args	/* { struct vnode *a_vp; int a_flags; struct
-        proc *a_p; } */ *ap;
-{
-    int                 retval;
-    struct volfs_vndata *priv_data;
-    DBG_FUNC_NAME("volfs_unlock");
-    DBG_VOP_LOCKS_DECL(1);
-#if 0
-	KERNEL_DEBUG((FSDBG_CODE(DBG_FSVN, 4)) | DBG_FUNC_START,
-		     (unsigned int)ap->a_vp, (unsigned int)ap->a_flags, (unsigned int)ap->a_p, 0, 0);
-#endif
-    DBG_VOP_PRINT_FUNCNAME();DBG_VOP_PRINT_VNODE_INFO(ap->a_vp);DBG_VOP(("\n"));
-
-    DBG_VOP_LOCKS_INIT(0,ap->a_vp, VOPDBG_LOCKED, VOPDBG_UNLOCKED, VOPDBG_LOCKED, VOPDBG_ZERO);
-
-    priv_data = (struct volfs_vndata *) ap->a_vp->v_data;
-    retval = lockmgr(&priv_data->lock, ap->a_flags | LK_RELEASE,
-		     &ap->a_vp->v_interlock, ap->a_p);
-
-    DBG_VOP_LOCKS_TEST(retval);
-#if 0
-	KERNEL_DEBUG((FSDBG_CODE(DBG_FSVN, 4)) | DBG_FUNC_END,
-		     (unsigned int)ap->a_vp, (unsigned int)ap->a_flags, (unsigned int)ap->a_p, retval, 0);
-#endif
-    return (retval);
-}
-
-/*
- * volfs_islocked - Check for a locked inode.
- *
- * Locking policy: ignore
- */
-int
-volfs_islocked(ap)
-    struct vop_islocked_args /* { struct vnode *a_vp; } */ *ap;
-{
-    int                 retval;
-    struct volfs_vndata *priv_data;
-
-    DBG_FUNC_NAME("volfs_islocked");
-    DBG_VOP_LOCKS_DECL(1);
-    //DBG_VOP_PRINT_FUNCNAME();DBG_VOP(("\n"));
-
-    DBG_VOP_LOCKS_INIT(0,ap->a_vp, VOPDBG_IGNORE, VOPDBG_IGNORE, VOPDBG_IGNORE, VOPDBG_ZERO);
-    priv_data = (struct volfs_vndata *) ap->a_vp->v_data;
-    retval = lockstatus(&priv_data->lock);
-
-    DBG_VOP_LOCKS_TEST(retval);
-    return (retval);
-}
-
-/*
  * volfs_pathconf - Return POSIX pathconf information applicable to ufs filesystems.
- *
- * Locking policy: a_vp locked on input and output
  */
-int
+static int
 volfs_pathconf(ap)
-    struct vop_pathconf_args	/* { struct vnode *a_vp; int a_name; int
-        *a_retval; } */ *ap;
+    struct vnop_pathconf_args	/* { struct vnode *a_vp; int a_name; int
+        *a_retval; vfs_context_t a_context; } */ *ap;
 {
-    DBG_VOP(("volfs_pathconf called\n"));
-
     switch (ap->a_name)
       {
         case _PC_LINK_MAX:
@@ -824,65 +491,31 @@ volfs_pathconf(ap)
     /* NOTREACHED */
 }
 
-
-/*
- * Call VOP_GETATTRLIST on a given vnode
- */
-static int
-vp_getattrlist(struct vnode *vp, struct attrlist alist, void *attrbufptr, size_t bufsize, unsigned long options, struct proc *p) {
-	struct iovec iov;
-	struct uio bufuio;
-	
-	iov.iov_base = (char *)attrbufptr;
-	iov.iov_len = bufsize;
-	
-	bufuio.uio_iov = &iov;
-	bufuio.uio_iovcnt = 1;
-	bufuio.uio_offset = 0;
-	bufuio.uio_resid = iov.iov_len;
-	bufuio.uio_segflg = UIO_SYSSPACE;
-	bufuio.uio_rw = UIO_READ;
-	bufuio.uio_procp = p;
-	
-    return VOP_GETATTRLIST(vp, &alist, &bufuio, p->p_ucred, p);
-}
-
 /* 
  * get_parentvp() - internal routine that tries to lookup the parent of vpp.
- * On success, *vpp is the parent vp and is returned locked and the original child 
- * is left unlocked. On failure, the original child will be locked upon return.
+ * On success, *vpp is the parent vp and is returned with a reference. 
  */
 static int
-get_parentvp(struct vnode **vpp, struct mount *mp, struct proc *p)
+get_parentvp(struct vnode **vpp, struct mount *mp, vfs_context_t context)
 {
 	int result;
-	struct attrlist alist;
-	struct finfoattrbuf finfobuf;
+	struct vnode_attr va;
 	struct vnode *child_vp = *vpp;
-
-	alist.bitmapcount = 5;
-	alist.reserved = 0;
-	alist.commonattr = ATTR_CMN_PAROBJID;
-	alist.volattr = 0;
-	alist.dirattr = 0;
-	alist.fileattr = 0;
-	alist.forkattr = 0;
-	result = vp_getattrlist(child_vp, alist, &finfobuf, sizeof(finfobuf), 0, p);
-	if (result)
+	
+	VATTR_INIT(&va);
+	VATTR_WANTED(&va, va_parentid);
+	result = vnode_getattr(child_vp, &va, context);
+	if (result) {
 		return result;
-	
-	/* Release the child vnode before trying to acquire its parent
-	   to avoid vnode deadlock problems with parsing code
-	   coming top-down through the directory hierarchy: */
-	VOP_UNLOCK(child_vp, 0, p);
-	
-	/* Shift attention to the parent directory vnode: */
-	result = VFS_VGET(mp, &finfobuf.fi.parID.fid_objno, vpp);
-	if (result) { 
-		/* Make sure child_vp is still locked on exit: */
-		vn_lock(child_vp, LK_EXCLUSIVE | LK_RETRY, p);
 	}
-	
+
+	/* Shift attention to the parent directory vnode: */
+	result = VFS_VGET(mp, (ino64_t)va.va_parentid, vpp, context);
+
+	if (result == 0 && child_vp->v_parent != *vpp) {
+	        vnode_update_identity(child_vp, *vpp, NULL, 0, 0, VNODE_UPDATE_PARENT);
+	}
+
 	return result;
 }	
 
@@ -891,58 +524,50 @@ get_parentvp(struct vnode **vpp, struct mount *mp, struct proc *p)
  * Look up the parent directory of a given vnode.
  */
 static int
-lookup_parent(u_int id, struct vnode *child_vp, struct vnode **parent_vp, struct proc *p)
+lookup_parent(vnode_t child_vp, vnode_t *parent_vpp, int is_authorized, vfs_context_t context)
 {
-	struct nameidata nd;
-	struct componentname *cnp = &nd.ni_cnd;
-    struct filedesc *fdp = p->p_fd;
+	struct componentname cn;
+	vnode_t new_vp;
 	int error;
 
-	*parent_vp = NULL;
-	
-    /*
-     * Special case lookups for root's parent directory,
-     * recognized by its special id of "1":
-     */
-    if (id != 1) {
-        VREF(child_vp);
-        nd.ni_startdir = child_vp;
-        NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF, UIO_SYSSPACE, (caddr_t)&gDotDot, p);
-    } else {
-        struct vnode *root_vp;
-        
-        error = VFS_ROOT(child_vp->v_mount, &root_vp);
-        if (error) return error;
-        VOP_UNLOCK(root_vp, 0, p);			/* Hold on to the reference */
-        nd.ni_startdir = root_vp;
-        NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF, UIO_SYSSPACE, (caddr_t)&gDot, p);
-    };
-	nd.ni_cnd.cn_cred = nd.ni_cnd.cn_proc->p_ucred;
-    
-    /* Since we can't hit any symlinks, use the source path string directly: */
-    cnp->cn_pnbuf = nd.ni_dirp;
-    nd.ni_pathlen = strlen(cnp->cn_pnbuf);
-	cnp->cn_pnlen = nd.ni_pathlen + 1;
-    cnp->cn_flags |= (HASBUF | SAVENAME);
+	*parent_vpp = NULLVP;
 
-	nd.ni_loopcnt = 0;
+	if (is_authorized == 0) {
+		error = vnode_authorize(child_vp, NULL, KAUTH_VNODE_SEARCH, context);
+		if (error != 0) {
+			return (error);
+		}
+	}
+	new_vp = child_vp->v_parent;
 
-	if ((nd.ni_rootdir = fdp->fd_rdir) == NULL) nd.ni_rootdir = rootvnode;
-	cnp->cn_nameptr = cnp->cn_pnbuf;
-    if (error = lookup(&nd)) {
-        cnp->cn_pnbuf = NULL;
-        return (error);
-    }
-    /*
-     * Check for symbolic link
-     */
-    if (cnp->cn_flags & ISSYMLINK) return ENOENT;
-    if (nd.ni_vp == child_vp) return ELOOP;
+	if (new_vp != NULLVP) {
+	        if ( (error = vnode_getwithref(new_vp)) == 0 )
+		        *parent_vpp = new_vp;
+		return (error);
+	}
+	bzero(&cn, sizeof(cn));
+	cn.cn_nameiop = LOOKUP;
+	cn.cn_context = context;
+	cn.cn_pnbuf = CAST_DOWN(caddr_t, &gDotDot);
+	cn.cn_pnlen = strlen(cn.cn_pnbuf);
+	cn.cn_nameptr = cn.cn_pnbuf;
+	cn.cn_namelen = cn.cn_pnlen;
+	cn.cn_flags = (FOLLOW | LOCKLEAF | ISLASTCN | ISDOTDOT);
 
-    *parent_vp = nd.ni_vp;
-    return 0;
+	error = VNOP_LOOKUP(child_vp, &new_vp, &cn, context);
+	if (error != 0) {
+		return(error);
+	}
+	if (new_vp == child_vp) {
+		vnode_put(new_vp);
+		return ELOOP;
+	}
+	if (child_vp->v_parent == NULLVP) {
+	        vnode_update_identity(child_vp, new_vp, NULL, 0, 0, VNODE_UPDATE_PARENT);
+	}
+	*parent_vpp = new_vp;
+	return 0;
 }
-
 
 
 /*
@@ -950,107 +575,120 @@ lookup_parent(u_int id, struct vnode *child_vp, struct vnode **parent_vp, struct
  */
 
 static int
-verify_fullpathaccess(u_int id, struct vnode *targetvp, struct proc *p) {
+verify_fullpathaccess(struct vnode *targetvp, vfs_context_t context)
+{
 	struct vnode *vp, *parent_vp;
 	struct mount *mp = targetvp->v_mount;
-	struct attrlist alist;
-	struct finfoattrbuf finfobuf;
+	struct proc *p = vfs_context_proc(context);
 	int result;
+	int dp_authorized;
 	struct filedesc *fdp = p->p_fd;	/* pointer to file descriptor state */
-	u_int target_id;
-	u_long vp_id;
 	
-#if 0
-	KERNEL_DEBUG((FSDBG_CODE(DBG_FSVN, 12)) | DBG_FUNC_START,
-		     (unsigned int)targetvp, (unsigned int)mp, (unsigned int)p, 0, 0);
-#endif
-
 	vp = targetvp;
-	vp_id = vp->v_id;
-	if (vp->v_type != VDIR) {
-	  
-		/* The target is a file: get the parent directory. */
-		result = get_parentvp(&vp, mp, p);
-		if (result) goto err_exit;
-	        	
-		/* At this point, targetvp is unlocked (but still referenced), and
-		   vp is the parent directory vnode, held locked */
-	};
-
+	dp_authorized = 0;
 	
-#if MAXPLCENTRIES
-	if (volfs_PLCLookup(mp->mnt_stat.f_fsid.val[0], id, p->p_ucred->cr_uid, p->p_pid)) goto lookup_success;
-#endif
-	/* Keep going up until either the process's root or the process's working directory is hit,
-	   either one of which are potential valid starting points for a full pathname: */
-    target_id = id;
-	while (vp != NULL && (!((vp->v_flag & VROOT) ||	/* Hit "/" */
-			 (vp == fdp->fd_cdir) ||	/* Hit process's working directory */
-	         (vp == fdp->fd_rdir)))) {	/* Hit process chroot()-ed root */
-	     
-	     /* At this point, vp is some directory node and it's always locked */
-	    /* Unlock the starting directory for namei(), retaining a reference... */
-		VOP_UNLOCK(vp, 0, p);
-
-		if (result = lookup_parent(target_id, vp, &parent_vp, p)) {
-			/* 
-			 * If the lookup fails with EACCES and the targetvp is a directory,
-			 * we should try again using get_parentvp(). Without this check, 
-			 * directories that you can navigate to but not traverse will 
-			 * disappear when clicked in the Finder.
-			 */
-			if (result == EACCES && vp == targetvp && vp->v_type == VDIR && (vp->v_flag & VROOT) == 0) {
-				vn_lock(vp, LK_EXCLUSIVE | LK_RETRY, p);
-				parent_vp = vp;
-				if (get_parentvp(&parent_vp, mp, p)) {
-					/* on error, vp is still locked... unlock for lookup_err_exit path */
-					VOP_UNLOCK(vp, 0, p);
-				} else {
-					/* on success, vp is returned unlocked, parent_vp is returned locked */
-					result = 0;
+	/* get the parent directory. */
+	if ((vp->v_flag & VROOT) == 0 && vp != fdp->fd_cdir && vp != fdp->fd_rdir) {
+		if (vp->v_parent == NULLVP || (vp->v_flag & VISHARDLINK) || (vnode_getwithref(vp->v_parent) != 0)) {
+			if (vp->v_type == VDIR) {
+				result = lookup_parent(vp, &parent_vp, dp_authorized, context);
+	
+				/*
+				 * If the lookup fails with EACCES and the vp is a directory,
+				 * we should try again but bypass authorization check. Without this
+				 * workaround directories that you can navigate to but not traverse will 
+				 * disappear when clicked in the Finder.
+				 */
+				if (result == EACCES && (vp->v_flag & VROOT) == 0) {
+					dp_authorized = 1;  /* bypass auth check */
+					if (lookup_parent(vp, &parent_vp, dp_authorized, context) == 0) {
+						result = 0;
+					}
+					dp_authorized = 0; /* force us to authorize */
 				}
-			};
-			if (result) goto lookup_err_exit;
-		};
-		
-		if (vp != targetvp) {
-			vrele(vp);					/* Completely done with that vp now... */
-		};
-		
-		vp = parent_vp;
-        target_id = 0;					/* It's unknown at this point */
-		
-		if (((result = VOP_ACCESS(vp, VEXEC, p->p_ucred, p)) != 0) &&
-			((result = VOP_ACCESS(vp, VREAD, p->p_ucred, p)) != 0)) {
-			VOP_UNLOCK(vp, 0, p);
-			goto lookup_err_exit;
-		};
-	};
-
-#if MAXPLCENTRIES
-	volfs_PLCEnter(mp->mnt_stat.f_fsid.val[0], id, p->p_ucred->cr_uid, p->p_pid);
-#endif
-
-lookup_success:
-    /* Success: the caller has complete access to the initial vnode: */
-	result = 0;
-	
-	if (vp && vp != targetvp) VOP_UNLOCK(vp, 0, p);
-
-lookup_err_exit:
-	if (vp && vp != targetvp) {
-		vrele(vp);
-		vn_lock(targetvp, LK_EXCLUSIVE | LK_RETRY, p);
-		if (vp_id != targetvp->v_id || targetvp->v_type == VBAD) {
-			result = EAGAIN;  /* vnode was recycled */
+				vp = parent_vp;
+			}
+			else {
+				/*
+				 * this is not a directory so we must get parent object ID
+				 */
+				result = get_parentvp(&vp, mp, context);
+				parent_vp = vp;
+			}
+			if (result != 0) 
+				goto err_exit;
 		}
-	};
+		else {
+			/*
+			 * we where able to get a reference on v_parent
+			 */
+			parent_vp = vp = vp->v_parent;
+		}
+	} 
+
+	/*
+	 * Keep going up until either the process's root or the process's working 
+	 * directory is hit, either one of which are potential valid starting points 
+	 * for a full pathname
+	 */
+	while (vp != NULLVP) {
+
+		result = reverse_lookup(vp, &parent_vp, fdp, context, &dp_authorized);
+		if (result == 0) {
+			/*
+			 * we're done and we have access
+			 */
+			break;
+		}
+		if (vp != parent_vp) {
+		        /*
+			 * we where able to walk up the parent chain so now we don't need
+			 * vp any longer
+			 */
+			vnode_put(vp);	
+			vp = parent_vp;
+		}
+		/*
+		 * we have a referenced vp at this point... if dp_authorized == 1, than
+		 * it's been authorized for search, but v_parent was NULL...
+		 * if dp_authorized == 0, than we need to do the authorization check
+		 * before looking up the parent
+		 */
+		if ((vp->v_flag & VROOT) != 0 ||
+		    vp == fdp->fd_cdir || vp == fdp->fd_rdir) {
+		        /*
+			 * we're already at the termination point, which implies that
+			 * the authorization check in the cache failed (otherwise we
+			 * would have returned 'done' from "reverse_lookup"... so,
+			 * do the authorization and bail
+			 */
+			result = vnode_authorize(vp, NULL, KAUTH_VNODE_SEARCH, context);
+			goto lookup_exit;
+		}
+		result = lookup_parent(vp, &parent_vp, dp_authorized, context);
+		if (result != 0) {
+			goto lookup_exit;
+		}
+		if (vp != parent_vp) {
+		        /*
+			 * got the parent so now we don't need vp any longer
+			 */
+			vnode_put(vp);	
+			vp = parent_vp;
+		}
+	} /* while loop */
+
+	/*
+	 * Success: the caller has complete access to the initial vnode
+	 */
+	result = 0; 
+
+lookup_exit:
+	if (vp != NULLVP && vp != targetvp) {
+		vnode_put(vp);
+	}
 		
 err_exit:
-#if 0
-	KERNEL_DEBUG((FSDBG_CODE(DBG_FSVN, 12)) | DBG_FUNC_END,
-		     (unsigned int)targetvp, (unsigned int)mp, (unsigned int)p, result, 0);
-#endif
 	return result;
 };
 
@@ -1060,33 +698,21 @@ err_exit:
  *   id of filesystem to lookup and pointer to vnode pointer to fill in
  */
 static int
-get_fsvnode(our_mount, id, ret_vnode)
-    struct mount       *our_mount;
-    int id;
-    struct vnode      **ret_vnode;
+get_fsvnode(struct mount *our_mount, int id, vnode_t *ret_vnode)
 {
-    register struct mount *mp;
     struct mount       *cur_mount;
+	fsid_t				cur_fsid;
     struct vnode       *cur_vnode;
     struct volfs_vndata *cur_privdata;
 	int					retval;
-
-    //DBG_VOP(("volfs: get_fsvnode called\n"));
+	struct vnode_fsparam vfsp;
+	int	vid = 0;
 
     /*
      * OK, first look up the matching mount on the list of mounted file systems
      */
-    cur_mount = NULL;
-    simple_lock(&mountlist_slock);
-    for (mp = mountlist.cqh_first; mp != (void *)&mountlist; mp = mp->mnt_list.cqe_next)
-      {
-        if (validfsnode(mp) && mp->mnt_stat.f_fsid.val[0] == id)
-          {
-            cur_mount = mp;
-            break;
-          }
-      }
-    simple_unlock(&mountlist_slock);
+	/* the following will return the mount point with vfs_busy held */
+	cur_mount = mount_lookupby_volfsid(id, 1);
 
     if (cur_mount == NULL) {
         /*
@@ -1100,34 +726,36 @@ get_fsvnode(our_mount, id, ret_vnode)
         return ENOENT;
     };
 
+	cur_fsid = cur_mount->mnt_vfsstat.f_fsid;
+
     /*
      * Now search the list attached to the mount structure to
      * see if this vnode is already floating around
      */
 search_vnodelist:
-    cur_vnode = our_mount->mnt_vnodelist.lh_first;
-    while (cur_vnode != NULL)
-      {
+	mount_lock(our_mount);
+	TAILQ_FOREACH(cur_vnode, &our_mount->mnt_vnodelist, v_mntvnodes)  {
         cur_privdata = (struct volfs_vndata *) cur_vnode->v_data;
-        if (cur_privdata->nodeID == id)
+        if (cur_privdata->nodeID == (unsigned int)id)
             {
             if (cur_privdata->fs_mount != cur_mount) {
-                DBG_VOP(("volfs get_fsvnode: Updating fs_mount for vnode 0x%08lX (id = %d) from 0x%08lX to 0x%08lX...\n",
-                         (unsigned long)cur_vnode,
-                         cur_privdata->nodeID,
-                         (unsigned long)cur_privdata->fs_mount,
-                         (unsigned long)cur_mount));
                 cur_privdata->fs_mount = cur_mount;
+                cur_privdata->fs_fsid = cur_fsid;
             };
             break;
             }
-        cur_vnode = cur_vnode->v_mntvnodes.le_next;
-      }
+	}
+	mount_unlock(our_mount);
 
-    //DBG_VOP(("\tfinal cur_mount: 0x%x\n",cur_mount));
     if (cur_vnode) {
-        /* If vget returns an error, cur_vnode will not be what we think it is, try again */
-        if (vget(cur_vnode, LK_EXCLUSIVE, current_proc()) != 0) {
+        vid = vnode_vid(cur_vnode);
+
+        /*
+	 * use vnode_getwithvid since it will wait for a vnode currently being
+	 * terminated... if it returns an error, cur_vnode will not be what we
+	 * think it is, try again
+	 */
+        if (vnode_getwithvid(cur_vnode, vid) != 0) {
             goto search_vnodelist;
         };
         }
@@ -1135,27 +763,40 @@ search_vnodelist:
       {
         MALLOC(cur_privdata, struct volfs_vndata *,
                sizeof(struct volfs_vndata), M_VOLFSNODE, M_WAITOK);
-        retval = getnewvnode(VT_VOLFS, our_mount, volfs_vnodeop_p, &cur_vnode);
-        if (retval != 0) {
-            FREE(cur_privdata, M_VOLFSNODE);
-            return retval;
-        };
-			
+
         cur_privdata->vnode_type = VOLFS_FSNODE;
         cur_privdata->nodeID = id;
 
         cur_privdata->fs_mount = cur_mount;
-        lockinit(&cur_privdata->lock, PINOD, "volfsnode", 0, 0);
-        lockmgr(&cur_privdata->lock, LK_EXCLUSIVE, (struct slock *)0, current_proc());
-        cur_vnode->v_data = cur_privdata;
-        cur_vnode->v_type = VDIR;
-        DBG_VOP(("get_fsvnode returned with new node of "));
-        DBG_VOP_PRINT_VNODE_INFO(cur_vnode);DBG_VOP(("\n"));
+        cur_privdata->fs_fsid = cur_fsid;
+
+		vfsp.vnfs_mp = our_mount;
+		vfsp.vnfs_vtype = VDIR;
+		vfsp.vnfs_str = "volfs";
+		vfsp.vnfs_dvp = 0;
+		vfsp.vnfs_fsnode = cur_privdata;
+		vfsp.vnfs_cnp = 0;
+		vfsp.vnfs_vops = volfs_vnodeop_p;
+		vfsp.vnfs_rdev = 0;
+		vfsp.vnfs_filesize = 0;
+		vfsp.vnfs_flags = VNFS_NOCACHE | VNFS_CANTCACHE;
+		vfsp.vnfs_marksystem = 0;
+		vfsp.vnfs_markroot = 0;
+
+		retval = vnode_create(VNCREATE_FLAVOR, VCREATESIZE, &vfsp, &cur_vnode);
+        if (retval != 0) {
+            FREE(cur_privdata, M_VOLFSNODE);
+			goto out;
+        };
+		cur_vnode->v_tag = VT_VOLFS;
+			
       }
 
     *ret_vnode = cur_vnode;
-
-    return (0);
+	retval = 0;
+out:
+	vfs_unbusy(cur_mount);
+    return (retval);
 }
 
 
@@ -1166,11 +807,7 @@ search_vnodelist:
  *		to a vnode pointer
  */
 static int
-get_filevnode(parent_fs, id, ret_vnode, p)
-    struct mount      	*parent_fs;
-    u_int 				id;
-    struct vnode     	**ret_vnode;
-    struct proc 		*p;
+get_filevnode(struct mount *parent_fs, u_int id, vnode_t *ret_vnode, vfs_context_t context)
 {
     int                 retval;
 
@@ -1179,18 +816,18 @@ again:
 	 * Special case 2 to mean the root of a file system
 	 */
 	if (id == 2)
-		retval = VFS_ROOT(parent_fs, ret_vnode);
+		retval = VFS_ROOT(parent_fs, ret_vnode, context);
 	else
-    	retval = VFS_VGET(parent_fs, &id, ret_vnode);
+		retval = VFS_VGET(parent_fs, (ino64_t)id, ret_vnode, context);
 	if (retval) goto error;
 
-    retval = verify_fullpathaccess(id, *ret_vnode, p);
+	retval = verify_fullpathaccess(*ret_vnode, context);
 	if (retval) {
 		/* An error was encountered verifying that the caller has,
 		   in fact, got access all the way from "/" or their working
 		   directory to the specified item...
 		 */
-		vput(*ret_vnode);
+		vnode_put(*ret_vnode);
 		*ret_vnode = NULL;
 		/* vnode was recycled during access verification. */
 		if (retval == EAGAIN) {
@@ -1203,382 +840,140 @@ error:
 }
 
 
-int
-volfs_lookup(ap)
-    struct vop_lookup_args	/* { struct vnode *a_dvp; struct vnode
-        **a_vpp; struct componentname *a_cnp; } */ *ap;
+static int
+volfs_lookup(struct vnop_lookup_args *ap)
 {
-    struct volfs_vndata *priv_data;
-    char				*cnp;
-    long				namelen;
-    struct mount		*parent_fs;
-    int					unlocked_parent = 0, isdot_or_dotdot = 0;
-    int                 ret_err = ENOENT;
-    DBG_FUNC_NAME("volfs_lookup");
-    DBG_VOP_LOCKS_DECL(2);
+	struct volfs_vndata *priv_data;
+	char  *nameptr;
+	long  namelen;
+	struct mount  *parent_fs;
+	vnode_t	vp;
+	int  isdot_or_dotdot = 0;
+	int  ret_err = ENOENT;
+	char firstchar;
+	int ret_val;
 
 #if 0
 	KERNEL_DEBUG((FSDBG_CODE(DBG_FSVN, 8)) | DBG_FUNC_START,
 		     (unsigned int)ap->a_dvp, (unsigned int)ap->a_cnp, (unsigned int)p, 0, 0);
 #endif
-
-    DBG_VOP(("volfs_lookup called, name = %s, namelen = %ld\n", ap->a_cnp->cn_nameptr, ap->a_cnp->cn_namelen));
-
-    DBG_VOP_LOCKS_INIT(0,ap->a_dvp, VOPDBG_LOCKED, VOPDBG_IGNORE, VOPDBG_IGNORE, VOPDBG_POS);
-    DBG_VOP_LOCKS_INIT(1,*ap->a_vpp, VOPDBG_IGNORE, VOPDBG_LOCKED, VOPDBG_IGNORE, VOPDBG_POS);
-    DBG_VOP_PRINT_FUNCNAME();DBG_VOP(("\n"));
-    DBG_VOP(("\t"));DBG_VOP_PRINT_CPN_INFO(ap->a_cnp);DBG_VOP(("\n"));
-	if (ap->a_cnp->cn_flags & LOCKPARENT)
-		DBG_VOP(("\tLOCKPARENT is set\n"));
-	if (ap->a_cnp->cn_flags & ISLASTCN)
-		{
-		DBG_VOP(("\tISLASTCN is set\n"));
-		if (ap->a_cnp->cn_nameiop == DELETE || ap->a_cnp->cn_nameiop == RENAME)		/* XXX PPD Shouldn't we check for CREATE, too? */
-			{
-			ret_err = EROFS;
-			goto Err_Exit;
-			}
-		}
 	priv_data = ap->a_dvp->v_data;
-	cnp = ap->a_cnp->cn_nameptr;
+	nameptr = ap->a_cnp->cn_nameptr;
 	namelen = ap->a_cnp->cn_namelen;
-	
-#if VOLFS_DEBUG
-    switch (priv_data->vnode_type) {
-        case VOLFS_ROOT:
-            DBG_VOP(("\tparent directory (vnode 0x%08lX) vnode_type is VOLFS_ROOT.\n", (unsigned long)ap->a_dvp));
-            break;
+	firstchar = nameptr[0];
 
-        case VOLFS_FSNODE:
-            DBG_VOP(("\tparent directory (vnode 0x%08lX) vnode_type is VOLFS_FSNODE, nodeID = %d, fs_mount = 0x%08lX.\n",
-                     (unsigned long)ap->a_dvp,
-                     priv_data->nodeID,
-                     (unsigned long)priv_data->fs_mount));
-
-        default:
-            DBG_VOP(("\tparent directory (vnode 0x%08lX) has unknown vnode_type (%d), nodeID = %d.\n",
-                     (unsigned long)ap->a_dvp,
-                     priv_data->vnode_type,
-                     priv_data->nodeID));
-    };
-#endif	/* VOLFS_DEBUG */
-
-	/* first check for "." and ".." */
-	if (cnp[0] == '.')
-	{
-		if (namelen == 1)
-		{
+	/* First check for "." and ".." */
+	if (firstchar == '.') {
+		if (namelen == 1) {
 			/* "." requested */
 			isdot_or_dotdot = 1;
-		    *ap->a_vpp = ap->a_dvp;
-		    VREF(*ap->a_vpp);
-            DBG_VOP_LOCKS_TEST(0);
-            ret_err = 0;
-		}
-		else if (cnp[1] == '.' && namelen == 2)	
-		{
+			*ap->a_vpp = ap->a_dvp;
+			vnode_get(*ap->a_vpp);
+			ret_err = 0;
+		} else if (nameptr[1] == '.' && namelen == 2) {
 			/* ".." requested */
 			isdot_or_dotdot = 1;
-			ret_err = volfs_root(ap->a_dvp->v_mount, ap->a_vpp);
+			ret_err = VFS_ROOT(ap->a_dvp->v_mount, ap->a_vpp, ap->a_context);
 		}
-	}
-
-	/* then look for special file system root symbol ('@') */
-	else if (cnp[0] == '@')
-	{
+	} else if (firstchar == '@') { /* '@' is alias for system root */
 		if ((namelen == 1) && (priv_data->vnode_type != VOLFS_ROOT)) {
-			parent_fs = priv_data->fs_mount;
-			if (!(ap->a_cnp->cn_flags & LOCKPARENT) || !(ap->a_cnp->cn_flags & ISLASTCN)) {
-				VOP_UNLOCK(ap->a_dvp, 0, ap->a_cnp->cn_proc);
-				unlocked_parent = 1;
-			};
-			ret_err = VFS_ROOT(parent_fs, ap->a_vpp);
-        } else {
-            DBG_VOP(("volfs_lookup: pathname = '@' but namelen = %ld and parent vnode_type = %d.\n", namelen, priv_data->vnode_type));
-            *ap->a_vpp = NULL;
-            ret_err = ENOENT;
-        };
-	}
-
-	/* finally, just look for numeric ids... */
-	else if (namelen <= 10 && cnp[0] > '0' && cnp[0] <= '9') /* 10 digits max lead digit must be 1 - 9 */
-	{
+			/* the following returns with iteration count on mount point */
+			parent_fs = mount_list_lookupby_fsid(&priv_data->fs_fsid, 0, 1);
+			if (parent_fs) {
+				ret_val = vfs_busy(parent_fs, LK_NOWAIT);
+				mount_iterdrop(parent_fs);
+				if (ret_val !=0) {
+					*ap->a_vpp = NULL;
+					ret_err = ENOENT;
+				} else {
+					ret_err = VFS_ROOT(parent_fs, ap->a_vpp, ap->a_context);
+					vfs_unbusy(parent_fs);
+				}
+			} else {
+				*ap->a_vpp = NULL;
+				ret_err = ENOENT;
+			}
+		} else {
+			*ap->a_vpp = NULL;
+			ret_err = ENOENT;
+		}
+	} else if (namelen <= 10 && firstchar > '0' && firstchar <= '9') {
 		char	*check_ptr;
 		u_long	id;
 
-		id = strtoul(cnp, &check_ptr, 10);
+		id = strtoul(nameptr, &check_ptr, 10);
 
-    	/*
+		/*
 		 * strtol will leave us at the first non-numeric character.
 		 * we've checked to make sure the component name does
 		 * begin with a numeric so check_ptr must wind up on
 		 * the terminating null or there was other junk following the
 		 * number
 		 */
-		if ((check_ptr - cnp) == namelen)
-		{
-		    if (priv_data->vnode_type == VOLFS_ROOT)
+		if ((check_ptr - nameptr) == namelen) {
+			if (priv_data->vnode_type == VOLFS_ROOT) {
+				/*
+				 * OPTIMIZATION
+				 *
+				 * Obtain the mountpoint and call VFS_VGET in
+				 * one step (ie without creating a vnode for
+				 * the mountpoint).
+				 */
+				if (check_ptr[0] == '/' &&
+				    check_ptr[1] > '0' && check_ptr[1] <= '9') {
+					struct mount *mp;
+					struct vnode *vp;
+					u_long	id2;
+					char *endptr;
+		
+					/* this call will return mount point with vfs_busy held */
+					mp = mount_lookupby_volfsid(id, 1);
+					if (mp == NULL) {
+						*ap->a_vpp = NULL;
+						return ENOENT;
+					}
+					id2 = strtoul(&check_ptr[1], &endptr, 10);
+					if ((endptr[0] == '/' || endptr[0] == '\0') &&
+					    get_filevnode(mp, id2, &vp, ap->a_context) == 0) {
+						ap->a_cnp->cn_consume = endptr - check_ptr;
+						*ap->a_vpp = vp;
+						vfs_unbusy(mp);
+						return (0);
+					}
+					vfs_unbusy(mp);
+				}
+				/* Fall through to default behavior... */
+
 				ret_err = get_fsvnode(ap->a_dvp->v_mount, id, ap->a_vpp);
-		    else {
-		    	parent_fs = priv_data->fs_mount;
-                        if (!(ap->a_cnp->cn_flags & LOCKPARENT) || !(ap->a_cnp->cn_flags & ISLASTCN)) {
-                                VOP_UNLOCK(ap->a_dvp, 0, ap->a_cnp->cn_proc);
-                                unlocked_parent = 1;
-                        };
-                        ret_err = get_filevnode(parent_fs, id, ap->a_vpp, ap->a_cnp->cn_proc);
+
+			} else {
+				parent_fs = mount_list_lookupby_fsid(&priv_data->fs_fsid, 0, 1);
+				if (parent_fs) {
+					ret_val = vfs_busy(parent_fs, LK_NOWAIT);
+					mount_iterdrop(parent_fs);
+					if (ret_val !=0) {
+						*ap->a_vpp = NULL;
+						ret_err = ENOENT;
+					} else {
+						ret_err = get_filevnode(parent_fs, id, ap->a_vpp, ap->a_context);
+						vfs_unbusy(parent_fs);
+					}
+				} else {
+						*ap->a_vpp = NULL;
+						ret_err = ENOENT;
+				}
 			}
 		}
 	}
+	vp = *ap->a_vpp;
 
-	if (!isdot_or_dotdot && *ap->a_vpp && VPARENT(*ap->a_vpp) == NULL && ap->a_dvp != *ap->a_vpp) {
-		if (VPARENT(ap->a_dvp) == *ap->a_vpp) {
-			panic("volfs: ap->a_dvp 0x%x has parent == a_vpp 0x%x\n",
-				  ap->a_dvp, *ap->a_vpp);
-		}
-		vget(ap->a_dvp, 0, ap->a_cnp->cn_proc);
-		VPARENT(*ap->a_vpp) = ap->a_dvp;
-	}
+	if ( ret_err == 0 && !isdot_or_dotdot && (vp != NULLVP) && (vp->v_parent == NULLVP))
+	        vnode_update_identity(vp, ap->a_dvp, NULL, 0, 0, VNODE_UPDATE_PARENT);
 
-	if (!unlocked_parent && (!(ap->a_cnp->cn_flags & LOCKPARENT) || !(ap->a_cnp->cn_flags & ISLASTCN))) {
-		VOP_UNLOCK(ap->a_dvp, 0, ap->a_cnp->cn_proc);
-	};
-
-	/* XXX PPD Should we do something special in case LOCKLEAF isn't set? */
-
-Err_Exit:
-
-	DBG_VOP_UPDATE_VP(1, *ap->a_vpp);
-	DBG_VOP_LOCKS_TEST(ret_err);
-    
 #if 0
 	KERNEL_DEBUG((FSDBG_CODE(DBG_FSVN, 8)) | DBG_FUNC_START,
 		     (unsigned int)ap->a_dvp, (unsigned int)ap->a_cnp, (unsigned int)p, ret_err, 0);
 #endif
-    return (ret_err);
+	return (ret_err);
 }
-
-#if DBG_VOP_TEST_LOCKS
-
-#if 0
-static void DbgLookupTest(	char *funcname, struct componentname  *cnp, struct vnode *dvp, struct vnode *vp)
-{
-    int 		flags = cnp->cn_flags;
-    int 		nameiop = cnp->cn_nameiop;
-
-    DBG_VOP (("%s: Action:", funcname));
-    switch (nameiop)
-        {
-        case LOOKUP:
-            PRINTIT ("LOOKUP");
-            break;
-        case CREATE:
-            PRINTIT ("CREATE");
-            break;
-        case DELETE:
-            PRINTIT ("DELETE");
-            break;
-        case RENAME:
-            PRINTIT ("RENAME");
-            break;
-        default:
-            PRINTIT ("!!!UNKNOWN!!!!");
-            break;
-            }
-    PRINTIT(" flags: 0x%x ",flags );
-    if (flags & LOCKPARENT)
-        PRINTIT (" Lock Parent");
-    if (flags & ISLASTCN)
-        PRINTIT (" Last Action");
-    PRINTIT("\n");
-
-    if (dvp)
-        {
-        PRINTIT ("%s: Parent vnode exited ", funcname);
-    if (VOP_ISLOCKED(dvp))
-            PRINTIT("LOCKED\n");
-        else
-            PRINTIT("UNLOCKED\n");
-        }
-    if (vp && vp==dvp)
-        {
-        PRINTIT ("%s: Found and Parent are the same\n", funcname);
-        }
-    else if (vp)
-        {
-        PRINTIT ("%s: Found vnode exited ", funcname);
-    if (VOP_ISLOCKED(vp))
-            PRINTIT("LOCKED\n");
-        else
-            PRINTIT("UNLOCKED\n");
-        }
-    else
-        PRINTIT ("%s: Found vnode exited NULL\n", funcname);
-
-
-}
-#endif
-
-static void DbgVopTest( int maxSlots,
-                 int retval,
-                 VopDbgStoreRec *VopDbgStore,
-                 char *funcname)
-{
-    int index;
-
-    for (index = 0; index < maxSlots; index++)
-      {
-        if (VopDbgStore[index].id != index) {
-            PRINTIT("%s: DBG_VOP_LOCK: invalid id field (%d) in target entry (#%d).\n", funcname, VopDbgStore[index].id, index);
-		return;
-        };
-
-        if ((VopDbgStore[index].vp != NULL) &&
-            ((VopDbgStore[index].vp->v_data==NULL)))
-            continue;
-
-        switch (VopDbgStore[index].inState)
-          {
-            case VOPDBG_IGNORE:
-            case VOPDBG_SAME:
-                /* Do Nothing !!! */
-                break;
-            case VOPDBG_LOCKED:
-            case VOPDBG_UNLOCKED:
-            case VOPDBG_LOCKNOTNIL:
-              {
-                  if (VopDbgStore[index].vp == NULL && (VopDbgStore[index].inState != VOPDBG_LOCKNOTNIL)) {
-                      PRINTIT ("%s: InState check: Null vnode ptr in entry #%d\n", funcname, index);
-                  } else if (VopDbgStore[index].vp != NULL) {
-                      switch (VopDbgStore[index].inState)
-                        {
-                          case VOPDBG_LOCKED:
-                          case VOPDBG_LOCKNOTNIL:
-                              if (VopDbgStore[index].inValue == 0)
-                                {
-                                  PRINTIT ("%s: %d Entry: not LOCKED:", funcname, index); DBG_VOP(("\n"));
-                                }
-                              break;
-                          case VOPDBG_UNLOCKED:
-                              if (VopDbgStore[index].inValue != 0)
-                                {
-                                  PRINTIT ("%s: %d Entry: not UNLOCKED:", funcname, index); DBG_VOP(("\n"));
-                                }
-                              break;
-                        }
-                  }
-                  break;
-              }
-            default:
-                PRINTIT ("%s: DBG_VOP_LOCK on entry: bad lock test value: %d\n", funcname, VopDbgStore[index].errState);
-          }
-
-
-        if (retval != 0)
-          {
-            switch (VopDbgStore[index].errState)
-              {
-                case VOPDBG_IGNORE:
-                    /* Do Nothing !!! */
-                    break;
-                case VOPDBG_LOCKED:
-                case VOPDBG_UNLOCKED:
-                case VOPDBG_SAME:
-                  {
-                      if (VopDbgStore[index].vp == NULL) {
-                          PRINTIT ("%s: ErrState check: Null vnode ptr in entry #%d\n", funcname, index);
-                      } else {
-                          VopDbgStore[index].outValue = VOP_ISLOCKED(VopDbgStore[index].vp);
-                          switch (VopDbgStore[index].errState)
-                            {
-                              case VOPDBG_LOCKED:
-                                  if (VopDbgStore[index].outValue == 0)
-                                    {
-                                      PRINTIT ("%s: %d Error: not LOCKED:", funcname, index); DBG_VOP(("\n"));
-                                    }
-                                  break;
-                              case VOPDBG_UNLOCKED:
-                                  if (VopDbgStore[index].outValue != 0)
-                                    {
-                                      PRINTIT ("%s: %d Error: not UNLOCKED:", funcname, index); DBG_VOP(("\n"));
-                                    }
-                                  break;
-                              case VOPDBG_SAME:
-                                  if (VopDbgStore[index].outValue != VopDbgStore[index].inValue)
-                                      PRINTIT ("%s: Error: In/Out locks are DIFFERENT: 0x%x, inis %d and out is %d\n", funcname, (u_int)VopDbgStore[index].vp, VopDbgStore[index].inValue, VopDbgStore[index].outValue);
-                                  break;
-                            }
-                      }
-                      break;
-                  }
-                case VOPDBG_LOCKNOTNIL:
-                    if (VopDbgStore[index].vp != NULL) {
-                    VopDbgStore[index].outValue = VOP_ISLOCKED(VopDbgStore[index].vp);
-                        if (VopDbgStore[index].outValue == 0)
-                            PRINTIT ("%s: Error: %d Not LOCKED: 0x%x\n", funcname, index, (u_int)VopDbgStore[index].vp);
-                    }
-                    break;
-                default:
-                    PRINTIT ("%s: Error: bad lock test value: %d\n", funcname, VopDbgStore[index].errState);
-              }
-          }
-        else
-          {
-            switch (VopDbgStore[index].outState)
-              {
-                case VOPDBG_IGNORE:
-                    /* Do Nothing !!! */
-                    break;
-                case VOPDBG_LOCKED:
-                case VOPDBG_UNLOCKED:
-                case VOPDBG_SAME:
-                    if (VopDbgStore[index].vp == NULL) {
-                        PRINTIT ("%s: OutState: Null vnode ptr in entry #%d\n", funcname, index);
-                    };
-                    if (VopDbgStore[index].vp != NULL)
-                      {
-                    VopDbgStore[index].outValue = VOP_ISLOCKED(VopDbgStore[index].vp);
-                        switch (VopDbgStore[index].outState)
-                          {
-                            case VOPDBG_LOCKED:
-                                if (VopDbgStore[index].outValue == 0)
-                                  {
-                                    PRINTIT ("%s: %d Out: not LOCKED:", funcname, index); DBG_VOP(("\n"));
-                                  }
-                                break;
-                            case VOPDBG_UNLOCKED:
-                                if (VopDbgStore[index].outValue != 0)
-                                  {
-                                    PRINTIT ("%s: %d Out: not UNLOCKED:", funcname, index); DBG_VOP(("\n"));
-                                  }
-                                break;
-                            case VOPDBG_SAME:
-                                if (VopDbgStore[index].outValue != VopDbgStore[index].inValue)
-                                    PRINTIT ("%s: Out: In/Out locks are DIFFERENT: 0x%x, inis %d and out is %d\n", funcname, (u_int)VopDbgStore[index].vp, VopDbgStore[index].inValue, VopDbgStore[index].outValue);
-                                break;
-                          }
-                      }
-                    break;
-                case VOPDBG_LOCKNOTNIL:
-                    if (VopDbgStore[index].vp != NULL) {
-                    if (&((struct volfs_vndata *)(VopDbgStore[index].vp->v_data))->lock == NULL)
-                            PRINTIT ("%s: DBG_VOP_LOCK on out: Null lock on vnode 0x%x\n", funcname, (u_int)VopDbgStore[index].vp);
-                        else {
-                        VopDbgStore[index].outValue = VOP_ISLOCKED(VopDbgStore[index].vp);
-                            if (VopDbgStore[index].outValue == 0)
-                              {
-                                PRINTIT ("%s: DBG_VOP_LOCK on out: Should be LOCKED:", funcname); DBG_VOP(("\n"));
-                              }
-                        }
-                    }
-                    break;
-                default:
-                    PRINTIT ("%s: DBG_VOP_LOCK on out: bad lock test value: %d\n", funcname, VopDbgStore[index].outState);
-              }
-          }
-
-        VopDbgStore[index].id = -1;		/* Invalidate the entry to allow panic-free re-use */
-      }	
-}
-
-#endif /* DBG_VOP_TEST_LOCKS */
 

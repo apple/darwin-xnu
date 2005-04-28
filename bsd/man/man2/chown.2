@@ -1,6 +1,3 @@
-.\"	$OpenBSD: chown.2,v 1.3 1997/01/26 05:10:33 downsj Exp $
-.\"	$NetBSD: chown.2,v 1.10 1995/10/12 15:40:47 jtc Exp $
-.\"
 .\" Copyright (c) 1980, 1991, 1993, 1994
 .\"	The Regents of the University of California.  All rights reserved.
 .\"
@@ -34,29 +31,31 @@
 .\"
 .\"     @(#)chown.2	8.4 (Berkeley) 4/19/94
 .\"
-.Dd January 25, 1997
+.Dd April 19, 1994
 .Dt CHOWN 2
 .Os
 .Sh NAME
 .Nm chown ,
-.Nm fchown
-.Nd change owner and group of a file or link
+.Nm fchown ,
+.Nm lchown
+.Nd change owner and group of a file
 .Sh SYNOPSIS
-.Fd #include <sys/types.h>
-.Fd #include <unistd.h>
+.In unistd.h
 .Ft int
 .Fn chown "const char *path" "uid_t owner" "gid_t group"
 .Ft int
 .Fn fchown "int fd" "uid_t owner" "gid_t group"
+.Ft int
+.Fn lchown "const char *path" "uid_t owner" "gid_t group"
 .Sh DESCRIPTION
-The owner ID and group ID of the file (or link)
+The owner ID and group ID of the file
 named by
 .Fa path
 or referenced by
 .Fa fd
 is changed as specified by the arguments
 .Fa owner
-and 
+and
 .Fa group .
 The owner of a file may change the
 .Fa group
@@ -66,36 +65,49 @@ but the change
 .Fa owner
 capability is restricted to the super-user.
 .Pp
-.Fn Chown
+The
+.Fn chown
+system call
 clears the set-user-id and set-group-id bits
 on the file
 to prevent accidental or mischievous creation of
-set-user-id and set-group-id programs.
+set-user-id and set-group-id programs if not executed
+by the super-user.
+The
+.Fn chown
+system call
+follows symbolic links to operate on the target of the link
+rather than the link itself.
 .Pp
-.Fn Fchown
+The
+.Fn fchown
+system call
 is particularly useful when used in conjunction
 with the file locking primitives (see
 .Xr flock 2 ) .
 .Pp
+The
+.Fn lchown
+system call is similar to
+.Fn chown
+but does not follow symbolic links.
+.Pp
 One of the owner or group id's
 may be left unchanged by specifying it as -1.
 .Sh RETURN VALUES
-Zero is returned if the operation was successful;
--1 is returned if an error occurs, with a more specific
-error code being placed in the global variable
-.Va errno .
+.Rv -std
 .Sh ERRORS
-.Fn Chown
-will fail and the file or link will be unchanged if:
+The
+.Fn chown
+and
+.Fn lchown
+will fail and the file will be unchanged if:
 .Bl -tag -width Er
 .It Bq Er ENOTDIR
 A component of the path prefix is not a directory.
 .It Bq Er ENAMETOOLONG
-A component of a pathname exceeded 
-.Dv {NAME_MAX}
-characters, or an entire path name exceeded 
-.Dv {PATH_MAX}
-characters.
+A component of a pathname exceeded 255 characters,
+or an entire path name exceeded 1023 characters.
 .It Bq Er ENOENT
 The named file does not exist.
 .It Bq Er EACCES
@@ -107,20 +119,27 @@ The effective user ID is not the super-user.
 .It Bq Er EROFS
 The named file resides on a read-only file system.
 .It Bq Er EFAULT
-.Fa Path
+The
+.Fa path
+argument
 points outside the process's allocated address space.
 .It Bq Er EIO
 An I/O error occurred while reading from or writing to the file system.
 .El
 .Pp
-.Fn Fchown
-will fail if:
+The
+.Fn fchown
+system call will fail if:
 .Bl -tag -width Er
 .It Bq Er EBADF
+The
 .Fa fd
+argument
 does not refer to a valid descriptor.
 .It Bq Er EINVAL
+The
 .Fa fd
+argument
 refers to a socket, not a file.
 .It Bq Er EPERM
 The effective user ID is not the super-user.
@@ -130,24 +149,33 @@ The named file resides on a read-only file system.
 An I/O error occurred while reading from or writing to the file system.
 .El
 .Sh SEE ALSO
-.Xr chown 8 ,
 .Xr chgrp 1 ,
 .Xr chmod 2 ,
-.Xr flock 2
+.Xr flock 2 ,
+.Xr chown 8
 .Sh STANDARDS
 The
 .Fn chown
-function is expected to conform to 
-.St -p1003.1-88 .
+system call is expected to conform to
+.St -p1003.1-90 .
 .Sh HISTORY
 The
+.Fn chown
+function appeared in
+.At v7 .
+The
 .Fn fchown
-function call appeared in
+system call appeared in
 .Bx 4.2 .
 .Pp
 The
 .Fn chown
 and
 .Fn fchown
-functions were changed to follow symbolic links in
+system calls were changed to follow symbolic links in
 .Bx 4.4 .
+The
+.Fn lchown
+system call was added in
+.Fx 3.0
+to compensate for the loss of functionality.

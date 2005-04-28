@@ -38,7 +38,7 @@
 #if KERNEL
 
 #include <stdarg.h>
-#include <string.h>
+//#include <string.h>
 
 #include <sys/systm.h>
 
@@ -55,12 +55,11 @@ enum { false = 0, true = 1 };
 
 #define vm_page_size page_size
 
-extern load_return_t fatfile_getarch(
-    void            * vp,       // normally a (struct vnode *)
-    vm_offset_t       data_ptr,
-    struct fat_arch * archret);
+extern void kld_error_vprintf(const char *format, va_list ap);
 
 __private_extern__ char *strstr(const char *in, const char *str);
+extern struct mach_header _mh_execute_header;
+extern struct segment_command *getsegbyname(char *seg_name);	// 32 bit only
 
 #else /* !KERNEL */
 
@@ -167,7 +166,7 @@ typedef struct Data {
 } Data, *DataRef;
 
 struct sectionRecord {
-    const struct section *fSection;
+    const struct section *fSection;	// 32 bit mach object section
     DataRef fRelocCache;
 };
 
@@ -241,8 +240,6 @@ findSymbolByName(struct fileRecord *file, const char *symname);
 
 static void errprintf(const char *fmt, ...)
 {
-    extern void kld_error_vprintf(const char *format, va_list ap);
-
     va_list ap;
 
     va_start(ap, fmt);
@@ -381,6 +378,10 @@ symbolname(const struct fileRecord *file, const struct nlist *sym)
     unsigned int index;
 
     index = sym - file->fSymbolBase;
+
+    if (index && !sym->n_un.n_strx)
+       return file->fStringBase + sym->n_value;
+
     if (index < file->fSymtab->nsyms)
         return symNameByIndex(file,  index);
 
@@ -605,6 +606,7 @@ kld_set_architecture(const NXArchInfo * arch)
     sPreferArchInfo = arch;
 }
 
+// This function can only operate on 32 bit mach-o files
 Boolean
 kld_macho_swap(struct mach_header * mh)
 {
@@ -648,6 +650,7 @@ kld_macho_swap(struct mach_header * mh)
     return (true);
 }
 
+// This function can only operate on 32 bit mach-o files
 void
 kld_macho_unswap(struct mach_header * mh, Boolean didSwap, int symbols)
 {
@@ -702,6 +705,8 @@ kld_macho_unswap(struct mach_header * mh, Boolean didSwap, int symbols)
 
 #endif /* !KERNEL */
 
+// Note: This functions is only called from kld_file_map()
+// This function can only operate on 32 bit mach-o files
 static Boolean findBestArch(struct fileRecord *file, const char *pathName)
 {
     unsigned long magic;
@@ -797,6 +802,7 @@ static Boolean findBestArch(struct fileRecord *file, const char *pathName)
     return true;
 }
 
+// This function can only operate on segments from 32 bit mach-o files
 static Boolean
 parseSegments(struct fileRecord *file, struct segment_command *seg)
 {
@@ -902,6 +908,8 @@ tryRemangleAgain:
     return true;
 }
 
+// This function can only operate on symbol table files from  32 bit
+// mach-o files
 static Boolean parseSymtab(struct fileRecord *file, const char *pathName)
 {
     const struct nlist *sym;
@@ -996,7 +1004,7 @@ static Boolean parseSymtab(struct fileRecord *file, const char *pathName)
 		errprintf("%s: Undefined in symbol set: %s\n", pathName, symname);
 		patchsym->n_type = N_ABS;
 		patchsym->n_desc  = 0;
-		patchsym->n_value = 0;
+		patchsym->n_value = patchsym->n_un.n_strx;
 		patchsym->n_un.n_strx = 0;
 	    }
 
@@ -1129,7 +1137,7 @@ findSymbolByAddress(const struct fileRecord *file, void *entry)
 }
 
 static const struct nlist *
-findSymbolByAddressInAllFiles(const struct fileRecord * fromFile, 
+findSymbolByAddressInAllFiles(__unused const struct fileRecord * fromFile, 
 			    void *entry, const struct fileRecord **resultFile)
 {
     int i, nfiles = 0;
@@ -1588,7 +1596,7 @@ static Boolean mergeOSObjectsForFile(const struct fileRecord *file)
 	    ("Unable to allocate memory metaclass list\n", file->fPath));
     }
     else {	/* perform a duplicate check */
-	int i, j, cnt1, cnt2;
+	int k, j, cnt1, cnt2;
 	struct metaClassRecord **list1, **list2;
 
 	list1 = (struct metaClassRecord **) DataGetPtr(file->fClassList);
@@ -1596,11 +1604,11 @@ static Boolean mergeOSObjectsForFile(const struct fileRecord *file)
 	list2 = (struct metaClassRecord **) DataGetPtr(sMergeMetaClasses);
 	cnt2  = DataGetLength(sMergeMetaClasses) / sizeof(*list2);
 
-	for (i = 0; i < cnt1; i++) {
+	for (k = 0; k < cnt1; k++) {
 	    for (j = 0; j < cnt2; j++) {
-		if (!strcmp(list1[i]->fClassName, list2[j]->fClassName)) {
+		if (!strcmp(list1[k]->fClassName, list2[j]->fClassName)) {
 		    errprintf("duplicate class %s in %s & %s\n",
-			      list1[i]->fClassName,
+			      list1[k]->fClassName,
 			      file->fPath, list2[j]->fFile->fPath);
 		}
 	    }
@@ -2218,6 +2226,8 @@ static Boolean growImage(struct fileRecord *file, vm_size_t delta)
 #endif /* KERNEL */
 }
 
+// Note: This function is only called from kld_file_prepare_for_link()
+// This function can only operate on 32 bit mach-o files
 static Boolean
 prepareFileForLink(struct fileRecord *file)
 {
@@ -2256,7 +2266,7 @@ DEBUG_LOG(("Linking 2 %s\n", file->fPath));	// @@@ gvdl:
 	    // We will need to repair the reloc list 
 	    for (j = 0; j < nreloc; j++, rec++) {
 		void **entry;
-		struct nlist *sym;
+		struct nlist *repairSym;
     
 		// Repair Damage to object image
 		entry = (void **) (sectionBase + rec->fRInfo->r_address);
@@ -2264,12 +2274,12 @@ DEBUG_LOG(("Linking 2 %s\n", file->fPath));	// @@@ gvdl:
 
 		// Check if the symbol that this relocation entry points
 		// to is marked as erasable 
-		sym = (struct nlist *) rec->fSymbol;
-		if (sym && sym->n_type == (N_EXT | N_UNDF)
-		&&  sym->n_sect == (unsigned char) -1) {
+		repairSym = (struct nlist *) rec->fSymbol;
+		if (repairSym && repairSym->n_type == (N_EXT | N_UNDF)
+		&&  repairSym->n_sect == (unsigned char) -1) {
 		    // It is in use so we better clear the mark
-		    sym->n_un.n_strx = -sym->n_un.n_strx;
-		    sym->n_sect = NO_SECT;
+		    repairSym->n_un.n_strx = -repairSym->n_un.n_strx;
+		    repairSym->n_sect = NO_SECT;
 		}
 	    }
 
@@ -2355,6 +2365,7 @@ DEBUG_LOG(("Linking 2 %s\n", file->fPath));	// @@@ gvdl:
     }
 
     // Don't need the new strings any more
+    
     if (file->fNewStringBlocks){
         last = DataGetLength(file->fNewStringBlocks) / sizeof(DataRef);
         stringBlocks = (DataRef *) DataGetPtr(file->fNewStringBlocks);
@@ -2363,6 +2374,7 @@ DEBUG_LOG(("Linking 2 %s\n", file->fPath));	// @@@ gvdl:
         last =0;
         stringBlocks=0;
     }
+    
     for (i = 0; i < last; i++)
         DataRelease(stringBlocks[i]);
 
@@ -2416,6 +2428,7 @@ DEBUG_LOG(("Linking 2 %s\n", file->fPath));	// @@@ gvdl:
     return true;
 }
 
+// This function can only operate on 32 bit mach-o files
 Boolean
 #if KERNEL
 kld_file_map(const char *pathName,
@@ -2451,7 +2464,7 @@ kld_file_map(const char *pathName)
 	} *machO;
 	const struct load_command *cmd;
 	boolean_t lookVMRange;
-        int i;
+        unsigned long i;
 
 	if (!findBestArch(&file, pathName))
 	    break;
@@ -2544,9 +2557,6 @@ kld_file_map(const char *pathName)
         // Automatically load the kernel's link edit segment if we are
         // attempting to load a driver.
 	if (!sKernelFile) {
-	    extern struct mach_header _mh_execute_header;
-	    extern struct segment_command *getsegbyname(char *seg_name);
-    
 	    struct segment_command *sg;
 	    size_t kernelSize;
 	    Boolean ret;
@@ -2683,7 +2693,7 @@ Boolean kld_file_patch_OSObjects(const char *pathName)
     return true;
 }
 
-Boolean kld_file_prepare_for_link()
+Boolean kld_file_prepare_for_link(void)
 {
     if (sMergedFiles) {
 	unsigned long i, nmerged = 0;
@@ -2707,7 +2717,7 @@ Boolean kld_file_prepare_for_link()
     return true;
 }
 
-void kld_file_cleanup_all_resources()
+void kld_file_cleanup_all_resources(void)
 {
     unsigned long i, nfiles;
 

@@ -77,7 +77,6 @@
 
 #include <net/if.h>
 #include <net/if_types.h>
-#include <net/netisr.h>
 #include <net/route.h>
 #include <net/bpf.h>
 
@@ -109,12 +108,12 @@
 
 #include "bpfilter.h"
 
-static int dummyioctl __P((struct ifnet *, u_long, caddr_t));
-int dummyoutput __P((struct ifnet *, register struct mbuf *, struct sockaddr *,
-	register struct rtentry *));
-static void dummyrtrequest __P((int, struct rtentry *, struct sockaddr *));
+static int dummyioctl(struct ifnet *, u_long, caddr_t);
+int dummyoutput(struct ifnet *, register struct mbuf *, struct sockaddr *,
+	register struct rtentry *);
+static void dummyrtrequest(int, struct rtentry *, struct sockaddr *);
 
-static void dummyattach __P((void *));
+static void dummyattach(void *);
 PSEUDO_SET(dummyattach, if_dummy);
 
 #if TINY_DUMMYMTU
@@ -171,8 +170,6 @@ dummyoutput(ifp, m, dst, rt)
 	struct sockaddr *dst;
 	register struct rtentry *rt;
 {
-	int s, isr;
-	register struct ifqueue *ifq = 0;
 
 	if ((m->m_flags & M_PKTHDR) == 0)
 		panic("dummyoutput no HDR");
@@ -216,62 +213,9 @@ dummyoutput(ifp, m, dst, rt)
 	}
 	ifp->if_opackets++;
 	ifp->if_obytes += m->m_pkthdr.len;
-	switch (dst->sa_family) {
-
-#if INET
-	case AF_INET:
-		ifq = &ipintrq;
-		isr = NETISR_IP;
-		break;
-#endif
-#if IPX
-	case AF_IPX:
-		ifq = &ipxintrq;
-		isr = NETISR_IPX;
-		break;
-#endif
-#if INET6
-	case AF_INET6:
-		ifq = &ip6intrq;
-		isr = NETISR_IPV6;
-		break;
-#endif
-#if NS
-	case AF_NS:
-		ifq = &nsintrq;
-		isr = NETISR_NS;
-		break;
-#endif
-#if ISO
-	case AF_ISO:
-		ifq = &clnlintrq;
-		isr = NETISR_ISO;
-		break;
-#endif
-#if NETATALK
-	case AF_APPLETALK:
-	        ifq = &atintrq2;
-		isr = NETISR_ATALK;
-		break;
-#endif NETATALK
-	default:
-		printf("%s: can't handle af%d\n",
-		       if_name(ifp), dst->sa_family);
-		m_freem(m);
-		return (EAFNOSUPPORT);
-	}
-	s = splimp();
-	if (IF_QFULL(ifq)) {
-		IF_DROP(ifq);
-		m_freem(m);
-		splx(s);
-		return (ENOBUFS);
-	}
-	IF_ENQUEUE(ifq, m);
-	schednetisr(isr);
+	proto_inject(dst->sa_family, m);
 	ifp->if_ipackets++;
 	ifp->if_ibytes += m->m_pkthdr.len;
-	splx(s);
 	return (0);
 }
 
@@ -311,7 +255,7 @@ dummyioctl(ifp, cmd, data)
 	switch (cmd) {
 
 	case SIOCSIFADDR:
-		ifp->if_flags |= IFF_UP | IFF_RUNNING;
+		ifnet_set_flags(ifp, IFF_UP | IFF_RUNNING, IFF_UP | IFF_RUNNING);
 		ifa = (struct ifaddr *)data;
 		ifa->ifa_rtrequest = dummyrtrequest;
 		/*

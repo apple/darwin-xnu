@@ -34,8 +34,7 @@
 #define _NETINET6_MLD6_VAR_H_
 #include <sys/appleapiopts.h>
 
-#ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
+#ifdef KERNEL_PRIVATE
 
 #define MLD6_RANDOM_DELAY(X) (random() % (X) + 1)
 
@@ -45,12 +44,11 @@
 #define MLD6_OTHERLISTENER			0
 #define MLD6_IREPORTEDLAST			1
 
-void	mld6_init __P((void));
-void	mld6_input __P((struct mbuf *, int));
-void	mld6_start_listening __P((struct in6_multi *));
-void	mld6_stop_listening __P((struct in6_multi *));
-void	mld6_fasttimeo __P((void));
-#endif /* __APPLE_API_PRIVATE */
-#endif /* KERNEL */
+void	mld6_init(void);
+void	mld6_input(struct mbuf *, int);
+void	mld6_start_listening(struct in6_multi *);
+void	mld6_stop_listening(struct in6_multi *);
+void	mld6_fasttimeo(void);
+#endif KERNEL_PRIVATE
 
-#endif /* _NETINET6_MLD6_VAR_H_ */
+#endif _NETINET6_MLD6_VAR_H_

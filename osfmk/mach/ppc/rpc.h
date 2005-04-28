@@ -21,20 +21,9 @@
  */
 /*
  * @OSF_COPYRIGHT@
- * 
  */
-#ifndef _MACH_PPC_RPC_H_
-#define _MACH_PPC_RPC_H_
 
-#endif	/* _MACH_PPC_RPC_H_ */
+#ifndef	_MACH_PPC_RPC_H_
+#define	_MACH_PPC_RPC_H_
 
-
-
-
-
-
-
-
-
-
-
+#endif	_MACH_PPC_RPC_H_

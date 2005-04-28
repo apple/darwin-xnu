@@ -68,15 +68,14 @@
  * special devices. It is allocated in checkalias and freed
  * in vgone.
  */
-struct lockf;
 struct specinfo {
 	struct	vnode **si_hashchain;
 	struct	vnode *si_specnext;
 	long	si_flags;
 	dev_t	si_rdev;
-	daddr_t si_size;                  /* device block size in bytes */
-	u_int64_t	si_devsize;	  /* actual device size in bytes */
-	struct lockf	*si_lockf;	/* head of advisory lock list */
+	daddr_t	si_size;		/* device block size in bytes */
+	daddr64_t	si_lastr;	/* last read blkno (read-ahead) */
+	u_int64_t	si_devsize;	/* actual device size in bytes */
 };
 /*
  * Exported shorthand
@@ -87,6 +86,7 @@ struct specinfo {
 #define v_specflags v_specinfo->si_flags
 #define v_specsize v_specinfo->si_size
 #define v_specdevsize v_specinfo->si_devsize
+#define v_speclastr v_specinfo->si_lastr
 
 /*
  * Flags for specinfo
@@ -116,56 +116,48 @@ struct	flock;
 struct	buf;
 struct	uio;
 
-int	spec_ebadf();
+int	spec_ebadf(void *);
 
-int	spec_lookup __P((struct vop_lookup_args *));
-#define spec_create ((int (*) __P((struct  vop_access_args *)))err_create)
-#define spec_mknod ((int (*) __P((struct  vop_access_args *)))err_mknod)
-int	spec_open __P((struct vop_open_args *));
-int	spec_close __P((struct vop_close_args *));
-#define spec_access ((int (*) __P((struct  vop_access_args *)))spec_ebadf)
-#define spec_getattr ((int (*) __P((struct  vop_getattr_args *)))spec_ebadf)
-#define spec_setattr ((int (*) __P((struct  vop_setattr_args *)))spec_ebadf)
-int	spec_read __P((struct vop_read_args *));
-int	spec_write __P((struct vop_write_args *));
-#define spec_lease_check ((int (*) __P((struct  vop_access_args *)))nop_lease)
-int	spec_ioctl __P((struct vop_ioctl_args *));
-int	spec_select __P((struct vop_select_args *));
-#define spec_revoke ((int (*) __P((struct  vop_access_args *)))nop_revoke)
-#define spec_mmap ((int (*) __P((struct  vop_access_args *)))err_mmap)
-int	spec_fsync __P((struct  vop_fsync_args *));
-#define spec_seek ((int (*) __P((struct  vop_access_args *)))err_seek)
-#define spec_remove ((int (*) __P((struct  vop_access_args *)))err_remove)
-#define spec_link ((int (*) __P((struct  vop_access_args *)))err_link)
-#define spec_rename ((int (*) __P((struct  vop_access_args *)))err_rename)
-#define spec_mkdir ((int (*) __P((struct  vop_access_args *)))err_mkdir)
-#define spec_rmdir ((int (*) __P((struct  vop_access_args *)))err_rmdir)
-#define spec_symlink ((int (*) __P((struct  vop_access_args *)))err_symlink)
-#define spec_readdir ((int (*) __P((struct  vop_access_args *)))err_readdir)
-#define spec_readlink ((int (*) __P((struct  vop_access_args *)))err_readlink)
-#define spec_abortop ((int (*) __P((struct  vop_access_args *)))err_abortop)
-#define spec_inactive ((int (*) __P((struct  vop_access_args *)))nop_inactive)
-#define spec_reclaim ((int (*) __P((struct  vop_access_args *)))nop_reclaim)
-#define spec_lock ((int (*) __P((struct  vop_access_args *)))nop_lock)
-#define spec_unlock ((int (*) __P((struct  vop_access_args *)))nop_unlock)
-int	spec_bmap __P((struct vop_bmap_args *));
-int	spec_strategy __P((struct vop_strategy_args *));
-int	spec_print __P((struct vop_print_args *));
-#define spec_islocked ((int (*) __P((struct  vop_access_args *)))nop_islocked)
-int	spec_pathconf __P((struct vop_pathconf_args *));
-int	spec_advlock __P((struct  vop_advlock_args *));
-#define spec_blkatoff ((int (*) __P((struct  vop_access_args *)))err_blkatoff)
-#define spec_valloc ((int (*) __P((struct  vop_access_args *)))err_valloc)
-#define spec_vfree ((int (*) __P((struct  vop_access_args *)))err_vfree)
-#define spec_truncate ((int (*) __P((struct  vop_access_args *)))nop_truncate)
-#define spec_update ((int (*) __P((struct  vop_access_args *)))nop_update)
-#define spec_reallocblks \
-	((int (*) __P((struct  vop_reallocblks_args *)))err_reallocblks)
-#define spec_bwrite ((int (*) __P((struct  vop_bwrite_args *)))nop_bwrite)
-int     spec_devblocksize __P((struct vop_devblocksize_args *));
-int spec_blktooff __P((struct  vop_blktooff_args *));
-int spec_offtoblk __P((struct  vop_offtoblk_args *));
-int spec_cmap __P((struct  vop_cmap_args *));
+int	spec_lookup (struct vnop_lookup_args *);
+#define spec_create (int (*) (struct  vnop_access_args *))err_create
+#define spec_mknod (int (*) (struct  vnop_access_args *))err_mknod
+int	spec_open (struct vnop_open_args *);
+int	spec_close (struct vnop_close_args *);
+#define spec_access (int (*) (struct  vnop_access_args *))spec_ebadf
+#define spec_getattr (int (*) (struct  vnop_getattr_args *))spec_ebadf
+#define spec_setattr (int (*) (struct  vnop_setattr_args *))spec_ebadf
+int	spec_read (struct vnop_read_args *);
+int	spec_write (struct vnop_write_args *);
+int	spec_ioctl (struct vnop_ioctl_args *);
+int	spec_select (struct vnop_select_args *);
+#define spec_revoke (int (*) (struct  vnop_access_args *))nop_revoke
+#define spec_mmap (int (*) (struct  vnop_access_args *))err_mmap
+int	spec_fsync (struct  vnop_fsync_args *);
+int	spec_fsync_internal (vnode_t, int, vfs_context_t);
+#define spec_remove (int (*) (struct  vnop_access_args *))err_remove
+#define spec_link (int (*) (struct  vnop_access_args *))err_link
+#define spec_rename (int (*) (struct  vnop_access_args *))err_rename
+#define spec_mkdir (int (*) (struct  vnop_access_args *))err_mkdir
+#define spec_rmdir (int (*) (struct  vnop_access_args *))err_rmdir
+#define spec_symlink (int (*) (struct  vnop_access_args *))err_symlink
+#define spec_readdir (int (*) (struct  vnop_access_args *))err_readdir
+#define spec_readlink (int (*) (struct  vnop_access_args *))err_readlink
+#define spec_inactive (int (*) (struct  vnop_access_args *))nop_inactive
+#define spec_reclaim (int (*) (struct  vnop_access_args *))nop_reclaim
+#define spec_lock (int (*) (struct  vnop_access_args *))nop_lock
+#define spec_unlock (int (*)(struct  vnop_access_args *))nop_unlock
+int	spec_strategy (struct vnop_strategy_args *);
+#define spec_islocked (int (*) (struct  vnop_access_args *))nop_islocked
+int	spec_pathconf (struct vnop_pathconf_args *);
+#define spec_advlock (int (*) (struct  vnop_access_args *))err_advlock
+#define spec_blkatoff (int (*) (struct  vnop_access_args *))err_blkatoff
+#define spec_valloc (int (*) (struct  vnop_access_args *))err_valloc
+#define spec_vfree (int (*) (struct  vnop_access_args *))err_vfree
+#define spec_bwrite (int (*) (struct  vnop_bwrite_args *))nop_bwrite
+int     spec_devblocksize (struct vnop_devblocksize_args *);
+int spec_blktooff (struct  vnop_blktooff_args *);
+int spec_offtoblk (struct  vnop_offtoblk_args *);
+int spec_blockmap (struct  vnop_blockmap_args *);
 
 #endif /* __APPLE_API_PRIVATE */
 #endif /* _MISCFS_SPECFS_SPECDEV_H_ */

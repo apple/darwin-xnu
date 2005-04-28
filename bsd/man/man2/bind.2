@@ -43,7 +43,7 @@
 .Fd #include <sys/types.h>
 .Fd #include <sys/socket.h>
 .Ft int
-.Fn bind "int s" "const struct sockaddr *name" "int namelen"
+.Fn bind "int s" "const struct sockaddr *name" "socklen_t namelen"
 .Sh DESCRIPTION
 .Fn Bind
 assigns a name to an unnamed socket.

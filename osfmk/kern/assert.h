@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -56,16 +56,19 @@
 /*	assert.h	4.2	85/01/21	*/
 
 #include <kern/macro_help.h>
+#include <sys/cdefs.h>
 
 #ifdef	MACH_KERNEL_PRIVATE
 #include <mach_assert.h>
 #endif
 
+__BEGIN_DECLS
 /* Assert error */
 extern void	Assert(
 			const char	*file,
 			int		line,
 			const char	*expression);
+__END_DECLS
 
 #if	MACH_ASSERT
 
@@ -73,10 +76,14 @@ extern void	Assert(
     ((ex) ? (void)0 : Assert(__FILE__, __LINE__, # ex))
 #define	assert_static(x)	assert(x)
 
+#define __assert_only
+
 #else	/* MACH_ASSERT */
 
 #define assert(ex)		((void)0)
 #define assert_static(ex)
+
+#define __assert_only __unused
 
 #endif	/* MACH_ASSERT */
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -40,31 +40,29 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/sysproto.h>
 #include <sys/kernel.h>
-#include <sys/proc.h>
+#include <sys/proc_internal.h>
+#include <sys/kauth.h>
 #include <sys/msg.h>
-#include <sys/sysent.h>
+#include <sys/malloc.h>
+#include <mach/mach_types.h>
 
 #include <bsm/audit_kernel.h>
 
-static void msginit __P((void *));
-SYSINIT(sysv_msg, SI_SUB_SYSV_MSG, SI_ORDER_FIRST, msginit, NULL)
+#include <sys/filedesc.h>
+#include <sys/file_internal.h>
+#include <sys/sysctl.h>
+#include <sys/sysproto.h>
+#include <sys/ipcs.h>
+
+static void msginit(void *);
 
 #define MSG_DEBUG
 #undef MSG_DEBUG_OK
 
-#ifndef _SYS_SYSPROTO_H_
-struct msgctl_args;
-int msgctl __P((struct proc *p, struct msgctl_args *uap));
-struct msgget_args;
-int msgget __P((struct proc *p, struct msgget_args *uap));
-struct msgsnd_args;
-int msgsnd __P((struct proc *p, struct msgsnd_args *uap));
-struct msgrcv_args;
-int msgrcv __P((struct proc *p, struct msgrcv_args *uap));
-#endif
-static void msg_freehdr __P((struct msg *msghdr));
+static void msg_freehdr(struct msg *msghdr);
+
+typedef int     sy_call_t(struct proc *, void *, int *);
 
 /* XXX casting to (sy_call_t *) is bogus, as usual. */
 static sy_call_t *msgcalls[] = {
@@ -72,19 +70,116 @@ static sy_call_t *msgcalls[] = {
 	(sy_call_t *)msgsnd, (sy_call_t *)msgrcv
 };
 
-static int nfree_msgmaps;	/* # of free map entries */
-static short free_msgmaps;	/* head of linked list of free map entries */
-static struct msg *free_msghdrs;	/* list of free msg headers */
-char *msgpool;			/* MSGMAX byte long msg buffer pool */
-struct msgmap *msgmaps;		/* MSGSEG msgmap structures */
-struct msg *msghdrs;		/* MSGTQL msg headers */
-struct msqid_ds *msqids;	/* MSGMNI msqid_ds struct's */
+static int		nfree_msgmaps;	/* # of free map entries */
+static short		free_msgmaps;	/* free map entries list head */
+static struct msg	*free_msghdrs;	/* list of free msg headers */
+char			*msgpool;	/* MSGMAX byte long msg buffer pool */
+struct msgmap		*msgmaps;	/* MSGSEG msgmap structures */
+struct msg		*msghdrs;	/* MSGTQL msg headers */
+struct user_msqid_ds	*msqids;	/* MSGMNI user_msqid_ds struct's */
 
-void
-msginit(dummy)
-	void *dummy;
+static lck_grp_t       *sysv_msg_subsys_lck_grp;
+static lck_grp_attr_t  *sysv_msg_subsys_lck_grp_attr;
+static lck_attr_t      *sysv_msg_subsys_lck_attr;
+static lck_mtx_t        sysv_msg_subsys_mutex;
+
+#define SYSV_MSG_SUBSYS_LOCK() lck_mtx_lock(&sysv_msg_subsys_mutex)
+#define SYSV_MSG_SUBSYS_UNLOCK() lck_mtx_unlock(&sysv_msg_subsys_mutex)
+
+void sysv_msg_lock_init(void);
+
+
+#ifdef __APPLE_API_PRIVATE
+struct msginfo msginfo = {
+		MSGMAX,		/* = (MSGSSZ*MSGSEG) : max chars in a message */
+		MSGMNI,		/* = 40 : max message queue identifiers */
+		MSGMNB,		/* = 2048 : max chars in a queue */
+		MSGTQL,		/* = 40 : max messages in system */
+		MSGSSZ,		/* = 8 : size of a message segment (2^N long) */
+		MSGSEG		/* = 2048 : number of message segments */
+};
+#endif /* __APPLE_API_PRIVATE */
+
+/* Initialize the mutex governing access to the SysV msg subsystem */
+__private_extern__ void
+sysv_msg_lock_init( void )
 {
+	sysv_msg_subsys_lck_grp_attr = lck_grp_attr_alloc_init();
+	lck_grp_attr_setstat(sysv_msg_subsys_lck_grp_attr);
+
+	sysv_msg_subsys_lck_grp = lck_grp_alloc_init("sysv_msg_subsys_lock", sysv_msg_subsys_lck_grp_attr);
+
+	sysv_msg_subsys_lck_attr = lck_attr_alloc_init();
+	/* lck_attr_setdebug(sysv_msg_subsys_lck_attr); */
+	lck_mtx_init(&sysv_msg_subsys_mutex, sysv_msg_subsys_lck_grp, sysv_msg_subsys_lck_attr);
+}
+
+static __inline__ user_time_t
+sysv_msgtime(void)
+{
+	struct timeval	tv;
+	microtime(&tv);
+	return (tv.tv_sec);
+}
+
+/*
+ * NOTE: Source and target may *NOT* overlap! (target is smaller)
+ */
+static void
+msqid_ds_64to32(struct user_msqid_ds *in, struct msqid_ds *out)
+{
+	out->msg_perm	= in->msg_perm;
+	out->msg_qnum	= in->msg_qnum;
+	out->msg_cbytes	= in->msg_cbytes;	/* for ipcs */
+	out->msg_qbytes	= in->msg_qbytes;
+	out->msg_lspid	= in->msg_lspid;
+	out->msg_lrpid	= in->msg_lrpid;
+	out->msg_stime	= in->msg_stime;	/* XXX loss of range */
+	out->msg_rtime	= in->msg_rtime;	/* XXX loss of range */
+	out->msg_ctime	= in->msg_ctime;	/* XXX loss of range */
+}
+
+/*
+ * NOTE: Source and target may are permitted to overlap! (source is smaller);
+ * this works because we copy fields in order from the end of the struct to
+ * the beginning.
+ */
+static void
+msqid_ds_32to64(struct msqid_ds *in, struct user_msqid_ds *out)
+{
+	out->msg_ctime	= in->msg_ctime;
+	out->msg_rtime	= in->msg_rtime;
+	out->msg_stime	= in->msg_stime;
+	out->msg_lrpid	= in->msg_lrpid;
+	out->msg_lspid	= in->msg_lspid;
+	out->msg_qbytes	= in->msg_qbytes;
+	out->msg_cbytes	= in->msg_cbytes;	/* for ipcs */
+	out->msg_qnum	= in->msg_qnum;
+	out->msg_perm	= in->msg_perm;
+}
+
+/* This routine assumes the system is locked prior to calling this routine */
+void 
+msginit(__unused void *dummy)
+{
+	static int initted = 0;
 	register int i;
+
+	/* Lazy initialization on first system call; we don't have SYSINIT(). */
+	if (initted)
+		return;
+	initted = 1;
+
+	msgpool = (char *)_MALLOC(msginfo.msgmax, M_SHM, M_WAITOK);
+	MALLOC(msgmaps, struct msgmap *,
+			sizeof(struct msgmap) * msginfo.msgseg, 
+			M_SHM, M_WAITOK);
+	MALLOC(msghdrs, struct msg *,
+			sizeof(struct msg) * msginfo.msgtql, 
+			M_SHM, M_WAITOK);
+	MALLOC(msqids, struct user_msqid_ds *,
+			sizeof(struct user_msqid_ds) * msginfo.msgmni, 
+			M_SHM, M_WAITOK);
 
 	/*
 	 * msginfo.msgssz should be a power of two for efficiency reasons.
@@ -140,28 +235,17 @@ msginit(dummy)
 /*
  * Entry point for all MSG calls
  */
-int
-msgsys(p, uap)
-	struct proc *p;
 	/* XXX actually varargs. */
-	struct msgsys_args /* {
-		u_int	which;
-		int	a2;
-		int	a3;
-		int	a4;
-		int	a5;
-		int	a6;
-	} */ *uap;
+int
+msgsys(struct proc *p, struct msgsys_args *uap, register_t *retval)
 {
-
 	if (uap->which >= sizeof(msgcalls)/sizeof(msgcalls[0]))
 		return (EINVAL);
-	return ((*msgcalls[uap->which])(p, &uap->a2));
+	return ((*msgcalls[uap->which])(p, &uap->a2, retval));
 }
 
 static void
-msg_freehdr(msghdr)
-	struct msg *msghdr;
+msg_freehdr(struct msg *msghdr)
 {
 	while (msghdr->msg_ts > 0) {
 		short next;
@@ -183,29 +267,23 @@ msg_freehdr(msghdr)
 	free_msghdrs = msghdr;
 }
 
-#ifndef _SYS_SYSPROTO_H_
-struct msgctl_args {
-	int	msqid;
-	int	cmd;
-	struct	msqid_ds *buf;
-};
-#endif
-
 int
-msgctl(p, uap)
-	struct proc *p;
-	register struct msgctl_args *uap;
+msgctl(struct proc *p, struct msgctl_args *uap, register_t *retval)
 {
 	int msqid = uap->msqid;
 	int cmd = uap->cmd;
-	struct msqid_ds *user_msqptr = uap->buf;
-	struct ucred *cred = p->p_ucred;
+	kauth_cred_t cred = kauth_cred_get();
 	int rval, eval;
-	struct msqid_ds msqbuf;
-	register struct msqid_ds *msqptr;
+	struct user_msqid_ds msqbuf;
+	struct user_msqid_ds *msqptr;
+	struct user_msqid_ds umsds;
+
+	SYSV_MSG_SUBSYS_LOCK();
+
+	msginit( 0);
 
 #ifdef MSG_DEBUG_OK
-	printf("call to msgctl(%d, %d, 0x%x)\n", msqid, cmd, user_msqptr);
+	printf("call to msgctl(%d, %d, 0x%qx)\n", msqid, cmd, uap->buf);
 #endif
 
 	AUDIT_ARG(svipc_cmd, cmd);
@@ -217,7 +295,8 @@ msgctl(p, uap)
 		printf("msqid (%d) out of range (0<=msqid<%d)\n", msqid,
 		    msginfo.msgmni);
 #endif
-		return(EINVAL);
+		eval = EINVAL;
+		goto msgctlout;
 	}
 
 	msqptr = &msqids[msqid];
@@ -226,13 +305,15 @@ msgctl(p, uap)
 #ifdef MSG_DEBUG_OK
 		printf("no such msqid\n");
 #endif
-		return(EINVAL);
+		eval = EINVAL;
+		goto msgctlout;
 	}
 	if (msqptr->msg_perm.seq != IPCID_TO_SEQ(uap->msqid)) {
 #ifdef MSG_DEBUG_OK
 		printf("wrong sequence number\n");
 #endif
-		return(EINVAL);
+		eval = EINVAL;
+		goto msgctlout;
 	}
 
 	eval = 0;
@@ -244,7 +325,8 @@ msgctl(p, uap)
 	{
 		struct msg *msghdr;
 		if ((eval = ipcperm(cred, &msqptr->msg_perm, IPC_M)))
-			return(eval);
+			goto msgctlout;
+
 		/* Free the message headers */
 		msghdr = msqptr->msg_first;
 		while (msghdr != NULL) {
@@ -272,15 +354,31 @@ msgctl(p, uap)
 
 	case IPC_SET:
 		if ((eval = ipcperm(cred, &msqptr->msg_perm, IPC_M)))
+			goto msgctlout;
+
+		SYSV_MSG_SUBSYS_UNLOCK();
+
+		if (IS_64BIT_PROCESS(p)) {
+			eval = copyin(uap->buf, &msqbuf, sizeof(struct user_msqid_ds));
+		} else {
+			eval = copyin(uap->buf, &msqbuf, sizeof(struct msqid_ds));
+			/* convert in place; ugly, but safe */
+			msqid_ds_32to64((struct msqid_ds *)&msqbuf, &msqbuf);
+		}
+		if (eval)
 			return(eval);
-		if ((eval = copyin(user_msqptr, &msqbuf, sizeof(msqbuf))) != 0)
-			return(eval);
+
+		SYSV_MSG_SUBSYS_LOCK();
+
 		if (msqbuf.msg_qbytes > msqptr->msg_qbytes) {
 			eval = suser(cred, &p->p_acflag);
 			if (eval)
-				return(eval);
+				goto msgctlout;
 		}
-		if (msqbuf.msg_qbytes > msginfo.msgmnb) {
+
+
+		/* compare (msglen_t) value against restrict (int) value */
+		if (msqbuf.msg_qbytes > (msglen_t)msginfo.msgmnb) {
 #ifdef MSG_DEBUG_OK
 			printf("can't increase msg_qbytes beyond %d (truncating)\n",
 			    msginfo.msgmnb);
@@ -291,14 +389,15 @@ msgctl(p, uap)
 #ifdef MSG_DEBUG_OK
 			printf("can't reduce msg_qbytes to 0\n");
 #endif
-			return(EINVAL);		/* non-standard errno! */
+			eval = EINVAL;
+			goto msgctlout;
 		}
 		msqptr->msg_perm.uid = msqbuf.msg_perm.uid;	/* change the owner */
 		msqptr->msg_perm.gid = msqbuf.msg_perm.gid;	/* change the owner */
 		msqptr->msg_perm.mode = (msqptr->msg_perm.mode & ~0777) |
 		    (msqbuf.msg_perm.mode & 0777);
 		msqptr->msg_qbytes = msqbuf.msg_qbytes;
-		msqptr->msg_ctime = time_second;
+		msqptr->msg_ctime = sysv_msgtime();
 		break;
 
 	case IPC_STAT:
@@ -306,41 +405,48 @@ msgctl(p, uap)
 #ifdef MSG_DEBUG_OK
 			printf("requester doesn't have read access\n");
 #endif
-			return(eval);
+			goto msgctlout;
 		}
-		eval = copyout((caddr_t)msqptr, user_msqptr,
-		    sizeof(struct msqid_ds));
+
+		bcopy(msqptr, &umsds, sizeof(struct user_msqid_ds));
+
+		SYSV_MSG_SUBSYS_UNLOCK();
+		if (IS_64BIT_PROCESS(p)) {
+			eval = copyout(&umsds, uap->buf, sizeof(struct user_msqid_ds));
+		} else {
+			struct msqid_ds msqid_ds32;
+			msqid_ds_64to32(&umsds, &msqid_ds32);
+			eval = copyout(&msqid_ds32, uap->buf, sizeof(struct msqid_ds));
+		}
+		SYSV_MSG_SUBSYS_LOCK();
 		break;
 
 	default:
 #ifdef MSG_DEBUG_OK
 		printf("invalid command %d\n", cmd);
 #endif
-		return(EINVAL);
+		eval = EINVAL;
+		goto msgctlout;
 	}
 
 	if (eval == 0)
-		p->p_retval[0] = rval;
+		*retval = rval;
+msgctlout:
+	SYSV_MSG_SUBSYS_UNLOCK();
 	return(eval);
 }
 
-#ifndef _SYS_SYSPROTO_H_
-struct msgget_args {
-	key_t	key;
-	int	msgflg;
-};
-#endif
-
 int
-msgget(p, uap)
-	struct proc *p;
-	register struct msgget_args *uap;
+msgget(__unused struct proc *p, struct msgget_args *uap, register_t *retval)
 {
 	int msqid, eval;
 	int key = uap->key;
 	int msgflg = uap->msgflg;
-	struct ucred *cred = p->p_ucred;
-	register struct msqid_ds *msqptr = NULL;
+	kauth_cred_t cred = kauth_cred_get();
+	struct user_msqid_ds *msqptr = NULL;
+
+	SYSV_MSG_SUBSYS_LOCK();
+	msginit( 0);
 
 #ifdef MSG_DEBUG_OK
 	printf("msgget(0x%x, 0%o)\n", key, msgflg);
@@ -361,29 +467,30 @@ msgget(p, uap)
 #ifdef MSG_DEBUG_OK
 				printf("not exclusive\n");
 #endif
-				return(EEXIST);
+				eval = EEXIST;
+				goto msggetout;
 			}
 			if ((eval = ipcperm(cred, &msqptr->msg_perm, msgflg & 0700 ))) {
 #ifdef MSG_DEBUG_OK
 				printf("requester doesn't have 0%o access\n",
 				    msgflg & 0700);
 #endif
-				return(eval);
+				goto msggetout;
 			}
 			goto found;
 		}
 	}
 
 #ifdef MSG_DEBUG_OK
-	printf("need to allocate the msqid_ds\n");
+	printf("need to allocate the user_msqid_ds\n");
 #endif
 	if (key == IPC_PRIVATE || (msgflg & IPC_CREAT)) {
 		for (msqid = 0; msqid < msginfo.msgmni; msqid++) {
 			/*
-			 * Look for an unallocated and unlocked msqid_ds.
-			 * msqid_ds's can be locked by msgsnd or msgrcv while
-			 * they are copying the message in/out.  We can't
-			 * re-use the entry until they release it.
+			 * Look for an unallocated and unlocked user_msqid_ds.
+			 * user_msqid_ds's can be locked by msgsnd or msgrcv
+			 * while they are copying the message in/out.  We
+			 * can't re-use the entry until they release it.
 			 */
 			msqptr = &msqids[msqid];
 			if (msqptr->msg_qbytes == 0 &&
@@ -392,16 +499,17 @@ msgget(p, uap)
 		}
 		if (msqid == msginfo.msgmni) {
 #ifdef MSG_DEBUG_OK
-			printf("no more msqid_ds's available\n");
+			printf("no more user_msqid_ds's available\n");
 #endif
-			return(ENOSPC);
+			eval = ENOSPC;
+			goto msggetout;
 		}
 #ifdef MSG_DEBUG_OK
 		printf("msqid %d is available\n", msqid);
 #endif
 		msqptr->msg_perm.key = key;
-		msqptr->msg_perm.cuid = cred->cr_uid;
-		msqptr->msg_perm.uid = cred->cr_uid;
+		msqptr->msg_perm.cuid = kauth_cred_getuid(cred);
+		msqptr->msg_perm.uid = kauth_cred_getuid(cred);
 		msqptr->msg_perm.cgid = cred->cr_gid;
 		msqptr->msg_perm.gid = cred->cr_gid;
 		msqptr->msg_perm.mode = (msgflg & 0777);
@@ -416,47 +524,45 @@ msgget(p, uap)
 		msqptr->msg_lrpid = 0;
 		msqptr->msg_stime = 0;
 		msqptr->msg_rtime = 0;
-		msqptr->msg_ctime = time_second;
+		msqptr->msg_ctime = sysv_msgtime();
 	} else {
 #ifdef MSG_DEBUG_OK
 		printf("didn't find it and wasn't asked to create it\n");
 #endif
-		return(ENOENT);
+		eval = ENOENT;
+		goto msggetout;
 	}
 
 found:
 	/* Construct the unique msqid */
-	p->p_retval[0] = IXSEQ_TO_IPCID(msqid, msqptr->msg_perm);
-	AUDIT_ARG(svipc_id, p->p_retval[0]);
-	return(0);
+	*retval = IXSEQ_TO_IPCID(msqid, msqptr->msg_perm);
+	AUDIT_ARG(svipc_id, *retval);
+	eval = 0;
+msggetout:
+	SYSV_MSG_SUBSYS_UNLOCK();
+	return(eval);
 }
 
-#ifndef _SYS_SYSPROTO_H_
-struct msgsnd_args {
-	int	msqid;
-	void	*msgp;
-	size_t	msgsz;
-	int	msgflg;
-};
-#endif
 
 int
-msgsnd(p, uap)
-	struct proc *p;
-	register struct msgsnd_args *uap;
+msgsnd(struct proc *p, struct msgsnd_args *uap, register_t *retval)
 {
 	int msqid = uap->msqid;
-	void *user_msgp = uap->msgp;
-	size_t msgsz = uap->msgsz;
+	user_addr_t user_msgp = uap->msgp;
+	size_t msgsz = (size_t)uap->msgsz;	/* limit to 4G */
 	int msgflg = uap->msgflg;
 	int segs_needed, eval;
-	struct ucred *cred = p->p_ucred;
-	register struct msqid_ds *msqptr;
-	register struct msg *msghdr;
+	struct user_msqid_ds *msqptr;
+	struct msg *msghdr;
 	short next;
+	user_long_t msgtype;
+
+
+	SYSV_MSG_SUBSYS_LOCK();
+	msginit( 0);
 
 #ifdef MSG_DEBUG_OK
-	printf("call to msgsnd(%d, 0x%x, %d, %d)\n", msqid, user_msgp, msgsz,
+	printf("call to msgsnd(%d, 0x%qx, %d, %d)\n", msqid, user_msgp, msgsz,
 	    msgflg);
 #endif
 
@@ -468,7 +574,8 @@ msgsnd(p, uap)
 		printf("msqid (%d) out of range (0<=msqid<%d)\n", msqid,
 		    msginfo.msgmni);
 #endif
-		return(EINVAL);
+		eval = EINVAL;
+		goto msgsndout;
 	}
 
 	msqptr = &msqids[msqid];
@@ -476,20 +583,22 @@ msgsnd(p, uap)
 #ifdef MSG_DEBUG_OK
 		printf("no such message queue id\n");
 #endif
-		return(EINVAL);
+		eval = EINVAL;
+		goto msgsndout;
 	}
 	if (msqptr->msg_perm.seq != IPCID_TO_SEQ(uap->msqid)) {
 #ifdef MSG_DEBUG_OK
 		printf("wrong sequence number\n");
 #endif
-		return(EINVAL);
+		eval = EINVAL;
+		goto msgsndout;
 	}
 
-	if ((eval = ipcperm(cred, &msqptr->msg_perm, IPC_W))) {
+	if ((eval = ipcperm(kauth_cred_get(), &msqptr->msg_perm, IPC_W))) {
 #ifdef MSG_DEBUG_OK
 		printf("requester doesn't have write access\n");
 #endif
-		return(eval);
+		goto msgsndout;
 	}
 
 	segs_needed = (msgsz + msginfo.msgssz - 1) / msginfo.msgssz;
@@ -509,7 +618,8 @@ msgsnd(p, uap)
 #ifdef MSG_DEBUG_OK
 			printf("msgsz > msqptr->msg_qbytes\n");
 #endif
-			return(EINVAL);
+			eval = EINVAL;
+			goto msgsndout;
 		}
 
 		if (msqptr->msg_perm.mode & MSG_LOCKED) {
@@ -544,19 +654,20 @@ msgsnd(p, uap)
 #ifdef MSG_DEBUG_OK
 				printf("need more resources but caller doesn't want to wait\n");
 #endif
-				return(EAGAIN);
+				eval = EAGAIN;
+				goto msgsndout;
 			}
 
 			if ((msqptr->msg_perm.mode & MSG_LOCKED) != 0) {
 #ifdef MSG_DEBUG_OK
-				printf("we don't own the msqid_ds\n");
+				printf("we don't own the user_msqid_ds\n");
 #endif
 				we_own_it = 0;
 			} else {
 				/* Force later arrivals to wait for our
 				   request */
 #ifdef MSG_DEBUG_OK
-				printf("we own the msqid_ds\n");
+				printf("we own the user_msqid_ds\n");
 #endif
 				msqptr->msg_perm.mode |= MSG_LOCKED;
 				we_own_it = 1;
@@ -564,7 +675,7 @@ msgsnd(p, uap)
 #ifdef MSG_DEBUG_OK
 			printf("goodnight\n");
 #endif
-			eval = tsleep((caddr_t)msqptr, (PZERO - 4) | PCATCH,
+			eval = msleep((caddr_t)msqptr, &sysv_msg_subsys_mutex, (PZERO - 4) | PCATCH,
 			    "msgwait", 0);
 #ifdef MSG_DEBUG_OK
 			printf("good morning, eval=%d\n", eval);
@@ -575,7 +686,8 @@ msgsnd(p, uap)
 #ifdef MSG_DEBUG_OK
 				printf("msgsnd:  interrupted system call\n");
 #endif
-				return(EINTR);
+				eval = EINTR;
+				goto msgsndout;
 			}
 
 			/*
@@ -588,12 +700,14 @@ msgsnd(p, uap)
 #endif
 				/* The SVID says to return EIDRM. */
 #ifdef EIDRM
-				return(EIDRM);
+				eval = EIDRM;
 #else
 				/* Unfortunately, BSD doesn't define that code
 				   yet! */
-				return(EINVAL);
+				eval = EINVAL;
 #endif
+				goto msgsndout;
+			
 			}
 
 		} else {
@@ -619,12 +733,12 @@ msgsnd(p, uap)
 		panic("no more msghdrs");
 
 	/*
-	 * Re-lock the msqid_ds in case we page-fault when copying in the
-	 * message
+	 * Re-lock the user_msqid_ds in case we page-fault when copying in
+	 * the message
 	 */
 
 	if ((msqptr->msg_perm.mode & MSG_LOCKED) != 0)
-		panic("msqid_ds is already locked");
+		panic("user_msqid_ds is already locked");
 	msqptr->msg_perm.mode |= MSG_LOCKED;
 
 	/*
@@ -661,25 +775,36 @@ msgsnd(p, uap)
 	}
 
 	/*
-	 * Copy in the message type
+	 * Copy in the message type.  For a 64 bit process, this is 64 bits,
+	 * but we only ever use the low 32 bits, so the cast is OK.
 	 */
+	if (IS_64BIT_PROCESS(p)) {
+		SYSV_MSG_SUBSYS_UNLOCK();
+		eval = copyin(user_msgp, &msgtype, sizeof(msgtype));
+		SYSV_MSG_SUBSYS_LOCK();
+		msghdr->msg_type = CAST_DOWN(long,msgtype);
+		user_msgp = user_msgp + sizeof(msgtype);	/* ptr math */
+	} else {
+		SYSV_MSG_SUBSYS_UNLOCK();
+		eval = copyin(user_msgp, &msghdr->msg_type, sizeof(long));
+		SYSV_MSG_SUBSYS_LOCK();
+		user_msgp = user_msgp + sizeof(long);		/* ptr math */
+	}
 
-	if ((eval = copyin(user_msgp, &msghdr->msg_type,
-	    sizeof(msghdr->msg_type))) != 0) {
+	if (eval != 0) {
 #ifdef MSG_DEBUG_OK
 		printf("error %d copying the message type\n", eval);
 #endif
 		msg_freehdr(msghdr);
 		msqptr->msg_perm.mode &= ~MSG_LOCKED;
 		wakeup((caddr_t)msqptr);
-		return(eval);
+		goto msgsndout;
 	}
-	user_msgp = (char *)user_msgp + sizeof(msghdr->msg_type);
+
 
 	/*
 	 * Validate the message type
 	 */
-
 	if (msghdr->msg_type < 1) {
 		msg_freehdr(msghdr);
 		msqptr->msg_perm.mode &= ~MSG_LOCKED;
@@ -687,17 +812,18 @@ msgsnd(p, uap)
 #ifdef MSG_DEBUG_OK
 		printf("mtype (%d) < 1\n", msghdr->msg_type);
 #endif
-		return(EINVAL);
+		eval = EINVAL;
+		goto msgsndout;
 	}
 
 	/*
 	 * Copy in the message body
 	 */
-
 	next = msghdr->msg_spot;
 	while (msgsz > 0) {
 		size_t tlen;
-		if (msgsz > msginfo.msgssz)
+		/* compare input (size_t) value against restrict (int) value */
+		if (msgsz > (size_t)msginfo.msgssz)
 			tlen = msginfo.msgssz;
 		else
 			tlen = msgsz;
@@ -705,31 +831,36 @@ msgsnd(p, uap)
 			panic("next too low #2");
 		if (next >= msginfo.msgseg)
 			panic("next out of range #2");
-		if ((eval = copyin(user_msgp, &msgpool[next * msginfo.msgssz],
-		    tlen)) != 0) {
+
+		SYSV_MSG_SUBSYS_UNLOCK();
+		eval = copyin(user_msgp, &msgpool[next * msginfo.msgssz], tlen);
+		SYSV_MSG_SUBSYS_LOCK();
+
+		if (eval != 0) {
 #ifdef MSG_DEBUG_OK
 			printf("error %d copying in message segment\n", eval);
 #endif
 			msg_freehdr(msghdr);
 			msqptr->msg_perm.mode &= ~MSG_LOCKED;
 			wakeup((caddr_t)msqptr);
-			return(eval);
+
+			goto msgsndout;
 		}
 		msgsz -= tlen;
-		user_msgp = (char *)user_msgp + tlen;
+		user_msgp = user_msgp + tlen;	/* ptr math */
 		next = msgmaps[next].next;
 	}
 	if (next != -1)
 		panic("didn't use all the msg segments");
 
 	/*
-	 * We've got the message.  Unlock the msqid_ds.
+	 * We've got the message.  Unlock the user_msqid_ds.
 	 */
 
 	msqptr->msg_perm.mode &= ~MSG_LOCKED;
 
 	/*
-	 * Make sure that the msqid_ds is still allocated.
+	 * Make sure that the user_msqid_ds is still allocated.
 	 */
 
 	if (msqptr->msg_qbytes == 0) {
@@ -737,11 +868,12 @@ msgsnd(p, uap)
 		wakeup((caddr_t)msqptr);
 		/* The SVID says to return EIDRM. */
 #ifdef EIDRM
-		return(EIDRM);
+		eval = EIDRM;
 #else
 		/* Unfortunately, BSD doesn't define that code yet! */
-		return(EINVAL);
+		eval = EINVAL;
 #endif
+		goto msgsndout;
 	}
 
 	/*
@@ -760,42 +892,39 @@ msgsnd(p, uap)
 	msqptr->msg_cbytes += msghdr->msg_ts;
 	msqptr->msg_qnum++;
 	msqptr->msg_lspid = p->p_pid;
-	msqptr->msg_stime = time_second;
+	msqptr->msg_stime = sysv_msgtime();
 
 	wakeup((caddr_t)msqptr);
-	p->p_retval[0] = 0;
-	return(0);
+	*retval = 0;
+	eval = 0;
+
+msgsndout:
+	SYSV_MSG_SUBSYS_UNLOCK();
+	return(eval);
 }
 
-#ifndef _SYS_SYSPROTO_H_
-struct msgrcv_args {
-	int	msqid;
-	void	*msgp;
-	size_t	msgsz;
-	long	msgtyp;
-	int	msgflg;
-};
-#endif
 
 int
-msgrcv(p, uap)
-	struct proc *p;
-	register struct msgrcv_args *uap;
+msgrcv(struct proc *p, struct msgrcv_args *uap, user_ssize_t *retval)
 {
 	int msqid = uap->msqid;
-	void *user_msgp = uap->msgp;
-	size_t msgsz = uap->msgsz;
-	long msgtyp = uap->msgtyp;
+	user_addr_t user_msgp = uap->msgp;
+	size_t msgsz = (size_t)uap->msgsz;	/* limit to 4G */
+	long msgtyp = (long)uap->msgtyp;	/* limit to 32 bits */
 	int msgflg = uap->msgflg;
 	size_t len;
-	struct ucred *cred = p->p_ucred;
-	register struct msqid_ds *msqptr;
-	register struct msg *msghdr;
+	struct user_msqid_ds *msqptr;
+	struct msg *msghdr;
 	int eval;
 	short next;
+	user_long_t msgtype;
+	long msg_type_long;
+
+	SYSV_MSG_SUBSYS_LOCK();
+	msginit( 0);
 
 #ifdef MSG_DEBUG_OK
-	printf("call to msgrcv(%d, 0x%x, %d, %ld, %d)\n", msqid, user_msgp,
+	printf("call to msgrcv(%d, 0x%qx, %d, %ld, %d)\n", msqid, user_msgp,
 	    msgsz, msgtyp, msgflg);
 #endif
 
@@ -807,7 +936,8 @@ msgrcv(p, uap)
 		printf("msqid (%d) out of range (0<=msqid<%d)\n", msqid,
 		    msginfo.msgmni);
 #endif
-		return(EINVAL);
+		eval = EINVAL;
+		goto msgrcvout;
 	}
 
 	msqptr = &msqids[msqid];
@@ -815,20 +945,22 @@ msgrcv(p, uap)
 #ifdef MSG_DEBUG_OK
 		printf("no such message queue id\n");
 #endif
-		return(EINVAL);
+		eval = EINVAL;
+		goto msgrcvout;
 	}
 	if (msqptr->msg_perm.seq != IPCID_TO_SEQ(uap->msqid)) {
 #ifdef MSG_DEBUG_OK
 		printf("wrong sequence number\n");
 #endif
-		return(EINVAL);
+		eval = EINVAL;
+		goto msgrcvout;
 	}
 
-	if ((eval = ipcperm(cred, &msqptr->msg_perm, IPC_R))) {
+	if ((eval = ipcperm(kauth_cred_get(), &msqptr->msg_perm, IPC_R))) {
 #ifdef MSG_DEBUG_OK
 		printf("requester doesn't have read access\n");
 #endif
-		return(eval);
+		goto msgrcvout;
 	}
 
 	msghdr = NULL;
@@ -842,7 +974,8 @@ msgrcv(p, uap)
 					printf("first message on the queue is too big (want %d, got %d)\n",
 					    msgsz, msghdr->msg_ts);
 #endif
-					return(E2BIG);
+					eval = E2BIG;
+					goto msgrcvout;
 				}
 				if (msqptr->msg_first == msqptr->msg_last) {
 					msqptr->msg_first = NULL;
@@ -881,7 +1014,8 @@ msgrcv(p, uap)
 						printf("requested message on the queue is too big (want %d, got %d)\n",
 						    msgsz, msghdr->msg_ts);
 #endif
-						return(E2BIG);
+						eval = E2BIG;
+						goto msgrcvout;
 					}
 					*prev = msghdr->msg_next;
 					if (msghdr == msqptr->msg_last) {
@@ -928,11 +1062,12 @@ msgrcv(p, uap)
 #endif
 			/* The SVID says to return ENOMSG. */
 #ifdef ENOMSG
-			return(ENOMSG);
+			eval = ENOMSG;
 #else
 			/* Unfortunately, BSD doesn't define that code yet! */
-			return(EAGAIN);
+			eval = EAGAIN;
 #endif
+			goto msgrcvout;
 		}
 
 		/*
@@ -942,7 +1077,7 @@ msgrcv(p, uap)
 #ifdef MSG_DEBUG_OK
 		printf("msgrcv:  goodnight\n");
 #endif
-		eval = tsleep((caddr_t)msqptr, (PZERO - 4) | PCATCH, "msgwait",
+		eval = msleep((caddr_t)msqptr, &sysv_msg_subsys_mutex, (PZERO - 4) | PCATCH, "msgwait",
 		    0);
 #ifdef MSG_DEBUG_OK
 		printf("msgrcv:  good morning (eval=%d)\n", eval);
@@ -952,7 +1087,8 @@ msgrcv(p, uap)
 #ifdef MSG_DEBUG_OK
 			printf("msgsnd:  interrupted system call\n");
 #endif
-			return(EINTR);
+			eval = EINTR;
+			goto msgrcvout;
 		}
 
 		/*
@@ -966,11 +1102,12 @@ msgrcv(p, uap)
 #endif
 			/* The SVID says to return EIDRM. */
 #ifdef EIDRM
-			return(EIDRM);
+			eval = EIDRM;
 #else
 			/* Unfortunately, BSD doesn't define that code yet! */
-			return(EINVAL);
+			eval = EINVAL;
 #endif
+			goto msgrcvout;
 		}
 	}
 
@@ -983,7 +1120,7 @@ msgrcv(p, uap)
 	msqptr->msg_cbytes -= msghdr->msg_ts;
 	msqptr->msg_qnum--;
 	msqptr->msg_lrpid = p->p_pid;
-	msqptr->msg_rtime = time_second;
+	msqptr->msg_rtime = sysv_msgtime();
 
 	/*
 	 * Make msgsz the actual amount that we'll be returning.
@@ -1002,17 +1139,34 @@ msgrcv(p, uap)
 	 * Return the type to the user.
 	 */
 
-	eval = copyout((caddr_t)&(msghdr->msg_type), user_msgp,
-	    sizeof(msghdr->msg_type));
+	/*
+	 * Copy out the message type.  For a 64 bit process, this is 64 bits,
+	 * but we only ever use the low 32 bits, so the cast is OK.
+	 */
+	if (IS_64BIT_PROCESS(p)) {
+		msgtype = msghdr->msg_type;
+		SYSV_MSG_SUBSYS_UNLOCK();
+		eval = copyout(&msgtype, user_msgp, sizeof(msgtype));
+		SYSV_MSG_SUBSYS_LOCK();
+		user_msgp = user_msgp + sizeof(msgtype);	/* ptr math */
+	} else {
+		msg_type_long = msghdr->msg_type;
+		SYSV_MSG_SUBSYS_UNLOCK();
+		eval = copyout(&msg_type_long, user_msgp, sizeof(long));
+		SYSV_MSG_SUBSYS_LOCK();
+		user_msgp = user_msgp + sizeof(long);		/* ptr math */
+	}
+
 	if (eval != 0) {
 #ifdef MSG_DEBUG_OK
 		printf("error (%d) copying out message type\n", eval);
 #endif
 		msg_freehdr(msghdr);
 		wakeup((caddr_t)msqptr);
-		return(eval);
+
+		goto msgrcvout;
 	}
-	user_msgp = (char *)user_msgp + sizeof(msghdr->msg_type);
+
 
 	/*
 	 * Return the segments to the user
@@ -1022,7 +1176,8 @@ msgrcv(p, uap)
 	for (len = 0; len < msgsz; len += msginfo.msgssz) {
 		size_t tlen;
 
-		if (msgsz > msginfo.msgssz)
+		/* compare input (size_t) value against restrict (int) value */
+		if (msgsz > (size_t)msginfo.msgssz)
 			tlen = msginfo.msgssz;
 		else
 			tlen = msgsz;
@@ -1030,8 +1185,10 @@ msgrcv(p, uap)
 			panic("next too low #3");
 		if (next >= msginfo.msgseg)
 			panic("next out of range #3");
-		eval = copyout((caddr_t)&msgpool[next * msginfo.msgssz],
+		SYSV_MSG_SUBSYS_UNLOCK();
+		eval = copyout(&msgpool[next * msginfo.msgssz],
 		    user_msgp, tlen);
+		SYSV_MSG_SUBSYS_LOCK();
 		if (eval != 0) {
 #ifdef MSG_DEBUG_OK
 			printf("error (%d) copying out message segment\n",
@@ -1039,9 +1196,9 @@ msgrcv(p, uap)
 #endif
 			msg_freehdr(msghdr);
 			wakeup((caddr_t)msqptr);
-			return(eval);
+			goto msgrcvout;
 		}
-		user_msgp = (char *)user_msgp + tlen;
+		user_msgp = user_msgp + tlen;	/* ptr math */
 		next = msgmaps[next].next;
 	}
 
@@ -1051,6 +1208,121 @@ msgrcv(p, uap)
 
 	msg_freehdr(msghdr);
 	wakeup((caddr_t)msqptr);
-	p->p_retval[0] = msgsz;
-	return(0);
+	*retval = msgsz;
+	eval = 0;
+msgrcvout:
+	SYSV_MSG_SUBSYS_UNLOCK();
+	return(eval);
 }
+
+static int
+IPCS_msg_sysctl(__unused struct sysctl_oid *oidp, __unused void *arg1,
+	__unused int arg2, struct sysctl_req *req)
+{
+	int error;
+	int cursor;
+	union {
+		struct IPCS_command u32;
+		struct user_IPCS_command u64;
+	} ipcs;
+	struct msqid_ds msqid_ds32;	/* post conversion, 32 bit version */
+	void *msqid_dsp;
+	size_t ipcs_sz = sizeof(struct user_IPCS_command);
+	size_t msqid_ds_sz = sizeof(struct user_msqid_ds);
+	struct proc *p = current_proc();
+
+	if (!IS_64BIT_PROCESS(p)) {
+		ipcs_sz = sizeof(struct IPCS_command);
+		msqid_ds_sz = sizeof(struct msqid_ds);
+	}
+
+	/* Copy in the command structure */
+	if ((error = SYSCTL_IN(req, &ipcs, ipcs_sz)) != 0) {
+		return(error);
+	}
+
+	if (!IS_64BIT_PROCESS(p))	/* convert in place */
+		ipcs.u64.ipcs_data = CAST_USER_ADDR_T(ipcs.u32.ipcs_data);
+
+	/* Let us version this interface... */
+	if (ipcs.u64.ipcs_magic != IPCS_MAGIC) {
+		return(EINVAL);
+	}
+
+	SYSV_MSG_SUBSYS_LOCK();
+
+	switch(ipcs.u64.ipcs_op) {
+	case IPCS_MSG_CONF:	/* Obtain global configuration data */
+		if (ipcs.u64.ipcs_datalen != sizeof(struct msginfo)) {
+			error = ERANGE;
+			break;
+		}
+		if (ipcs.u64.ipcs_cursor != 0) {	/* fwd. compat. */
+			error = EINVAL;
+			break;
+		}
+		SYSV_MSG_SUBSYS_UNLOCK();
+		error = copyout(&msginfo, ipcs.u64.ipcs_data, ipcs.u64.ipcs_datalen);
+		SYSV_MSG_SUBSYS_LOCK();
+		break;
+
+	case IPCS_MSG_ITER:	/* Iterate over existing segments */
+		/* Not done up top so we can set limits via sysctl (later) */
+		msginit( 0);
+
+		cursor = ipcs.u64.ipcs_cursor;
+		if (cursor < 0 || cursor >= msginfo.msgmni) {
+			error = ERANGE;
+			break;
+		}
+		if (ipcs.u64.ipcs_datalen != (int)msqid_ds_sz) {
+			error = ENOMEM;
+			break;
+		}
+		for( ; cursor < msginfo.msgmni; cursor++) {
+			if (msqids[cursor].msg_qbytes != 0)	/* allocated */
+				break;
+			continue;
+		}
+		if (cursor == msginfo.msgmni) {
+			error = ENOENT;
+			break;
+		}
+
+		msqid_dsp = &msqids[cursor];	/* default: 64 bit */
+
+		/*
+		 * If necessary, convert the 64 bit kernel segment
+		 * descriptor to a 32 bit user one.
+		 */
+		if (!IS_64BIT_PROCESS(p)) {
+			msqid_ds_64to32(msqid_dsp, &msqid_ds32);
+			msqid_dsp = &msqid_ds32;
+		}
+		SYSV_MSG_SUBSYS_UNLOCK();
+		error = copyout(msqid_dsp, ipcs.u64.ipcs_data, ipcs.u64.ipcs_datalen);
+		if (!error) {
+			/* update cursor */
+			ipcs.u64.ipcs_cursor = cursor + 1;
+
+			if (!IS_64BIT_PROCESS(p))	/* convert in place */
+				ipcs.u32.ipcs_data = CAST_DOWN(void *,ipcs.u64.ipcs_data);
+			error = SYSCTL_OUT(req, &ipcs, ipcs_sz);
+		}
+		SYSV_MSG_SUBSYS_LOCK();
+		break;
+
+	default:
+		error = EINVAL;
+		break;
+	}
+
+	SYSV_MSG_SUBSYS_UNLOCK();
+	return(error);
+}
+
+SYSCTL_DECL(_kern_sysv_ipcs);
+SYSCTL_PROC(_kern_sysv_ipcs, OID_AUTO, msg, CTLFLAG_RW|CTLFLAG_ANYBODY,
+	0, 0, IPCS_msg_sysctl,
+	"S,IPCS_msg_command",
+	"ipcs msg command interface");

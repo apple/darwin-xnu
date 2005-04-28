@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -36,14 +36,19 @@
 
 #include <IOKit/IOReturn.h>
 #include <IOKit/IOLib.h> 
+#include <IOKit/IOLocks.h> 
 #include <IOKit/IOMapper.h>
 #include <IOKit/IOKitDebug.h> 
+
+#include "IOKitKernelInternal.h"
 
 mach_timespec_t IOZeroTvalspec = { 0, 0 };
 
 extern ppnum_t pmap_find_phys(pmap_t pmap, addr64_t va);
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+lck_grp_t	*IOLockGroup;
 
 /*
  * Global variables for use by iLogger
@@ -61,17 +66,14 @@ void *_giDebugReserved2		= NULL;
  * Static variables for this module.
  */
 
-static IOThreadFunc threadArgFcn;
-static void *       threadArgArg;
-static lock_t *     threadArgLock;
-
 static queue_head_t gIOMallocContiguousEntries;
-static mutex_t *    gIOMallocContiguousEntriesLock;
+static lck_mtx_t *  gIOMallocContiguousEntriesLock;
 
 enum { kIOMaxPageableMaps = 16 };
 enum { kIOPageableMapSize = 96 * 1024 * 1024 };
 enum { kIOPageableMaxMapSize = 96 * 1024 * 1024 };
 
+/* LP64todo - these need to expand */
 typedef struct {
     vm_map_t	map;
     vm_offset_t	address;
@@ -82,7 +84,7 @@ static struct {
     UInt32	count;
     UInt32	hint;
     IOMapData	maps[ kIOMaxPageableMaps ];
-    mutex_t *	lock;
+    lck_mtx_t *	lock;
 } gIOKitPageableSpace;
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -96,24 +98,24 @@ void IOLibInit(void)
     if(libInitialized)
         return;	
 
-    threadArgLock = lock_alloc( true, NULL, NULL );
-
     gIOKitPageableSpace.maps[0].address = 0;
     ret = kmem_suballoc(kernel_map,
                     &gIOKitPageableSpace.maps[0].address,
                     kIOPageableMapSize,
                     TRUE,
-                    TRUE,
+                    VM_FLAGS_ANYWHERE,
                     &gIOKitPageableSpace.maps[0].map);
     if (ret != KERN_SUCCESS)
         panic("failed to allocate iokit pageable map\n");
 
-    gIOKitPageableSpace.lock 		= mutex_alloc( 0 );
+    IOLockGroup = lck_grp_alloc_init("IOKit", LCK_GRP_ATTR_NULL);
+
+    gIOKitPageableSpace.lock 		= lck_mtx_alloc_init(IOLockGroup, LCK_ATTR_NULL);
     gIOKitPageableSpace.maps[0].end	= gIOKitPageableSpace.maps[0].address + kIOPageableMapSize;
     gIOKitPageableSpace.hint		= 0;
     gIOKitPageableSpace.count		= 1;
 
-    gIOMallocContiguousEntriesLock 	= mutex_alloc( 0 );
+    gIOMallocContiguousEntriesLock 	= lck_mtx_alloc_init(IOLockGroup, LCK_ATTR_NULL);
     queue_init( &gIOMallocContiguousEntries );
 
     libInitialized = true;
@@ -121,44 +123,24 @@ void IOLibInit(void)
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-/*
- * We pass an argument to a new thread by saving fcn and arg in some
- * locked variables and starting the thread at ioThreadStart(). This
- * function retrives fcn and arg and makes the appropriate call.
- *
- */
-
-static void ioThreadStart( void )
-{
-    IOThreadFunc	fcn;
-    void * 		arg;
-
-    fcn = threadArgFcn;
-    arg = threadArgArg;
-    lock_done( threadArgLock);
-
-    (*fcn)(arg);
-
-    IOExitThread();
-}
-
 IOThread IOCreateThread(IOThreadFunc fcn, void *arg)
 {
-	IOThread thread;
+	kern_return_t	result;
+	thread_t		thread;
 
-	lock_write( threadArgLock);
-	threadArgFcn = fcn;
-	threadArgArg = arg;
+	result = kernel_thread_start((thread_continue_t)fcn, arg, &thread);
+	if (result != KERN_SUCCESS)
+		return (NULL);
 
-	thread = kernel_thread( kernel_task, ioThreadStart);
+	thread_deallocate(thread);
 
-	return(thread);
+	return (thread);
 }
 
 
-volatile void IOExitThread()
+volatile void IOExitThread(void)
 {
-	(void) thread_terminate(current_act());
+	(void) thread_terminate(current_thread());
 }
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -179,7 +161,7 @@ void * IOMalloc(vm_size_t size)
 void IOFree(void * address, vm_size_t size)
 {
     if (address) {
-	kfree((vm_offset_t)address, size);
+	kfree(address, size);
 #if IOALLOCDEBUG
 	debug_iomalloc_size -= size;
 #endif
@@ -270,9 +252,9 @@ void IOFreeAligned(void * address, vm_size_t size)
 				- sizeof(vm_address_t) ));
 
 	if (adjustedSize >= page_size)
-	    kmem_free( kernel_map, (vm_address_t) allocationAddress, adjustedSize);
+	    kmem_free( kernel_map, allocationAddress, adjustedSize);
 	else
-	    kfree((vm_offset_t) allocationAddress, adjustedSize);
+	  kfree((void *)allocationAddress, adjustedSize);
     }
 
 #if IOALLOCDEBUG
@@ -371,10 +353,10 @@ void * IOMallocContiguous(vm_size_t size, vm_size_t alignment,
 		    }
 		    entry->virtual = (void *) address;
 		    entry->ioBase  = base;
-		    mutex_lock(gIOMallocContiguousEntriesLock);
+		    lck_mtx_lock(gIOMallocContiguousEntriesLock);
 		    queue_enter( &gIOMallocContiguousEntries, entry, 
 				_IOMallocContiguousEntry *, link );
-		    mutex_unlock(gIOMallocContiguousEntriesLock);
+		    lck_mtx_unlock(gIOMallocContiguousEntriesLock);
     
 		    *physicalAddress = (IOPhysicalAddress)((base << PAGE_SHIFT) | (address & PAGE_MASK));
 		    for (offset = 0; offset < ((size + PAGE_MASK) >> PAGE_SHIFT); offset++, pagenum++)
@@ -412,7 +394,7 @@ void IOFreeContiguous(void * address, vm_size_t size)
 
     assert(size);
 
-    mutex_lock(gIOMallocContiguousEntriesLock);
+    lck_mtx_lock(gIOMallocContiguousEntriesLock);
     queue_iterate( &gIOMallocContiguousEntries, entry,
 		    _IOMallocContiguousEntry *, link )
     {
@@ -423,7 +405,7 @@ void IOFreeContiguous(void * address, vm_size_t size)
 	    break;
 	}
     }
-    mutex_unlock(gIOMallocContiguousEntriesLock);
+    lck_mtx_unlock(gIOMallocContiguousEntriesLock);
 
     if (base)
     {
@@ -442,7 +424,7 @@ void IOFreeContiguous(void * address, vm_size_t size)
         allocationAddress = *((vm_address_t *)( (vm_address_t) address
 				- sizeof(vm_address_t) ));
 
-        kfree((vm_offset_t) allocationAddress, adjustedSize);
+        kfree((void *)allocationAddress, adjustedSize);
     }
 
 #if IOALLOCDEBUG
@@ -451,8 +433,6 @@ void IOFreeContiguous(void * address, vm_size_t size)
 }
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
-
-typedef kern_return_t (*IOIteratePageableMapsCallback)(vm_map_t map, void * ref);
 
 kern_return_t IOIteratePageableMaps(vm_size_t size,
                     IOIteratePageableMapsCallback callback, void * ref)
@@ -484,11 +464,11 @@ kern_return_t IOIteratePageableMaps(vm_size_t size,
         if( KERN_SUCCESS == kr)
             break;
 
-        mutex_lock( gIOKitPageableSpace.lock );
+        lck_mtx_lock( gIOKitPageableSpace.lock );
 
         index = gIOKitPageableSpace.count;
         if( index >= (kIOMaxPageableMaps - 1)) {
-            mutex_unlock( gIOKitPageableSpace.lock );
+            lck_mtx_unlock( gIOKitPageableSpace.lock );
             break;
         }
 
@@ -502,10 +482,10 @@ kern_return_t IOIteratePageableMaps(vm_size_t size,
                     &min,
                     segSize,
                     TRUE,
-                    TRUE,
+                    VM_FLAGS_ANYWHERE,
                     &map);
         if( KERN_SUCCESS != kr) {
-            mutex_unlock( gIOKitPageableSpace.lock );
+            lck_mtx_unlock( gIOKitPageableSpace.lock );
             break;
         }
 
@@ -515,7 +495,7 @@ kern_return_t IOIteratePageableMaps(vm_size_t size,
         gIOKitPageableSpace.hint 		= index;
         gIOKitPageableSpace.count 		= index + 1;
 
-        mutex_unlock( gIOKitPageableSpace.lock );
+        lck_mtx_unlock( gIOKitPageableSpace.lock );
 
     } while( true );
 
@@ -555,7 +535,7 @@ void * IOMallocPageable(vm_size_t size, vm_size_t alignment)
 
 #if IOALLOCDEBUG
     if( ref.address)
-       debug_iomalloc_size += round_page_32(size);
+       debug_iomallocpageable_size += round_page_32(size);
 #endif
 
     return( (void *) ref.address );
@@ -588,15 +568,11 @@ void IOFreePageable(void * address, vm_size_t size)
         kmem_free( map, (vm_offset_t) address, size);
 
 #if IOALLOCDEBUG
-    debug_iomalloc_size -= round_page_32(size);
+    debug_iomallocpageable_size -= round_page_32(size);
 #endif
 }
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
-
-extern kern_return_t IOMapPages(vm_map_t map, vm_offset_t va, vm_offset_t pa,
-			vm_size_t length, unsigned int options);
-extern kern_return_t IOUnmapPages(vm_map_t map, vm_offset_t va, vm_size_t length);
 
 IOReturn IOSetProcessorCacheMode( task_t task, IOVirtualAddress address,
 				  IOByteCount length, IOOptionBits cacheMode )
@@ -659,13 +635,7 @@ SInt32 OSKernelStackRemaining( void )
 
 void IOSleep(unsigned milliseconds)
 {
-    wait_result_t wait_result;
-
-    wait_result = assert_wait_timeout(milliseconds, THREAD_UNINT);
-    assert(wait_result == THREAD_WAITING);
-
-    wait_result = thread_block(THREAD_CONTINUE_NULL);
-    assert(wait_result == THREAD_TIMED_OUT);
+    delay_for_interval(milliseconds, kMillisecondScale);
 }
 
 /*
@@ -673,9 +643,7 @@ void IOSleep(unsigned milliseconds)
  */
 void IODelay(unsigned microseconds)
 {
-    extern void delay(int usec);
-
-    delay(microseconds);
+    delay_for_interval(microseconds, kMicrosecondScale);
 }
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -684,7 +652,7 @@ void IOLog(const char *format, ...)
 {
 	va_list ap;
 	extern void conslog_putc(char);
-	extern void logwakeup();
+	extern void logwakeup(void);
 
 	va_start(ap, format);
 	_doprnt(format, &ap, conslog_putc, 16);
@@ -749,9 +717,4 @@ unsigned int IOAlignmentToSize(IOAlignment align)
 	size <<= 1;
     }
     return size;
-}
-
-IOReturn IONDRVLibrariesInitialize( void )
-{
-    return( kIOReturnUnsupported );
 }

@@ -101,12 +101,6 @@ union devnode_type {
     }Slnk;
 };
 
-#define	DN_ACCESS	0x0001		/* Access time update request. */
-#define	DN_CHANGE	0x0002		/* Inode change time update request. */
-#define	DN_UPDATE	0x0004		/* Modification time update request. */
-#define	DN_MODIFIED	0x0008		/* Inode has been modified. */
-#define	DN_RENAME	0x0010		/* Inode is being renamed. */
-
 struct devnode
 {
     devfstype_t		dn_type;
@@ -123,12 +117,21 @@ struct devnode
     struct vnode *	dn_vn;	/* address of last vnode that represented us */
     int			dn_len;   /* of any associated info (e.g. dir data) */
     devdirent_t *	dn_linklist;/* circular list of hardlinks to this node */
-    devdirent_t *	dn_last_lookup;	/* name I was last looked up from */
     devnode_t *		dn_nextsibling;	/* the list of equivalent nodes */
     devnode_t * *	dn_prevsiblingp;/* backpointer for the above */
     devnode_type_t	dn_typeinfo;
     int			dn_delete;	/* mark for deletion */
+    int			dn_change;
+    int			dn_update;
+    int			dn_access;
+  int			dn_lflags;
 };
+
+#define	DN_BUSY			0x01
+#define	DN_DELETE		0x02
+#define	DN_CREATE		0x04
+#define	DN_CREATEWAIT	0x08
+
 
 struct devdirent
 {
@@ -143,8 +146,8 @@ struct devdirent
 };
 
 extern devdirent_t * 		dev_root;
-extern struct lock__bsd__	devfs_lock;
 extern struct devfs_stats	devfs_stats;
+extern lck_mtx_t	  	devfs_mutex;
 
 /*
  * Rules for front nodes:
@@ -179,90 +182,80 @@ struct devfsmount
 
 #define VTODN(vp)	((devnode_t *)(vp)->v_data)
 
-static __inline__ int
-DEVFS_LOCK(struct proc * p)
-{
-    return (lockmgr(&devfs_lock, LK_EXCLUSIVE, NULL, p));
-}
+#define DEVFS_LOCK()	lck_mtx_lock(&devfs_mutex)
 
-static __inline__ int
-DEVFS_UNLOCK(struct proc * p)
-{
-    return (lockmgr(&devfs_lock, LK_RELEASE, NULL, p));
-}
+#define DEVFS_UNLOCK()	lck_mtx_unlock(&devfs_mutex)
+
+
 
 static __inline__ void
 DEVFS_INCR_ENTRIES()
 {
-    devfs_stats.entries++;
+    OSAddAtomic(1, &devfs_stats.entries);
 }
 
 static __inline__ void
 DEVFS_DECR_ENTRIES()
 {
-    devfs_stats.entries--;
+    OSAddAtomic(-1, &devfs_stats.entries);
 }
 
 static __inline__ void
 DEVFS_INCR_NODES()
 {
-    devfs_stats.nodes++;
+    OSAddAtomic(1, &devfs_stats.nodes);
 }
 
 static __inline__ void
 DEVFS_DECR_NODES()
 {
-    devfs_stats.nodes--;
+    OSAddAtomic(-1, &devfs_stats.nodes);
 }
 
 static __inline__ void
 DEVFS_INCR_MOUNTS()
 {
-    devfs_stats.mounts++;
+    OSAddAtomic(1, &devfs_stats.mounts);
 }
 
 static __inline__ void
 DEVFS_DECR_MOUNTS()
 {
-    devfs_stats.mounts--;
+    OSAddAtomic(-1, &devfs_stats.mounts);
 }
 
 static __inline__ void
 DEVFS_INCR_STRINGSPACE(int space)
 {
-    devfs_stats.stringspace += space;
+    OSAddAtomic(space, &devfs_stats.stringspace);
 }
 
 static __inline__ void
 DEVFS_DECR_STRINGSPACE(int space)
 {
-    devfs_stats.stringspace -= space;
-    if (devfs_stats.stringspace < 0) {
-	printf("DEVFS_DECR_STRINGSPACE: (%d - %d < 0)\n",
-	       devfs_stats.stringspace + space, space);
-	devfs_stats.stringspace = 0;
-    }
+    OSAddAtomic(-space, &devfs_stats.stringspace);
 }
 
 static __inline__ void
-dn_times(devnode_t * dnp, struct timeval t1, struct timeval t2) 
+dn_times(devnode_t * dnp, struct timeval *t1, struct timeval *t2, struct timeval *t3) 
 {
-    if (dnp->dn_flags & (DN_ACCESS | DN_CHANGE | DN_UPDATE)) {
-	if (dnp->dn_flags & DN_ACCESS) {
-	    dnp->dn_atime.tv_sec = t1.tv_sec;
-	    dnp->dn_atime.tv_nsec = t1.tv_usec * 1000;
+	if (dnp->dn_access) {
+	    dnp->dn_atime.tv_sec = t1->tv_sec;
+	    dnp->dn_atime.tv_nsec = t1->tv_usec * 1000;
+	    dnp->dn_access = 0;
 	}
-	if (dnp->dn_flags & DN_UPDATE) {
-	    dnp->dn_mtime.tv_sec = t2.tv_sec;
-	    dnp->dn_mtime.tv_nsec = t2.tv_usec * 1000;
+	if (dnp->dn_update) {
+	    dnp->dn_mtime.tv_sec = t2->tv_sec;
+	    dnp->dn_mtime.tv_nsec = t2->tv_usec * 1000;
+	    dnp->dn_update = 0;
 	}
-	if (dnp->dn_flags & DN_CHANGE) {
-	    dnp->dn_ctime.tv_sec = time.tv_sec;
-	    dnp->dn_ctime.tv_nsec = time.tv_usec * 1000;
+	if (dnp->dn_change) {
+	    dnp->dn_ctime.tv_sec = t3->tv_sec;
+	    dnp->dn_ctime.tv_nsec = t3->tv_usec * 1000;
+	    dnp->dn_change = 0;
 	}
-	dnp->dn_flags &= ~(DN_ACCESS | DN_CHANGE | DN_UPDATE);
-    }
-    return;
+
+	return;
 }
 
 static __inline__ void

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -97,12 +97,10 @@ typedef struct buffer		*buffer_t;
 	(pbuf)->prof_index
 
 
-extern vm_map_t kernel_map; 
-
 /* MACRO set_pbuf_value 
 ** 
 ** enters the value 'val' in the buffer 'pbuf' and returns the following
-** indications:     0: means that a fatal error occured: the buffer was full
+** indications:     0: means that a fatal error occurred: the buffer was full
 **                       (it hasn't been sent yet)
 **                  1: means that a value has been inserted successfully
 **		    2: means that we'v just entered the last value causing 
@@ -162,28 +160,27 @@ extern void	profile(
 	task->task_profiled = FALSE; \
      	task->profil_buffer = NULLPROFDATA;
 
-#define act_prof_init(thr_act, task) \
-	thr_act->act_profiled = task->task_profiled;	\
-	thr_act->profil_buffer = task->profil_buffer;
+#define thread_prof_init(thread, task) \
+	thread->profiled = task->profiled;	\
+	thread->profil_buffer = task->profil_buffer;
 
 #define task_prof_deallocate(task) \
 	if (task->profil_buffer) \
 		task_sample(task, MACH_PORT_NULL); \
 
-#define act_prof_deallocate(thr_act) \
-	if (thr_act->act_profiled_own && thr_act->profil_buffer)  \
-		thread_sample(thr_act, MACH_PORT_NULL); \
+#define thread_prof_deallocate(thread) \
+	if (thread->profiled_own && thread->profil_buffer)  \
+		thread_sample(thread, MACH_PORT_NULL); \
 
-extern kern_return_t thread_sample(thread_act_t, ipc_port_t);
+extern kern_return_t thread_sample(thread_t, ipc_port_t);
 extern kern_return_t task_sample(task_t, ipc_port_t);
 
 #else /* !MACH_PROT */
 
 #define task_prof_init(task)
-#define act_prof_init(thr_act, task)
+#define thread_prof_init(thread, task)
 #define task_prof_deallocate(task)
-#define act_prof_deallocate(thr_act)
-
+#define thread_prof_deallocate(thread)
 		
 #endif	/* !MACH_PROF */
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -152,7 +152,7 @@ vm_external_destroy(
 	} else {
 		bytes = power_of_2(bytes);
 	}
-	kfree((vm_offset_t)map, bytes);
+	kfree(map, bytes);
 }
 
 /*
@@ -167,12 +167,13 @@ vm_external_map_size(
 	vm_size_t	bytes;
 
 	bytes = stob(size);
-	if (bytes != 0)
+	if (bytes != 0) {
 	        if (bytes <= SMALL_SIZE) {
 			bytes = SMALL_SIZE;
 		} else {
 			bytes = power_of_2(bytes);
 		}
+	}
 	return bytes;
 }
 

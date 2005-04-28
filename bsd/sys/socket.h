@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -60,9 +60,9 @@
 #ifndef _SYS_SOCKET_H_
 #define	_SYS_SOCKET_H_
 
-#ifndef __APPLE__
-#include <machine/ansi.h>
-#endif
+#include <sys/_types.h>
+#include <sys/cdefs.h>
+
 #define _NO_NAMESPACE_POLLUTION
 #include <machine/param.h>
 #undef _NO_NAMESPACE_POLLUTION
@@ -74,10 +74,52 @@
 /*
  * Data types.
  */
-typedef u_char		sa_family_t;
-#ifdef	_BSD_SOCKLEN_T_
-typedef	_BSD_SOCKLEN_T_	socklen_t;
-#undef	_BSD_SOCKLEN_T_
+#ifndef _GID_T
+typedef __darwin_gid_t		gid_t;
+#define _GID_T
+#endif
+
+#ifndef _OFF_T
+typedef __darwin_off_t		off_t;
+#define _OFF_T
+#endif
+
+#ifndef _PID_T
+typedef __darwin_pid_t		pid_t;
+#define _PID_T
+#endif
+
+#ifndef _SA_FAMILY_T
+#define _SA_FAMILY_T
+typedef __uint8_t		sa_family_t;
+#endif
+
+#ifndef _SOCKLEN_T
+#define _SOCKLEN_T
+typedef	__darwin_socklen_t	socklen_t;
+#endif
+
+/* XXX Not explicitly defined by POSIX, but function return types are */
+#ifndef _SIZE_T
+#define _SIZE_T
+typedef __darwin_size_t		size_t;
+#endif
+ 
+/* XXX Not explicitly defined by POSIX, but function return types are */
+#ifndef	_SSIZE_T
+#define	_SSIZE_T
+typedef	__darwin_ssize_t	ssize_t;
+#endif
+
+/*
+ * [XSI] The iovec structure shall be defined as described in <sys/uio.h>.
+ */
+#ifndef _STRUCT_IOVEC
+#define	_STRUCT_IOVEC
+struct iovec {
+	void *   iov_base;	/* [XSI] Base address of I/O memory region */
+	size_t	 iov_len;	/* [XSI] Size of region iov_base points to */
+};
 #endif
  
 /*
@@ -86,7 +128,9 @@ typedef	_BSD_SOCKLEN_T_	socklen_t;
 #define	SOCK_STREAM	1		/* stream socket */
 #define	SOCK_DGRAM	2		/* datagram socket */
 #define	SOCK_RAW	3		/* raw-protocol interface */
+#ifndef _POSIX_C_SOURCE
 #define	SOCK_RDM	4		/* reliably-delivered message */
+#endif	/* !_POSIX_C_SOURCE */
 #define	SOCK_SEQPACKET	5		/* sequenced packet stream */
 
 /*
@@ -98,9 +142,14 @@ typedef	_BSD_SOCKLEN_T_	socklen_t;
 #define	SO_KEEPALIVE	0x0008		/* keep connections alive */
 #define	SO_DONTROUTE	0x0010		/* just use interface addresses */
 #define	SO_BROADCAST	0x0020		/* permit sending of broadcast msgs */
+#ifndef _POSIX_C_SOURCE
 #define	SO_USELOOPBACK	0x0040		/* bypass hardware when possible */
-#define	SO_LINGER	0x0080		/* linger on close if data present */
+#define SO_LINGER	0x0080          /* linger on close if data present (in ticks) */
+#else
+#define SO_LINGER	0x1080          /* linger on close if data present (in seconds) */
+#endif	/* !_POSIX_C_SOURCE */
 #define	SO_OOBINLINE	0x0100		/* leave received OOB data in line */
+#ifndef _POSIX_C_SOURCE
 #define	SO_REUSEPORT	0x0200		/* allow local address & port reuse */
 #define	SO_TIMESTAMP	0x0400		/* timestamp received dgram traffic */
 #ifndef __APPLE__
@@ -111,6 +160,7 @@ typedef	_BSD_SOCKLEN_T_	socklen_t;
 #define SO_WANTMORE		0x4000		/* APPLE: Give hint when more data ready */
 #define SO_WANTOOBFLAG	0x8000		/* APPLE: Want OOB in MSG_FLAG on receive */
 #endif
+#endif	/* !_POSIX_C_SOURCE */
 
 /*
  * Additional options, not kept in so_options.
@@ -123,13 +173,18 @@ typedef	_BSD_SOCKLEN_T_	socklen_t;
 #define SO_RCVTIMEO	0x1006		/* receive timeout */
 #define	SO_ERROR	0x1007		/* get error status and clear */
 #define	SO_TYPE		0x1008		/* get socket type */
+#ifndef _POSIX_C_SOURCE
 /*efine	SO_PRIVSTATE	0x1009		   get/deny privileged state */
 #ifdef __APPLE__
 #define SO_NREAD	0x1020		/* APPLE: get 1st-packet byte count */
 #define SO_NKE		0x1021		/* APPLE: Install socket-level NKE */
 #define SO_NOSIGPIPE	0x1022		/* APPLE: No SIGPIPE on EPIPE */
 #define SO_NOADDRERR	0x1023		/* APPLE: Returns EADDRNOTAVAIL when src is not available anymore */
+#define SO_NWRITE	0x1024		/* APPLE: Get number of bytes currently in send socket buffer */
+#define SO_LINGER_SEC	0x1080          /* linger on close if data present (in seconds) */
 #endif
+#endif	/* !_POSIX_C_SOURCE */
+
 /*
  * Structure used for manipulating linger option.
  */
@@ -154,9 +209,12 @@ struct	accept_filter_arg {
  * Address families.
  */
 #define	AF_UNSPEC	0		/* unspecified */
-#define	AF_LOCAL	1		/* local to host (pipes) */
-#define	AF_UNIX		AF_LOCAL	/* backward compatibility */
+#define	AF_UNIX		1		/* local to host (pipes) */
+#ifndef _POSIX_C_SOURCE
+#define	AF_LOCAL	AF_UNIX		/* backward compatibility */
+#endif	/* !_POSIX_C_SOURCE */
 #define	AF_INET		2		/* internetwork: UDP, TCP, etc. */
+#ifndef _POSIX_C_SOURCE
 #define	AF_IMPLINK	3		/* arpanet imp addresses */
 #define	AF_PUP		4		/* pup protocols: e.g. BSP */
 #define	AF_CHAOS	5		/* mit CHAOS protocols */
@@ -188,7 +246,9 @@ struct	accept_filter_arg {
 #define	AF_ISDN		28		/* Integrated Services Digital Network*/
 #define	AF_E164		AF_ISDN		/* CCITT E.164 recommendation */
 #define	pseudo_AF_KEY	29		/* Internal key-management function */
+#endif	/* !_POSIX_C_SOURCE */
 #define	AF_INET6	30		/* IPv6 */
+#ifndef _POSIX_C_SOURCE
 #define	AF_NATM		31		/* native ATM access */
 #ifdef __APPLE__
 #define AF_SYSTEM	32		/* Kernel event messages */
@@ -200,20 +260,28 @@ struct	accept_filter_arg {
 #define pseudo_AF_HDRCMPLT 35		/* Used by BPF to not rewrite headers
 					 * in interface output routine
 					 */
+#ifdef PRIVATE
+#define AF_AFP	36			/* Used by AFP */
+#else
+#define AF_RESERVED_36	36		/* Reserved for internal usage */
+#endif
+
 #ifndef __APPLE__
 #define	AF_NETGRAPH	32		/* Netgraph sockets */
 #endif
-#define	AF_MAX		36
+#define	AF_MAX		37
+#endif	/* !_POSIX_C_SOURCE */
 
 /*
- * Structure used by kernel to store most
- * addresses.
+ * [XSI] Structure used by kernel to store most addresses.
  */
 struct sockaddr {
-	u_char	sa_len;			/* total length */
-	u_char	sa_family;		/* address family */
-	char		sa_data[14];		/* actually longer; address value */
+	__uint8_t	sa_len;		/* total length */
+	sa_family_t	sa_family;	/* [XSI] address family */
+	char		sa_data[14];	/* [XSI] addr value (actually larger) */
 };
+
+#ifndef _POSIX_C_SOURCE
 #define	SOCK_MAXADDRLEN	255		/* longest possible addresses */
 
 /*
@@ -221,24 +289,30 @@ struct sockaddr {
  * information in raw sockets.
  */
 struct sockproto {
-	u_short	sp_family;		/* address family */
-	u_short	sp_protocol;		/* protocol */
+	__uint16_t	sp_family;		/* address family */
+	__uint16_t	sp_protocol;		/* protocol */
 };
+#endif	/* !_POSIX_C_SOURCE*/
 
 /*
  * RFC 2553: protocol-independent placeholder for socket addresses
  */
 #define	_SS_MAXSIZE	128
-#define	_SS_ALIGNSIZE	(sizeof(int64_t))
-#define	_SS_PAD1SIZE	(_SS_ALIGNSIZE - sizeof(u_char) - sizeof(sa_family_t))
-#define	_SS_PAD2SIZE	(_SS_MAXSIZE - sizeof(u_char) - sizeof(sa_family_t) - \
+#define	_SS_ALIGNSIZE	(sizeof(__int64_t))
+#define	_SS_PAD1SIZE	\
+		(_SS_ALIGNSIZE - sizeof(__uint8_t) - sizeof(sa_family_t))
+#define	_SS_PAD2SIZE	\
+		(_SS_MAXSIZE - sizeof(__uint8_t) - sizeof(sa_family_t) - \
 				_SS_PAD1SIZE - _SS_ALIGNSIZE)
 
+/*
+ * [XSI] sockaddr_storage
+ */
 struct sockaddr_storage {
-	u_char		ss_len;		/* address length */
-	sa_family_t	ss_family;	/* address family */
+	__uint8_t	ss_len;		/* address length */
+	sa_family_t	ss_family;	/* [XSI] address family */
 	char			__ss_pad1[_SS_PAD1SIZE];
-	int64_t		__ss_align;	/* force desired structure storage alignment */
+	__int64_t	__ss_align;	/* force structure storage alignment */
 	char			__ss_pad2[_SS_PAD2SIZE];
 };
 
@@ -284,12 +358,24 @@ struct sockaddr_storage {
 #define PF_SYSTEM	AF_SYSTEM
 #define PF_NETBIOS	AF_NETBIOS
 #define PF_PPP		AF_PPP
+#ifdef PRIVATE
+#define PF_AFP   	AF_AFP
+#else
+#define PF_RESERVED_36  AF_RESERVED_36
+#endif
+
 #else
 #define	PF_ATM		AF_ATM
 #define	PF_NETGRAPH	AF_NETGRAPH
 #endif
 
 #define	PF_MAX		AF_MAX
+
+/*
+ * These do not have socket-layer support:
+ */
+#define	PF_VLAN		((uint32_t)0x766c616e)	/* 'vlan' */
+#define PF_BOND		((uint32_t)0x626f6e64)	/* 'bond' */
 
 /*
  * Definitions for network related sysctl, CTL_NET.
@@ -301,6 +387,8 @@ struct sockaddr_storage {
  */
 #define NET_MAXID	AF_MAX
 
+
+#ifdef KERNEL_PRIVATE
 #define CTL_NET_NAMES { \
 	{ 0, 0 }, \
 	{ "local", CTLTYPE_NODE }, \
@@ -339,6 +427,7 @@ struct sockaddr_storage {
 	{ "ppp", CTLTYPE_NODE }, \
 	{ "hdrcomplete", CTLTYPE_NODE }, \
 }
+#endif KERNEL_PRIVATE
 
 /*
  * PF_ROUTE - Routing table
@@ -348,17 +437,28 @@ struct sockaddr_storage {
  *	Fifth: type of info, defined below
  *	Sixth: flag(s) to mask with for NET_RT_FLAGS
  */
-#define NET_RT_DUMP	1		/* dump; may limit to a.f. */
-#define NET_RT_FLAGS	2		/* by flags, e.g. RESOLVING */
-#define NET_RT_IFLIST	3		/* survey interface list */
-#define	NET_RT_MAXID	4
+#define NET_RT_DUMP			1		/* dump; may limit to a.f. */
+#define NET_RT_FLAGS		2		/* by flags, e.g. RESOLVING */
+#define NET_RT_IFLIST		3		/* survey interface list */
+#define NET_RT_STAT			4		/* routing statistics */
+#define NET_RT_TRASH		5		/* routes not in table but not freed */
+#define NET_RT_IFLIST2	6		/* interface list with addresses */
+#define NET_RT_DUMP2                     7               /* dump; may limit to a.f. */
+#define	NET_RT_MAXID		8
 
+#ifdef KERNEL_PRIVATE
 #define CTL_NET_RT_NAMES { \
 	{ 0, 0 }, \
 	{ "dump", CTLTYPE_STRUCT }, \
 	{ "flags", CTLTYPE_STRUCT }, \
 	{ "iflist", CTLTYPE_STRUCT }, \
+	{ "stat", CTLTYPE_STRUCT }, \
+	{ "trash", CTLTYPE_INT }, \
+	{ "iflist2", CTLTYPE_STRUCT }, \
+        { "dump2", CTLTYPE_STRUCT }, \
 }
+
+#endif KERNEL_PRIVATE
 
 /*
  * Maximum queue length specifiable by listen.
@@ -366,18 +466,44 @@ struct sockaddr_storage {
 #define	SOMAXCONN	128
 
 /*
- * Message header for recvmsg and sendmsg calls.
+ * [XSI] Message header for recvmsg and sendmsg calls.
  * Used value-result for recvmsg, value only for sendmsg.
  */
 struct msghdr {
-	caddr_t		msg_name;		/* optional address */
+	void		*msg_name;	/* [XSI] optional address */
+	socklen_t	msg_namelen;	/* [XSI] size of address */
+	struct		iovec *msg_iov;	/* [XSI] scatter/gather array */
+	int		msg_iovlen;	/* [XSI] # elements in msg_iov */
+	void		*msg_control;	/* [XSI] ancillary data, see below */
+	socklen_t	msg_controllen;	/* [XSI] ancillary data buffer len */
+	int		msg_flags;	/* [XSI] flags on received message */
+};
+
+// LP64todo - should this move?
+#ifdef KERNEL
+/* LP64 version of struct msghdr.  all pointers 
+ * grow when we're dealing with a 64-bit process.
+ * WARNING - keep in sync with struct msghdr
+ */
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=natural
+#endif
+
+struct user_msghdr {
+	user_addr_t	msg_name;		/* optional address */
 	socklen_t	msg_namelen;		/* size of address */
-	struct		iovec *msg_iov;		/* scatter/gather array */
-	u_int		msg_iovlen;		/* # elements in msg_iov */
-	caddr_t		msg_control;		/* ancillary data, see below */
+	user_addr_t	msg_iov;		/* scatter/gather array */
+	int		msg_iovlen;		/* # elements in msg_iov */
+	user_addr_t	msg_control;		/* ancillary data, see below */
 	socklen_t	msg_controllen;		/* ancillary data buffer len */
 	int		msg_flags;		/* flags on received message */
 };
+
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=reset
+#endif
+
+#endif // KERNEL
 
 #define	MSG_OOB		0x1		/* process out-of-band data */
 #define	MSG_PEEK	0x2		/* peek at incoming message */
@@ -386,6 +512,7 @@ struct msghdr {
 #define	MSG_TRUNC	0x10		/* data discarded before delivery */
 #define	MSG_CTRUNC	0x20		/* control data lost before delivery */
 #define	MSG_WAITALL	0x40		/* wait for full request or error */
+#ifndef _POSIX_C_SOURCE
 #define	MSG_DONTWAIT	0x80		/* this message should be nonblocking */
 #define	MSG_EOF		0x100		/* data completes connection */
 #ifdef __APPLE__
@@ -398,6 +525,13 @@ struct msghdr {
 #endif
 #define MSG_COMPAT      0x8000		/* used in sendit() */
 #define MSG_NEEDSA	0x10000		/* Fail receive if socket address cannot be allocated */
+#ifdef KERNEL_PRIVATE
+#define MSG_NBIO	0x20000		/* FIONBIO mode, used by fifofs */
+#endif
+#ifdef	KERNEL
+#define MSG_USEUPCALL	0x80000000 /* Inherit upcall in sock_accept */
+#endif
+#endif	/* !_POSIX_C_SOURCE */
 
 /*
  * Header for ancillary data objects in msg_control buffer.
@@ -406,12 +540,13 @@ struct msghdr {
  * of message elements headed by cmsghdr structures.
  */
 struct cmsghdr {
-	socklen_t	cmsg_len;		/* data byte count, including hdr */
-	int		cmsg_level;		/* originating protocol */
-	int		cmsg_type;		/* protocol-specific type */
-/* followed by	u_char  cmsg_data[]; */
+	socklen_t	cmsg_len;	/* [XSI] data byte count, including hdr */
+	int		cmsg_level;	/* [XSI] originating protocol */
+	int		cmsg_type;	/* [XSI] protocol-specific type */
+/* followed by	unsigned char  cmsg_data[]; */
 };
 
+#ifndef _POSIX_C_SOURCE
 #ifndef __APPLE__
 /*
  * While we may have more groups than this, the cmsgcred struct must
@@ -436,32 +571,35 @@ struct cmsgcred {
 	gid_t	cmcred_groups[CMGROUP_MAX];	/* groups */
 };
 #endif
+#endif	/* !_POSIX_C_SOURCE */
 
 /* given pointer to struct cmsghdr, return pointer to data */
-#define	CMSG_DATA(cmsg)		((u_char *)(cmsg) + \
+#define	CMSG_DATA(cmsg)		((unsigned char *)(cmsg) + \
 				 ALIGN(sizeof(struct cmsghdr)))
 
 /* given pointer to struct cmsghdr, return pointer to next cmsghdr */
 #define	CMSG_NXTHDR(mhdr, cmsg)	\
-	(((caddr_t)(cmsg) + ALIGN((cmsg)->cmsg_len) + \
+	(((unsigned char *)(cmsg) + ALIGN((cmsg)->cmsg_len) + \
 	  ALIGN(sizeof(struct cmsghdr)) > \
-	    (caddr_t)(mhdr)->msg_control + (mhdr)->msg_controllen) ? \
-	    (struct cmsghdr *)NULL : \
-	    (struct cmsghdr *)((caddr_t)(cmsg) + ALIGN((cmsg)->cmsg_len)))
+	    (unsigned char *)(mhdr)->msg_control + (mhdr)->msg_controllen) ? \
+	    (struct cmsghdr *)0 /* NULL */ : \
+	    (struct cmsghdr *)((unsigned char *)(cmsg) + ALIGN((cmsg)->cmsg_len)))
 
 #define	CMSG_FIRSTHDR(mhdr)	((struct cmsghdr *)(mhdr)->msg_control)
 
+#ifndef _POSIX_C_SOURCE
 /* RFC 2292 additions */
-	
 #define	CMSG_SPACE(l)		(ALIGN(sizeof(struct cmsghdr)) + ALIGN(l))
 #define	CMSG_LEN(l)		(ALIGN(sizeof(struct cmsghdr)) + (l))
 
 #ifdef KERNEL
 #define	CMSG_ALIGN(n)	ALIGN(n)
 #endif
+#endif	/* !_POSIX_C_SOURCE */
 
 /* "Socket"-level control message types: */
 #define	SCM_RIGHTS	0x01		/* access rights (array of int) */
+#ifndef _POSIX_C_SOURCE
 #define	SCM_TIMESTAMP	0x02		/* timestamp (struct timeval) */
 #define	SCM_CREDS	0x03		/* process creds (struct cmsgcred) */
 
@@ -469,21 +607,23 @@ struct cmsgcred {
  * 4.3 compat sockaddr, move to compat file later
  */
 struct osockaddr {
-	u_short	sa_family;		/* address family */
+	__uint16_t	sa_family;	/* address family */
 	char	sa_data[14];		/* up to 14 bytes of direct address */
 };
 
 /*
  * 4.3-compat message header (move to compat file later).
  */
+	// LP64todo - fix this.  should msg_iov be * iovec_64?
 struct omsghdr {
-	caddr_t	msg_name;		/* optional address */
-	int	msg_namelen;		/* size of address */
-	struct	iovec *msg_iov;		/* scatter/gather array */
-	int	msg_iovlen;		/* # elements in msg_iov */
-	caddr_t	msg_accrights;		/* access rights sent/received */
-	int	msg_accrightslen;
+	void		*msg_name;		/* optional address */
+	socklen_t	msg_namelen;		/* size of address */
+	struct	iovec	*msg_iov;		/* scatter/gather array */
+	int		msg_iovlen;		/* # elements in msg_iov */
+	void		*msg_accrights;		/* access rights sent/rcvd */
+	int		msg_accrightslen;
 };
+#endif	/* !_POSIX_C_SOURCE */
 
 /*
  * howto arguments for shutdown(2), specified by Posix.1g.
@@ -492,6 +632,7 @@ struct omsghdr {
 #define	SHUT_WR		1		/* shut down the writing side */
 #define	SHUT_RDWR	2		/* shut down both sides */
 
+#ifndef _POSIX_C_SOURCE
 #if SENDFILE
 /*
  * sendfile(2) header/trailer struct
@@ -503,37 +644,49 @@ struct sf_hdtr {
 	int trl_cnt;		/* number of trailer iovec's */
 };
 #endif
+#endif	/* !_POSIX_C_SOURCE */
 
 #ifndef	KERNEL
-
-#include <sys/cdefs.h>
-
 __BEGIN_DECLS
-int	accept __P((int, struct sockaddr *, socklen_t *));
-int	bind __P((int, const struct sockaddr *, socklen_t));
-int	connect __P((int, const struct sockaddr *, socklen_t));
-int	getpeername __P((int, struct sockaddr *, socklen_t *));
-int	getsockname __P((int, struct sockaddr *, socklen_t *));
-int	getsockopt __P((int, int, int, void *, int *));
-int	listen __P((int, int));
-ssize_t	recv __P((int, void *, size_t, int));
-ssize_t	recvfrom __P((int, void *, size_t, int, struct sockaddr *, socklen_t *));
-ssize_t	recvmsg __P((int, struct msghdr *, int));
-ssize_t	send __P((int, const void *, size_t, int));
-ssize_t	sendto __P((int, const void *,
-	    size_t, int, const struct sockaddr *, socklen_t));
-ssize_t	sendmsg __P((int, const struct msghdr *, int));
-#if SENDFILE
-int	sendfile __P((int, int, off_t, size_t, struct sf_hdtr *, off_t *, int));
-#endif
-int	setsockopt __P((int, int, int, const void *, socklen_t));
-int	shutdown __P((int, int));
-int	socket __P((int, int, int));
-int	socketpair __P((int, int, int, int *));
+int	accept(int, struct sockaddr * __restrict, socklen_t * __restrict)
+		__DARWIN_ALIAS(accept);
+int	bind(int, const struct sockaddr *, socklen_t) __DARWIN_ALIAS(bind);
+int	connect(int, const struct sockaddr *, socklen_t) __DARWIN_ALIAS( connect);
+int	getpeername(int, struct sockaddr * __restrict, socklen_t * __restrict)
+		__DARWIN_ALIAS(getpeername);
+int	getsockname(int, struct sockaddr * __restrict, socklen_t * __restrict)
+		__DARWIN_ALIAS(getsockname);
+int	getsockopt(int, int, int, void * __restrict, socklen_t * __restrict);
+int	listen(int, int) __DARWIN_ALIAS(listen);
+ssize_t	recv(int, void *, size_t, int) __DARWIN_ALIAS(recv);
+ssize_t	recvfrom(int, void *, size_t, int, struct sockaddr * __restrict,
+		socklen_t * __restrict) __DARWIN_ALIAS(recvfrom);
+ssize_t	recvmsg(int, struct msghdr *, int) __DARWIN_ALIAS(recvmsg);
+ssize_t	send(int, const void *, size_t, int) __DARWIN_ALIAS(send);
+ssize_t	sendmsg(int, const struct msghdr *, int) __DARWIN_ALIAS(sendmsg);
+ssize_t	sendto(int, const void *, size_t,
+		int, const struct sockaddr *, socklen_t) __DARWIN_ALIAS(sendto);
+int	setsockopt(int, int, int, const void *, socklen_t);
+int	shutdown(int, int);
+int	socket(int, int, int);
+int	socketpair(int, int, int, int *) __DARWIN_ALIAS(socketpair);
+/*
+ * NOTIMP:
+ * int sockatmark(int s);
+ */
 
-void	pfctlinput __P((int, struct sockaddr *));
+#ifndef _POSIX_C_SOURCE
+#if SENDFILE
+int	sendfile(int, int, off_t, size_t, struct sf_hdtr *, off_t *, int);
+#endif
+void	pfctlinput(int, struct sockaddr *);
+#endif	/* !_POSIX_C_SOURCE */
 __END_DECLS
 
 #endif /* !KERNEL */
+
+#ifdef KERNEL
+#include <sys/kpi_socket.h>
+#endif
 
 #endif /* !_SYS_SOCKET_H_ */

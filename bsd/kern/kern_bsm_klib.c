@@ -20,8 +20,10 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 
+#include <sys/systm.h>
 #include <sys/types.h>
-#include <sys/vnode.h>
+#include <sys/proc_internal.h>
+#include <sys/vnode_internal.h>
 #include <sys/fcntl.h>
 #include <sys/filedesc.h>
 #include <sys/sem.h>
@@ -352,7 +354,7 @@ au_event_t sys_au_event[] = {
 	AUE_NULL,			/* 295 */
 	AUE_LOADSHFILE,			/* 296 = load_shared_file */
 	AUE_RESETSHFILE,		/* 297 = reset_shared_file */
-	AUE_NEWSYSTEMSHREG, 		/* 298 = new_system_shared_regions */
+	AUE_NEWSYSTEMSHREG,		/* 298 = new_system_shared_regions */
 	AUE_NULL,			/* 299 */
 	AUE_NULL,			/* 300 */
 	AUE_NULL,			/* 301 */
@@ -418,7 +420,7 @@ au_event_t sys_au_event[] = {
 	AUE_NULL,			/* 361 */
 	AUE_NULL,			/* 362 = kqueue */
 	AUE_NULL,			/* 363 = kevent */
-	AUE_NULL,			/* 364 */
+	AUE_LCHOWN,			/* 364 = lchown */
 	AUE_NULL,			/* 365 */
 	AUE_NULL,			/* 366 */
 	AUE_NULL,			/* 367 */
@@ -459,12 +461,12 @@ au_class_t au_event_class(au_event_t event)
 	return (AU_NULL);
 }
 
-/* 
+	/*
  * Insert a event to class mapping. If the event already exists in the
  * mapping, then replace the mapping with the new one.
  * XXX There is currently no constraints placed on the number of mappings.
  *     May want to either limit to a number, or in terms of memory usage.
- */
+		 */
 void au_evclassmap_insert(au_event_t event, au_class_t class) 
 {
 	struct evclass_list *evcl;
@@ -478,14 +480,13 @@ void au_evclassmap_insert(au_event_t event, au_class_t class)
 			return;
 		}
 	}
-	kmem_alloc(kernel_map, &evc, sizeof(*evc));
+	kmem_alloc(kernel_map, (vm_offset_t *)&evc, sizeof(*evc));
 	if (evc == NULL) {
 		return;
 	}
 	evc->event = event;
 	evc->class = class;
 	LIST_INSERT_HEAD(&evcl->head, evc, entry);
-		
 }
 
 void au_evclassmap_init() 
@@ -499,7 +500,7 @@ void au_evclassmap_init()
 	for (i = 0; i < nsys_au_event; i++) {
 		if (sys_au_event[i] != AUE_NULL) {
 			au_evclassmap_insert(sys_au_event[i], AU_NULL);
-		}
+	}
 	}
 	/* Add the Mach system call events */
 	au_evclassmap_insert(AUE_TASKFORPID, AU_NULL);
@@ -508,27 +509,26 @@ void au_evclassmap_init()
 	au_evclassmap_insert(AUE_SWAPOFF, AU_NULL);
 	au_evclassmap_insert(AUE_MAPFD, AU_NULL);
 	au_evclassmap_insert(AUE_INITPROCESS, AU_NULL);
-	
+
 	/* Add the specific open events to the mapping. */
 	au_evclassmap_insert(AUE_OPEN_R, AU_FREAD);
-        au_evclassmap_insert(AUE_OPEN_RC, AU_FREAD|AU_FCREATE);
-        au_evclassmap_insert(AUE_OPEN_RTC, AU_FREAD|AU_FCREATE|AU_FDELETE);
-        au_evclassmap_insert(AUE_OPEN_RT, AU_FREAD|AU_FDELETE);
-        au_evclassmap_insert(AUE_OPEN_RW, AU_FREAD|AU_FWRITE);
-        au_evclassmap_insert(AUE_OPEN_RWC, AU_FREAD|AU_FWRITE|AU_FCREATE);
-        au_evclassmap_insert(AUE_OPEN_RWTC, AU_FREAD|AU_FWRITE|AU_FCREATE|AU_FDELETE);
-        au_evclassmap_insert(AUE_OPEN_RWT, AU_FREAD|AU_FWRITE|AU_FDELETE);
-        au_evclassmap_insert(AUE_OPEN_W, AU_FWRITE);
-        au_evclassmap_insert(AUE_OPEN_WC, AU_FWRITE|AU_FCREATE);
-        au_evclassmap_insert(AUE_OPEN_WTC, AU_FWRITE|AU_FCREATE|AU_FDELETE);
-        au_evclassmap_insert(AUE_OPEN_WT, AU_FWRITE|AU_FDELETE);
+	au_evclassmap_insert(AUE_OPEN_RC, AU_FREAD|AU_FCREATE);
+	au_evclassmap_insert(AUE_OPEN_RTC, AU_FREAD|AU_FCREATE|AU_FDELETE);
+	au_evclassmap_insert(AUE_OPEN_RT, AU_FREAD|AU_FDELETE);
+	au_evclassmap_insert(AUE_OPEN_RW, AU_FREAD|AU_FWRITE);
+	au_evclassmap_insert(AUE_OPEN_RWC, AU_FREAD|AU_FWRITE|AU_FCREATE);
+	au_evclassmap_insert(AUE_OPEN_RWTC, AU_FREAD|AU_FWRITE|AU_FCREATE|AU_FDELETE);
+	au_evclassmap_insert(AUE_OPEN_RWT, AU_FREAD|AU_FWRITE|AU_FDELETE);
+	au_evclassmap_insert(AUE_OPEN_W, AU_FWRITE);
+	au_evclassmap_insert(AUE_OPEN_WC, AU_FWRITE|AU_FCREATE);
+	au_evclassmap_insert(AUE_OPEN_WTC, AU_FWRITE|AU_FCREATE|AU_FDELETE);
+	au_evclassmap_insert(AUE_OPEN_WT, AU_FWRITE|AU_FDELETE);
 }
 
-/*
+	/* 
  * Check whether an event is aditable by comparing the mask of classes this
  * event is part of against the given mask.
- *
- */
+	 */
 int au_preselect(au_event_t event, au_mask_t *mask_p, int sorf)
 {
 	au_class_t effmask = 0;
@@ -538,10 +538,10 @@ int au_preselect(au_event_t event, au_mask_t *mask_p, int sorf)
 		return (-1);
 
 	ae_class = au_event_class(event);
-	/* 
+	/*
 	 * Perform the actual check of the masks against the event.
 	 */
-	if (sorf & AU_PRS_SUCCESS) {
+	if(sorf & AU_PRS_SUCCESS) {
 		effmask |= (mask_p->am_success & ae_class);
 	}
                         
@@ -580,6 +580,7 @@ au_event_t ctlname_to_sysctlevent(int name[], uint64_t valid_arg) {
 	case KERN_SAVED_IDS:
 	case KERN_NETBOOT:
 	case KERN_SYMFILE:
+	case KERN_SHREG_PRIVATIZABLE:
 		return AUE_SYSCTL_NONADMIN;
 
 	/* only treat the sets as admin */
@@ -656,13 +657,13 @@ au_event_t flags_and_error_to_openevent(int oflags, int error) {
 	default:
 		aevent = AUE_OPEN;
 		break;
-	}
+}
 
-	/* 
+/*
 	 * Convert chatty errors to better matching events.
 	 * Failures to find a file are really just attribute
 	 * events - so recast them as such.
-	 */
+*/
 	switch (aevent) {
 	case AUE_OPEN_R:
 	case AUE_OPEN_RT:
@@ -672,12 +673,12 @@ au_event_t flags_and_error_to_openevent(int oflags, int error) {
 	case AUE_OPEN_WT:
 		if (error == ENOENT)
 			aevent = AUE_OPEN;
-	}
+}
 	return aevent;
 }
 
 /* Convert a MSGCTL command to a specific event. */
-int msgctl_to_event(int cmd)
+au_event_t msgctl_to_event(int cmd)
 {
 	switch (cmd) {
 	case IPC_RMID:
@@ -693,7 +694,7 @@ int msgctl_to_event(int cmd)
 }
 
 /* Convert a SEMCTL command to a specific event. */
-int semctl_to_event(int cmd)
+au_event_t semctl_to_event(int cmd)
 {
 	switch (cmd) {
 	case GETALL:
@@ -829,12 +830,9 @@ int canon_path(struct proc *p, char *path, char *cpath)
 			cpath[0] = '\0';
 			return (ret);
 		}
-		/* The length returned by vn_getpath() is two greater than the 
-		 * number of characters in the string.
-		 */
 		if (len < MAXPATHLEN)
-			cpath[len-2] = '/';	
-		strncpy(cpath + len-1, bufp, MAXPATHLEN - len);
+			cpath[len-1] = '/';	
+		strncpy(cpath + len, bufp, MAXPATHLEN - len);
 	} else {
 		strncpy(cpath, bufp, MAXPATHLEN);
 	}

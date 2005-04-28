@@ -37,8 +37,8 @@ extern kern_return_t	i386_io_port_list(
 					thread_t	thread,
 					device_t	** list,
 					unsigned int	* list_count);
+#endif
 extern void		iopb_init(void);
 extern iopb_tss_t	iopb_create(void);
 extern void		iopb_destroy(
 					iopb_tss_t	iopb);
-#endif

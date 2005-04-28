@@ -64,7 +64,7 @@
 #include <sys/kernel.h>
 #include <sys/systm.h>
 #include <sys/sysctl.h>
-#include <sys/proc.h>
+#include <sys/proc_internal.h>
 #include <sys/unistd.h>
 
 #if defined(SMP)
@@ -76,10 +76,9 @@
 #include <sys/kernel.h>
 #include <sys/malloc.h>
 #include <sys/proc.h>
-#include <sys/file.h>
+#include <sys/file_internal.h>
 #include <sys/vnode.h>
 #include <sys/unistd.h>
-#include <sys/buf.h>
 #include <sys/ioctl.h>
 #include <sys/namei.h>
 #include <sys/tty.h>
@@ -96,7 +95,7 @@
 
 extern vm_map_t bsd_pageable_map;
 
-#include <sys/mount.h>
+#include <sys/mount_internal.h>
 #include <sys/kdebug.h>
 
 #include <IOKit/IOPlatformExpert.h>
@@ -105,6 +104,7 @@ extern vm_map_t bsd_pageable_map;
 #include <machine/machine_routines.h>
 #include <machine/cpu_capabilities.h>
 
+static int	cputype, cpusubtype, cputhreadtype;
 
 SYSCTL_NODE(, 0,	  sysctl, CTLFLAG_RW, 0,
 	"Sysctl internal magic");
@@ -132,6 +132,14 @@ SYSCTL_NODE(, CTL_USER,	  user,   CTLFLAG_RW, 0,
  */
 
 #define CTLHW_RETQUAD	(1 << 31)
+#define CTLHW_LOCAL	(1 << 30)
+
+#define HW_LOCAL_CPUTHREADTYPE	(1 | CTLHW_LOCAL)
+#define HW_LOCAL_PHYSICALCPU	(2 | CTLHW_LOCAL)
+#define HW_LOCAL_PHYSICALCPUMAX	(3 | CTLHW_LOCAL)
+#define HW_LOCAL_LOGICALCPU	(4 | CTLHW_LOCAL)
+#define HW_LOCAL_LOGICALCPUMAX	(5 | CTLHW_LOCAL)
+
 
 /*
  * Supporting some variables requires us to do "real" work.  We 
@@ -146,6 +154,9 @@ sysctl_hw_generic SYSCTL_HANDLER_ARGS
 	ml_cpu_info_t cpu_info;
 	int val, doquad;
 	long long qval;
+	host_basic_info_data_t hinfo;
+	kern_return_t kret;
+	int count = HOST_BASIC_INFO_COUNT;
 
 	/*
 	 * Test and mask off the 'return quad' flag.
@@ -156,6 +167,9 @@ sysctl_hw_generic SYSCTL_HANDLER_ARGS
 
 	ml_cpu_get_info(&cpu_info);
 
+#define BSD_HOST 1
+	kret = host_info(BSD_HOST, HOST_BASIC_INFO, &hinfo, &count);
+
 	/*
 	 * Handle various OIDs.
 	 *
@@ -164,32 +178,40 @@ sysctl_hw_generic SYSCTL_HANDLER_ARGS
 	 */
 	switch (arg2) {
 	case HW_NCPU:
-		{
-		host_basic_info_data_t hinfo;
-		kern_return_t kret;
-		int count = HOST_BASIC_INFO_COUNT;
-#define BSD_HOST 1
-
-			kret = host_info(BSD_HOST, HOST_BASIC_INFO, &hinfo, &count);
-			if (kret == KERN_SUCCESS) {
-				return(SYSCTL_RETURN(req, hinfo.max_cpus));
-			} else {
-				return(EINVAL);
-			}
+		if (kret == KERN_SUCCESS) {
+			return(SYSCTL_RETURN(req, hinfo.max_cpus));
+		} else {
+			return(EINVAL);
 		}
 	case HW_AVAILCPU:
-		{
-		host_basic_info_data_t hinfo;
-		kern_return_t kret;
-		int count = HOST_BASIC_INFO_COUNT;
-#define BSD_HOST 1
-
-			kret = host_info(BSD_HOST, HOST_BASIC_INFO, &hinfo, &count);
-			if (kret == KERN_SUCCESS) {
-				return(SYSCTL_RETURN(req, hinfo.avail_cpus));
-			} else {
-				return(EINVAL);
-			}
+		if (kret == KERN_SUCCESS) {
+			return(SYSCTL_RETURN(req, hinfo.avail_cpus));
+		} else {
+			return(EINVAL);
+		}
+	case HW_LOCAL_PHYSICALCPU:
+		if (kret == KERN_SUCCESS) {
+			return(SYSCTL_RETURN(req, hinfo.physical_cpu));
+		} else {
+			return(EINVAL);
+		}
+	case HW_LOCAL_PHYSICALCPUMAX:
+		if (kret == KERN_SUCCESS) {
+			return(SYSCTL_RETURN(req, hinfo.physical_cpu_max));
+		} else {
+			return(EINVAL);
+		}
+	case HW_LOCAL_LOGICALCPU:
+		if (kret == KERN_SUCCESS) {
+			return(SYSCTL_RETURN(req, hinfo.logical_cpu));
+		} else {
+			return(EINVAL);
+		}
+	case HW_LOCAL_LOGICALCPUMAX:
+		if (kret == KERN_SUCCESS) {
+			return(SYSCTL_RETURN(req, hinfo.logical_cpu_max));
+		} else {
+			return(EINVAL);
 		}
 	case HW_CACHELINE:
 		val = cpu_info.cache_line_size;
@@ -268,11 +290,15 @@ sysctl_hw_generic SYSCTL_HANDLER_ARGS
 /*
  * hw.* MIB variables.
  */
-SYSCTL_PROC    (_hw, HW_NCPU, ncpu, CTLTYPE_INT  | CTLFLAG_RD | CTLFLAG_KERN, 0, HW_NCPU, sysctl_hw_generic, "I", "");
+SYSCTL_PROC    (_hw, HW_NCPU, ncpu, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN, 0, HW_NCPU, sysctl_hw_generic, "I", "");
 SYSCTL_PROC    (_hw, HW_AVAILCPU, activecpu, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN, 0, HW_AVAILCPU, sysctl_hw_generic, "I", "");
+SYSCTL_PROC    (_hw, OID_AUTO, physicalcpu, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN, 0, HW_LOCAL_PHYSICALCPU, sysctl_hw_generic, "I", "");
+SYSCTL_PROC    (_hw, OID_AUTO, physicalcpu_max, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN, 0, HW_LOCAL_PHYSICALCPUMAX, sysctl_hw_generic, "I", "");
+SYSCTL_PROC    (_hw, OID_AUTO, logicalcpu, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN, 0, HW_LOCAL_LOGICALCPU, sysctl_hw_generic, "I", "");
+SYSCTL_PROC    (_hw, OID_AUTO, logicalcpu_max, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN, 0, HW_LOCAL_LOGICALCPUMAX, sysctl_hw_generic, "I", "");
 SYSCTL_INT     (_hw, HW_BYTEORDER, byteorder, CTLFLAG_RD | CTLFLAG_KERN, NULL, BYTE_ORDER, "");
-SYSCTL_INT     (_hw, OID_AUTO, cputype, CTLFLAG_RD | CTLFLAG_KERN, &machine_slot[0].cpu_type, 0, "");
-SYSCTL_INT     (_hw, OID_AUTO, cpusubtype, CTLFLAG_RD | CTLFLAG_KERN, &machine_slot[0].cpu_subtype, 0, "");
+SYSCTL_INT     (_hw, OID_AUTO, cputype, CTLFLAG_RD | CTLFLAG_KERN, &cputype, 0, "");
+SYSCTL_INT     (_hw, OID_AUTO, cpusubtype, CTLFLAG_RD | CTLFLAG_KERN, &cpusubtype, 0, "");
 SYSCTL_INT2QUAD(_hw, OID_AUTO, pagesize, CTLFLAG_RD | CTLFLAG_KERN, &page_size, "");
 SYSCTL_QUAD    (_hw, OID_AUTO, busfrequency, CTLFLAG_RD | CTLFLAG_KERN, &gPEClockFrequencyInfo.bus_frequency_hz, "");
 SYSCTL_QUAD    (_hw, OID_AUTO, busfrequency_min, CTLFLAG_RD | CTLFLAG_KERN, &gPEClockFrequencyInfo.bus_frequency_min_hz, "");
@@ -339,7 +365,10 @@ SYSCTL_PROC(_hw, HW_L3SETTINGS,   l3settings, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG
 void
 sysctl_mib_init(void)
 {
-	
+	cputype = cpu_type();
+	cpusubtype = cpu_subtype();
+	cputhreadtype = cpu_threadtype();
+
 	/*
 	 * Populate the optional portion of the hw.* MIB.
 	 *
@@ -347,6 +376,12 @@ sysctl_mib_init(void)
 	 *     that actually directly relate to the functions in
 	 *     question.
 	 */
+
+	if (cputhreadtype != CPU_THREADTYPE_NONE) {
+		static SYSCTL_INT(_hw, OID_AUTO, cputhreadtype, CTLFLAG_RD | CTLFLAG_NOAUTO | CTLFLAG_KERN, &cputhreadtype, 0, "");
+		sysctl_register_oid(&sysctl__hw_cputhreadtype);
+	}
+
 #ifdef __ppc__
 	{
 		static int altivec_flag = -1;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -51,34 +51,8 @@ enum {
 
 static void	GetFilenameExtension( ItemCount length, ConstUniCharArrayPtr unicodeStr, char* extStr );
 
-static void	GetFileIDString( HFSCatalogNodeID fileID, char* fileIDStr );
 
 static UInt32	HexStringToInteger( UInt32 length, const UInt8 *hexStr );
-
-
-
-/*
- * Convert file ID into a hexidecimal string with no leading zeros
- */
-static void
-GetFileIDString( HFSCatalogNodeID fileID, char * fileIDStr )
-{
-	SInt32	i, b;
-	UInt8	*translate = (UInt8 *) "0123456789ABCDEF";
-	UInt8	c;
-	
-	fileIDStr[0] = '#';
-
-	for ( i = 0, b = 28; b >= 0; b -= 4 ) {
-		c = *(translate + ((fileID >> b) & 0x0000000F));
-		
-		/* if its not a leading zero add it to our string */
-		if ( (c != (UInt8) '0') || (i > 1) || (b == 0) )
-			fileIDStr[++i] = c;
-	}
-
-	fileIDStr[++i] = '\0';
-}
 
 
 /*
@@ -235,7 +209,7 @@ static UInt32
 HexStringToInteger(UInt32 length, const UInt8 *hexStr)
 {
 	UInt32		value;
-	short		i;
+	UInt32		i;
 	UInt8		c;
 	const UInt8	*p;
 
@@ -448,7 +422,7 @@ ConvertUnicodeToUTF8Mangled(ByteCount srcLen, ConstUniCharArrayPtr srcStr, ByteC
 	char fileIDStr[15];
 	char extStr[15];
 
-	GetFileIDString(cnid, fileIDStr);
+	sprintf(fileIDStr, "#%X", cnid);
 	GetFilenameExtension(srcLen/sizeof(UniChar), srcStr, extStr);
 
 	/* remove extension chars from source */

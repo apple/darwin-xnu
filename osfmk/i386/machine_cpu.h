@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -26,28 +26,28 @@
 #include <mach/boolean.h>
 #include <kern/kern_types.h>
 #include <pexpert/pexpert.h>
+#include <sys/cdefs.h>
 
+__BEGIN_DECLS
 void	cpu_machine_init(
 	void);
-
-kern_return_t cpu_register(
-        int *);
-
-kern_return_t cpu_start(
-        int);
-
-void	cpu_doshutdown(
-        void);
-
-void	cpu_sleep(
-        void);
 
 struct i386_interrupt_state;
 void	cpu_signal_handler(
 	struct i386_interrupt_state *regs);
 
+kern_return_t cpu_register(
+        int *slot_nump);
+__END_DECLS
+
+static inline void cpu_halt(void)
+{
+	asm volatile( "cli; hlt" );
+}
+
 static inline void cpu_pause(void)
 {
 	asm volatile( "rep; nop" );
 }
+
 #endif /* _I386_MACHINE_CPU_H_ */

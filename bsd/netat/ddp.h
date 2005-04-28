@@ -32,6 +32,8 @@
 #define _NETAT_DDP_H_
 #include <sys/appleapiopts.h>
 
+#ifdef __APPLE_API_OBSOLETE
+
 /* Header and data sizes */
 
 #define  DDP_HDR_SIZE                 5  /* DDP (short) header size */
@@ -74,10 +76,8 @@ typedef struct {
         char       data[DDP_DATA_SIZE];
 } at_ddp_t;
 
-
 #define	DDPLEN_ASSIGN(ddp, len)		ddp->length = len
 #define	DDPLEN_VALUE(ddp)		ddp->length
-
 
 /* DDP module statistics and configuration */
 
@@ -102,6 +102,7 @@ typedef struct at_ddp_stats {
 	u_int	xmit_dropped_nobuf;
 } at_ddp_stats_t;
 
+
 /* DDP streams module ioctls */
 
 #define	AT_MID_DDP	203
@@ -124,8 +125,7 @@ typedef struct at_ddp_stats {
 #define DDP_IOC_SET_PROTO	((AT_MID_DDP<<8) | 13)
 #endif
 
-#ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
+#ifdef KERNEL_PRIVATE
 
 #define DDP_MIN_NETWORK		0x0001
 #define	DDP_MAX_NETWORK		0xfffe
@@ -184,6 +184,6 @@ void ddp_bit_reverse(unsigned char *);
 /* in ddp_lap.c */
 int ddp_shutdown(int);
 
-#endif /* __APPLE_API_PRIVATE */
-#endif /* KERNEL */
+#endif /* KERNEL_PRIVATE */
+#endif /* __APPLE_API_OBSOLETE */
 #endif /* _NETAT_DDP_H_ */

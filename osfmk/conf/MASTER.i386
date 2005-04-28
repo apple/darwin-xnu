@@ -20,7 +20,6 @@
 machine		"i386"						# <intel>
 cpu		"i386"						# <intel>
 
-pseudo-device	cpus		4
 pseudo-device	com		2
 pseudo-device	vc		1
 
@@ -39,7 +38,6 @@ options		FP_EMUL		# floating point emulation	# <fp>
 options		PC_SUPPORT	# virtual PC support		# <pc>
 options		PROFILE		# kernel profiling		# <profile>
 options		UXPR		# user-level XPR package	# <uxpr>
-options		STAT_TIME	# time stats
 config		mach_kernel	swap generic			# <mach>
 
 options		GPROF		# kgmon profiling 		# <profile>
@@ -52,4 +50,5 @@ options         MACH_PE		#				# <mach_pe>
 
 #options	DDB		# Inline debugger		# <debug>
 options		MACH_KDP	# KDP				# <mach_kdp>
+#options		PAE
 

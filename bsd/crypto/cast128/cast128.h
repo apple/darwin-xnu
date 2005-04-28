@@ -46,14 +46,10 @@
 #define	CAST128_DECRYPT	0
 
 
-extern void set_cast128_subkey __P((u_int32_t *, u_int8_t *, int));
-extern void cast128_encrypt_round16 __P((u_int8_t *, const u_int8_t *,
-					u_int32_t *));
-extern void cast128_decrypt_round16 __P((u_int8_t *, const u_int8_t *,
-					u_int32_t *));
-extern void cast128_encrypt_round12 __P((u_int8_t *, const u_int8_t *,
-					u_int32_t *));
-extern void cast128_decrypt_round12 __P((u_int8_t *, const u_int8_t *,
-					u_int32_t *));
+extern void set_cast128_subkey(u_int32_t *, u_int8_t *, int);
+extern void cast128_encrypt_round16(u_int8_t *, const u_int8_t *, u_int32_t *);
+extern void cast128_decrypt_round16(u_int8_t *, const u_int8_t *, u_int32_t *);
+extern void cast128_encrypt_round12(u_int8_t *, const u_int8_t *, u_int32_t *);
+extern void cast128_decrypt_round12(u_int8_t *, const u_int8_t *, u_int32_t *);
 #endif
 

@@ -60,11 +60,11 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/mount.h>
-#include <sys/proc.h>
+#include <sys/mount_internal.h>
+#include <sys/proc_internal.h>	/* for accessing p_stats */
 #include <sys/file.h>
-#include <sys/buf.h>
-#include <sys/vnode.h>
+#include <sys/buf_internal.h>
+#include <sys/vnode_internal.h>
 #include <sys/kernel.h>
 #include <sys/malloc.h>
 #include <sys/trace.h>
@@ -87,8 +87,8 @@
 #include <architecture/byte_order.h>
 #endif /* REV_ENDIAN_FS */
 
-static int ffs_indirtrunc __P((struct inode *, ufs_daddr_t, ufs_daddr_t,
-	    ufs_daddr_t, int, long *));
+static int ffs_indirtrunc(struct inode *, ufs_daddr_t, ufs_daddr_t,
+	    ufs_daddr_t, int, long *);
 
 /*
  * Update the access, modified, and inode change times as specified by the
@@ -100,25 +100,20 @@ static int ffs_indirtrunc __P((struct inode *, ufs_daddr_t, ufs_daddr_t,
  * complete.
  */
 int
-ffs_update(ap)
-	struct vop_update_args /* {
-		struct vnode *a_vp;
-		struct timeval *a_access;
-		struct timeval *a_modify;
-		int a_waitfor;
-	} */ *ap;
+ffs_update(struct vnode *vp, struct timeval *access, struct timeval *modify, int waitfor)
 {
 	register struct fs *fs;
 	struct buf *bp;
 	struct inode *ip;
-	int error;
+	struct timeval tv;
+	errno_t error;
 #if REV_ENDIAN_FS
-	struct mount *mp=(ap->a_vp)->v_mount;
+	struct mount *mp=(vp)->v_mount;
 	int rev_endian=(mp->mnt_flag & MNT_REVEND);
 #endif /* REV_ENDIAN_FS */
 
-	ip = VTOI(ap->a_vp);
-	if (ap->a_vp->v_mount->mnt_flag & MNT_RDONLY) {
+	ip = VTOI(vp);
+	if (vp->v_mount->mnt_flag & MNT_RDONLY) {
 		ip->i_flag &=
 		    ~(IN_ACCESS | IN_CHANGE | IN_MODIFIED | IN_UPDATE);
 		return (0);
@@ -127,13 +122,15 @@ ffs_update(ap)
 	    (IN_ACCESS | IN_CHANGE | IN_MODIFIED | IN_UPDATE)) == 0)
 		return (0);
 	if (ip->i_flag & IN_ACCESS)
-		ip->i_atime = ap->a_access->tv_sec;
+		ip->i_atime = access->tv_sec;
 	if (ip->i_flag & IN_UPDATE) {
-		ip->i_mtime = ap->a_modify->tv_sec;
+		ip->i_mtime = modify->tv_sec;
 		ip->i_modrev++;
 	}
-	if (ip->i_flag & IN_CHANGE)
-		ip->i_ctime = time.tv_sec;
+	if (ip->i_flag & IN_CHANGE) {
+		microtime(&tv);
+		ip->i_ctime = tv.tv_sec;
+	}
 	ip->i_flag &= ~(IN_ACCESS | IN_CHANGE | IN_MODIFIED | IN_UPDATE);
 	fs = ip->i_fs;
 	/*
@@ -144,62 +141,50 @@ ffs_update(ap)
 		ip->i_din.di_ouid = ip->i_uid;		/* XXX */
 		ip->i_din.di_ogid = ip->i_gid;		/* XXX */
 	}						/* XXX */
-	if (error = bread(ip->i_devvp,
-	    fsbtodb(fs, ino_to_fsba(fs, ip->i_number)),
+	if (error = buf_bread(ip->i_devvp,
+			      (daddr64_t)((unsigned)fsbtodb(fs, ino_to_fsba(fs, ip->i_number))),
 		(int)fs->fs_bsize, NOCRED, &bp)) {
-		brelse(bp);
-		return (error);
+		buf_brelse(bp);
+		return ((int)error);
 	}
 #if REV_ENDIAN_FS
 	if (rev_endian)
-		byte_swap_inode_out(ip, ((struct dinode *)bp->b_data + ino_to_fsbo(fs, ip->i_number)));
+		byte_swap_inode_out(ip, ((struct dinode *)buf_dataptr(bp) + ino_to_fsbo(fs, ip->i_number)));
 	else {
 #endif /* REV_ENDIAN_FS */
-	*((struct dinode *)bp->b_data +
-	    ino_to_fsbo(fs, ip->i_number)) = ip->i_din;
+	*((struct dinode *)buf_dataptr(bp) + ino_to_fsbo(fs, ip->i_number)) = ip->i_din;
 #if REV_ENDIAN_FS
 	}
 #endif /* REV_ENDIAN_FS */
 
-	if (ap->a_waitfor && (ap->a_vp->v_mount->mnt_flag & MNT_ASYNC) == 0)
-		return (bwrite(bp));
+	if (waitfor && (vp->v_mount->mnt_flag & MNT_ASYNC) == 0)
+		return ((int)buf_bwrite(bp));
 	else {
-		bdwrite(bp);
+		buf_bdwrite(bp);
 		return (0);
 	}
 }
 
+
 #define	SINGLE	0	/* index of single indirect block */
 #define	DOUBLE	1	/* index of double indirect block */
 #define	TRIPLE	2	/* index of triple indirect block */
-/*
- * Truncate the inode oip to at most length size, freeing the
- * disk blocks.
- */
-ffs_truncate(ap)
-	struct vop_truncate_args /* {
-		struct vnode *a_vp;
-		off_t a_length;
-		int a_flags;
-		struct ucred *a_cred;
-		struct proc *a_p;
-	} */ *ap;
+
+int
+ffs_truncate_internal(vnode_t ovp, off_t length, int flags, ucred_t cred)
 {
-	register struct vnode *ovp = ap->a_vp;
+	struct inode	*oip;
+	struct fs	*fs;
 	ufs_daddr_t lastblock;
-	register struct inode *oip;
 	ufs_daddr_t bn, lbn, lastiblock[NIADDR], indir_lbn[NIADDR];
 	ufs_daddr_t oldblks[NDADDR + NIADDR], newblks[NDADDR + NIADDR];
-	off_t length = ap->a_length;
-	register struct fs *fs;
-	struct buf *bp;
-	int offset, size, level;
-	long count, nblocks, vflags, blocksreleased = 0;
-	struct timeval tv;
-	register int i;
-	int aflags, error, allerror;
-	off_t osize;
-	int devBlockSize=0;
+	buf_t	bp;
+	int	offset, size, level, i;
+	long	count, nblocks, vflags, blocksreleased = 0;
+	struct	timeval tv;
+	int	aflags, error, allerror;
+	off_t	osize;
+	int	devBlockSize=0;
 #if QUOTA
 	int64_t change;   /* in bytes */
 #endif /* QUOTA */
@@ -213,7 +198,7 @@ ffs_truncate(ap)
 	if (length > fs->fs_maxfilesize)
 	        return (EFBIG);
 
-	tv = time;
+	microtime(&tv);
 	if (ovp->v_type == VLNK &&
 	    oip->i_size < ovp->v_mount->mnt_maxsymlinklen) {
 #if DIAGNOSTIC
@@ -223,12 +208,12 @@ ffs_truncate(ap)
 		bzero((char *)&oip->i_shortlink, (u_int)oip->i_size);
 		oip->i_size = 0;
 		oip->i_flag |= IN_CHANGE | IN_UPDATE;
-		return (VOP_UPDATE(ovp, &tv, &tv, 1));
+		return (ffs_update(ovp, &tv, &tv, 1));
 	}
 
 	if (oip->i_size == length) {
 		oip->i_flag |= IN_CHANGE | IN_UPDATE;
-		return (VOP_UPDATE(ovp, &tv, &tv, 0));
+		return (ffs_update(ovp, &tv, &tv, 0));
 	}
 #if QUOTA
 	if (error = getinoquota(oip))
@@ -245,25 +230,24 @@ ffs_truncate(ap)
 		offset = blkoff(fs, length - 1);
 		lbn = lblkno(fs, length - 1);
 		aflags = B_CLRBUF;
-		if (ap->a_flags & IO_SYNC)
+		if (flags & IO_SYNC)
 			aflags |= B_SYNC;
-		if (error = ffs_balloc(oip, lbn, offset + 1, ap->a_cred, &bp,
-		    aflags , 0))
+		if (error = ffs_balloc(oip, lbn, offset + 1, cred, &bp, aflags, 0))
 			return (error);
 		oip->i_size = length;
 		
 		if (UBCINFOEXISTS(ovp)) {
-			bp->b_flags |= B_INVAL;
-			bwrite(bp);
+			buf_markinvalid(bp);
+			buf_bwrite(bp);
 			ubc_setsize(ovp, (off_t)length); 
 		} else {
 			if (aflags & B_SYNC)
-				bwrite(bp);
+				buf_bwrite(bp);
 			else
-				bawrite(bp);
+				buf_bawrite(bp);
 		}
 		oip->i_flag |= IN_CHANGE | IN_UPDATE;
-		return (VOP_UPDATE(ovp, &tv, &tv, 1));
+		return (ffs_update(ovp, &tv, &tv, 1));
 	}
 	/*
 	 * Shorten the size of the file. If the file is not being
@@ -275,33 +259,34 @@ ffs_truncate(ap)
 	if (UBCINFOEXISTS(ovp))
 		ubc_setsize(ovp, (off_t)length); 
 
-	vflags = ((length > 0) ? V_SAVE : 0) | V_SAVEMETA;
-	allerror = vinvalbuf(ovp, vflags, ap->a_cred, ap->a_p, 0, 0);
-                
+	vflags = ((length > 0) ? BUF_WRITE_DATA : 0) | BUF_SKIP_META;
 
+	if (vflags & BUF_WRITE_DATA)
+	        ffs_fsync_internal(ovp, MNT_WAIT);
+	allerror = buf_invalidateblks(ovp, vflags, 0, 0);
+                
 	offset = blkoff(fs, length);
 	if (offset == 0) {
 		oip->i_size = length;
 	} else {
 		lbn = lblkno(fs, length);
 		aflags = B_CLRBUF;
-		if (ap->a_flags & IO_SYNC)
+		if (flags & IO_SYNC)
 			aflags |= B_SYNC;
-		if (error = ffs_balloc(oip, lbn, offset, ap->a_cred, &bp,
-		    aflags, 0))
+		if (error = ffs_balloc(oip, lbn, offset, cred, &bp, aflags, 0))
 			return (error);
 		oip->i_size = length;
 		size = blksize(fs, oip, lbn);
-		bzero((char *)bp->b_data + offset, (u_int)(size - offset));
+		bzero((char *)buf_dataptr(bp) + offset, (u_int)(size - offset));
 		allocbuf(bp, size);
 		if (UBCINFOEXISTS(ovp)) {
-			bp->b_flags |= B_INVAL;
-			bwrite(bp);
+			buf_markinvalid(bp);
+			buf_bwrite(bp);
 		} else {
 			if (aflags & B_SYNC)
-				bwrite(bp);
+				buf_bwrite(bp);
 			else
-				bawrite(bp);
+				buf_bawrite(bp);
 		}
 	}
 	/*
@@ -314,7 +299,8 @@ ffs_truncate(ap)
 	lastiblock[SINGLE] = lastblock - NDADDR;
 	lastiblock[DOUBLE] = lastiblock[SINGLE] - NINDIR(fs);
 	lastiblock[TRIPLE] = lastiblock[DOUBLE] - NINDIR(fs) * NINDIR(fs);
-	VOP_DEVBLOCKSIZE(oip->i_devvp,&devBlockSize);
+
+	devBlockSize = vfs_devblocksize(vnode_mount(ovp));
 	nblocks = btodb(fs->fs_bsize, devBlockSize);
 
 	/*
@@ -332,7 +318,7 @@ ffs_truncate(ap)
 	for (i = NDADDR - 1; i > lastblock; i--)
 		oip->i_db[i] = 0;
 	oip->i_flag |= IN_CHANGE | IN_UPDATE;
-	if (error = VOP_UPDATE(ovp, &tv, &tv, MNT_WAIT))
+	if (error = ffs_update(ovp, &tv, &tv, MNT_WAIT))
 		allerror = error;
 	/*
 	 * Having written the new inode to disk, save its new configuration
@@ -343,8 +329,12 @@ ffs_truncate(ap)
 	bcopy((caddr_t)&oip->i_db[0], (caddr_t)newblks, sizeof newblks);
 	bcopy((caddr_t)oldblks, (caddr_t)&oip->i_db[0], sizeof oldblks);
 	oip->i_size = osize;
-	vflags = ((length > 0) ? V_SAVE : 0) | V_SAVEMETA;
-	allerror = vinvalbuf(ovp, vflags, ap->a_cred, ap->a_p, 0, 0);
+
+	vflags = ((length > 0) ? BUF_WRITE_DATA : 0) | BUF_SKIP_META;
+
+	if (vflags & BUF_WRITE_DATA)
+	        ffs_fsync_internal(ovp, MNT_WAIT);
+	allerror = buf_invalidateblks(ovp, vflags, 0, 0);
 
 	/*
 	 * Indirect blocks first.
@@ -424,7 +414,7 @@ done:
 		if (newblks[i] != oip->i_db[i])
 			panic("itrunc2");
 	if (length == 0 &&
-	    (ovp->v_dirtyblkhd.lh_first || ovp->v_cleanblkhd.lh_first))
+	    (vnode_hasdirtyblks(ovp) || vnode_hascleanblks(ovp)))
 		panic("itrunc3");
 #endif /* DIAGNOSTIC */
 	/*
@@ -468,10 +458,10 @@ ffs_indirtrunc(ip, lbn, dbn, lastbn, level, countp)
 	ufs_daddr_t *copy, nb, nlbn, last;
 	long blkcount, factor;
 	int nblocks, blocksreleased = 0;
-	int error = 0, allerror = 0;
+	errno_t error = 0, allerror = 0;
 	int devBlockSize=0;
-#if REV_ENDIAN_FS
 	struct mount *mp=vp->v_mount;
+#if REV_ENDIAN_FS
 	int rev_endian=(mp->mnt_flag & MNT_REVEND);
 #endif /* REV_ENDIAN_FS */
 
@@ -486,7 +476,8 @@ ffs_indirtrunc(ip, lbn, dbn, lastbn, level, countp)
 	last = lastbn;
 	if (lastbn > 0)
 		last /= factor;
-	VOP_DEVBLOCKSIZE(ip->i_devvp,&devBlockSize);
+
+	devBlockSize = vfs_devblocksize(mp);
 	nblocks = btodb(fs->fs_bsize, devBlockSize);
 
 	/* Doing a MALLOC here is asking for trouble. We can still
@@ -494,51 +485,52 @@ ffs_indirtrunc(ip, lbn, dbn, lastbn, level, countp)
 	 * low on memory and block in MALLOC
 	 */
 
-	tbp = geteblk(fs->fs_bsize);
-	copy = (ufs_daddr_t *)tbp->b_data;
+	tbp = buf_geteblk(fs->fs_bsize);
+	copy = (ufs_daddr_t *)buf_dataptr(tbp);
 
 	/*
 	 * Get buffer of block pointers, zero those entries corresponding
 	 * to blocks to be free'd, and update on disk copy first.  Since
 	 * double(triple) indirect before single(double) indirect, calls
 	 * to bmap on these blocks will fail.  However, we already have
-	 * the on disk address, so we have to set the b_blkno field
-	 * explicitly instead of letting bread do everything for us.
+	 * the on disk address, so we have to set the blkno field
+	 * explicitly instead of letting buf_bread do everything for us.
 	 */
 
 	vp = ITOV(ip);
-	bp = getblk(vp, lbn, (int)fs->fs_bsize, 0, 0, BLK_META);
-	if (bp->b_flags & (B_DONE | B_DELWRI)) {
+	bp = buf_getblk(vp, (daddr64_t)((unsigned)lbn), (int)fs->fs_bsize, 0, 0, BLK_META);
+
+	if (buf_valid(bp)) {
 		/* Braces must be here in case trace evaluates to nothing. */
 		trace(TR_BREADHIT, pack(vp, fs->fs_bsize), lbn);
 	} else {
 		trace(TR_BREADMISS, pack(vp, fs->fs_bsize), lbn);
 		current_proc()->p_stats->p_ru.ru_inblock++;	/* pay for read */
-		bp->b_flags |= B_READ;
-		if (bp->b_bcount > bp->b_bufsize)
+		buf_setflags(bp,  B_READ);
+		if (buf_count(bp) > buf_size(bp))
 			panic("ffs_indirtrunc: bad buffer size");
-		bp->b_blkno = dbn;
-		VOP_STRATEGY(bp);
-		error = biowait(bp);
+		buf_setblkno(bp, (daddr64_t)((unsigned)dbn));
+		VNOP_STRATEGY(bp);
+		error = buf_biowait(bp);
 	}
 	if (error) {
-		brelse(bp);
+		buf_brelse(bp);
 		*countp = 0;
-		brelse(tbp);
-		return (error);
+		buf_brelse(tbp);
+		return ((int)error);
 	}
 
-	bap = (ufs_daddr_t *)bp->b_data;
+	bap = (ufs_daddr_t *)buf_dataptr(bp);
 	bcopy((caddr_t)bap, (caddr_t)copy, (u_int)fs->fs_bsize);
 	bzero((caddr_t)&bap[last + 1],
 	  (u_int)(NINDIR(fs) - (last + 1)) * sizeof (ufs_daddr_t));
 	if (last == -1)
-		bp->b_flags |= B_INVAL;
+		buf_markinvalid(bp);
 	if (last != -1 && (vp)->v_mount->mnt_flag & MNT_ASYNC) {
 		error = 0;
-		bdwrite(bp);
+		buf_bdwrite(bp);
 	} else {
-		error = bwrite(bp);
+		error = buf_bwrite(bp);
 		if (error)
 			allerror = error;
 	}
@@ -591,8 +583,8 @@ ffs_indirtrunc(ip, lbn, dbn, lastbn, level, countp)
 			blocksreleased += blkcount;
 		}
 	}
-	brelse(tbp);
+	buf_brelse(tbp);
 	*countp = blocksreleased;
-	return (allerror);
+	return ((int)allerror);
 }
 

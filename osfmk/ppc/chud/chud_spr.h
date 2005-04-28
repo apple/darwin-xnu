@@ -264,3 +264,4 @@
 #define chud_970_pir		1023
 
 #endif // _CHUD_SPR_H_
+

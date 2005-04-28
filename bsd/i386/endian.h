@@ -71,52 +71,25 @@
 #define _QUAD_HIGHWORD 1
 #define _QUAD_LOWWORD 0
 
-#if	defined(KERNEL) || !defined(_POSIX_SOURCE)
 /*
  * Definitions for byte order, according to byte significance from low
  * address to high.
  */
-#define	LITTLE_ENDIAN	1234	/* LSB first: i386, vax */
-#define	BIG_ENDIAN	4321	/* MSB first: 68000, ibm, net */
-#define	PDP_ENDIAN	3412	/* LSB first in word, MSW first in long */
+#define	__DARWIN_LITTLE_ENDIAN	1234	/* LSB first: i386, vax */
+#define	__DARWIN_BIG_ENDIAN	4321	/* MSB first: 68000, ibm, net */
+#define	__DARWIN_PDP_ENDIAN	3412	/* LSB first in word, MSW first in long */
 
-#define	BYTE_ORDER	LITTLE_ENDIAN
+#define	__DARWIN_BYTE_ORDER	__DARWIN_LITTLE_ENDIAN
 
-#include <sys/cdefs.h>
+#if	defined(KERNEL) || !defined(_POSIX_C_SOURCE)
 
-__BEGIN_DECLS
-unsigned long	htonl __P((unsigned long));
-unsigned short	htons __P((unsigned short));
-unsigned long	ntohl __P((unsigned long));
-unsigned short	ntohs __P((unsigned short));
-__END_DECLS
+#define	LITTLE_ENDIAN	__DARWIN_LITTLE_ENDIAN
+#define	BIG_ENDIAN	__DARWIN_BIG_ENDIAN
+#define	PDP_ENDIAN	__DARWIN_PDP_ENDIAN
 
-/*
- * Macros for network/external number representation conversion.
- */
-#if BYTE_ORDER == BIG_ENDIAN && !defined(lint)
-#define	ntohl(x)	(x)
-#define	ntohs(x)	(x)
-#define	htonl(x)	(x)
-#define	htons(x)	(x)
+#define	BYTE_ORDER	__DARWIN_BYTE_ORDER
 
-#define	NTOHL(x)	(x)
-#define	NTOHS(x)	(x)
-#define	HTONL(x)	(x)
-#define	HTONS(x)	(x)
+#include <sys/_endian.h>
 
-#else
-#include <machine/byte_order.h>
- 
-#define ntohl(x)	NXSwapBigLongToHost(x)
-#define ntohs(x)	NXSwapBigShortToHost(x)
-#define htonl(x)	NXSwapHostLongToBig(x)
-#define htons(x)	NXSwapHostShortToBig(x)
-
-#define	NTOHL(x)	(x) = ntohl((u_long)x)
-#define	NTOHS(x)	(x) = ntohs((u_short)x)
-#define	HTONL(x)	(x) = htonl((u_long)x)
-#define	HTONS(x)	(x) = htons((u_short)x)
-#endif
-#endif /* defined(KERNEL) || !defined(_POSIX_SOURCE) */
+#endif /* defined(KERNEL) || !defined(_POSIX_C_SOURCE) */
 #endif /* !_I386__ENDIAN_H_ */

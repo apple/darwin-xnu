@@ -106,6 +106,7 @@ aurp_wput(gref, m)
 			break;
 
 		case AUC_UDPPORT:
+			mdata = gbuf_cont(m);
 			aurp_global.udp_port = *(char *)gbuf_rptr(mdata);
 			break;
 

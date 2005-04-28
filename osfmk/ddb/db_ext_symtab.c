@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -57,7 +57,7 @@
 #include <mach/vm_param.h>
 #include <mach/std_types.h>
 #include <mach/mach_types.h>
-#include <mach/mach_host_server.h>  /* prototype */
+#include <mach/host_priv_server.h>  /* prototype */
 
 #if MACH_KDB && MACH_DEBUG
 #include <vm/vm_map.h>
@@ -77,11 +77,11 @@
  */
 kern_return_t
 host_load_symbol_table(
-	host_priv_t	host_priv,
-	task_t		task,
-	char *		name,
-	pointer_t	symtab,
-	mach_msg_type_number_t	symtab_count)
+	__unused host_priv_t			host_priv,
+	__unused task_t			task,
+	__unused char *			name,
+	__unused pointer_t			symtab,
+	__unused mach_msg_type_number_t	symtab_count)
 {
         return KERN_FAILURE;
 }

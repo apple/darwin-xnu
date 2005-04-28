@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -46,7 +46,6 @@
 #include <ppc/trap.h>
 #include <ppc/exception.h>
 #include <ppc/savearea.h>
-#include <ppc/spl.h>
 
 
 #define VERIFYSAVE 0
@@ -92,13 +91,13 @@
 			.globl EXT(thandler)
 LEXT(thandler)										; Trap handler
 
-			mfsprg	r25,0							; Get the per_proc 
+			mfsprg	r13,1							; Get the current activation
+			lwz		r25,ACT_PER_PROC(r13)			; Get the per_proc block 
 		
 			lwz		r1,PP_ISTACKPTR(r25)			; Get interrupt stack pointer
 	
-			mfsprg	r13,1							; Get the current thread
 			cmpwi	cr0,r1,0						; Are we on interrupt stack?					
-			lwz		r6,ACT_THREAD(r13)				; Get the shuttle
+			mr		r6,r13
 			beq-	cr0,EXT(ihandler)				; If on interrupt stack, treat this as interrupt...
 			lwz		r26,ACT_MACT_SPF(r13)			; Get special flags
 			lwz		r8,ACT_MACT_PCB(r13)			; Get the last savearea used
@@ -122,7 +121,7 @@ LEXT(thandler)										; Trap handler
 			subi	r1,r26,FM_REDZONE				; Make a red zone on interrupt time kernel stack
 
 .L_kstackfree:
-			lwz		r7,savesrr1+4(r4)				; Pick up the entry MSR 
+			lwz		r31,savesrr1+4(r4)				; Pick up the entry MSR 
 			sub		r9,r1,r9						; Get displacment into the kernel stack
 			li		r0,0							; Make this 0
 			rlwinm.	r0,r9,0,28,31					; Verify that we have a 16-byte aligned stack (and get a 0)
@@ -134,7 +133,7 @@ LEXT(thandler)										; Trap handler
 .L_state_on_kstack:	
 			lwz		r9,savevrsave(r4)				; Get the VRSAVE register
 			bne--	kernelStackUnaligned			; Stack is unaligned...
-			rlwinm.	r6,r7,0,MSR_VEC_BIT,MSR_VEC_BIT	; Was vector on?
+			rlwinm.	r6,r31,0,MSR_VEC_BIT,MSR_VEC_BIT	; Was vector on?
 			subi	r1,r1,FM_SIZE					; Push a header onto the current stack 
 			bgt--	cr2,kernelStackBad				; Kernel stack is bogus...
 
@@ -154,16 +153,20 @@ tvecoff:	stw		r26,FM_BACKPTR(r1)				; Link back to the previous frame
 			stwu	r1,	-FM_SIZE(r1)				; and make new frame 
 #endif /* DEBUG */
 
+			mr		r30,r4
+			lwz		r3,SAVtime+4(r4)
+			addi	r4,r13,SYSTEM_TIMER
+			bl		EXT(timer_event)
 
 /* call trap handler proper, with
- *   ARG0 = type		(not yet, holds pcb ptr)
- *   ARG1 = saved_state ptr	(already there)
- *   ARG2 = dsisr		(already there)
- *   ARG3 = dar			(already there)
+ *   ARG0 = type
+ *   ARG1 = saved_state ptr
+ *   ARG2 = dsisr
+ *   ARG3 = dar
  */
 
-
-			lwz		r3,saveexception(r4)			; Get the exception code 
+			mr		r4,r30
+			lwz		r3,saveexception(r30)			; Get the exception code 
 			lwz		r0,ACT_MACT_SPF(r13)			; Get the special flags
 			
 			addi	r5,r3,-T_DATA_ACCESS			; Adjust to start of range
@@ -173,7 +176,7 @@ tvecoff:	stw		r26,FM_BACKPTR(r1)				; Link back to the previous frame
 			lwz		r5,savedsisr(r4)				; Get the saved DSISR
 			
 			crnor	cr7_eq,cr0_eq,cr2_gt			; We should intercept if in VM and is a true trap (cr7_eq == 1 if yes)
-			rlwinm.	r0,r7,0,MSR_PR_BIT,MSR_PR_BIT	; Are we trapping from supervisor state? (cr0_eq == 1 if yes)
+			rlwinm.	r0,r31,0,MSR_PR_BIT,MSR_PR_BIT	; Are we trapping from supervisor state? (cr0_eq == 1 if yes)
 
 			cmpi	cr2,r3,T_PREEMPT				; Is this a preemption?
 
@@ -202,7 +205,8 @@ tvecoff:	stw		r26,FM_BACKPTR(r1)				; Link back to the previous frame
 			ori		r10,r10,lo16(MASK(MSR_FP)|MASK(MSR_EE))	; Add in FP and EE
 			andc	r7,r7,r10						; Turn off VEC, FP, and EE
 			mtmsr	r7								; Disable for interrupts
-			mfsprg	r10,0							; Restore the per_proc info
+			mfsprg	r8,1							; Get the current activation
+			lwz		r10,ACT_PER_PROC(r8)			; Get the per_proc block 
 /*
  * This is also the point where new threads come when they are created.
  * The new thread is setup to look like a thread that took an 
@@ -216,7 +220,7 @@ thread_return:
 			mfsprg	r8,1							; Get the current thread
 			rlwinm	r11,r11,0,15,13					; Clear the syscall flag
 			rlwinm.	r0,r0,0,MSR_PR_BIT,MSR_PR_BIT	; Are we going to the user?
-			lwz		r1,ACT_THREAD(r8)				; Get the shuttle
+			mr		r1,r8
 			stw		r11,SAVflags(r3)				; Save back the flags (with reset stack cleared) 
 			
 			lwz		r5,THREAD_KERNEL_STACK(r1)		; Get the base pointer to the stack 
@@ -289,16 +293,16 @@ kernelStackUnaligned:
 LEXT(shandler)										; System call handler
 
 			lwz		r7,savesrr1+4(r4)				; Get the SRR1 value
-			mfsprg	r25,0							; Get the per proc area 
+			mfsprg	r13,1							; Get the current activation
+			lwz		r25,ACT_PER_PROC(r13)			; Get the per_proc block 
 			lwz		r0,saver0+4(r4)					; Get the original syscall number
 			lwz		r17,PP_ISTACKPTR(r25)			; Get interrupt stack pointer
-			mfsprg	r13,1							; Get the current thread 
 			rlwinm	r15,r0,0,0,19					; Clear the bottom of call number for fast check
 			mr.		r17,r17							; Are we on interrupt stack?
 			lwz		r9,savevrsave(r4)				; Get the VRsave register
 			beq--	EXT(ihandler)					; On interrupt stack, not allowed...
 			rlwinm.	r6,r7,0,MSR_VEC_BIT,MSR_VEC_BIT	; Was vector on?
-			lwz		r16,ACT_THREAD(r13)				; Get the shuttle
+			mr		r16,r13
 
 			beq++	svecoff							; Vector off, do not save vrsave...
 			stw		r9,liveVRS(r25)					; Set the live value
@@ -348,6 +352,10 @@ noassist:	cmplwi	r15,0x7000						; Do we have a fast path trap?
 			mr		r30,r4							; Save pointer to the new context savearea
 			stw		r0,ACT_MACT_KSP(r13)			; Mark stack as busy with 0 val 
 			stw		r15,FM_BACKPTR(r1)				; Link stack frame backwards
+
+			lwz		r3,SAVtime+4(r30)
+			addi	r4,r13,SYSTEM_TIMER
+			bl		EXT(timer_event)
 		
 #if	DEBUG
 /* If debugging, we need two frames, the first being a dummy
@@ -359,10 +367,12 @@ noassist:	cmplwi	r15,0x7000						; Do we have a fast path trap?
 			stwu	r1,	-FM_SIZE(r1)				; and make new frame
 #endif /* DEBUG */
 
+			mr		r4,r30
+
 			lwz		r15,SAVflags(r30)				; Get the savearea flags
 			lwz		r0,saver0+4(r30)				; Get R0 back
 			mfmsr	r11								; Get the MSR
-			stwu	r1,-(FM_SIZE+ARG_SIZE)(r1)		; Make a stack frame
+			stwu	r1,-(FM_SIZE+ARG_SIZE+MUNGE_ARGS_SIZE)(r1)		; Make a stack frame
 			ori		r11,r11,lo16(MASK(MSR_EE))		; Turn on interruption enabled bit
 			rlwinm	r10,r0,0,0,19					; Keep only the top part 
 			oris	r15,r15,SAVsyscall >> 16 		; Mark that it this is a syscall
@@ -470,7 +480,8 @@ LEXT(ppcscret)
 			mr.		r3,r3							; See what we should do
 			mr		r31,r16							; Restore the current thread pointer
 			bgt+	.L_thread_syscall_ret_check_ast	; Take normal AST checking return....
-			mfsprg	r10,0							; Get the per_proc
+			mfsprg	r10,1							; Get the current activation
+			lwz		r10,ACT_PER_PROC(r10)			; Get the per_proc block 
 			blt+	.L_thread_syscall_return		; Return, but no ASTs....
 			lwz		r0,saver0+4(r30)				; Restore the system call number
 			b		.L_call_server_syscall_exception	; Go to common exit...
@@ -491,25 +502,26 @@ ksystrace:
 
 			bge-	.L_call_server_syscall_exception	; The syscall number is invalid
 	
-			lwz		r0,MACH_TRAP_FUNCTION(r31)	; Pick up the function address
-;
-;	NOTE: We do not support more than 8 parameters for PPC.  The only 
-;	system call to use more than 8 is mach_msg_overwrite_trap and it
-;	uses 9.  We pass a 0 in as number 9.
-;
-			lwz		r3,saver3+4(r30)  			; Restore r3 
-			lwz		r4,saver4+4(r30)  			; Restore r4 
+			lwz     r0,savesrr1(r30)				; Get the saved srr1
+			rlwinm.	r0,r0,0,MSR_SF_BIT,MSR_SF_BIT	; Test for 64 bit caller
+			lwz		r0,MACH_TRAP_ARG_MUNGE32(r31)	; Pick up the 32 bit munge function address
+			beq--	.L_ksystrace_munge
+			lwz		r0,MACH_TRAP_ARG_MUNGE64(r31)	; Pick up the 64 bit munge function address
+
+.L_ksystrace_munge:
+			cmplwi  r0,0							; do we have a munger to call?
 			mtctr	r0							; Set the function call address
-			lwz		r5,saver5+4(r30)  			; Restore r5 
-			lwz		r6,saver6+4(r30)  			; Restore r6
-			lwz		r7,saver7+4(r30)  			; Restore r7
-			li		r0,0						; Clear this out
-			lwz		r8,saver8+4(r30)  			; Restore r8 
-			lwz		r9,saver9+4(r30)  			; Restore r9 
-			lwz		r10,saver10+4(r30)  		; Restore r10
-			stw		r0,FM_ARG0(r1)				; Clear that 9th parameter just in case some fool uses it
-			bctrl								; perform the actual syscall
-	
+			addi	r3,r30,saver3						; Pointer to args from save area
+			addi	r4,r1,FM_ARG0+ARG_SIZE				; Pointer for munged args
+			beq--	.L_ksystrace_trapcall			; just make the trap call
+			bctrl								; Call the munge function
+
+.L_ksystrace_trapcall:		
+			lwz	r0,MACH_TRAP_FUNCTION(r31)			; Pick up the function address
+			mtctr	r0							; Set the function call address
+			addi	r3,r1,FM_ARG0+ARG_SIZE				; Pointer to munged args
+			bctrl
+
 			mr		r4,r30						; Pass in the savearea
 			bl		EXT(syscall_trace_end)		; Trace the exit of the system call	
 			b		.L_mach_return
@@ -540,8 +552,11 @@ ksystrace:
 
 			lwz		r7,TASK_SYSCALLS_MACH(r10)	; Get the current count
 			neg		r31,r0						; Make this positive
-			slwi	r27,r31,MACH_TRAP_OFFSET_POW2	; Convert index to offset
+			mr 		r3,r31					; save it
+			slwi		r27,r3,4					; multiply by 16
+			slwi		r3,r3,2					; and the original by 4
 			ori		r28,r28,lo16(EXT(mach_trap_table))	; Get address of table
+			add		r27,r27,r3				; for a total of 20x (5 words/entry)
 			addi	r7,r7,1						; Bump TASK_SYSCALLS_MACH count
 			cmplwi	r8,0						; Is kdebug_enable non-zero
 			stw		r7,TASK_SYSCALLS_MACH(r10)	; Save count
@@ -551,26 +566,27 @@ ksystrace:
 			add		r31,r27,r28					; Point right to the syscall table entry
 
 			bge--	.L_call_server_syscall_exception	; The syscall number is invalid
-	
-			lwz		r0,MACH_TRAP_FUNCTION(r31)	; Pick up the function address
 
-;
-;	NOTE: We do not support more than 8 parameters for PPC.  The only 
-;	system call to use more than 8 is mach_msg_overwrite_trap and it
-;	uses 9.  We pass a 0 in as number 9.
-;
-			lwz		r3,saver3+4(r30)  			; Restore r3 
-			lwz		r4,saver4+4(r30)  			; Restore r4 
-			lwz		r5,saver5+4(r30)  			; Restore r5 
+			lwz     r0,savesrr1(r30)				; Get the saved srr1
+			rlwinm.	r0,r0,0,MSR_SF_BIT,MSR_SF_BIT	; Test for 64 bit caller
+			lwz		r0,MACH_TRAP_ARG_MUNGE32(r31)	; Pick up the 32 bit munge function address
+			beq--	.L_kernel_syscall_munge
+			lwz		r0,MACH_TRAP_ARG_MUNGE64(r31)	; Pick up the 64 bit munge function address
+
+.L_kernel_syscall_munge:
+			cmplwi	r0,0							; test for null munger
 			mtctr	r0							; Set the function call address
-			lwz		r6,saver6+4(r30)  			; Restore r6
-			lwz		r7,saver7+4(r30)  			; Restore r7
-			lwz		r8,saver8+4(r30)  			; Restore r8 
-			li		r0,0						; Clear this out
-			lwz		r9,saver9+4(r30)  			; Restore r9 
-			lwz		r10,saver10+4(r30)  		; Restore r10
-			stw		r0,FM_ARG0(r1)				; Clear that 9th parameter just in case some fool uses it
-			bctrl								; perform the actual syscall
+			addi	r3,r30,saver3						; Pointer to args from save area
+			addi	r4,r1,FM_ARG0+ARG_SIZE				; Pointer for munged args
+			beq--	.L_kernel_syscall_trapcall		;   null munger - skip to trap call
+			bctrl								; Call the munge function
+
+.L_kernel_syscall_trapcall:		
+			lwz	r0,MACH_TRAP_FUNCTION(r31)			; Pick up the function address
+			mtctr	r0							; Set the function call address
+			addi	r3,r1,FM_ARG0+ARG_SIZE				; Pointer to munged args
+			bctrl
+
 
 /*
  * Ok, return from C function, R3 = return value
@@ -579,11 +595,13 @@ ksystrace:
  * saved state is still in R30 and the active thread is in R16
  */
 
-.L_mach_return:	
+.L_mach_return:
+			srawi  r0,r3,31						; properly extend the return code
+			cmpi	cr0,r3,KERN_INVALID_ARGUMENT		; deal with invalid system calls
 			mr		r31,r16						; Move the current thread pointer
-			stw		r3,saver3+4(r30)				; Stash the return code
-			cmpi		cr0,r3,KERN_INVALID_ARGUMENT			; deal with invalid system calls
-			beq-		cr0,.L_mach_invalid_ret				; otherwise fall through into the normal return path
+			stw	r0, saver3(r30)					; stash the high part of the return code
+			stw	r3,saver3+4(r30)					; Stash the low part of the return code
+			beq-	cr0,.L_mach_invalid_ret				; otherwise fall through into the normal return path
 .L_mach_invalid_arg:		
 
 
@@ -606,12 +624,12 @@ ksystrace:
 			andc	r12,r12,r10						; Turn off VEC, FP, and EE
 			mtmsr	r12								; Turn interruptions off
 			
-			mfsprg	r10,0							; Get the per_processor block
+			mfsprg	r10,1							; Get the current activation
+			lwz		r10,ACT_PER_PROC(r10)			; Get the per_proc block 
 
 /* Check to see if there's an outstanding AST */
 		
-			lwz		r4,PP_NEED_AST(r10)				; Get the pointer to the ast requests
-			lwz		r4,0(r4)						; Get the flags
+			lwz		r4,PP_PENDING_AST(r10)
 			cmpi	cr0,r4,	0						; Any pending asts?
 			beq++	cr0,.L_syscall_no_ast			; Nope...
 
@@ -634,8 +652,9 @@ ksystrace:
 scrnotkern:		
 #endif	/* DEBUG */
 	
-			li		r3,AST_ALL						; Set ast flags
+			lis		r3,hi16(AST_ALL)				; Set ast flags
 			li		r4,1							; Set interrupt allowed
+			ori		r3,r3,lo16(AST_ALL)
 			bl		EXT(ast_taken)					; Process the pending ast
 			b		.L_thread_syscall_ret_check_ast	; Go see if there was another...
 
@@ -646,10 +665,13 @@ scrnotkern:
  * then we want to throw an exception... otherwise
  * we want to pass the error code back to the caller
  */
-			lwz     r0,saver0+4(r30)				; reload the original syscall number
-			neg		r28,r0							; Make this positive
-			slwi	r27,r28,MACH_TRAP_OFFSET_POW2	; Convert index to offset
+			lwz		r0,saver0+4(r30)				; reload the original syscall number
+			neg		r28,r0						; Make this positive
+			mr		r4,r28						; save a copy
+			slwi		r27,r4,4						; multiply by 16
+			slwi		r4,r4,2						; and another 4
 			lis		r28,hi16(EXT(mach_trap_table))	; Get address of table
+			add		r27,r27,r4					; for a total of 20x (5 words/entry)
 			ori		r28,r28,lo16(EXT(mach_trap_table))	; Get address of table
 			add		r28,r27,r28						; Point right to the syscall table entry
 			lwz		r27,MACH_TRAP_FUNCTION(r28)		; Pick up the function address
@@ -713,9 +735,9 @@ LEXT(thread_exception_return)						; Directly return to user mode
    frame, given that we're not going to return.  
 */
 		
-			mfsprg	r10,0							; Get the per_processor block 
-			lwz		r4,PP_NEED_AST(r10)
-			lwz		r4,0(r4)
+			mfsprg	r10,1							; Get the current activation
+			lwz		r10,ACT_PER_PROC(r10)			; Get the per_proc block 
+			lwz		r4,PP_PENDING_AST(r10)
 			cmpi	cr0,r4,	0
 			beq+		cr0,.L_exc_ret_no_ast
 		
@@ -724,8 +746,9 @@ LEXT(thread_exception_return)						; Directly return to user mode
  * ast_taken will save all state and bring us back here
  */
 	
-			li		r3,AST_ALL
+			lis		r3,hi16(AST_ALL)
 			li		r4,1
+			ori		r3,r3,lo16(AST_ALL)
 			
 			bl		EXT(ast_taken)
 			b		.L_thread_exc_ret_check_ast		; check for a second AST (rare)
@@ -736,7 +759,7 @@ LEXT(thread_exception_return)						; Directly return to user mode
 .L_exc_ret_no_ast:
 			
 			mfsprg  r30,1							; Get the currrent activation
-			lwz		r31,ACT_THREAD(r30)				; Get the current thread
+			mr		r31,r30
 
 			lwz		r30,ACT_MACT_PCB(r30)
 			mr.		r30,r30							; Is there any context yet?
@@ -818,11 +841,11 @@ LEXT(ihandler)										; Interrupt handler */
 
 			lwz		r10,savesrr1+4(r4)				; Get SRR1 
 			lwz		r7,savevrsave(r4)				; Get the VRSAVE register
-			mfsprg	r25,0							; Get the per_proc block
+			mfsprg	r13,1							; Get the current activation
+			lwz		r25,ACT_PER_PROC(r13)			; Get the per_proc block 
 			li		r14,0							; Zero this for now
-			rlwinm.	r13,r10,0,MSR_VEC_BIT,MSR_VEC_BIT	; Was vector on?
+			rlwinm.	r16,r10,0,MSR_VEC_BIT,MSR_VEC_BIT	; Was vector on?
 			lwz		r1,PP_ISTACKPTR(r25)			; Get the interrupt stack
-			mfsprg	r13,1							; Get the current thread
 			li		r16,0							; Zero this for now
 
 			beq+	ivecoff							; Vector off, do not save vrsave...
@@ -832,7 +855,7 @@ ivecoff:	li		r0,0							; Get a constant 0
 			rlwinm	r5,r10,0,MSR_PR_BIT,MSR_PR_BIT	; Are we trapping from supervisor state?
 			mr.		r1,r1							; Is it active?
 			cmplwi	cr2,r5,0						; cr2_eq == 1 if yes
-			lwz		r16,ACT_THREAD(r13)				; Get the shuttle
+			mr		r16,r13
 			lwz		r14,ACT_MACT_PCB(r13)			; Now point to the PCB 
 			lwz		r9,saver1+4(r4)					; Pick up the rupt time stack
 			stw		r14,SAVprev+4(r4)				; Queue the new save area in the front
@@ -908,8 +931,17 @@ ihbootnover:										; (TEST/DEBUG)
 			stwu	r1,-FM_SIZE(r1)					; Make another new frame for C routine
 #endif /* DEBUG */
 
-			lwz		r5,savedsisr(r4)				; Get the DSISR
-			lwz		r6,savedar+4(r4)				; Get the DAR 
+			mr		r31,r3
+			mr		r30,r4
+
+			lwz		r3,SAVtime+4(r4)
+			addi	r4,r13,SYSTEM_TIMER
+			bl		EXT(timer_event)
+
+			mr		r3,r31
+			mr		r4,r30
+			lwz		r5,savedsisr(r30)				; Get the DSISR
+			lwz		r6,savedar+4(r30)				; Get the DAR 
 			
 			bl	EXT(interrupt)
 
@@ -927,14 +959,13 @@ LEXT(ihandler_ret)									; Marks our return point from debugger entry
 			ori		r10,r10,lo16(MASK(MSR_FP)|MASK(MSR_EE))	; Add in FP and EE
 			andc	r0,r0,r10						; Turn off VEC, FP, and EE
 			mtmsr	r0								; Make sure interrupts are disabled
-			mfsprg	r10,0							; Get the per_proc block
+			mfsprg	r8,1							; Get the current activation
+			lwz		r10,ACT_PER_PROC(r8)			; Get the per_proc block 
 		
 			lwz		r7,SAVflags(r3)					; Pick up the flags
-			mfsprg	r8,1							; Get the current thread
 			lwz		r9,SAVprev+4(r3)					; Get previous save area
 			cmplwi	cr1,r8,0						; Are we still initializing?
 			lwz		r12,savesrr1+4(r3)				; Get the MSR we will load on return 
-			lwz		r8,THREAD_TOP_ACT(r8)			; Pick up the active thread 
 			andis.	r11,r7,hi16(SAVrststk)			; Is this the first on the stack?
 			stw		r9,ACT_MACT_PCB(r8)				; Point to previous context savearea 
 			mr		r4,r3							; Move the savearea pointer
@@ -955,8 +986,7 @@ LEXT(ihandler_ret)									; Marks our return point from debugger entry
 			cmplwi	r3, 0							; Check for preemption
 			bne		.L_no_int_ast					; Do not preempt if level is not zero
 			andi.	r6,r12,MASK(MSR_PR)				; privilege mode
-			lwz		r11,PP_NEED_AST(r10)			; Get the AST request address
-			lwz		r11,0(r11)						; Get the request
+			lwz		r11,PP_PENDING_AST(r10)			; Get the pending AST mask
 			beq-	.L_kernel_int_ast				; In kernel space, AST_URGENT check
 			li		r3,T_AST						; Assume the worst
 			mr.		r11,r11							; Are there any pending? 
@@ -1045,15 +1075,16 @@ chkfac:		lwz		r29,savesrr1+4(r3)				; Get the current MSR
 			
 			eieio									; Make sure this gets out before owner clear
 			
-#if ppSize != 4096
-#error per_proc_info is not 4k in size
+#if ppeSize != 16
+#error per_proc_entry is not 16bytes in size
 #endif
 			
-			lis		r23,hi16(EXT(per_proc_info))	; Set base per_proc
-			slwi	r22,r22,12						; FInd offset to the owner per_proc
-			ori		r23,r23,lo16(EXT(per_proc_info))	; Set base per_proc
-			li		r24,FPUowner					; Displacement to FPU owner
-			add		r22,r23,r22						; Point to the owner per_proc	
+			lis		r23,hi16(EXT(PerProcTable))		; Set base PerProcTable
+			slwi	r22,r22,4						; Find offset to the owner per_proc_entry
+			ori		r23,r23,lo16(EXT(PerProcTable))	; Set base PerProcTable
+			li		r24,FPUowner					; Displacement to float owner
+			add		r22,r23,r22						; Point to the owner per_proc_entry
+			lwz		r22,ppe_vaddr(r22)				; Point to the owner per_proc
 			
 fpuinvothr:	lwarx	r23,r24,r22						; Get the owner
 
@@ -1204,11 +1235,12 @@ chkvec:
 			
 			eieio									; Make sure this gets out before owner clear
 			
-			lis		r23,hi16(EXT(per_proc_info))	; Set base per_proc
-			slwi	r22,r22,12						; Find offset to the owner per_proc			
-			ori		r23,r23,lo16(EXT(per_proc_info))	; Set base per_proc
-			li		r24,VMXowner					; Displacement to VMX owner
-			add		r22,r23,r22						; Point to the owner per_proc	
+			lis		r23,hi16(EXT(PerProcTable))		; Set base PerProcTable
+			slwi	r22,r22,4						; Find offset to the owner per_proc_entry
+			ori		r23,r23,lo16(EXT(PerProcTable))	; Set base PerProcTable
+			li		r24,VMXowner					; Displacement to float owner
+			add		r22,r23,r22						; Point to the owner per_proc_entry
+			lwz		r22,ppe_vaddr(r22)				; Point to the owner per_proc
 			
 vmxinvothr:	lwarx	r23,r24,r22						; Get the owner
 
@@ -1310,7 +1342,7 @@ vmxchkena:	lwz		r21,VMXowner(r31)				; Get the ID of the live context
 			
 vmxena:		oris	r29,r29,hi16(MASK(MSR_VEC))		; Enable facility
 
-setena:		lwz		r18,cioSpace(r28)				; Get the space ID in case we are launching user
+setena:		lwz		r18,umwSpace(r28)				; Get the space ID in case we are launching user
 			rlwinm.	r0,r29,0,MSR_PR_BIT,MSR_PR_BIT	; Are we about to launch user state?
 			li		r0,0							; Get set to release quickfret holdoff
 			crmove	cr7_eq,cr0_eq					; Remember if we are going to user state
@@ -1319,7 +1351,7 @@ setena:		lwz		r18,cioSpace(r28)				; Get the space ID in case we are launching u
 			rlwinm	r20,r29,(((31-vectorCngbit)+(MSR_VEC_BIT+1))&31),vectorCngbit,vectorCngbit	; Set flag if we enabled vector
 			stw		r29,savesrr1+4(r27)				; Turn facility on or off
 			stw		r0,holdQFret(r31)				; Release quickfret
-			oris	r18,r18,hi16(cioSwitchAway)		; Set the switch-away bit in case we go to user
+			oris	r18,r18,hi16(umwSwitchAway)		; Set the switch-away bit in case we go to user
 
 			beq		setenaa							; Neither float nor vector turned on....
 			
@@ -1362,12 +1394,16 @@ segtb:		mftbu	r20								; Get the upper time base
 			
 			mtdec	r13								; Set our value
 
-chkifuser:	beq--	cr7,chkenax						; Skip this if we are going to kernel...
-			stw		r18,cioSpace(r28)				; Half-invalidate to force MapUserAddressSpace to reload SRs
+chkifuser:	addi	r4,r28,SYSTEM_TIMER
+			mftb	r3
+			beq--	cr7,chkifuser1					; Skip this if we are going to kernel...
+			stw		r18,umwSpace(r28)				; Half-invalidate to force MapUserAddressWindow to reload SRs
+			addi	r4,r28,USER_TIMER
+
+chkifuser1:	bl		EXT(timer_event)
 
 chkenax:	
 
-	
 #if DEBUG
 			lwz		r20,SAVact(r27)					; (TEST/DEBUG) Make sure our restore
 			mfsprg	r21, 1							; (TEST/DEBUG) with the current act.
@@ -1445,20 +1481,24 @@ fastpath:	cmplwi	cr3,r0,0x7FF5				; Is this a null fastpath?
 /*
  * void cthread_set_self(cproc_t p)
  *
- * set's thread state "user_value"
+ * Set's thread state "user_value".  In practice this is the thread-local-data-pointer (TLDP),
+ * though we do not interpret it.  This call is mostly used by 32-bit tasks, but we save all 64 bits
+ * in case a 64-bit task wants to use this facility.  They normally do not, because the 64-bit
+ * ABI reserves r13 for the TLDP.
  *
  * This op is invoked as follows:
  *	li r0, CthreadSetSelfNumber	// load the fast-trap number
  *	sc				// invoke fast-trap
  *	blr
- *
  */
 
 CthreadSetSelfNumber:
-
-			lwz		r5,saver3+4(r4)				/* Retrieve the self number */
-			stw		r5,CTHREAD_SELF(r13)		/* Remember it */
-			stw		r5,UAW(r25)					/* Prime the per_proc_info with it */
+            lwz     r3,saver3+0(r4)             /* get the TLDP passed in r3 */
+			lwz		r5,saver3+4(r4)				/* (all 64 bits, in case this is a 64-bit task) */
+			stw		r3,CTHREAD_SELF+0(r13)		/* Remember it in the activation... */
+			stw		r5,CTHREAD_SELF+4(r13)
+			stw		r3,UAW+0(r25)               /* ...and in the per-proc */
+			stw		r5,UAW+4(r25)
 
 
 			.globl	EXT(fastexit)
@@ -1511,13 +1551,14 @@ exitFromVM:	mr		r30,r4						; Get the savearea
 			.globl	EXT(retFromVM)
 
 LEXT(retFromVM)
-			mfsprg	r10,0						; Restore the per_proc info
+			mfsprg	r10,1						; Get the current activation
+			lwz		r10,ACT_PER_PROC(r10)		; Get the per_proc block 
 			mr		r8,r3						; Get the activation
 			lwz		r4,SAVprev+4(r30)			; Pick up the previous savearea
 			mr		r3,r30						; Put savearea in proper register for common code
 			lwz		r11,SAVflags(r30)			; Get the flags of the current savearea
 			rlwinm	r11,r11,0,15,13				; Clear the syscall flag 
-			lwz		r1,ACT_THREAD(r8)			; and the active thread
+			mr		r1,r8
 			stw		r11,SAVflags(r3)			; Save back the flags (with reset stack cleared)
 
 			stw		r4,ACT_MACT_PCB(r8)			; Point to the previous savearea (or 0 if none)
@@ -1550,7 +1591,8 @@ LEXT(retFromVM)
 LEXT(chandler)									; Choke handler
 
 			li		r31,0						; Get a 0
-			mfsprg	r25,0						; Get the per_proc 
+			mfsprg	r25,1						; Get the current activation
+			lwz		r25,ACT_PER_PROC(r25)		; Get the per_proc block 
 			stw		r31,traceMask(0)			; Force tracing off right now
 		
 		
@@ -1600,7 +1642,8 @@ versave:
 			lwz		r23,0(r22)						; (TEST/DEBUG)
 			mr.		r23,r23							; (TEST/DEBUG)
 			beqlr-									; (TEST/DEBUG)
-			mfsprg	r20,0							; (TEST/DEBUG)
+			mfsprg	r20,1							; Get the current activation
+			lwz		r20,ACT_PER_PROC(r20)			; Get the per_proc block 
 			lwz		r21,pfAvailable(r20)			; (TEST/DEBUG)
 			mr.		r21,r21							; (TEST/DEBUG)
 			bnelr+									; (TEST/DEBUG)

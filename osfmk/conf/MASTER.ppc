@@ -19,16 +19,6 @@
 #
 ##############################################################################
 #
-# Statistics and timing options.
-#
-# STAT_TIME indicates that this machine uses a statistical timer for gathering
-#       usage statistics, and has no higher resolution timer to measure actual
-#       intervals.
-#
-options		STAT_TIME
-#options	MACH_MACHINE_ROUTINES
-
-#
 # MACH_PROF enables code for mach profiling.
 #
 options         MACH_PROF	#		# <mach_prof>
@@ -42,11 +32,10 @@ options		PROFILE		# kernel profiling	# <profile>
 
 machine		"ppc"
 cpu		"ppc"
-pseudo-device	cpus		2
 pseudo-device	scc		1
 pseudo-device	vc		1
 
-
+options		MACHINE_TIMER_ROUTINES
 
 # Disabled by default, since mklinux does not need this
 # unless running multiserver - the atalk stack at time of

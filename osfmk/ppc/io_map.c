@@ -62,7 +62,7 @@ io_map(phys_addr, size)
 
 	if (phys_addr != 0) {						/* If they supplied a physical address, use it */
 
-		size = round_page_32(size + (phys_addr & PAGE_MASK));	/* Make sure we map all of it */
+		size = round_page(size + (phys_addr & PAGE_MASK));	/* Make sure we map all of it */
 
 		(void) kmem_alloc_pageable(kernel_map, &start, size);	/* Get some virtual addresses to use */
 		
@@ -105,10 +105,6 @@ io_map(phys_addr, size)
 vm_offset_t io_map_spec(vm_offset_t phys_addr, vm_size_t size)
 {
 	vm_offset_t	start;
-	int		i;
-	unsigned int j;
-	vm_page_t 	m;
-
 
 	if(kernel_map != VM_MAP_NULL) {				/* If VM system is up, redirect to normal routine */
 		
@@ -116,7 +112,7 @@ vm_offset_t io_map_spec(vm_offset_t phys_addr, vm_size_t size)
 	
 	}
 	
-	size = round_page_32(size + (phys_addr - (phys_addr & -PAGE_SIZE)));	/* Extend the length to include it all */
+	size = round_page(size + (phys_addr - (phys_addr & -PAGE_SIZE)));	/* Extend the length to include it all */
 	start = pmap_boot_map(size);				/* Get me some virtual address */
 
 	(void)mapping_make(kernel_pmap, (addr64_t)start, (ppnum_t)(phys_addr >> 12), 

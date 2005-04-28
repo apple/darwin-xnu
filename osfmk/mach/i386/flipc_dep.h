@@ -23,45 +23,6 @@
  * @OSF_COPYRIGHT@
  *
  */
-/*
- * HISTORY
- * 
- * Revision 1.1.1.1  1998/09/22 21:05:31  wsanchez
- * Import of Mac OS X kernel (~semeria)
- *
- * Revision 1.1.1.1  1998/03/07 02:25:47  wsanchez
- * Import of OSF Mach kernel (~mburg)
- *
- * Revision 1.1.5.1  1995/06/13  18:20:42  sjs
- * 	Merge from flipc_shared.
- * 	[95/06/07            sjs]
- *
- * Revision 1.1.3.3  1995/02/21  17:23:16  randys
- * 	Re-indented code to four space indentation
- * 	[1995/02/21  16:26:50  randys]
- * 
- * Revision 1.1.3.2  1994/12/20  19:02:12  randys
- * 	Moved definition of flipc_simple_lock to flipc_cb.h
- * 	[1994/12/20  17:35:15  randys]
- * 
- * 	Moved the machine independent macros into mach/flipc_locks.h
- * 	[1994/12/20  16:44:14  randys]
- * 
- * 	Added filename in comment at top of file
- * 	[1994/12/19  20:29:36  randys]
- * 
- * 	Fixed incorrect return of lock_try
- * 	[1994/12/13  00:36:46  randys]
- * 
- * Revision 1.1.3.1  1994/12/12  17:46:29  randys
- * 	Putting initial flipc implementation under flipc_shared
- * 	[1994/12/12  16:27:51  randys]
- * 
- * Revision 1.1.1.2  1994/12/11  23:08:36  randys
- * 	Initial flipc code checkin.
- * 
- * $EndLog$
- */
 
 /*
  * mach/i386/flipc_dep.h

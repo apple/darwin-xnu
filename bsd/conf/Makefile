@@ -3,6 +3,10 @@ export MakeInc_def=${SRCROOT}/makedefs/MakeInc.def
 export MakeInc_rule=${SRCROOT}/makedefs/MakeInc.rule
 export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 
+export vnode_pager.o_CFLAGS_ADD=-Werror
+export vm_unix.o_CFLAGS_ADD=-Werror
+export dp_backing_file.o_CFLAGS_ADD=-Werror
+export if_mib.o_CFLAGS_ADD=-Wno-unused-parameter
 
 include $(MakeInc_cmd)
 include $(MakeInc_def)

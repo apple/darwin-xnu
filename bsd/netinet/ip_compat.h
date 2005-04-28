@@ -35,13 +35,8 @@
 #ifndef	__IP_COMPAT_H__
 #define	__IP_COMPAT_H__
 
-#ifndef	__P
-# ifdef	__STDC__
-#  define	__P(x)  x
-# else
-#  define	__P(x)  ()
-#  define	const
-# endif
+#ifndef	__STDC__
+# define	const
 #endif
 
 #ifndef	SOLARIS
@@ -245,7 +240,7 @@ typedef	struct	qif	{
 	 */
 	int	qf_hl;	/* header length */
 } qif_t;
-extern	ill_t	*get_unit __P((char *));
+extern	ill_t	*get_unit(char *);
 #  define	GETUNIT(n)	get_unit((n))
 # else /* SOLARIS */
 #  if defined(__sgi)
@@ -289,8 +284,8 @@ typedef struct {
 #  define	KFREE(x)	kmem_free((char *)(x), sizeof(*(x)))
 #  define	KFREES(x,s)	kmem_free((char *)(x), (s))
 #  if !SOLARIS
-extern	void	m_copydata __P((struct mbuf *, int, int, caddr_t));
-extern	void	m_copyback __P((struct mbuf *, int, int, caddr_t));
+extern	void	m_copydata(struct mbuf *, int, int, caddr_t);
+extern	void	m_copyback(struct mbuf *, int, int, caddr_t);
 #  endif
 #  ifdef __sgi
 #   include <sys/kmem.h>

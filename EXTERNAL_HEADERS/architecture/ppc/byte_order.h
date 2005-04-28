@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -23,17 +23,6 @@
  * Copyright (c) 1996 NeXT Software, Inc.
  *
  * Byte ordering conversion (for ppc).
- *
- * HISTORY
- *
- * 29-Dec-96  Umesh Vaishampayan  (umeshv@NeXT.com)
- *	Ported from m98k.
- *
- * 8 October 1992 ? at NeXT
- *	Converted to NXxxx versions.  Condensed history.
- *
- * 28 August 1992 Bruce Martin @NeXT
- *	Created.
  */
 
 static __inline__
@@ -77,27 +66,6 @@ NXSwapInt(
 }
 
 static __inline__
-unsigned long
-NXSwapLong(
-    unsigned long	inv
-)
-{
-    union lconv {
-	unsigned long	ul;
-	unsigned char	uc[4];
-    } *inp, outv;
-    
-    inp = (union lconv *)&inv;
-    
-    outv.uc[0] = inp->uc[3];
-    outv.uc[1] = inp->uc[2];
-    outv.uc[2] = inp->uc[1];
-    outv.uc[3] = inp->uc[0];
-    
-    return (outv.ul);
-}
-
-static __inline__
 unsigned long long
 NXSwapLongLong(
     unsigned long long	inv
@@ -121,6 +89,58 @@ NXSwapLongLong(
     
     return (outv.ull);
 }
+
+#if defined(__LP64__)
+
+static __inline__
+unsigned long 
+NXSwapLong(
+    unsigned long inv
+)
+{
+    union llconv {
+	unsigned long		ul;
+	unsigned char		uc[8];
+    } *inp, outv;
+    
+    inp = (union llconv *)&inv;
+    
+    outv.uc[0] = inp->uc[7];
+    outv.uc[1] = inp->uc[6];
+    outv.uc[2] = inp->uc[5];
+    outv.uc[3] = inp->uc[4];
+    outv.uc[4] = inp->uc[3];
+    outv.uc[5] = inp->uc[2];
+    outv.uc[6] = inp->uc[1];
+    outv.uc[7] = inp->uc[0];
+    
+    return (outv.ul);
+}
+
+#else 
+
+static __inline__
+unsigned long
+NXSwapLong(
+    unsigned long	inv
+)
+{
+    union lconv {
+	unsigned long	ul;
+	unsigned char	uc[4];
+    } *inp, outv;
+    
+    inp = (union lconv *)&inv;
+    
+    outv.uc[0] = inp->uc[3];
+    outv.uc[1] = inp->uc[2];
+    outv.uc[2] = inp->uc[1];
+    outv.uc[3] = inp->uc[0];
+    
+    return (outv.ul);
+}
+
+#endif /* __LP64__ */
 
 #ifndef KERNEL
 

@@ -84,8 +84,8 @@ ENTRY(setjmp,TAG_NO_FRAME_USED)
 	stw	r0,    88(ARG0)  /* Fixed point exception register */
 
 #if FLOATING_POINT_SUPPORT	/* TODO NMGS probably not needed for kern */ 
-	mffs	r0
-	stw	r0,    92(ARG0)  /* Floating point status register */
+	mffs	f0				/* get FPSCR in low 32 bits of f0 */
+	stfiwx	f0,    92(ARG0)  /* Floating point status register */
 
 	stfd	f14,   96(ARG0)  /* Floating point context - 8 byte aligned */
 	stfd	f15,  104(ARG0)
@@ -156,8 +156,8 @@ ENTRY(longjmp, TAG_NO_FRAME_USED)  /* TODO NMGS - need correct tag */
 	mtxer	r0
 
 #ifdef FLOATING_POINT_SUPPORT
-	lwz	r0,    92(ARG0)  /* Floating point status register */
-	mtfs	r0
+	lfd	f0,  92-4(ARG0)  /* get Floating point status register in low 32 bits of f0 */
+	mtfsf	 0xFF,f0	 /* restore FPSCR */
 
 	lfd	f14,   96(ARG0)  /* Floating point context - 8 byte aligned */
 	lfd	f15,  104(ARG0)

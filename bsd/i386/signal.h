@@ -27,10 +27,14 @@
 #ifndef	_i386_SIGNAL_
 #define	_i386_SIGNAL_ 1
 
+#ifndef _ANSI_SOURCE
+typedef int sig_atomic_t; 
+
+#ifndef _POSIX_C_SOURCE
+
 #include <sys/appleapiopts.h>
 
 #ifdef __APPLE_API_OBSOLETE
-typedef int sig_atomic_t; 
 
 /*
  * Information pushed on stack when a signal is delivered.
@@ -61,6 +65,8 @@ struct	sigcontext {
 };
 
 #endif /* __APPLE_API_OBSOLETE */
+#endif /* ! _POSIX_C_SOURCE */
+#endif /* ! _ANSI_SOURCE */
 
 #endif	/* _i386_SIGNAL_ */
 

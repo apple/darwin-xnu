@@ -259,7 +259,7 @@ IOThread IOCreateThread(IOThreadFunc function, void *argument);
     @abstract Terminate exceution of current thread.
     @discussion This function destroys the currently running thread, and does not return. */
 
-volatile void IOExitThread();
+volatile void IOExitThread(void);
 
 /*! @function IOSleep
     @abstract Sleep the calling thread for a number of milliseconds.
@@ -284,7 +284,13 @@ void IODelay(unsigned microseconds);
 void IOLog(const char *format, ...)
 __attribute__((format(printf, 1, 2)));
 
+#ifndef _FN_KPRINTF
+#define	_FN_KPRINTF
 void kprintf(const char *format, ...);
+#endif
+#ifndef _FN_KPRINTF_DECLARED
+#define	_FN_KPRINTF_DECLARED
+#endif
 
 /*
  * Convert a integer constant (typically a #define or enum) to a string

@@ -54,6 +54,8 @@
 #define _NETAT_NBP_H_
 #include <sys/appleapiopts.h>
 
+#ifdef __APPLE_API_OBSOLETE
+
 /* NBP packet types */
 
 #define NBP_BRRQ		0x01  	/* Broadcast request */
@@ -97,8 +99,7 @@ typedef struct at_nbp {
 
 #define DEFAULT_ZONE(zone) (!(zone)->len || ((zone)->len == 1 && (zone)->str[0] == '*'))
 
-#ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
+#ifdef KERNEL_PRIVATE
 
 /* Struct for name registry */
 typedef struct _nve_ {
@@ -123,8 +124,10 @@ typedef struct _nve_ {
 #define	NBP_WILD_TYPE	0x02
 #define	NBP_WILD_MASK	0x03
 
-typedef	struct	nbp_req	{
-	int		(*func)();
+struct nbp_req;
+typedef	struct nbp_req nbp_req_t;
+struct nbp_req	{
+	int		(*func)(nbp_req_t *, nve_entry_t *);
 	gbuf_t		*response;	/* the response datagram	*/
 	int		space_unused;	/* Space available in the resp	*/
 					/* packet.			*/
@@ -134,16 +137,16 @@ typedef	struct	nbp_req	{
 	u_char		flags;		/* Flags to indicate whether or	*/
 					/* not the request tuple has	*/
 					/* wildcards in it		*/
-} nbp_req_t;
+};
 
 extern int	nbp_insert_entry(nve_entry_t *);
 extern u_int	nbp_strhash (at_nvestr_t *);
 extern nve_entry_t *nbp_find_nve(nve_entry_t *);
-extern int	nbp_fillin_nve();
+extern int	nbp_fillin_nve(at_entity_t *, nve_entry_t *);
 
 extern at_nvestr_t *getSPLocalZone(int);
 extern at_nvestr_t *getLocalZone(int);
 
-#endif /* __APPLE_API_PRIVATE */
-#endif /* KERNEL */
+#endif /* KERNEL_PRIVATE */
+#endif /* __APPLE_API_OBSOLETE */
 #endif /* _NETAT_NBP_H_ */

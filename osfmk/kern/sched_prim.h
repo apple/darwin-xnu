@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -66,80 +66,80 @@
 #include <kern/clock.h>
 #include <kern/kern_types.h>
 #include <kern/thread.h>
-#include <kern/lock.h>
-#include <kern/time_out.h>	/*** ??? temp - remove me soon ***/
-#include <kern/cpu_data.h>
-
-#include <sys/appleapiopts.h>
-
-#ifdef	__APPLE_API_PRIVATE
+#include <sys/cdefs.h>
 
 #ifdef	MACH_KERNEL_PRIVATE
 
-#include <mach_ldebug.h>
-/*
- *	Exported interface to sched_prim.c.
- *	A few of these functions are actually defined in
- *	ipc_sched.c, for historical reasons.
- */
-
-/* Initialize scheduler module */
+/* Initialization */
 extern void		sched_init(void);
+
+extern void		sched_startup(void);
 
 extern void		sched_timebase_init(void);
 
-/*
- * Set up thread timeout element(s) when thread is created.
- */
-extern void		thread_timer_setup(
-					thread_t		thread);
-
-extern void		thread_timer_terminate(void);
-
-/*
- * Stop a thread and wait for it to stop running.
- */
+/* Force a preemption point for a thread and wait for it to stop running */
 extern boolean_t	thread_stop( 
 						thread_t	thread);
 
-/*
- * Wait for a thread to stop running.
- */
-extern boolean_t	thread_wait(
+/* Release a previous stop request */
+extern void			thread_unstop(
 						thread_t	thread);
 
-/* Select a thread to run on a particular processor */
-extern thread_t	thread_select(
-						processor_t	myprocessor);
+/* Wait for a thread to stop running */
+extern void			thread_wait(
+						thread_t	thread);
 
-extern kern_return_t thread_go_locked(
-					 	thread_t		thread,
-						wait_result_t	result);
+/* Select a thread to run */
+extern thread_t		thread_select(
+						processor_t		myprocessor);
 
-/* Stop old thread and run new thread */
-extern boolean_t thread_invoke(
+/* Unblock thread on wake up */
+extern boolean_t	thread_unblock(
+						thread_t		thread,
+						wait_result_t	wresult);
+
+/* Unblock and dispatch thread */
+extern kern_return_t	thread_go(
+						 	thread_t		thread,
+							wait_result_t	wresult);
+
+/* Context switch primitive */
+extern boolean_t	thread_invoke(
+						thread_t			old_thread,
+						thread_t			new_thread,
+						ast_t				reason);
+
+/* Perform calculations for thread finishing execution */
+extern void			thread_done(
 						thread_t		old_thread,
 						thread_t		new_thread,
-						int				reason,
-						thread_continue_t continuation);
+						processor_t		processor);
 
-/* Called when current thread is given new stack */
-extern void		thread_continue(
-						thread_t		old_thread);
+/* Set up for thread beginning execution */
+extern void			thread_begin(
+						thread_t		thread,
+						processor_t		processor);
+
+/* Handle previous thread at context switch */
+extern void			thread_dispatch(
+						thread_t		thread);
 
 /* Switch directly to a particular thread */
-extern int		thread_run(
-						thread_t		old_thread,
-						thread_continue_t continuation,
-						thread_t		new_thread);
+extern int			thread_run(
+						thread_t			self,
+						thread_continue_t	continuation,
+						void				*parameter,
+						thread_t			new_thread);
 
-/* Dispatch a thread not on a run queue */
-extern void		thread_dispatch(
-						thread_t		thread);
+/* Resume thread with new stack */
+extern void			thread_continue(
+						thread_t		old_thread);
 
 /* Invoke continuation */
 extern void		call_continuation(
-						thread_continue_t continuation);		  
+					thread_continue_t	continuation,
+					void				*parameter,
+					wait_result_t		wresult);
 
 /* Set the current scheduled priority */
 extern void		set_sched_pri(
@@ -161,42 +161,32 @@ extern void		compute_my_priority(
 					thread_t		thread);
 
 /* Periodic scheduler activity */
-extern void		sched_tick_init(void);
+extern void		sched_tick_thread(void);
 
-/*
- * Update thread to the current scheduler tick.
- */
+/* Perform sched_tick housekeeping activities */
 extern void		update_priority(
 					thread_t		thread);
 
-/* Idle thread loop */
+/* Idle processor thread */
 extern void		idle_thread(void);
 
-/*
- *	Machine-dependent code must define these functions.
- */
+extern kern_return_t	idle_thread_create(
+							processor_t		processor);
 
 /* Start thread running */
 extern void		thread_bootstrap_return(void);
-
-/* Return from exception */
-extern void		thread_exception_return(void);
 
 /* Continuation return from syscall */
 extern void     thread_syscall_return(
                         kern_return_t   ret);
 
-/*
- *	These functions are either defined in kern/thread.c
- *	or are defined directly by machine-dependent code.
- */
-
-/* Block current thread, indicating reason */
+/* Context switch */
 extern wait_result_t	thread_block_reason(
 							thread_continue_t	continuation,
+							void				*parameter,
 							ast_t				reason);
 
-/* Dispatch a thread for execution */
+/* Reschedule thread for execution */
 extern void		thread_setrun(
 					thread_t	thread,
 					integer_t	options);
@@ -210,6 +200,10 @@ extern processor_t		thread_bind(
 							thread_t		thread,
 							processor_t		processor);
 
+extern void		thread_timer_expire(
+					void			*thread,
+					void			*p1);
+
 /* Set the maximum interrupt level for the thread */
 __private_extern__ wait_interrupt_t thread_interrupt_level(
 						wait_interrupt_t interruptible);
@@ -218,51 +212,79 @@ __private_extern__ wait_result_t thread_mark_wait_locked(
 						thread_t		 thread,
 						wait_interrupt_t interruptible);
 
-/* Sleep, unlocking and then relocking a usimple_lock in the process */
-__private_extern__ wait_result_t thread_sleep_fast_usimple_lock(
-						event_t			event,
-						simple_lock_t	lock,
-						wait_interrupt_t interruptible);
-
 /* Wake up locked thread directly, passing result */
 __private_extern__ kern_return_t clear_wait_internal(
 						thread_t		thread,
 						wait_result_t	result);
 
-__private_extern__
-	wait_queue_t	wait_event_wait_queue(
-						event_t			event);
-
 #endif /* MACH_KERNEL_PRIVATE */
 
-extern wait_result_t	assert_wait_prim(
-							event_t				event,
-							thread_roust_t		roust_hint,
-							uint64_t			deadline,
-							wait_interrupt_t	interruptible);
+__BEGIN_DECLS
+
+#ifdef	XNU_KERNEL_PRIVATE
+
+extern boolean_t		assert_wait_possible(void);
 
 /*
  ****************** Only exported until BSD stops using ********************
  */
-
-/*
- * Cancel a stop and unblock the thread if already stopped.
- */
-extern void		thread_unstop(
-						thread_t		thread);
 
 /* Wake up thread directly, passing result */
 extern kern_return_t clear_wait(
 						thread_t		thread,
 						wait_result_t	result);
 
-#endif	/* __APPLE_API_PRIVATE */
+/* Return from exception (BSD-visible interface) */
+extern void		thread_exception_return(void);
+
+#endif	/* XNU_KERNEL_PRIVATE */
+
+/* Context switch */
+extern wait_result_t	thread_block(
+							thread_continue_t	continuation);
+
+extern wait_result_t	thread_block_parameter(
+							thread_continue_t	continuation,
+							void				*parameter);
+
+/* Declare thread will wait on a particular event */
+extern wait_result_t	assert_wait(
+							event_t				event,
+							wait_interrupt_t	interruptible);
+
+/* Assert that the thread intends to wait with a timeout */
+extern wait_result_t	assert_wait_timeout(
+							event_t				event,
+							wait_interrupt_t	interruptible,
+							uint32_t			interval,
+							uint32_t			scale_factor);
+
+extern wait_result_t	assert_wait_deadline(
+							event_t				event,
+							wait_interrupt_t	interruptible,
+							uint64_t			deadline);
+
+/* Wake up thread (or threads) waiting on a particular event */
+extern kern_return_t	thread_wakeup_prim(
+							event_t				event,
+							boolean_t			one_thread,
+							wait_result_t		result);
+
+#define thread_wakeup(x)					\
+			thread_wakeup_prim((x), FALSE, THREAD_AWAKENED)
+#define thread_wakeup_with_result(x, z)		\
+			thread_wakeup_prim((x), FALSE, (z))
+#define thread_wakeup_one(x)				\
+			thread_wakeup_prim((x), TRUE, THREAD_AWAKENED)
+
+extern boolean_t		preemption_enabled(void);
+
+#ifdef	KERNEL_PRIVATE
 
 /*
- * *********************   PUBLIC APIs ************************************
+ * Obsolete interfaces.
  */
 
-/* Set timer for current thread */
 extern void		thread_set_timer(
 					uint32_t		interval,
 					uint32_t		scale_factor);
@@ -272,78 +294,19 @@ extern void		thread_set_timer_deadline(
 
 extern void		thread_cancel_timer(void);
 
-/* Declare thread will wait on a particular event */
-extern wait_result_t assert_wait(
-						event_t			 event,
-						wait_interrupt_t interruptflag);
+#ifndef	MACH_KERNEL_PRIVATE
 
-/* Assert that the thread intends to wait for a timeout */
-extern wait_result_t assert_wait_timeout(
-						natural_t		 msecs,
-						wait_interrupt_t interruptflags);
-
-/* Sleep, unlocking and then relocking a usimple_lock in the process */
-extern wait_result_t thread_sleep_usimple_lock(
-						event_t			event,
-						usimple_lock_t	lock,
-						wait_interrupt_t interruptible);	
-
-/* Sleep, unlocking and then relocking a mutex in the process */
-extern wait_result_t thread_sleep_mutex(
-						event_t			event,
-						mutex_t			*mutex,
-						wait_interrupt_t interruptible);	
-										
-/* Sleep with a deadline, unlocking and then relocking a mutex in the process */
-extern wait_result_t thread_sleep_mutex_deadline(
-						event_t			event,
-						mutex_t			*mutex,
-						uint64_t		deadline,
-						wait_interrupt_t interruptible);	
-
-/* Sleep, unlocking and then relocking a write lock in the process */
-extern wait_result_t thread_sleep_lock_write(
-						event_t			event,
-						lock_t			*lock,
-						wait_interrupt_t interruptible);	
-									   
-/* Sleep, hinting that a thread funnel may be involved in the process */
-extern wait_result_t thread_sleep_funnel(
-						event_t			event,
-						wait_interrupt_t interruptible);	
-
-/* Wake up thread (or threads) waiting on a particular event */
-extern kern_return_t thread_wakeup_prim(
-						event_t			event,
-						boolean_t		one_thread,
-						wait_result_t	result);
-
-#ifdef	__APPLE_API_UNSTABLE
-
-/* Block current thread (Block reason) */
-extern wait_result_t thread_block(
-						thread_continue_t continuation);
-
-#endif	/* __APPLE_API_UNSTABLE */
-
-/*
- *	Routines defined as macros
- */
-
-#define thread_wakeup(x)					\
-			thread_wakeup_prim((x), FALSE, THREAD_AWAKENED)
-#define thread_wakeup_with_result(x, z)		\
-			thread_wakeup_prim((x), FALSE, (z))
-#define thread_wakeup_one(x)				\
-			thread_wakeup_prim((x), TRUE, THREAD_AWAKENED)
-
-#if		!defined(MACH_KERNEL_PRIVATE) && !defined(ABSOLUTETIME_SCALAR_TYPE)
-
-#include <libkern/OSBase.h>
+#ifndef	ABSOLUTETIME_SCALAR_TYPE
 
 #define thread_set_timer_deadline(a)	\
 	thread_set_timer_deadline(__OSAbsoluteTime(a))
 
-#endif
+#endif	/* ABSOLUTETIME_SCALAR_TYPE */
+
+#endif	/* MACH_KERNEL_PRIVATE */
+
+#endif	/* KERNEL_PRIVATE */
+
+__END_DECLS
 
 #endif	/* _KERN_SCHED_PRIM_H_ */

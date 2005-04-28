@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -53,8 +53,6 @@
  * Hardware trap/fault handler.
  */
 
-#include <cpus.h>
-#include <fast_idle.h>
 #include <mach_kdb.h>
 #include <mach_kgdb.h>
 #include <mach_kdp.h>
@@ -74,9 +72,8 @@
 #include <vm/vm_kern.h>
 #include <vm/vm_fault.h>
 
-#include <kern/etap_macros.h>
 #include <kern/kern_types.h>
-#include <kern/ast.h>
+#include <kern/processor.h>
 #include <kern/thread.h>
 #include <kern/task.h>
 #include <kern/sched.h>
@@ -127,7 +124,7 @@ void
 thread_syscall_return(
         kern_return_t ret)
 {
-        register thread_act_t   thr_act = current_act();
+        register thread_t   thr_act = current_thread();
         register struct i386_saved_state *regs = USER_REGS(thr_act);
         regs->eax = ret;
         thread_exception_return();
@@ -144,24 +141,18 @@ extern boolean_t db_breakpoints_inserted;
 void
 thread_kdb_return(void)
 {
-	register thread_act_t	thr_act = current_act();
-	register thread_t	cur_thr = current_thread();
-	register struct i386_saved_state *regs = USER_REGS(thr_act);
+	register thread_t	thread = current_thread();
+	register struct i386_saved_state *regs = USER_REGS(thread);
 
 	if (kdb_trap(regs->trapno, regs->err, regs)) {
 #if		MACH_LDEBUG
-		assert(cur_thr->mutex_count == 0); 
+		assert(thread->mutex_count == 0); 
 #endif		/* MACH_LDEBUG */
-		check_simple_locks();
 		thread_exception_return();
 		/*NOTREACHED*/
 	}
 }
 boolean_t let_ddb_vm_fault = FALSE;
-
-#if	NCPUS > 1
-extern int kdb_active[NCPUS];
-#endif	/* NCPUS > 1 */
 
 #endif	/* MACH_KDB */
 
@@ -169,9 +160,8 @@ void
 user_page_fault_continue(
 	kern_return_t	kr)
 {
-	register thread_act_t	thr_act = current_act();
-	register thread_t	cur_thr = current_thread();
-	register struct i386_saved_state *regs = USER_REGS(thr_act);
+	register thread_t	thread = current_thread();
+	register struct i386_saved_state *regs = USER_REGS(thread);
 
 	if ((kr == KERN_SUCCESS) || (kr == KERN_ABORTED)) {
 #if	MACH_KDB
@@ -181,7 +171,7 @@ user_page_fault_continue(
 		if (db_watchpoint_list &&
 		    db_watchpoints_inserted &&
 		    (regs->err & T_PF_WRITE) &&
-		    db_find_watchpoint(thr_act->map,
+		    db_find_watchpoint(thread->map,
 				       (vm_offset_t)regs->cr2,
 				       regs))
 			kdb_trap(T_WATCHPOINT, 0, regs);
@@ -194,9 +184,8 @@ user_page_fault_continue(
 	if (debug_all_traps_with_kdb &&
 	    kdb_trap(regs->trapno, regs->err, regs)) {
 #if		MACH_LDEBUG
-		assert(cur_thr->mutex_count == 0);
+		assert(thread->mutex_count == 0);
 #endif		/* MACH_LDEBUG */
-		check_simple_locks();
 		thread_exception_return();
 		/*NOTREACHED*/
 	}
@@ -210,8 +199,8 @@ user_page_fault_continue(
  * Fault recovery in copyin/copyout routines.
  */
 struct recovery {
-	int	fault_addr;
-	int	recover_addr;
+	uint32_t	fault_addr;
+	uint32_t	recover_addr;
 };
 
 extern struct recovery	recover_table[];
@@ -225,8 +214,9 @@ extern struct recovery	recover_table_end[];
 extern struct recovery	retry_table[];
 extern struct recovery	retry_table_end[];
 
-char *	trap_type[] = {TRAP_NAMES};
+const char *		trap_type[] = {TRAP_NAMES};
 int	TRAP_TYPES = sizeof(trap_type)/sizeof(trap_type[0]);
+
 
 /*
  * Trap from kernel mode.  Only page-fault errors are recoverable,
@@ -237,35 +227,21 @@ boolean_t
 kernel_trap(
 	register struct i386_saved_state	*regs)
 {
-	int	exc;
-	int	code;
-	int	subcode;
-	int	interruptible;
-	register int	type;
-	vm_map_t	map;
-	kern_return_t	result;
+	int			code;
+	unsigned int		subcode;
+	int			interruptible = THREAD_UNINT;
+	register int		type;
+	vm_map_t		map;
+	kern_return_t		result = KERN_FAILURE;
 	register thread_t	thread;
-	thread_act_t		thr_act;
-	etap_data_t		probe_data;
-	pt_entry_t		*pte;
-	extern vm_offset_t	vm_last_phys;
 
 	type = regs->trapno;
 	code = regs->err;
 	thread = current_thread();
-	thr_act = current_act();
-
-	ETAP_DATA_LOAD(probe_data[0], regs->trapno);
-	ETAP_DATA_LOAD(probe_data[1], MACH_PORT_NULL);
-	ETAP_DATA_LOAD(probe_data[2], MACH_PORT_NULL);
-	ETAP_PROBE_DATA(ETAP_P_EXCEPTION,
-			0,
-			thread,
-			&probe_data,
-			ETAP_DATA_ENTRY*3);
 
 	switch (type) {
 	    case T_PREEMPT:
+		ast_taken(AST_PREEMPTION, FALSE);
 		return (TRUE);
 
 	    case T_NO_FPU:
@@ -291,9 +267,7 @@ kernel_trap(
 #if	MACH_KDB
 		mp_disable_preemption();
 		if (db_active
-#if	NCPUS > 1
 		    && kdb_active[cpu_number()]
-#endif	/* NCPUS > 1 */
 		    && !let_ddb_vm_fault) {
 			/*
 			 * Force kdb to handle this one.
@@ -307,13 +281,11 @@ kernel_trap(
 
 		if (subcode > LINEAR_KERNEL_ADDRESS) {
 		    map = kernel_map;
-		    subcode -= LINEAR_KERNEL_ADDRESS;
-		} else if (thr_act == THR_ACT_NULL || thread == THREAD_NULL)
+		} else if (thread == THREAD_NULL)
 		    map = kernel_map;
 		else {
-		    map = thr_act->map;
+		    map = thread->map;
 		}
-
 #if	MACH_KDB
 		/*
 		 * Check for watchpoint on kernel static data.
@@ -326,9 +298,7 @@ kernel_trap(
 		    (vm_offset_t)subcode < vm_last_phys &&
 		    ((*(pte = pmap_pte(kernel_pmap, (vm_offset_t)subcode))) &
 		     INTEL_PTE_WRITE) == 0) {
-		  	*pte = INTEL_PTE_VALID | INTEL_PTE_WRITE |
-			       pa_to_pte(trunc_page((vm_offset_t)subcode) -
-					 VM_MIN_KERNEL_ADDRESS);
+		  *pte = *pte | INTEL_PTE_VALID | INTEL_PTE_WRITE; /* XXX need invltlb here? */
 			result = KERN_SUCCESS;
 		} else
 #endif	/* MACH_KDB */
@@ -350,7 +320,6 @@ kernel_trap(
 					}
 				}
 			}
-
 		  	result = vm_fault(map,
 					  trunc_page((vm_offset_t)subcode),
 					  VM_PROT_READ|VM_PROT_WRITE,
@@ -436,6 +405,15 @@ kernel_trap(
 
 	    default:
 		/*
+		 * Exception 15 is reserved but some chips may generate it
+		 * spuriously. Seen at startup on AMD Athlon-64.
+		 */
+	    	if (type == 15) {
+			kprintf("kernel_trap() ignoring spurious trap 15\n"); 
+			return (TRUE);
+		}
+
+		/*
 		 * ...and return failure, so that locore can call into
 		 * debugger.
 		 */
@@ -475,15 +453,13 @@ user_trap(
 {
 	int		exc;
 	int		code;
-	int		subcode;
+	unsigned int	subcode;
 	register int	type;
 	vm_map_t	map;
 	vm_prot_t	prot;
 	kern_return_t	result;
-	register thread_act_t thr_act = current_act();
-	thread_t thread = (thr_act ? thr_act->thread : THREAD_NULL);
+	thread_t	thread = current_thread();
 	boolean_t	kernel_act = FALSE;
-	etap_data_t	probe_data;
 
 	if (regs->efl & EFL_VM) {
 	    /*
@@ -497,6 +473,7 @@ user_trap(
 	type = regs->trapno;
 	code = 0;
 	subcode = 0;
+	exc = 0;
 
 	switch (type) {
 
@@ -573,7 +550,7 @@ user_trap(
 		if (kernel_act == FALSE) {
 			if (!(regs->err & T_PF_WRITE))
 				prot = VM_PROT_READ;
-			(void) user_page_fault_continue(vm_fault(thr_act->map,
+			(void) user_page_fault_continue(vm_fault(thread->map,
 				trunc_page((vm_offset_t)subcode),
 				prot,
 				FALSE,
@@ -583,9 +560,8 @@ user_trap(
 		else {
 			if (subcode > LINEAR_KERNEL_ADDRESS) {
 			  	map = kernel_map;
-		    		subcode -= LINEAR_KERNEL_ADDRESS;
 			}
-			result = vm_fault(thr_act->map,
+			result = vm_fault(thread->map,
 				trunc_page((vm_offset_t)subcode),
 				prot,
 				FALSE,
@@ -596,7 +572,7 @@ user_trap(
 				 * so that we can ask for read-only access
 				 * but enter a (kernel) writable mapping.
 				 */
-				result = intel_read_fault(thr_act->map,
+				result = intel_read_fault(thread->map,
 					trunc_page((vm_offset_t)subcode));
 			}
 			user_page_fault_continue(result);
@@ -629,21 +605,6 @@ user_trap(
 		return;
 #endif	/* MACH_KDB */
 
-#if	ETAP_EVENT_MONITOR
-	if (thread != THREAD_NULL) {
-		ETAP_DATA_LOAD(probe_data[0], regs->trapno);
-		ETAP_DATA_LOAD(probe_data[1],
-			       thr_act->exc_actions[exc].port);
-		ETAP_DATA_LOAD(probe_data[2],
-			       thr_act->task->exc_actions[exc].port);
-		ETAP_PROBE_DATA(ETAP_P_EXCEPTION,
-				0,
-				thread,		
-				&probe_data,
-				ETAP_DATA_ENTRY*3);
-	}
-#endif	/* ETAP_EVENT_MONITOR */
-
 	i386_exception(exc, code, subcode);
 	/*NOTREACHED*/
 }
@@ -666,7 +627,7 @@ v86_assist(
 	thread_t				thread,
 	register struct i386_saved_state	*regs)
 {
-	register struct v86_assist_state *v86 = &thread->top_act->mact.pcb->ims.v86s;
+	register struct v86_assist_state *v86 = &thread->machine.pcb->ims.v86s;
 
 /*
  * Build an 8086 address.  Use only when off is known to be 16 bits.
@@ -838,9 +799,9 @@ v86_assist(
 
 		    case 0x9c:		/* pushf */
 		    {
-			int	flags;
-			vm_offset_t sp;
-			int	size;
+			int		flags;
+			vm_offset_t	sp;
+			unsigned int	size;
 
 			flags = regs->efl;
 			if ((v86->flags & EFL_IF) == 0)
@@ -860,7 +821,7 @@ v86_assist(
 			    goto stack_error;
 			sp -= size;
 			if (copyout((char *)&flags,
-				    (char *)Addr8086(regs->ss,sp),
+				    (user_addr_t)Addr8086(regs->ss,sp),
 				    size))
 			    goto addr_error;
 			if (addr_32)
@@ -913,7 +874,6 @@ v86_assist(
 		    {
 			vm_offset_t sp;
 			int	nflags;
-			int	size;
 			union iret_struct iret_struct;
 
 			v86->flags &= ~V86_IRET_PENDING;
@@ -967,7 +927,7 @@ v86_assist(
 		}
 		break;	/* exit from 'while TRUE' */
 	    }
-	    regs->eip = (regs->eip & 0xffff0000 | eip);
+	    regs->eip = (regs->eip & 0xffff0000) | eip;
 	}
 	else {
 	    /*
@@ -1018,7 +978,7 @@ v86_assist(
 			      (char *) (sizeof(struct int_vec) * vec),
 		      	      sizeof (struct int_vec));
 		if (copyout((char *)&iret_16,
-			    (char *)Addr8086(regs->ss,sp),
+			    (user_addr_t)Addr8086(regs->ss,sp),
 			    sizeof(struct iret_16)))
 		    goto addr_error;
 		regs->uesp = (regs->uesp & 0xFFFF0000) | (sp & 0xffff);
@@ -1063,18 +1023,16 @@ extern void     log_thread_action (thread_t, char *);
 void
 i386_astintr(int preemption)
 {
-	int		mycpu;
-	ast_t		mask = AST_ALL;
+	ast_t		*my_ast, mask = AST_ALL;
 	spl_t		s;
-	thread_t	self = current_thread();
 
 	s = splsched();		/* block interrupts to check reasons */
 	mp_disable_preemption();
-	mycpu = cpu_number();
-	if (need_ast[mycpu] & AST_I386_FP) {
+	my_ast = ast_pending();
+	if (*my_ast & AST_I386_FP) {
 	    /*
 	     * AST was for delayed floating-point exception -
-	     * FP interrupt occured while in kernel.
+	     * FP interrupt occurred while in kernel.
 	     * Turn off this AST reason and handle the FPU error.
 	     */
 
@@ -1090,32 +1048,10 @@ i386_astintr(int preemption)
 	     * Interrupts are still blocked.
 	     */
 
-#ifdef	XXX
+#if 1
 	    if (preemption) {
-
-	    /*
-	     * We don't want to process any AST if we were in
-	     * kernel-mode and the current thread is in any
-	     * funny state (waiting and/or suspended).
-	     */
-
-		thread_lock (self);
-
-		if (thread_not_preemptable(self) || self->preempt) {
-			ast_off(AST_URGENT);
-			thread_unlock (self);
-			mp_enable_preemption();
-			splx(s);
-			return;
-		}
-		else mask = AST_PREEMPTION;
+		mask = AST_PREEMPTION;
 		mp_enable_preemption();
-
-/*
-		self->preempt = TH_NOT_PREEMPTABLE;
-*/
-
-		thread_unlock (self);
 	    } else {
 		mp_enable_preemption();
 	    }
@@ -1123,14 +1059,8 @@ i386_astintr(int preemption)
 	mp_enable_preemption();
 #endif
 
-	    ast_taken(mask, s
-#if	FAST_IDLE
-		      ,NO_IDLE_THREAD
-#endif	/* FAST_IDLE */
-		      );
-/*
-	    self->preempt = TH_PREEMPTABLE;
-*/
+	ast_taken(mask, s);
+
 	}
 }
 
@@ -1164,7 +1094,7 @@ i386_exception(
 
 	codes[0] = code;		/* new exception interface */
 	codes[1] = subcode;
-	exception(exc, codes, 2);
+	exception_triage(exc, codes, 2);
 	/*NOTREACHED*/
 }
 
@@ -1247,13 +1177,12 @@ check_io_fault(
 void
 kernel_preempt_check (void)
 {
+	ast_t		*myast;
+
 	mp_disable_preemption();
-        if ((need_ast[cpu_number()] & AST_URGENT) &&
-#if	NCPUS > 1
+	myast = ast_pending();
+        if ((*myast & AST_URGENT) &&
 	    get_interrupt_level() == 1
-#else	/* NCPUS > 1 */
-	    get_interrupt_level() == 0
-#endif	/* NCPUS > 1 */
 	    ) {
 		mp_enable_preemption_no_check();
                 __asm__ volatile ("     int     $0xff");

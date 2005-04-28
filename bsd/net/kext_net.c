@@ -96,7 +96,8 @@ register_sockfilter(struct NFDescriptor *nfp, struct NFDescriptor *nfp1,
 	return(0);
 }
 
-unregister_sockfilter(struct NFDescriptor *nfp, struct protosw *pr, int flags)
+int
+unregister_sockfilter(struct NFDescriptor *nfp, struct protosw *pr, __unused int flags)
 {	int s;
 
 	s = splhigh();
@@ -129,7 +130,7 @@ find_nke(unsigned int handle)
  */
 int
 nke_insert(struct socket *so, struct so_nke *np)
-{	int s, error;
+{
 	struct kextcb *kp, *kp1;
 	struct NFDescriptor *nf1, *nf2 = NULL;
 

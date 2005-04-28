@@ -79,6 +79,12 @@ enum {
 #define kIOClientPrivilegeAdministrator	"root"
 #define kIOClientPrivilegeLocalUser	"local"
 
+/*!
+    @class IOUserClient
+    @abstract   Provides a basis for communication between client applications and I/O Kit objects.
+*/
+
+
 class IOUserClient : public IOService
 {
     OSDeclareAbstractStructors(IOUserClient)
@@ -86,11 +92,12 @@ class IOUserClient : public IOService
 protected:
 /*! @struct ExpansionData
     @discussion This structure will be used to expand the capablilties of this class in the future.
-    */    
+*/    
     struct ExpansionData { };
 
 /*! @var reserved
-    Reserved for future use.  (Internal use only)  */
+    Reserved for future use.  (Internal use only) 
+*/
     ExpansionData * reserved;
 
 public:
@@ -174,9 +181,9 @@ public:
     /*!
         @function exportObjectToClient
         Make an arbitrary OSObject available to the client task.
-        @param task The task
-        @param obj The object we want to export to the client
-        @param clientObj returned value is the client's port name.
+        @param task The task.
+        @param obj The object we want to export to the client.
+        @param clientObj Returned value is the client's port name.
     */
     virtual IOReturn exportObjectToClient(task_t task,
 				OSObject *obj, io_object_t *clientObj);

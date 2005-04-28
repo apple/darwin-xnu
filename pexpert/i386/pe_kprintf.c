@@ -84,8 +84,17 @@ void kprintf(const char *fmt, ...)
     boolean_t state;
     
     if (!disableSerialOuput) {
-        state = ml_set_interrupts_enabled(FALSE);
-        simple_lock(&kprintf_lock);
+
+	/*
+	 * Spin to get kprintf lock but re-enable interrupts while failing.
+	 * This allows interrupts to be handled while waiting but
+	 * interrupts are disabled once we have the lock.
+	 */
+	state = ml_set_interrupts_enabled(FALSE);
+	while (!simple_lock_try(&kprintf_lock)) {
+             ml_set_interrupts_enabled(state);
+             ml_set_interrupts_enabled(FALSE);
+	}
 
 	if (cpu_number() != cpu_last_locked) {
 	    MP_DEBUG_KPRINTF("[cpu%d...]\n", cpu_number());

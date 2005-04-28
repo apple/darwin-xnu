@@ -1,0 +1,427 @@
+.\" Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+.\" 
+.\" The contents of this file constitute Original Code as defined in and
+.\" are subject to the Apple Public Source License Version 1.1 (the
+.\" "License").  You may not use this file except in compliance with the
+.\" License.  Please obtain a copy of the License at
+.\" http://www.apple.com/publicsource and read it before using this file.
+.\" 
+.\" This Original Code and all software distributed under the License are
+.\" distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+.\" EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+.\" INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+.\" FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+.\" License for the specific language governing rights and limitations
+.\" under the License.
+.\" 
+.\"     @(#)getdirentriesattr.2
+.
+.Dd December 15, 2003
+.Dt GETDIRENTRIESATTR 2
+.Os Darwin
+.Sh NAME
+.Nm getdirentriesattr
+.Nd get file system attributes for multiple directory entries
+.Sh SYNOPSIS
+.Fd #include <sys/attr.h>
+.Fd #include <unistd.h>
+.Ft int
+.Fn getdirentriesattr "int fd" "struct attrlist * attrList" "void * attrBuf" "size_t attrBufSize" "unsigned long * count" "unsigned long * basep" "unsigned long * newState" "unsigned long options"
+.
+.
+.Sh DESCRIPTION
+The
+.Fn getdirentriesattr
+function reads directory entries and returns their attributes (that is, metadata). 
+You can think of it as a combination of 
+.Xr getdirentries 2
+and
+.Xr getattrlist 2 .
+The function reads directory entries from the directory referenced by the 
+file descriptor 
+.Fa fd .
+Attributes of those directory entries are placed into the buffer specified by 
+.Fa attrBuf
+and
+.Fa attrBufSize .
+The 
+.Fa attrList 
+parameter determines what attributes are returned for each entry.
+The 
+.Fa count 
+parameter contains the number of directory entries requested and returned.
+The 
+.Fa basep
+parameter returns the directory offset in a manner similar to 
+.Xr getdirentries 2 .
+The 
+.Fa newState
+parameter allows you to check whether the directory has been modified while 
+you were reading it.
+The 
+.Fa options 
+parameter lets you control specific aspects of the function's behaviour.
+.Pp
+.
+The 
+.Fn getdirentriesattr 
+function is only supported by certain volume format implementations. 
+For maximum compatibility, client programs should use high-level APIs 
+(such as the Carbon File Manager) to access file system attributes.
+These high-level APIs include logic to emulate file system attributes 
+on volumes that don't support 
+.Fn getdirentriesattr .
+.Pp
+.
+.\" fd parameter
+.
+The
+.Fa fd
+parameter must be a file descriptor that references a directory that you have opened for reading. 
+.Pp
+.
+.\" attrList parameter
+.
+The
+.Fa attrList
+parameter is a pointer to an 
+.Vt attrlist 
+structure. 
+You are responsible for filling out all fields of this structure before calling the function. 
+See the discussion of the  
+.Xr getattrlist 2 
+function for a detailed description of this structure. 
+To get an attribute you must set the corresponding bit in the appropriate 
+.Vt attrgroup_t 
+field of the 
+.Vt attrlist 
+structure. 
+You must not request volume attributes.
+.Pp
+.
+.\" attrBuf and attrBufSize parameters
+.
+The
+.Fa attrBuf
+and 
+.Fa attrBufSize
+parameters specify a buffer into which the function places attribute values. 
+The attributes for any given directory entry are grouped together and 
+packed in exactly the same way as they are returned from 
+.Xr getattrlist 2 .
+These groups are then placed into the buffer, one after another. 
+As each group starts with a leading 
+.Vt unsigned long 
+that contains the 
+overall length of the group, you can step from one group to the next 
+by simply adding this length to your pointer.
+The sample code (below) shows how to do this.
+The initial contents of this buffer are ignored.
+.Pp
+.
+.\" count parameter
+.
+The 
+.Fa count 
+parameter points to a 
+.Vt unsigned long 
+variable. 
+You should initialise this variable to be the number of directory entries for which 
+you wish to get attributes.
+On return, this variable contains the number of directory entries whose attributes 
+have been placed into the attribute buffer.
+This may be smaller than the number that you requested.
+.Pp
+.
+.\" basep parameter
+The 
+.Fa basep 
+parameter returns the offset of the last directory entry read, in a 
+manner identical to 
+.Xr getdirentries 2 . 
+You can use this value to reset a directory iteration to a known position 
+using 
+.Xr lseek 2 .
+The initial value of the variable is ignored.
+.Pp
+.
+.\" newState parameter
+.
+The 
+.Fa newState 
+parameter returns a value that changes if the directory has been modified. 
+If you're iterating through the directory by making repeated calls to 
+.Fn getdirentriesattr ,
+you can compare subsequent values of 
+.Fa newState 
+to determine whether the directory has been modified (and thus restart 
+your iteration at the beginning).
+The initial value of the variable is ignored.
+.Pp
+.
+.\" options parameter
+.
+The
+.Fa options
+parameter is a bit set that controls the behaviour of
+.Fn getdirentriesattr .
+The following option bits are defined.
+.
+.Bl -tag -width FSOPT_NOINMEMUPDATE
+.
+.It FSOPT_NOINMEMUPDATE
+This tells 
+.Fn getdirentriesattr
+to return the directory entries from disk rather than taking the extra step of looking 
+at data structures in-memory which may contain changes that haven't been flushed to disk.
+.Pp
+This option allowed for specific performance optimizations for specific clients on older systems. 
+We currently recommend that clients not set this option and that file system 
+implementations ignore it.
+.
+.El
+.Pp
+It is typical to ask for a combination of common, file, and directory 
+attributes and then use the value of the 
+.Dv ATTR_CMN_OBJTYPE 
+attribute to parse the resulting attribute buffer.
+.
+.Sh RETURN VALUES
+Upon successful completion a value of 0 or 1 is returned. 
+The value 0 indicates that the routine completed successfully. 
+The value 1 indicates that the routine completed successfully and has 
+returned the last entry in the directory.
+On error, a value of -1 is returned and
+.Va errno
+is set to indicate the error.
+.
+.Sh COMPATIBILITY
+Not all volumes support 
+.Fn getdirentriesattr .
+You can test whether a volume supports 
+.Fn getdirentriesattr 
+by using 
+.Xr getattrlist 2 
+to get the volume capabilities attribute 
+.Dv ATTR_VOL_CAPABILITIES ,
+and then testing the 
+.Dv VOL_CAP_INT_READDIRATTR 
+flag.
+.Pp
+.
+The 
+.Fn getdirentriesattr 
+function has been undocumented for more than two years. 
+In that time a number of volume format implementations have been created without 
+a proper specification for the behaviour of this routine. 
+You may encounter volume format implementations with slightly different 
+behaviour than what is described here. 
+Your program is expected to be tolerant of this variant behaviour.
+.Pp
+.
+If you're implementing a volume format that supports 
+.Fn getdirentriesattr ,
+you should be careful to support the behaviour specified by this document.
+.
+.Sh ERRORS
+.Fn getdirentriesattr
+will fail if:
+.Bl -tag -width Er
+.
+.It Bq Er ENOTSUP
+The volume does not support
+.Fn getdirentriesattr .
+.
+.It Bq Er EBADF
+.Fa fd 
+is not a valid file descriptor for a directory open for reading.
+.
+.It Bq Er EFAULT
+.Fa attrList
+or
+.Em attrBuf
+points to an invalid address.
+.
+.It Bq Er EINVAL
+The 
+.Fa bitmapcount 
+field of 
+.Fa attrList 
+is not 
+.Dv ATTR_BIT_MAP_COUNT .
+.
+.It Bq Er EINVAL
+You requested an invalid attribute.
+.
+.It Bq Er EINVAL
+You requested volume attributes.
+.
+.It Bq Er EINVAL
+The 
+.Fa options 
+parameter contains an invalid flag.
+.
+.It Bq Er EIO
+An I/O error occurred while reading from or writing to the file system.
+.El
+.Pp
+.
+.Sh EXAMPLES
+.
+The following code lists the contents of a directory using 
+.Fn getdirentriesattr . 
+The listing includes the file type and creator for files.
+.
+.Bd -literal
+#include <assert.h>
+#include <stdio.h>
+#include <stddef.h>
+#include <string.h>
+#include <sys/attr.h>
+#include <sys/errno.h>
+#include <unistd.h>
+#include <sys/vnode.h>
+#include <stdbool.h>
+#include <fcntl.h>
+.Pp
+.
+typedef struct attrlist attrlist_t;
+.Pp
+.
+struct FInfoAttrBuf {
+    unsigned long   length;
+    attrreference_t name;
+    fsobj_type_t    objType;
+    char            finderInfo[32];
+};
+typedef struct FInfoAttrBuf FInfoAttrBuf;
+.Pp
+.
+enum {
+    kEntriesPerCall = 10
+};
+.Pp
+.
+static int FInfoDemo(const char *dirPath)
+{
+    int             err;
+    int             junk;
+    int             dirFD;
+    attrlist_t      attrList;
+    unsigned long   index;
+    unsigned long   count;
+    unsigned long   junkBaseP;
+    bool            oldStateValid;
+    unsigned long   oldState;
+    unsigned long   newState;
+    bool            done;
+    FInfoAttrBuf *  thisEntry;
+    char            attrBuf[kEntriesPerCall * (sizeof(FInfoAttrBuf) + 64)];
+.Pp
+.
+    // attrBuf is big enough for kEntriesPerCall entries, assuming that 
+    // the average name length is less than 64.
+.Pp
+.
+    memset(&attrList, 0, sizeof(attrList));
+    attrList.bitmapcount = ATTR_BIT_MAP_COUNT;
+    attrList.commonattr  =    ATTR_CMN_NAME 
+                            | ATTR_CMN_OBJTYPE 
+                            | ATTR_CMN_FNDRINFO;
+.Pp
+    
+    err = 0;
+    dirFD = open(dirPath, O_RDONLY, 0);
+    if (dirFD < 0) {
+        err = errno;
+    }
+    if (err == 0) {
+        oldStateValid = false;
+        done = false;
+        do {
+            count = kEntriesPerCall;
+.Pp
+            err = getdirentriesattr(
+                dirFD, 
+                &attrList, 
+                &attrBuf, 
+                sizeof(attrBuf), 
+                &count, 
+                &junkBaseP, 
+                &newState, 
+                0
+            );
+            if (err < 0) {
+                err = errno;
+            } else {
+                done = err;
+                err = 0;
+            }
+.Pp
+            if (err == 0) {
+                if (oldStateValid) {
+                    if (newState != oldState) {
+                        printf("*** Directory has changed\en");
+                        oldState = newState;
+                    }
+                } else {
+                    oldState = newState;
+                    oldStateValid = true;
+                }
+.Pp
+                thisEntry = (FInfoAttrBuf *) attrBuf;
+.Pp
+                for (index = 0; index < count; index++) {
+                    switch (thisEntry->objType) {
+                        case VREG:
+                            printf(
+                                "'%4.4s' '%4.4s' ", 
+                                &thisEntry->finderInfo[0], 
+                                &thisEntry->finderInfo[4]
+                            );
+                            break;
+                        case VDIR:
+                            printf("directory     ");
+                            break;
+                        default:
+                            printf(
+                                "objType = %-2d  ", 
+                                thisEntry->objType
+                            );
+                            break;
+                    }
+                    printf(
+                        "%s\en", 
+                        ((char *) &thisEntry->name) 
+                            + thisEntry->name.attr_dataoffset
+                    );
+.Pp
+                    // Advance to the next entry.
+.Pp
+                    ((char *) thisEntry) += thisEntry->length;
+                }
+            }
+        } while ( err == 0 && ! done );
+    }
+.Pp
+    if (dirFD != -1) {
+        junk = close(dirFD);
+        assert(junk == 0);
+    }
+.Pp
+    return err;
+}
+.Ed
+.Pp
+.
+.Sh SEE ALSO
+.
+.Xr getattrlist 2 ,
+.Xr getdirentries 2 ,
+.Xr lseek 2
+.
+.Sh HISTORY
+A
+.Fn getdirentriesattr
+function call appeared in Darwin 1.3.1 (Mac OS X version 10.0).
+.

@@ -26,6 +26,9 @@
  *
  *	Mach object file loader API.
  *
+ * NOTE:	This header is only used by the kld code for loading 32 bit
+ *		kernel modules into a 32 bit mach_kernel.
+ *
  * HISTORY
  *  24-Aug-92	Doug Mitchell at NeXT
  *	Created.

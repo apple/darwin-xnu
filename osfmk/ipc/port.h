@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -69,9 +69,6 @@
  *	the same (unsigned) type as mach_port_name_t.
  */
 
-typedef mach_port_name_t mach_port_index_t;		/* index values */
-typedef mach_port_name_t mach_port_gen_t;		/* generation numbers */
-
 
 #define	MACH_PORT_UREFS_MAX	((mach_port_urefs_t) ((1 << 16) - 1))
 
@@ -81,6 +78,6 @@ typedef mach_port_name_t mach_port_gen_t;		/* generation numbers */
 		  (((urefs) + (delta)) > MACH_PORT_UREFS_MAX)))
 
 #define	MACH_PORT_UREFS_UNDERFLOW(urefs, delta)				\
-		(((delta) < 0) && (-(delta) > (urefs)))
+		(((delta) < 0) && (((mach_port_urefs_t)-(delta)) > (urefs)))
 
 #endif	/* _IPC_PORT_H_ */

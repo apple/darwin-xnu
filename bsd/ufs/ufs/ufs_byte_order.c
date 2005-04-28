@@ -339,11 +339,11 @@ byte_swap_dir_out(char *addr, int count)
 void
 byte_swap_dir_block_out(struct buf *bp)
 {
-	struct direct	*ep = (struct direct *) bp->b_data;
+	struct direct	*ep = (struct direct *) buf_dataptr(bp);
 	int		reclen, entryoffsetinblk = 0;
 
-	while (entryoffsetinblk < bp->b_bcount) {
-		ep = (struct direct *) (entryoffsetinblk + bp->b_data);
+	while (entryoffsetinblk < buf_count(bp)) {
+		ep = (struct direct *) (entryoffsetinblk + buf_dataptr(bp));
 		reclen = ep->d_reclen;
 		entryoffsetinblk += reclen;
 		byte_swap_int(ep->d_ino);

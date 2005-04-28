@@ -456,13 +456,6 @@
 #define busFIR 0x0A00
 #define busFIRrst 0x0A10
 
-;	GUS Mode Register
-#define GUSModeReg 0x0430
-#define GUSMdmapen 0x00008000
-#define GUSMstgtdis 0x00000080
-#define GUSMstgttim 0x00000038
-#define GUSMstgttoff 0x00000004
-
 ; PowerTune
 #define PowerTuneControlReg	0x0AA001
 #define PowerTuneStatusReg	0x408001
@@ -661,6 +654,13 @@
 #define	LOW_ADDR(x)	lo16(x)
 
 #endif	/* ASSEMBLER */
+
+/*	GUS Mode Register */
+#define GUSModeReg 0x0430
+#define GUSMdmapen 0x00008000
+#define GUSMstgtdis 0x00000080
+#define GUSMstgttim 0x00000038
+#define GUSMstgttoff 0x00000004
 
 /* Tags are placed before Immediately Following Code (IFC) for the debugger
  * to be able to deduce where to find various registers when backtracing

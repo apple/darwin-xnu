@@ -86,13 +86,13 @@ void AURPsndRIAck(state, m, flags)
 	AURPsend(m, AUD_AURP, state->rem_node);
 }
 
-/* funneled version of AURPsndRIReq */
-void AURPsndRIReq_funnel(state)
+/* locked version of AURPsndRIReq */
+void AURPsndRIReq_locked(state)
 	aurp_state_t *state;
 {
-        thread_funnel_set(network_flock, TRUE);
+	atalk_lock();
 	AURPsndRIReq(state);
-        thread_funnel_set(network_flock, FALSE);
+	atalk_unlock();
 }
 
 /* */
@@ -132,17 +132,17 @@ void AURPsndRIReq(state)
 	}
 
 	/* start the retry timer */
-	timeout(AURPsndRIReq_funnel, state, AURP_RetryInterval*HZ);
+	timeout(AURPsndRIReq_locked, state, AURP_RetryInterval*HZ);
 	state->rcv_tmo = 1;
 }
 
-/* funneled version of AURPsndRIRsp */
-void AURPsndRIRsp_funnel(state)
+/* locked version of AURPsndRIRsp */
+void AURPsndRIRsp_locked(state)
 	aurp_state_t *state;
 {
-        thread_funnel_set(network_flock, TRUE);
+	atalk_lock();
 	AURPsndRIRsp(state);
-        thread_funnel_set(network_flock, FALSE);
+	atalk_unlock();
 }
 
 /* */
@@ -170,7 +170,7 @@ void AURPsndRIRsp(state)
 		ATENABLE(s, aurpgen_lock);
 		msize = sizeof(aurp_hdr_t);
 		if ((m = (gbuf_t *)gbuf_alloc(msize+AURP_MaxPktSize, PRI_MED)) == 0) {
-			timeout(AURPsndRIRsp_funnel, state, AURP_RetryInterval*HZ);
+			timeout(AURPsndRIRsp_locked, state, AURP_RetryInterval*HZ);
 			state->snd_tmo = 1;
 			return;
 		}
@@ -198,7 +198,7 @@ void AURPsndRIRsp(state)
 	m = (gbuf_t *)gbuf_dupb(state->rsp_m);
 
 	/* start the retry timer */
-	timeout(AURPsndRIRsp_funnel, state, AURP_RetryInterval*HZ);
+	timeout(AURPsndRIRsp_locked, state, AURP_RetryInterval*HZ);
 	state->snd_tmo = 1;
 
 	if (msize == 0)
@@ -212,12 +212,12 @@ void AURPsndRIRsp(state)
         
 }
 
-void AURPsndRIUpd_funnel(state)
+void AURPsndRIUpd_locked(state)
 	aurp_state_t *state;
 {
-        thread_funnel_set(network_flock, TRUE);
+	atalk_lock();
 	AURPsndRIUpd(state);
-        thread_funnel_set(network_flock, FALSE);
+	atalk_unlock();
 }
 
 /* */
@@ -261,7 +261,7 @@ void AURPsndRIUpd(state)
 	m = (gbuf_t *)gbuf_dupb(state->upd_m);
 
 	/* start the retry timer */
-	timeout(AURPsndRIUpd_funnel, state, AURP_RetryInterval*HZ);
+	timeout(AURPsndRIUpd_locked, state, AURP_RetryInterval*HZ);
 	state->snd_tmo = 1;
 
 	if (msize == 0)
@@ -369,7 +369,7 @@ void AURPrcvRIRsp(state, m)
 	dPrintf(D_M_AURP, D_L_INFO, ("AURPrcvRIRsp: len=%ld\n", gbuf_len(m)));
 
 	/* cancel the retry timer */
-	untimeout(AURPsndRIReq_funnel, state);
+	untimeout(AURPsndRIReq_locked, state);
 	state->rcv_tmo = 0;
 
 	/* send RI ack */
@@ -472,13 +472,13 @@ void AURPrcvRIAck(state, m)
 
 		if (snd_state == AURPSTATE_WaitingForRIAck1) {
 			/* ack from the tunnel peer to our RI response */
-			untimeout(AURPsndRIRsp_funnel, state);
+			untimeout(AURPsndRIRsp_locked, state);
 			dat_m = state->rsp_m;
 			state->rsp_m = 0;
 			flag = 1;
 		} else {
 			/* ack from the tunnel peer to our RI update */
-			untimeout(AURPsndRIUpd_funnel, state);
+			untimeout(AURPsndRIUpd_locked, state);
 			dat_m = state->upd_m;
 			state->upd_m = 0;
 			flag = 2;

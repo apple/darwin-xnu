@@ -48,8 +48,8 @@
 
 #include <net/if.h>
 #include <net/route.h>
-#include <net/netisr.h>
 #include <kern/cpu_number.h>
+#include <kern/locks.h>
 
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
@@ -91,6 +91,7 @@
 
 #define IPLEN_FLIPPED
 
+extern lck_mtx_t *sadb_mutex;
 #if INET
 extern struct protosw inetsw[];
 
@@ -110,6 +111,7 @@ ah4_input(struct mbuf *m, int off)
 	int s;
 	size_t stripsiz = 0;
 
+	lck_mtx_lock(sadb_mutex);
 
 #ifndef PULLDOWN_TEST
 	if (m->m_len < off + sizeof(struct newah)) {
@@ -447,17 +449,9 @@ ah4_input(struct mbuf *m, int off)
 			ipsecstat.in_nomem++;
 			goto fail;
 		}
-
-		s = splimp();
-		if (IF_QFULL(&ipintrq)) {
-			ipsecstat.in_inval++;
-			splx(s);
-			goto fail;
-		}
-		IF_ENQUEUE(&ipintrq, m);
-		m = NULL;
-		schednetisr(NETISR_IP);	/*can be skipped but to make sure*/
-		splx(s);
+		lck_mtx_unlock(sadb_mutex);
+		proto_input(PF_INET, m);
+		lck_mtx_lock(sadb_mutex);
 		nxt = IPPROTO_DONE;
 	} else {
 		/*
@@ -531,7 +525,9 @@ ah4_input(struct mbuf *m, int off)
 				ipsecstat.in_polvio++;
 				goto fail;
 			}
-			(*ip_protox[nxt]->pr_input)(m, off);
+			lck_mtx_unlock(sadb_mutex);
+			ip_proto_dispatch_in(m, off, nxt, 0);
+			lck_mtx_lock(sadb_mutex);
 		} else
 			m_freem(m);
 		m = NULL;
@@ -543,6 +539,7 @@ ah4_input(struct mbuf *m, int off)
 		key_freesav(sav);
 	}
 	ipsecstat.in_success++;
+	lck_mtx_unlock(sadb_mutex);
 	return;
 
 fail:
@@ -551,6 +548,7 @@ fail:
 			printf("DP ah4_input call free SA:%p\n", sav));
 		key_freesav(sav);
 	}
+	lck_mtx_unlock(sadb_mutex);
 	if (m)
 		m_freem(m);
 	return;
@@ -577,14 +575,17 @@ ah6_input(mp, offp)
 	int s;
 	size_t stripsiz = 0;
 
+	lck_mtx_lock(sadb_mutex);
+
 #ifndef PULLDOWN_TEST
-	IP6_EXTHDR_CHECK(m, off, sizeof(struct ah), IPPROTO_DONE);
+	IP6_EXTHDR_CHECK(m, off, sizeof(struct ah), {lck_mtx_unlock(sadb_mutex);return IPPROTO_DONE;});
 	ah = (struct ah *)(mtod(m, caddr_t) + off);
 #else
 	IP6_EXTHDR_GET(ah, struct ah *, m, off, sizeof(struct newah));
 	if (ah == NULL) {
 		ipseclog((LOG_DEBUG, "IPv6 AH input: can't pullup\n"));
 		ipsec6stat.in_inval++;
+		lck_mtx_unlock(sadb_mutex);
 		return IPPROTO_DONE;
 	}
 #endif
@@ -662,7 +663,8 @@ ah6_input(mp, offp)
 		goto fail;
 	}
 #ifndef PULLDOWN_TEST
-	IP6_EXTHDR_CHECK(m, off, sizeof(struct ah) + sizoff + siz1, IPPROTO_DONE);
+	IP6_EXTHDR_CHECK(m, off, sizeof(struct ah) + sizoff + siz1, 
+		{lck_mtx_unlock(sadb_mutex);return IPPROTO_DONE;});
 #else
 	IP6_EXTHDR_GET(ah, struct ah *, m, off,
 		sizeof(struct ah) + sizoff + siz1);
@@ -748,7 +750,8 @@ ah6_input(mp, offp)
 		sizoff = (sav->flags & SADB_X_EXT_OLD) ? 0 : 4;
 
 		IP6_EXTHDR_CHECK(m, off, sizeof(struct ah) + sizoff + siz1
-				+ sizeof(struct ip6_hdr), IPPROTO_DONE);
+				+ sizeof(struct ip6_hdr), 
+				{lck_mtx_unlock(sadb_mutex);return IPPROTO_DONE;});
 
 		nip6 = (struct ip6_hdr *)((u_char *)(ah + 1) + sizoff + siz1);
 		if (!IN6_ARE_ADDR_EQUAL(&nip6->ip6_src, &ip6->ip6_src)
@@ -849,17 +852,9 @@ ah6_input(mp, offp)
 			ipsec6stat.in_nomem++;
 			goto fail;
 		}
-
-		s = splimp();
-		if (IF_QFULL(&ip6intrq)) {
-			ipsec6stat.in_inval++;
-			splx(s);
-			goto fail;
-		}
-		IF_ENQUEUE(&ip6intrq, m);
-		m = NULL;
-		schednetisr(NETISR_IPV6); /* can be skipped but to make sure */
-		splx(s);
+		lck_mtx_unlock(sadb_mutex);
+		proto_input(PF_INET6, m);
+		lck_mtx_lock(sadb_mutex);
 		nxt = IPPROTO_DONE;
 	} else {
 		/*
@@ -933,6 +928,7 @@ ah6_input(mp, offp)
 		key_freesav(sav);
 	}
 	ipsec6stat.in_success++;
+	lck_mtx_unlock(sadb_mutex);
 	return nxt;
 
 fail:
@@ -941,6 +937,7 @@ fail:
 			printf("DP ah6_input call free SA:%p\n", sav));
 		key_freesav(sav);
 	}
+	lck_mtx_unlock(sadb_mutex);
 	if (m)
 		m_freem(m);
 	return IPPROTO_DONE;
@@ -1007,6 +1004,7 @@ ah6_ctlinput(cmd, sa, d)
 			 */
 			sa6_src = ip6cp->ip6c_src;
 			sa6_dst = (struct sockaddr_in6 *)sa;
+			lck_mtx_lock(sadb_mutex);
 			sav = key_allocsa(AF_INET6,
 					  (caddr_t)&sa6_src->sin6_addr,
 					  (caddr_t)&sa6_dst->sin6_addr,
@@ -1017,6 +1015,7 @@ ah6_ctlinput(cmd, sa, d)
 					valid++;
 				key_freesav(sav);
 			}
+			lck_mtx_unlock(sadb_mutex);
 
 			/* XXX Further validation? */
 

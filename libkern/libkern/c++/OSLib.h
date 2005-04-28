@@ -41,7 +41,9 @@ __BEGIN_DECLS
 #include <sys/systm.h>
 
 #include <kern/assert.h>
+#ifdef	KERNEL_PRIVATE
 #include <kern/kalloc.h>
+#endif
 
 __END_DECLS
 

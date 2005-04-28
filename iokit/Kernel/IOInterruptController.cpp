@@ -34,6 +34,7 @@
 #include <IOKit/IOLib.h>
 #include <IOKit/IOService.h>
 #include <IOKit/IOPlatformExpert.h>
+#include <IOKit/IODeviceTreeSupport.h>
 #include <IOKit/IOInterrupts.h>
 #include <IOKit/IOInterruptController.h>
 
@@ -66,6 +67,8 @@ IOReturn IOInterruptController::registerInterrupt(IOService *nub, int source,
   OSData            *vectorData;
   IOService         *originalNub;
   int               originalSource;
+  IOOptionBits      options;
+  bool              canBeShared, shouldBeShared, wasAlreadyRegisterd;
   
   interruptSources = nub->_interruptSources;
   vectorData = interruptSources[source].vectorData;
@@ -75,14 +78,22 @@ IOReturn IOInterruptController::registerInterrupt(IOService *nub, int source,
   // Get the lock for this vector.
   IOTakeLock(vector->interruptLock);
   
-  // If this vector is already in use, and can be shared,
+  // Check if the interrupt source can/should be shared.
+  canBeShared = vectorCanBeShared(vectorNumber, vector);
+  IODTGetInterruptOptions(nub, source, &options);
+  shouldBeShared = canBeShared && (options & kIODTInterruptShared);
+  wasAlreadyRegisterd = vector->interruptRegistered;
+  
+  // If the vector is registered and can not be shared return error.
+  if (wasAlreadyRegisterd && !canBeShared) {
+    IOUnlock(vector->interruptLock);
+    return kIOReturnNoResources;
+  }
+  
+  // If this vector is already in use, and can be shared (implied),
+  // or it is not registered and should be shared,
   // register as a shared interrupt.
-  if (vector->interruptRegistered) {
-    if (!vectorCanBeShared(vectorNumber, vector)) {
-      IOUnlock(vector->interruptLock);
-      return kIOReturnNoResources;
-    }
-    
+  if (wasAlreadyRegisterd || shouldBeShared) {
     // If this vector is not already shared, break it out.
     if (vector->sharedController == 0) {
       // Make the IOShareInterruptController instance
@@ -92,54 +103,57 @@ IOReturn IOInterruptController::registerInterrupt(IOService *nub, int source,
         return kIOReturnNoMemory;
       }
       
-      // Save the nub and source for the original consumer.
-      originalNub = vector->nub;
-      originalSource = vector->source;
-      
-      // Physically disable the interrupt, but mark it as being enables in the hardware.
-      // The interruptDisabledSoft now indicates the driver's request for enablement.
-      disableVectorHard(vectorNumber, vector);
-      vector->interruptDisabledHard = 0;
+      if (wasAlreadyRegisterd) {
+	// Save the nub and source for the original consumer.
+	originalNub = vector->nub;
+	originalSource = vector->source;
+	
+	// Physically disable the interrupt, but mark it as being enabled in the hardware.
+	// The interruptDisabledSoft now indicates the driver's request for enablement.
+	disableVectorHard(vectorNumber, vector);
+	vector->interruptDisabledHard = 0;
+      }
       
       // Initialize the new shared interrupt controller.
-      error = vector->sharedController->initInterruptController(this,
-                                                                vectorData);
+      error = vector->sharedController->initInterruptController(this, vectorData);
       // If the IOSharedInterruptController could not be initalized,
-      // put the original consumor's interrupt back to normal and
+      // if needed, put the original consumer's interrupt back to normal and
       // get rid of whats left of the shared controller.
       if (error != kIOReturnSuccess) {
-        enableInterrupt(originalNub, originalSource);
+	if (wasAlreadyRegisterd) enableInterrupt(originalNub, originalSource);
         vector->sharedController->release();
         vector->sharedController = 0;
         IOUnlock(vector->interruptLock);
         return error;
       }
       
-      // Try to register the original consumer on the shared controller.
-      error = vector->sharedController->registerInterrupt(originalNub,
-                                                          originalSource,
-                                                          vector->target,
-                                                          vector->handler,
-                                                          vector->refCon);
-      // If the original consumer could not be moved to the shared controller,
-      // put the original consumor's interrupt back to normal and
-      // get rid of whats left of the shared controller.
-      if (error != kIOReturnSuccess) {
-	// Save the driver's interrupt enablement state.
-	wasDisabledSoft = vector->interruptDisabledSoft;
-	
-	// Make the interrupt really hard disabled.
-	vector->interruptDisabledSoft = 1;
-	vector->interruptDisabledHard = 1;
-	
-	// Enable the original consumer's interrupt if needed.
-	if (!wasDisabledSoft) originalNub->enableInterrupt(originalSource);
-        enableInterrupt(originalNub, originalSource);
-	
-        vector->sharedController->release();
-        vector->sharedController = 0;
-        IOUnlock(vector->interruptLock);
-        return error;
+      // If there was an original consumer try to register it on the shared controller.
+      if (wasAlreadyRegisterd) {
+	error = vector->sharedController->registerInterrupt(originalNub,
+							    originalSource,
+							    vector->target,
+							    vector->handler,
+							    vector->refCon);
+	// If the original consumer could not be moved to the shared controller,
+	// put the original consumor's interrupt back to normal and
+	// get rid of whats left of the shared controller.
+	if (error != kIOReturnSuccess) {
+	  // Save the driver's interrupt enablement state.
+	  wasDisabledSoft = vector->interruptDisabledSoft;
+	  
+	  // Make the interrupt really hard disabled.
+	  vector->interruptDisabledSoft = 1;
+	  vector->interruptDisabledHard = 1;
+	  
+	  // Enable the original consumer's interrupt if needed.
+	  if (!wasDisabledSoft) originalNub->enableInterrupt(originalSource);
+	  enableInterrupt(originalNub, originalSource);
+	  
+	  vector->sharedController->release();
+	  vector->sharedController = 0;
+	  IOUnlock(vector->interruptLock);
+	  return error;
+	}
       }
       
       // Fill in vector with the shared controller's info.
@@ -149,12 +163,18 @@ IOReturn IOInterruptController::registerInterrupt(IOService *nub, int source,
       vector->target  = vector->sharedController;
       vector->refCon  = 0;
       
-      // Save the driver's interrupt enablement state.
-      wasDisabledSoft = vector->interruptDisabledSoft;
+      // If the interrupt was already registered,
+      // save the driver's interrupt enablement state.
+      if (wasAlreadyRegisterd) wasDisabledSoft = vector->interruptDisabledSoft;
+      else wasDisabledSoft = true;
+      
+      // Do any specific initalization for this vector if it has not yet been used.
+      if (!wasAlreadyRegisterd) initVector(vectorNumber, vector);
       
       // Make the interrupt really hard disabled.
       vector->interruptDisabledSoft = 1;
       vector->interruptDisabledHard = 1;
+      vector->interruptRegistered   = 1;
       
       // Enable the original consumer's interrupt if needed.
       if (!wasDisabledSoft) originalNub->enableInterrupt(originalSource);
@@ -388,6 +408,8 @@ OSMetaClassDefineReservedUnused(IOSharedInterruptController, 3);
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
+#define kIOSharedInterruptControllerDefaultVectors (128)
+
 IOReturn IOSharedInterruptController::initInterruptController(IOInterruptController *parentController, OSData *parentSource)
 {
   int      cnt, interruptType;
@@ -416,7 +438,7 @@ IOReturn IOSharedInterruptController::initInterruptController(IOInterruptControl
   }
   
   // Allocate the memory for the vectors
-  numVectors = 32; // For now a constant number.
+  numVectors = kIOSharedInterruptControllerDefaultVectors; // For now a constant number.
   vectors = (IOInterruptVector *)IOMalloc(numVectors * sizeof(IOInterruptVector));
   if (vectors == NULL) {
     IOFree(_interruptSources, sizeof(IOInterruptSource));
@@ -440,6 +462,7 @@ IOReturn IOSharedInterruptController::initInterruptController(IOInterruptControl
     }
   }
   
+  numVectors = 0; // reset the high water mark for used vectors
   vectorsRegistered = 0;
   vectorsEnabled = 0;
   controllerDisabled = 1;
@@ -462,9 +485,9 @@ IOReturn IOSharedInterruptController::registerInterrupt(IOService *nub,
   interruptSources = nub->_interruptSources;
   
   // Find a free vector.
-  vectorNumber = numVectors;
-  while (vectorsRegistered != numVectors) {
-    for (vectorNumber = 0; vectorNumber < numVectors; vectorNumber++) {
+  vectorNumber = kIOSharedInterruptControllerDefaultVectors;
+  while (vectorsRegistered != kIOSharedInterruptControllerDefaultVectors) {
+    for (vectorNumber = 0; vectorNumber < kIOSharedInterruptControllerDefaultVectors; vectorNumber++) {
       vector = &vectors[vectorNumber];
       
       // Get the lock for this vector.
@@ -477,11 +500,11 @@ IOReturn IOSharedInterruptController::registerInterrupt(IOService *nub,
       IOUnlock(vector->interruptLock);
     }
     
-    if (vectorNumber != numVectors) break;
+    if (vectorNumber != kIOSharedInterruptControllerDefaultVectors) break;
   }
   
   // Could not find a free one, so give up.
-  if (vectorNumber == numVectors) {
+  if (vectorNumber == kIOSharedInterruptControllerDefaultVectors) {
     return kIOReturnNoResources;
   }
   
@@ -502,12 +525,13 @@ IOReturn IOSharedInterruptController::registerInterrupt(IOService *nub,
   vector->target  = target;
   vector->refCon  = refCon;
   
-  // Get the vector ready.  It start soft disabled.
+  // Get the vector ready.  It starts off soft disabled.
   vector->interruptDisabledSoft = 1;
   vector->interruptRegistered   = 1;
   
   interruptState = IOSimpleLockLockDisableInterrupt(controllerLock);
-  vectorsRegistered++;
+  // Move the high water mark if needed
+  if (++vectorsRegistered > numVectors) numVectors = vectorsRegistered;
   IOSimpleLockUnlockEnableInterrupt(controllerLock, interruptState);
   
   IOUnlock(vector->interruptLock);
@@ -521,7 +545,7 @@ IOReturn IOSharedInterruptController::unregisterInterrupt(IOService *nub,
   long              vectorNumber;
   IOInterruptVector *vector;
   OSData            *vectorData;
-  IOInterruptState  interruptState;;
+  IOInterruptState  interruptState;
   
   interruptSources = nub->_interruptSources;
   vectorData = interruptSources[source].vectorData;
@@ -537,7 +561,7 @@ IOReturn IOSharedInterruptController::unregisterInterrupt(IOService *nub,
     return kIOReturnSuccess;
   }
   
-  // Soft disable the source.
+  // Soft disable the source and the controller too.
   disableInterrupt(nub, source);
   
   // Clear all the storage for the vector except for interruptLock.
@@ -556,6 +580,13 @@ IOReturn IOSharedInterruptController::unregisterInterrupt(IOService *nub,
   IOSimpleLockUnlockEnableInterrupt(controllerLock, interruptState);
   
   IOUnlock(vector->interruptLock);
+  
+  // Re-enable the controller if all vectors are enabled.
+  if (vectorsEnabled == vectorsRegistered) {
+    controllerDisabled = 0;
+    provider->enableInterrupt(0);
+  }
+  
   return kIOReturnSuccess;
 }
 

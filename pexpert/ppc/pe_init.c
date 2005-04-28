@@ -23,7 +23,6 @@
  * file: pe_init.c
  *    PPC platform expert initialization.
  */
-#include <mach/boot_info.h>
 #include <mach/time_value.h>
 #include <pexpert/protos.h>
 #include <pexpert/pexpert.h>

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -22,69 +22,47 @@
 #ifndef __IOKIT_SYSTEM_H
 #define __IOKIT_SYSTEM_H
 
+#ifndef __STDC_LIMIT_MACROS
+#define __STDC_LIMIT_MACROS
+#endif
+
 #include <sys/cdefs.h>
 
 __BEGIN_DECLS
 
 #include <mach/mach_types.h>
 #include <mach/mach_interface.h>
-#include <mach/etap.h>
-#include <mach/etap_events.h>
+#include <mach/memory_object_types.h>
 
 #include <stdarg.h>
+#include <stdint.h>
+#include <string.h>
 
-#if KERNEL_PRIVATE
 #include <IOKit/assert.h>  /* Must be before other includes of kern/assert.h */
-#include <kern/cpu_data.h>
+
+#include <kern/kern_types.h>
 #include <kern/thread.h>
-#include <kern/thread_act.h>
-#include <vm/pmap.h>
-#include <vm/vm_kern.h>
-#include <kern/kalloc.h>
+#include <kern/debug.h>
 #include <kern/task.h>
-#include <kern/time_out.h>
 #include <kern/sched_prim.h>
-#include <machine/spl.h>
-#include <kern/lock.h>
+#include <kern/locks.h>
 #include <kern/queue.h>
 #include <kern/ipc_mig.h>
+#ifndef MACH_KERNEL_PRIVATE
+#include <libkern/libkern.h>
+#endif
+
+#ifdef	KERNEL_PRIVATE
+#include <kern/kalloc.h>
+#include <vm/pmap.h>
+#include <vm/vm_map.h>
+#include <vm/vm_kern.h>
 #endif /* KERNEL_PRIVATE */
 
-extern int	bcmp(const void *, const void *, size_t);
-extern void	bcopy(const void *, void *, size_t);
-extern void	bzero(void *, size_t);
-
-extern int	memcmp(const void *, const void *, size_t);
 
 extern void	_doprnt( const char *format, va_list *arg,
 			void (*putc)(char), int radix );
 
-extern int 	sscanf(const char *input, const char *fmt, ...);
-extern int 	sprintf(char *s, const char *format, ...);
-extern long 	strtol(const char *, char **, int);
-extern unsigned long strtoul(const char *, char **, int);
-extern long long strtoq(const char *, char **, int);
-extern unsigned long long strtouq(const char *, char **, int);
-
-extern
-#ifdef __GNUC__
-volatile
-#endif
-void panic(const char * msg, ...);
-
-/*
- */
-
-/*
- * Really need a set of interfaces from osfmk/pexpert components to do
- * all that is required to prepare an I/O from a cache management point
- * of view.
- * osfmk/ppc/cache.s
- */
-extern void invalidate_icache(vm_offset_t addr, unsigned cnt, int phys);
-extern void flush_dcache(vm_offset_t addr, unsigned count, int phys);
-extern void invalidate_icache64(addr64_t addr, unsigned cnt, int phys);
-extern void flush_dcache64(addr64_t addr, unsigned count, int phys);
 
 __END_DECLS
 

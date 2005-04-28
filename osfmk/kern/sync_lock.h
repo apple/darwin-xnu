@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -35,10 +35,6 @@
 
 #include <mach/mach_types.h>
 
-#include <sys/appleapiopts.h>
-
-#ifdef	__APPLE_API_PRIVATE
-
 #ifdef	MACH_KERNEL_PRIVATE
 
 #include <kern/wait_queue.h>
@@ -54,7 +50,7 @@ typedef struct ulock {
 	decl_mutex_data(,lock)		/* ulock lock			    */
 
 	struct lock_set *lock_set;	/* the retaining lock set	    */
-	thread_act_t	holder;		/* thread_act that holds the lock   */
+	thread_t	holder;		/* thread that holds the lock   */
 	unsigned int			/* flags                            */
 	/* boolean_t */ blocked:1,	/*     did threads block waiting?   */
 	/* boolean_t */	unstable:1,	/*     unstable? (holder died)	    */
@@ -89,60 +85,30 @@ typedef struct lock_set {
  *  Data structure internal lock macros
  */
 
-#define lock_set_lock_init(ls)		mutex_init(&(ls)->lock, \
-						   ETAP_THREAD_LOCK_SET)
+#define lock_set_lock_init(ls)		mutex_init(&(ls)->lock, 0)
 #define lock_set_lock(ls)		mutex_lock(&(ls)->lock)
 #define lock_set_unlock(ls)		mutex_unlock(&(ls)->lock)
 
-#define ulock_lock_init(ul)		mutex_init(&(ul)->lock, \
-						   ETAP_THREAD_ULOCK)
+#define ulock_lock_init(ul)		mutex_init(&(ul)->lock, 0)
 #define ulock_lock(ul)			mutex_lock(&(ul)->lock)
 #define ulock_unlock(ul)		mutex_unlock(&(ul)->lock)
 
 extern void lock_set_init(void);
 
-extern	kern_return_t	lock_release_internal	(ulock_t ulock,
-						 thread_act_t thr_act);
+extern	kern_return_t	ulock_release_internal(
+					ulock_t		ulock,
+					thread_t	thread);
 
-#endif	/* MACH_KERNEL_PRIVATE */
+extern	kern_return_t	lock_make_unstable(
+					ulock_t 	ulock, 
+					thread_t 	thread);
 
-#endif	/* __APPLE_API_PRIVATE */
-
-
-/*
- *	Forward Declarations
- */
-
-extern	kern_return_t	lock_set_create	     	(task_t task,
-						 lock_set_t *new_lock_set,
-						 int n_ulocks,
-						 int policy);
-
-extern	kern_return_t	lock_set_destroy     	(task_t task,
-						 lock_set_t lock_set);
-
-extern	kern_return_t	lock_acquire   	     	(lock_set_t lock_set,
-						 int lock_id);
-
-extern	kern_return_t	lock_release	     	(lock_set_t lock_set,
-						 int lock_id);
-
-extern	kern_return_t	lock_try	     	(lock_set_t lock_set,
-						 int lock_id);
-
-extern	kern_return_t	lock_make_stable	(lock_set_t lock_set,
-						 int lock_id);	       
-
-extern  kern_return_t	lock_make_unstable	(ulock_t ulock,
-						 thread_act_t thr_act);
-
-extern	kern_return_t	lock_handoff		(lock_set_t lock_set,
-						 int lock_id);
-
-extern	kern_return_t	lock_handoff_accept	(lock_set_t lock_set,
-						 int lock_id);
+extern	void	ulock_release_all(
+					thread_t	thread);
 
 extern	void		lock_set_reference	(lock_set_t lock_set);
 extern	void		lock_set_dereference	(lock_set_t lock_set);
+
+#endif	/* MACH_KERNEL_PRIVATE */
 
 #endif /* _KERN_SYNC_LOCK_H_ */

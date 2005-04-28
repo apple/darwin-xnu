@@ -59,7 +59,7 @@
 #define	_RADIX_H_
 #include <sys/appleapiopts.h>
 
-#if !defined(KERNEL) || defined(__APPLE_API_PRIVATE)
+#ifdef PRIVATE
 
 #ifdef MALLOC_DECLARE
 MALLOC_DECLARE(M_RTABLE);
@@ -104,14 +104,6 @@ struct radix_node {
 #define	rn_left		rn_u.rn_node.rn_L
 #define	rn_right	rn_u.rn_node.rn_R
 
-#if 0
-/* for backward compatibility with previous definitions */
-#define rn_p 		rn_parent
-#define rn_b 		rn_bit
-#define rn_off 		rn_offset
-#define rn_l 		rn_left
-#define rn_r 		rn_right
-#endif
 /*
  * Annotations to tree concerning potential routes applying to subtrees.
  */
@@ -141,35 +133,35 @@ struct radix_mask {
 
 #define MKFree(m) { (m)->rm_mklist = rn_mkfreelist; rn_mkfreelist = (m);}
 
-typedef int walktree_f_t __P((struct radix_node *, void *));
+typedef int walktree_f_t(struct radix_node *, void *);
 
 struct radix_node_head {
 	struct	radix_node *rnh_treetop;
 	int	rnh_addrsize;		/* permit, but not require fixed keys */
 	int	rnh_pktsize;		/* permit, but not require fixed keys */
 	struct	radix_node *(*rnh_addaddr)	/* add based on sockaddr */
-		__P((void *v, void *mask,
-		     struct radix_node_head *head, struct radix_node nodes[]));
+		(void *v, void *mask,
+		     struct radix_node_head *head, struct radix_node nodes[]);
 	struct	radix_node *(*rnh_addpkt)	/* add based on packet hdr */
-		__P((void *v, void *mask,
-		     struct radix_node_head *head, struct radix_node nodes[]));
+		(void *v, void *mask,
+		     struct radix_node_head *head, struct radix_node nodes[]);
 	struct	radix_node *(*rnh_deladdr)	/* remove based on sockaddr */
-		__P((void *v, void *mask, struct radix_node_head *head));
+		(void *v, void *mask, struct radix_node_head *head);
 	struct	radix_node *(*rnh_delpkt)	/* remove based on packet hdr */
-		__P((void *v, void *mask, struct radix_node_head *head));
+		(void *v, void *mask, struct radix_node_head *head);
 	struct	radix_node *(*rnh_matchaddr)	/* locate based on sockaddr */
-		__P((void *v, struct radix_node_head *head));
+		(void *v, struct radix_node_head *head);
 	struct	radix_node *(*rnh_lookup)	/* locate based on sockaddr */
-		__P((void *v, void *mask, struct radix_node_head *head));
+		(void *v, void *mask, struct radix_node_head *head);
 	struct	radix_node *(*rnh_matchpkt)	/* locate based on packet hdr */
-		__P((void *v, struct radix_node_head *head));
+		(void *v, struct radix_node_head *head);
 	int	(*rnh_walktree)			/* traverse tree */
-		__P((struct radix_node_head *head, walktree_f_t *f, void *w));
+		(struct radix_node_head *head, walktree_f_t *f, void *w);
 	int	(*rnh_walktree_from)		/* traverse tree below a */
-		__P((struct radix_node_head *head, void *a, void *m,
-		     walktree_f_t *f, void *w));
+		(struct radix_node_head *head, void *a, void *m,
+		     walktree_f_t *f, void *w);
 	void	(*rnh_close)	/* do something when the last ref drops */
-		__P((struct radix_node *rn, struct radix_node_head *head));
+		(struct radix_node *rn, struct radix_node_head *head);
 	struct	radix_node rnh_nodes[3];	/* empty tree for common case */
 };
 
@@ -178,26 +170,25 @@ struct radix_node_head {
 #define Bcopy(a, b, n) bcopy(((char *)(a)), ((char *)(b)), (unsigned)(n))
 #define Bzero(p, n) bzero((char *)(p), (int)(n));
 #define R_Malloc(p, t, n) (p = (t) malloc((unsigned int)(n)))
-#define Free(p) free((char *)p);
+#define R_Free(p) free((char *)p);
 #else
 #define Bcmp(a, b, n) bcmp(((caddr_t)(a)), ((caddr_t)(b)), (unsigned)(n))
 #define Bcopy(a, b, n) bcopy(((caddr_t)(a)), ((caddr_t)(b)), (unsigned)(n))
 #define Bzero(p, n) bzero((caddr_t)(p), (unsigned)(n));
 #define R_Malloc(p, t, n) (p = (t) _MALLOC((unsigned long)(n), M_RTABLE, M_WAITOK))
-#define Free(p) FREE((caddr_t)p, M_RTABLE);
+#define R_Free(p) FREE((caddr_t)p, M_RTABLE);
 #endif /*KERNEL*/
 
-void	 rn_init __P((void));
-int	 rn_inithead __P((void **, int));
-int	 rn_refines __P((void *, void *));
+void	 rn_init(void);
+int	 rn_inithead(void **, int);
+int	 rn_refines(void *, void *);
 struct radix_node
-	 *rn_addmask __P((void *, int, int)),
-	 *rn_addroute __P((void *, void *, struct radix_node_head *,
-			struct radix_node [2])),
-	 *rn_delete __P((void *, void *, struct radix_node_head *)),
-	 *rn_lookup __P((void *v_arg, void *m_arg,
-		        struct radix_node_head *head)),
-	 *rn_match __P((void *, struct radix_node_head *));
+	 *rn_addmask(void *, int, int),
+	 *rn_addroute(void *, void *, struct radix_node_head *,
+			struct radix_node [2]),
+	 *rn_delete(void *, void *, struct radix_node_head *),
+	 *rn_lookup(void *v_arg, void *m_arg, struct radix_node_head *head),
+	 *rn_match(void *, struct radix_node_head *);
 
-#endif /* __APPLE_API_PRIVATE || !KERNEL */
+#endif /* PRIVATE */
 #endif /* _RADIX_H_ */

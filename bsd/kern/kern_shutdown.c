@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -30,13 +30,12 @@
 #include <sys/systm.h>
 #include <sys/kernel.h>
 #include <sys/vm.h>
-#include <sys/proc.h>
+#include <sys/proc_internal.h>
 #include <sys/user.h>
-#include <sys/buf.h>
 #include <sys/reboot.h>
 #include <sys/conf.h>
-#include <sys/vnode.h>
-#include <sys/file.h>
+#include <sys/vnode_internal.h>
+#include <sys/file_internal.h>
 #include <sys/clist.h>
 #include <sys/callout.h>
 #include <sys/mbuf.h>
@@ -55,7 +54,9 @@
 #include <vm/vm_kern.h>
 #include <mach/vm_param.h>
 #include <sys/filedesc.h>
+#include <mach/host_priv.h>
 #include <mach/host_reboot.h>
+
 #include <bsm/audit_kernel.h>
 
 int	waittime = -1;
@@ -70,6 +71,7 @@ boot(paniced, howto, command)
 	struct proc *p = current_proc();	/* XXX */
 	int hostboot_option=0;
 	int funnel_state;
+	struct proc  *launchd_proc;
 
 	static void proc_shutdown();
     extern void md_prepare_for_shutdown(int paniced, int howto, char * command);
@@ -96,24 +98,28 @@ boot(paniced, howto, command)
 
 		sync(p, (void *)NULL, (int *)NULL);
 
-		/* Release vnodes from the VM object cache */	 
-		ubc_unmountall();
+		/*
+		 * Now that all processes have been  termianted and system is sync'ed up, 
+		 * suspend launchd
+		 */
 
-		IOSleep( 1 * 1000 );
+		launchd_proc = pfind(1);
+		if (launchd_proc && p != launchd_proc) {
+			task_suspend(launchd_proc->task);
+		}
 
 		/*
 		 * Unmount filesystems
 		 */
-		if (panicstr == 0)
-			vfs_unmountall();
+		vfs_unmountall();
 
 		/* Wait for the buffer cache to clean remaining dirty buffers */
-		for (iter = 0; iter < 20; iter++) {
+		for (iter = 0; iter < 100; iter++) {
 			nbusy = count_busy_buffers();
 			if (nbusy == 0)
 				break;
 			printf("%d ", nbusy);
-			IOSleep( 4 * nbusy );
+			IOSleep( 1 * nbusy );
 		}
 		if (nbusy)
 			printf("giving up\n");
@@ -135,6 +141,16 @@ boot(paniced, howto, command)
 	if (paniced == RB_PANIC)
 		hostboot_option = HOST_REBOOT_HALT;
 
+	/*
+	 * if we're going to power down due to a halt,
+	 * give the disks a chance to finish getting
+	 * the track cache flushed to the media... 
+	 * unfortunately, some of our earlier drives
+	 * don't properly hold off on returning 
+	 * from the track flush command (issued by
+	 * the unmounts) until it's actully fully
+	 * committed.
+	 */
 	if (hostboot_option == HOST_REBOOT_HALT)
 	        IOSleep( 1 * 1000 );
 
@@ -161,6 +177,7 @@ proc_shutdown()
 	struct proc	*p, *self;
 	struct vnode	**cdirp, **rdirp, *vp;
 	int		restart, i, TERM_catch;
+	int delayterm = 0;
 
 	/*
 	 *	Kill as many procs as we can.  (Except ourself...)
@@ -168,11 +185,13 @@ proc_shutdown()
 	self = (struct proc *)current_proc();
 	
 	/*
-	 * Suspend /etc/init
+	 * Signal the init with SIGTERM so that he does not launch
+	 * new processes 
 	 */
 	p = pfind(1);
-	if (p && p != self)
-		task_suspend(p->task);		/* stop init */
+	if (p && p != self) {
+		psignal(p, SIGTERM);
+	}
 
 	printf("Killing all processes ");
 
@@ -181,14 +200,18 @@ proc_shutdown()
 	 */
 sigterm_loop:
 	for (p = allproc.lh_first; p; p = p->p_list.le_next) {
-	        if (((p->p_flag&P_SYSTEM) == 0) && (p->p_pptr->p_pid != 0) && (p != self) && (p->p_shutdownstate == 0)) {
+	        if (((p->p_flag&P_SYSTEM) == 0) && (p->p_pptr->p_pid != 0) && (p != self) && (p->p_stat != SZOMB) && (p->p_shutdownstate == 0)) {
+
+			if ((delayterm == 0) && ((p->p_lflag& P_LDELAYTERM) == P_LDELAYTERM)) {
+				continue;
+			}
 		        if (p->p_sigcatch & sigmask(SIGTERM)) {
-			        p->p_shutdownstate = 1;
+					p->p_shutdownstate = 1;
 			        psignal(p, SIGTERM);
 
 				goto sigterm_loop;
-			}
 		}
+	}
 	}
 	/*
 	 * now wait for up to 30 seconds to allow those procs catching SIGTERM
@@ -201,23 +224,26 @@ sigterm_loop:
 		 * and then check to see if the tasks that were sent a
 		 * SIGTERM have exited
 		 */
-	        IOSleep(100);   
+		IOSleep(100);   
 		TERM_catch = 0;
 
-	        for (p = allproc.lh_first; p; p = p->p_list.le_next) {
-		        if (p->p_shutdownstate == 1)
-			        TERM_catch++;
+		for (p = allproc.lh_first; p; p = p->p_list.le_next) {
+			if (p->p_shutdownstate == 1) {
+				TERM_catch++;
+			}
 		}
 		if (TERM_catch == 0)
 		        break;
 	}
 	if (TERM_catch) {
-	        /*
+		/*
 		 * log the names of the unresponsive tasks
 		 */
+
 	        for (p = allproc.lh_first; p; p = p->p_list.le_next) {
-		        if (p->p_shutdownstate == 1)
+			if (p->p_shutdownstate == 1) {
 				  printf("%s[%d]: didn't act on SIGTERM\n", p->p_comm, p->p_pid);
+			}
 		}
 		IOSleep(1000 * 5);
 	}
@@ -227,10 +253,13 @@ sigterm_loop:
 	 */
 sigkill_loop:
 	for (p = allproc.lh_first; p; p = p->p_list.le_next) {
-	        if (((p->p_flag&P_SYSTEM) == 0) && (p->p_pptr->p_pid != 0) && (p != self) && (p->p_shutdownstate != 2)) {
-		        psignal(p, SIGKILL);
+	        if (((p->p_flag&P_SYSTEM) == 0) && (p->p_pptr->p_pid != 0) && (p != self) && (p->p_stat != SZOMB) && (p->p_shutdownstate != 2)) {
+
+			if ((delayterm == 0) && ((p->p_lflag& P_LDELAYTERM) == P_LDELAYTERM)) {
+				continue;
+			}
+			psignal(p, SIGKILL);
 			p->p_shutdownstate = 2;
-			
 			goto sigkill_loop;
 		}
 	}
@@ -241,7 +270,7 @@ sigkill_loop:
 		IOSleep(200);  /* double the time from 100 to 200 for NFS requests in particular */
 
 	        for (p = allproc.lh_first; p; p = p->p_list.le_next) {
-		        if (p->p_shutdownstate == 2)
+				if (p->p_shutdownstate == 2)
 			        break;
 		}
 		if (!p)
@@ -253,7 +282,8 @@ sigkill_loop:
 	 */
 	p = allproc.lh_first;
 	while (p) {
-	        if ((p->p_flag&P_SYSTEM) || (p->p_pptr->p_pid == 0) || (p == self)) {
+	        if ((p->p_flag&P_SYSTEM) || (!delayterm && ((p->p_lflag& P_LDELAYTERM))) 
+				|| (p->p_pptr->p_pid == 0) || (p == self)) {
 		        p = p->p_list.le_next;
 		}
 		else {
@@ -264,12 +294,11 @@ sigkill_loop:
 			 * understand the sig_lock.  This needs to be fixed.
 			 * XXX
 			 */
-		        if (p->exit_thread) {	/* someone already doing it */
-						/* give him a chance */
-			        thread_block(THREAD_CONTINUE_NULL);
-			}
-			else {
-			        p->exit_thread = current_act();
+			if (p->exit_thread) {	/* someone already doing it */
+				/* give him a chance */
+				thread_block(THREAD_CONTINUE_NULL);
+			} else {
+				p->exit_thread = current_thread();
 				printf(".");
 				exit1(p, 1, (int *)NULL);
 			}
@@ -277,28 +306,13 @@ sigkill_loop:
 		}
 	}
 	printf("\n");
-	/*
-	 *	Forcibly free resources of what's left.
-	 */
-#ifdef notyet
-	p = allproc.lh_first;
-	while (p) {
-	/*
-	 * Close open files and release open-file table.
-	 * This may block!
-	 */
 
-	/* panics on reboot due to "zfree: non-allocated memory in collectable zone" message */
-	fdfree(p);
-	p = p->p_list.le_next;
+
+	/* Now start the termination of processes that are marked for delayed termn */
+	if (delayterm == 0) {
+		delayterm = 1;
+		goto  sigterm_loop;
 	}
-#endif /* notyet */
-	/* Wait for the reaper thread to run, and clean up what we have done 
-	 * before we proceed with the hardcore shutdown. This reduces the race
-	 * between kill_tasks and the reaper thread.
-	 */
-	/* thread_wakeup(&reaper_queue); */
-	/*	IOSleep( 1 * 1000);      */
 	printf("continuing\n");
 }
 

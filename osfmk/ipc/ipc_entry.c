@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -119,7 +119,8 @@ ipc_entry_tree_collision(
 	ipc_splay_tree_bounds(&space->is_tree, name, &lower, &upper);
 
 	index = MACH_PORT_INDEX(name);
-	return (((lower != ~0) && (MACH_PORT_INDEX(lower) == index)) ||
+	return (((lower != (mach_port_name_t)~0) && 
+		 (MACH_PORT_INDEX(lower) == index)) ||
 		((upper != 0) && (MACH_PORT_INDEX(upper) == index)));
 }
 
@@ -535,7 +536,6 @@ ipc_entry_dealloc(
 			ipc_tree_entry_t tentry;
 			mach_port_name_t tname;
 			boolean_t pick;
-			ipc_entry_bits_t bits;
 			ipc_object_t obj;
 
 			/* must move an entry from tree to table */
@@ -634,8 +634,8 @@ ipc_entry_dealloc(
 
 kern_return_t
 ipc_entry_grow_table(
-	ipc_space_t	space,
-	int		target_size)
+	ipc_space_t		space,
+	ipc_table_elems_t	target_size)
 {
 	ipc_entry_num_t osize, size, nsize, psize;
 

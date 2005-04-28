@@ -34,7 +34,7 @@
  *
  */
 
-
+#include <string.h>
 
 #if 0
 void *memcpy(void *dst, const void *src, unsigned int ulen)
@@ -43,7 +43,9 @@ void *memcpy(void *dst, const void *src, unsigned int ulen)
 	return dst;
 }
 #endif /* 0 */
-void *memmove(void *dst, const void *src, unsigned int ulen)
+
+void *
+memmove(void *dst, const void *src, size_t ulen)
 {
 	bcopy(src, dst, ulen);
 	return dst;

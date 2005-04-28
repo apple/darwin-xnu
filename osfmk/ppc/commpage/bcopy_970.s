@@ -25,7 +25,6 @@
  *
  * Version of 6/11/2003, tuned for the IBM 970.
  *
- *
  * Register usage.  Note the rather delicate way we assign multiple uses
  * to the same register.  Beware.
  *   r0  = temp (NB: cannot use r0 for any constant such as "c16")
@@ -74,8 +73,22 @@
 #include <machine/commpage.h>
 
         .text
-        .globl	EXT(bcopy_970)
-
+/*
+ * WARNING: this code is written for 32-bit mode, and ported by the kernel if necessary
+ * to 64-bit mode for use in the 64-bit commpage.  This "port" consists of the following
+ * simple transformations:
+ *      - all word compares are changed to doubleword
+ *      - all "srwi[.]" opcodes are changed to "srdi[.]"                      
+ * Nothing else is done.  For this to work, the following rules must be
+ * carefully followed:
+ *      - do not use carry or overflow
+ *      - only use record mode if you are sure the results are mode-invariant
+ *        for example, all "andi." and almost all "rlwinm." are fine
+ *      - do not use "slwi", "slw", or "srw"
+ * An imaginative programmer could break the porting model in other ways, but the above
+ * are the most likely problem areas.  It is perhaps surprising how well in practice
+ * this simple method works.
+ */
 
 #define	kShort		64
 #define	kVeryLong	(128*1024)
@@ -347,7 +360,7 @@ LFwdLongVectors:
         lis		w3,kVeryLong>>16	// cutoff for very-long-operand special case path
         cmplw	cr1,rc,w3			// very long operand?
         rlwinm	w3,rc,0,28,31		// move last 0-15 byte count to w3
-        bgea--	cr1,_COMM_PAGE_BIGCOPY	// handle big copies separately
+        bge--	cr1,LBigCopy        // handle big copies separately
         mtctr	r0					// set up loop count
         cmpwi	cr6,w3,0			// set cr6 on leftover byte count
         oris	w4,rv,0xFFF8		// we use v0-v12
@@ -586,4 +599,23 @@ LReverseVecUnal:
         bne		cr6,LShortReverse16	// handle last 0-15 bytes iff any
         blr
 
-        COMMPAGE_DESCRIPTOR(bcopy_970,_COMM_PAGE_BCOPY,k64Bit+kHasAltivec,0,kCommPageMTCRF)
+        
+// Very Big Copy Path.  Save our return address in the stack for help decoding backtraces.
+// The conditions bigcopy expects are:
+//  r0 = return address (also stored in caller's SF)
+//	r4 = source ptr
+//	r5 = length (at least several pages)
+// r12 = dest ptr
+
+LBigCopy:
+		lis		r2,0x4000			// r2 <- 0x40000000
+        mflr    r0                  // get our return address
+		add.	r2,r2,r2			// set cr0_lt if running in 32-bit mode
+        stw     r0,8(r1)            // save return, assuming 32-bit mode ("crsave" if 64-bit mode)
+		blta	_COMM_PAGE_BIGCOPY  // 32-bit mode, join big operand copy
+		std		r0,16(r1)			// save return in correct spot for 64-bit mode
+        ba      _COMM_PAGE_BIGCOPY  // then join big operand code
+        
+
+	COMMPAGE_DESCRIPTOR(bcopy_970,_COMM_PAGE_BCOPY,k64Bit+kHasAltivec,0, \
+				kCommPageMTCRF+kCommPageBoth+kPort32to64)

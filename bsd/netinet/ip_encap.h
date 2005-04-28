@@ -54,8 +54,7 @@
 #define _NETINET_IP_ENCAP_H_
 #include <sys/appleapiopts.h>
 
-#ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
+#ifdef KERNEL_PRIVATE
 
 struct encaptab {
 	LIST_ENTRY(encaptab) chain;
@@ -65,23 +64,22 @@ struct encaptab {
 	struct sockaddr_storage srcmask;
 	struct sockaddr_storage dst;	/* remote addr */
 	struct sockaddr_storage dstmask;
-	int (*func) __P((const struct mbuf *, int, int, void *));
+	int (*func)(const struct mbuf *, int, int, void *);
 	const struct protosw *psw;	/* only pr_input will be used */
 	void *arg;			/* passed via m->m_pkthdr.aux */
 };
 
-void	encap_init __P((void));
-void	encap4_input __P((struct mbuf *, int));
-int	encap6_input __P((struct mbuf **, int *));
-const struct encaptab *encap_attach __P((int, int, const struct sockaddr *,
+void	encap_init(void);
+void	encap4_input(struct mbuf *, int);
+int	encap6_input(struct mbuf **, int *);
+const struct encaptab *encap_attach(int, int, const struct sockaddr *,
 	const struct sockaddr *, const struct sockaddr *,
-	const struct sockaddr *, const struct protosw *, void *));
-const struct encaptab *encap_attach_func __P((int, int,
-	int (*) __P((const struct mbuf *, int, int, void *)),
-	const struct protosw *, void *));
-int	encap_detach __P((const struct encaptab *));
-void	*encap_getarg __P((struct mbuf *));
-#endif /* __APPLE_API_PRIVATE */
-#endif
+	const struct sockaddr *, const struct protosw *, void *);
+const struct encaptab *encap_attach_func(int, int,
+	int (*)(const struct mbuf *, int, int, void *),
+	const struct protosw *, void *);
+int	encap_detach(const struct encaptab *);
+void	*encap_getarg(struct mbuf *);
+#endif KERNEL_PRIVATE
 
 #endif /*_NETINET_IP_ENCAP_H_*/

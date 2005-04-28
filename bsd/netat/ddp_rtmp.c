@@ -174,10 +174,15 @@ void trackrouter(ifID, net, node)
 void ddp_age_router(deadrouter)
      register struct routerinfo *deadrouter;
 {
-	register at_ifaddr_t *ourrouter = deadrouter->ifID;
-	boolean_t 	funnel_state;
+	register at_ifaddr_t *ourrouter;
 
-	funnel_state = thread_funnel_set(network_flock, TRUE);
+	atalk_lock();
+			
+	ourrouter = deadrouter->ifID;
+	if (ourrouter == NULL) {
+		atalk_unlock();
+		return;
+	}
         
 	dPrintf(D_M_RTMP, D_L_INFO, 
 		("ddp_age_router called deadrouter=%d:%d\n", NODE(deadrouter), NET(deadrouter)));
@@ -238,7 +243,7 @@ void ddp_age_router(deadrouter)
 	} else
 	        bzero((caddr_t) deadrouter, sizeof(struct routerinfo));
 
-        (void) thread_funnel_set(network_flock, FALSE);
+	atalk_unlock();
         
 } /* ddp_age_router */
 

@@ -26,6 +26,8 @@ EXPORT_MD_LIST	= setjmp.h
 
 EXPORT_MD_DIR = libsa/i386
 
+INSTALL_KF_MD_LIST = 
+
 include $(MakeInc_rule)
 include $(MakeInc_dir)
 

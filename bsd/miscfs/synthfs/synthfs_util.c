@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -34,16 +34,16 @@
 #include <sys/kernel.h>
 #include <sys/file.h>
 #include <sys/stat.h>
-#include <sys/buf.h>
 #include <sys/proc.h>
 #include <sys/conf.h>
-#include <sys/mount.h>
-#include <sys/vnode.h>
+#include <sys/mount_internal.h>
+#include <sys/vnode_internal.h>
 #include <sys/malloc.h>
 #include <sys/dirent.h>
 #include <sys/namei.h>
 #include <sys/attr.h>
 #include <sys/time.h>
+#include <sys/uio_internal.h>
 
 #include <sys/vm.h>
 #include <sys/errno.h>
@@ -62,25 +62,6 @@ struct synthfs_direntry_head {
 #define PATHSEPARATOR '/'
 #define ROOTDIRID 2
 
-void synthfs_setupuio(struct iovec *iov,
-					  struct uio *uio,
-					  void *buffer,
-					  size_t bufsize,
-					  enum uio_seg space,
-					  enum uio_rw direction,
-					  struct proc *p) {
-	iov->iov_base = (char *)buffer;
-	iov->iov_len = bufsize;
-	
-	uio->uio_iov = iov;
-	uio->uio_iovcnt = 1;
-	uio->uio_offset = 0;
-	uio->uio_resid = bufsize;
-	uio->uio_segflg = space;
-	uio->uio_rw = direction;
-	uio->uio_procp = p;
-}
-
 
 static int synthfs_insertnode(struct synthfsnode *newnode_sp, struct synthfsnode *parent_sp) {
 	struct timeval now;
@@ -91,25 +72,25 @@ static int synthfs_insertnode(struct synthfsnode *newnode_sp, struct synthfsnode
 	++parent_sp->s_u.d.d_entrycount;
 	newnode_sp->s_parent = parent_sp;
 	
-    parent_sp->s_nodeflags |= IN_CHANGE | IN_MODIFIED;
-    now = time;
-	VOP_UPDATE(STOV(parent_sp), &now, &now, 0);
+	parent_sp->s_nodeflags |= IN_CHANGE | IN_MODIFIED;
+	microtime(&now);
+	synthfs_update(STOV(parent_sp), &now, &now, 0);
 	
 	return 0;
 }
 
 
 
-static int synthfs_newnode(struct mount *mp, struct vnode *dp, const char *name, unsigned long nodeid, mode_t mode, struct proc *p, struct vnode **vpp) {
+static int synthfs_newnode(mount_t mp, vnode_t dp, const char *name, unsigned long nodeid,
+			   mode_t mode, __unused proc_t p, enum vtype vtype, vnode_t *vpp) {
 	int result;
     struct synthfsnode *sp;
 	struct vnode *vp;
     struct timeval now;
     char *nodename;
+	struct vnode_fsparam vfsp;
 
-    /* Allocate the synthfsnode now to avoid blocking between the call
-       to getnewvnode(), below, and the initialization of v_data: */
-    MALLOC(sp, struct synthfsnode *, sizeof(struct synthfsnode), M_SYNTHFS, M_WAITOK);
+     MALLOC(sp, struct synthfsnode *, sizeof(struct synthfsnode), M_SYNTHFS, M_WAITOK);
     
     if (name == NULL) {
         MALLOC(nodename, char *, 1, M_TEMP, M_WAITOK);
@@ -119,31 +100,12 @@ static int synthfs_newnode(struct mount *mp, struct vnode *dp, const char *name,
         strcpy(nodename, name);
     };
 
-	/*
-	   Note that getnewvnode() returns the vnode with a refcount of +1;
-	   this routine returns the newly created vnode with this positive refcount.
-	 */	
-    result = getnewvnode(VT_SYNTHFS, mp, synthfs_vnodeop_p, &vp);
-    if (result != 0) {
-        DBG_VOP(("getnewvnode failed with error code %d\n", result));
-	FREE(nodename, M_TEMP);
-        FREE(sp, M_TEMP);
-        return result;
-    }
-    if (vp == NULL) {
-        DBG_VOP(("getnewvnod returned NULL without an error!\n"));
-	FREE(nodename, M_TEMP);
-        FREE(sp, M_TEMP);
-        return EINVAL;
-    }
-
     /* Initialize the relevant synthfsnode fields: */
     bzero(sp, sizeof(*sp));
-    lockinit(&sp->s_lock, PINOD, "synthfsnode", 0, 0);
     sp->s_nodeid = nodeid;
     
     /* Initialize all times from a consistent snapshot of the clock: */
-    now = time;
+	microtime(&now);
     sp->s_createtime = now;
     sp->s_accesstime = now;
     sp->s_modificationtime = now;
@@ -151,11 +113,32 @@ static int synthfs_newnode(struct mount *mp, struct vnode *dp, const char *name,
     sp->s_name = nodename;
     sp->s_mode = mode;
 
-    sp->s_vp = vp;
-    vp->v_data = sp;
 
-    vget(vp, LK_EXCLUSIVE, p);
-    
+	//bzero(&vfsp, sizeof(struct vnode_fsparam));
+	vfsp.vnfs_mp = mp;
+	vfsp.vnfs_vtype = vtype;
+	vfsp.vnfs_str = "synthfs";
+	vfsp.vnfs_dvp = 0;
+	vfsp.vnfs_fsnode = sp;
+	vfsp.vnfs_cnp = 0;
+	vfsp.vnfs_vops = synthfs_vnodeop_p;
+	vfsp.vnfs_rdev = 0;
+	vfsp.vnfs_filesize = 0;
+	vfsp.vnfs_flags = VNFS_NOCACHE | VNFS_CANTCACHE;
+	vfsp.vnfs_marksystem = 0;
+	vfsp.vnfs_markroot = 0;
+
+	result = vnode_create(VNCREATE_FLAVOR, VCREATESIZE, &vfsp, &vp); 
+	if (result != 0) {
+	    DBG_VOP(("getnewvnode failed with error code %d\n", result));
+	    FREE(nodename, M_TEMP);
+	    FREE(sp, M_TEMP);
+	    return result;
+	}
+	vnode_ref(vp);
+
+    sp->s_vp = vp;
+
     /* If there's a parent directory, update its subnode structures to insert this new node: */
     if (dp) {
     	result = synthfs_insertnode(sp, VTOS(dp));
@@ -178,8 +161,8 @@ int synthfs_remove_entry(struct vnode *vp) {
 		--psp->s_u.d.d_entrycount;
 		
 		psp->s_nodeflags |= IN_CHANGE | IN_MODIFIED;
-		now = time;
-		VOP_UPDATE(STOV(psp), &now, &now, 0);
+		microtime(&now);
+		synthfs_update(STOV(psp), &now, &now, 0);
 	};
 	
     return 0;
@@ -219,15 +202,13 @@ int synthfs_new_directory(struct mount *mp, struct vnode *dp, const char *name, 
 	struct vnode *vp;
     struct synthfsnode *sp;
 	
-	result = synthfs_newnode(mp, dp, name, nodeid, mode, p, &vp);
+	result = synthfs_newnode(mp, dp, name, nodeid, mode, p, VDIR, &vp);
 	if (result) {
 		return result;
 	};
     sp = VTOS(vp);
     sp->s_linkcount = 2;
 	
-    /* Initialize the relevant vnode fields: */
-    vp->v_type = VDIR;
     if (dp) {
     	++VTOS(dp)->s_linkcount;					/* Account for the [fictitious] ".." link */
     };
@@ -251,6 +232,7 @@ int synthfs_remove_directory(struct vnode *vp) {
 	if (psp && (sp->s_type == SYNTHFS_DIRECTORY) && (psp != sp)) {
 		--psp->s_linkcount;					/* account for the [fictitious] ".." link now removed */
 	};
+	vnode_rele(vp);
 
 	/* Do the standard cleanup involved in pruning an entry from the filesystem: */
 	return synthfs_remove_entry(vp);			/* Do whatever standard cleanup is required */
@@ -271,16 +253,13 @@ int synthfs_new_symlink(
 	struct vnode *vp;
 	struct synthfsnode *sp;
 	
-	result = synthfs_newnode(mp, dp, name, nodeid, 0, p, &vp);
+	result = synthfs_newnode(mp, dp, name, nodeid, 0, p, VLNK,  &vp);
 	if (result) {
 		return result;
 	};
     sp = VTOS(vp);
     sp->s_linkcount = 1;
 	
-    /* Initialize the relevant vnode fields: */
-    vp->v_type = VLNK;
-    
     /* Set up the symlink-specific fields: */
     sp->s_type = SYNTHFS_SYMLINK;
     sp->s_u.s.s_length = strlen(targetstring);
@@ -298,6 +277,7 @@ int synthfs_remove_symlink(struct vnode *vp) {
 	struct synthfsnode *sp = VTOS(vp);
 	
 	FREE(sp->s_u.s.s_symlinktarget, M_TEMP);
+	vnode_rele(vp);
 
 	/* Do the standard cleanup involved in pruning an entry from the filesystem: */
 	return synthfs_remove_entry(vp);					/* Do whatever standard cleanup is required */
@@ -324,7 +304,7 @@ long synthfs_adddirentry(u_int32_t fileno, u_int8_t type, const char *name, stru
 	direntry.d_type = type;
 	direntry.d_namlen = namelength;
 
-    if (uio->uio_resid < direntry.d_reclen) {
+    if (uio_resid(uio) < direntry.d_reclen) {
         direntrylength = 0;
     } else {
         uiomove((caddr_t)(&direntry), sizeof(direntry), uio);

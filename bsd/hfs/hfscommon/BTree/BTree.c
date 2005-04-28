@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -1120,7 +1120,7 @@ ProcessData:
 	}
 	
 	while (err == 0) {
-		if (callBackProc(keyPtr, recordPtr, len, callBackState) == 0)
+		if (callBackProc(keyPtr, recordPtr, callBackState) == 0)
 			break;
 		
 		if ((index+1) < ((NodeDescPtr)node.buffer)->numRecords) {
@@ -1548,7 +1548,7 @@ BTUpdateRecord(FCB *filePtr, BTreeIterator *iterator,
 
 	btreePtr = (BTreeControlBlockPtr) filePtr->fcbBTCBPtr;
 
-	REQUIRE_FILE_LOCK(btreePtr->fileRefNum, false);
+	REQUIRE_FILE_LOCK(btreePtr->fileRefNum, true);
 
 	////////////////////////////// Take A Hint //////////////////////////////////
 
@@ -1571,7 +1571,7 @@ BTUpdateRecord(FCB *filePtr, BTreeIterator *iterator,
 				// XXXdbg
 				ModifyBlockStart(btreePtr->fileRefNum, &nodeRec);
 								
-				err = callBackProc(keyPtr, recordPtr, recordLen, callBackState);
+				err = callBackProc(keyPtr, recordPtr, callBackState);
 				M_ExitOnError (err);
 
 				err = UpdateNode (btreePtr, &nodeRec, 0, 0);
@@ -1606,7 +1606,7 @@ BTUpdateRecord(FCB *filePtr, BTreeIterator *iterator,
 	// XXXdbg
 	ModifyBlockStart(btreePtr->fileRefNum, &nodeRec);
 								
-	err = callBackProc(keyPtr, recordPtr, recordLen, callBackState);
+	err = callBackProc(keyPtr, recordPtr, callBackState);
 	M_ExitOnError (err);
 
 	err = UpdateNode (btreePtr, &nodeRec, 0, 0);
@@ -1786,7 +1786,7 @@ OSStatus	BTFlushPath				(FCB					*filePtr)
 
 	M_ReturnErrorIf (btreePtr == nil,	fsBTInvalidFileErr);
 
-	REQUIRE_FILE_LOCK(btreePtr->fileRefNum, false);
+	REQUIRE_FILE_LOCK(btreePtr->fileRefNum, true);
 
 	err = UpdateHeader (btreePtr, false);
 

@@ -1407,9 +1407,8 @@ getNumber(parser_state_t *state)
 {
 	unsigned long long n = 0;
 	int base = 10;
+	bool negate = false;
 	int c = currentChar();
-
-	if (!isDigit (c)) return 0;
 
 	if (c == '0') {
 		c = nextChar();
@@ -1419,9 +1418,16 @@ getNumber(parser_state_t *state)
 		}
 	}
 	if (base == 10) {
+		if (c == '-') {
+			negate = true;
+			c = nextChar();
+		}
 		while(isDigit(c)) {
 			n = (n * base + c - '0');
 			c = nextChar();
+		}
+		if (negate) {
+			n = (unsigned long long)((long long)n * (long long)-1);
 		}
 	} else {
 		while(isHexDigit(c)) {

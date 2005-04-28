@@ -37,9 +37,7 @@
 #ifndef	_SYS_LOADABLE_FS_
 #define _SYS_LOADABLE_FS_
 
-#include <sys/appleapiopts.h>
 
-#ifdef __APPLE_API_UNSTABLE
 /*
  * Constants for Loadabls FS Utilities (in "/System/Library/Filesystems")
  *
@@ -116,5 +114,4 @@
 #define	MNTOPT_FS		"filesystem=" /* e.g. "filesystem=DOS" */
 #define	MNTOPT_REMOVABLE	"removable"
 
-#endif /* __APPLE_API_UNSTABLE */
 #endif	/* _SYS_LOADABLE_FS_ */

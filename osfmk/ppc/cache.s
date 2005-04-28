@@ -273,3 +273,111 @@ cache_op_exit:
         beqlr--	cr5							// if using virtual addresses, no need to restore MSR
         b		EXT(ml_restore)				// restore MSR and return
 
+
+////////////////////////////////////////////////////
+
+        .align	5
+        .globl	_dcache_incoherent_io_store64
+_dcache_incoherent_io_store64:
+		rlwinm	r3,r3,0,1,0					; Duplicate high half of long long paddr into top of reg
+		rlwimi	r3,r4,0,0,31				; Combine bottom of long long to full 64-bits
+		mr		r4,r5						; Move count
+
+											// here with r3=addr, r4=count
+        mfsprg	r10,2						// r10 <- processor feature flags
+        andi.	r9,r10,pf32Byte+pf128Byte	// r9 <- cache line size
+        mtcrf	0x02,r10					// move pf64Bit bit to CR6
+        subi	r8,r9,1						// r8 <- (linesize-1)
+        
+        bf--	pf64Bitb,cache_ios_not64	// This is not a 64-bit machine
+       
+        srdi	r12,r3,31					// Slide bit 32 to bit 63
+        cmpldi	r12,1						// Are we in the I/O mapped area?
+        beqlr--								// No cache ops allowed here...
+        
+cache_ios_not64:
+        mflr	r12							// save return address
+        bl		EXT(ml_set_physical)		// turn on physical addressing
+        mtlr	r12							// restore return address
+
+        // get r3=first cache line, r4=first line not in set, r6=byte count
+        add		r7,r3,r4					// point to 1st byte not to operate on
+        andc	r3,r3,r8					// r3 <- 1st line to operate on
+        add		r4,r7,r8					// round up
+        andc	r4,r4,r8					// r4 <- 1st line not to operate on
+        sub.	r6,r4,r3					// r6 <- byte count to operate on
+        beq--	cache_ios_exit				// nothing to do
+        
+        sub.	r6,r6,r9					// >1 line?
+        beq		cache_ios_last_line			// use dcbst on all lines but last
+        
+        // DCBST loop
+cache_ios_5:
+        sub.	r6,r6,r9					// more to go?
+        dcbst	r6,r3						// store next line
+        bne		cache_ios_5					// loop if more to go
+
+cache_ios_last_line:
+        sync								// flush last line
+        isync
+        dcbf	r6,r3
+        sync
+        isync
+        add		r6,r6,r3
+        lwz		r0,0(r6)					// make sure the data reaches RAM (not just the memory controller)
+        isync
+
+        // restore MSR
+cache_ios_exit:
+        b		EXT(ml_restore)				// restore MSR and return
+
+
+////////////////////////////////////////////////////
+
+        .align	5
+        .globl	_dcache_incoherent_io_flush64
+_dcache_incoherent_io_flush64:
+		rlwinm	r3,r3,0,1,0					; Duplicate high half of long long paddr into top of reg
+		rlwimi	r3,r4,0,0,31				; Combine bottom of long long to full 64-bits
+		mr		r4,r5						; Move count
+
+											// here with r3=addr, r4=count
+        mfsprg	r10,2						// r10 <- processor feature flags
+        andi.	r9,r10,pf32Byte+pf128Byte	// r9 <- cache line size
+        mtcrf	0x02,r10					// move pf64Bit bit to CR6
+        subi	r8,r9,1						// r8 <- (linesize-1)
+        
+        bf--	pf64Bitb,cache_iof_not64	// This is not a 64-bit machine
+       
+        srdi	r12,r3,31					// Slide bit 32 to bit 63
+        cmpldi	r12,1						// Are we in the I/O mapped area?
+        beqlr--								// No cache ops allowed here...
+        
+cache_iof_not64:
+        mflr	r12							// save return address
+        bl		EXT(ml_set_physical)		// turn on physical addressing
+        mtlr	r12							// restore return address
+
+        // get r3=first cache line, r4=first line not in set, r6=byte count
+        add		r7,r3,r4					// point to 1st byte not to operate on
+        andc	r3,r3,r8					// r3 <- 1st line to operate on
+        add		r4,r7,r8					// round up
+        andc	r4,r4,r8					// r4 <- 1st line not to operate on
+        sub.	r6,r4,r3					// r6 <- byte count to operate on
+        beq--	cache_iof_exit				// nothing to do
+        
+        // DCBF loop
+cache_iof_5:
+        sub.	r6,r6,r9					// more to go?
+        dcbf	r6,r3						// store next line
+        bne		cache_iof_5					// loop if more to go
+
+cache_iof_last_line:
+        sync								// flush last line
+        isync
+
+        // restore MSR
+cache_iof_exit:
+        b		EXT(ml_restore)				// restore MSR and return
+
+

@@ -58,7 +58,7 @@
 #include <rev_endian_fs.h>
 #include <sys/param.h>
 #if REV_ENDIAN_FS
-#include <sys/mount.h>
+#include <sys/mount_internal.h>
 #endif /* REV_ENDIAN_FS */
 
 #ifndef KERNEL
@@ -67,7 +67,7 @@
 #else
 
 #include <sys/systm.h>
-#include <sys/vnode.h>
+#include <sys/vnode_internal.h>
 #include <sys/buf.h>
 #include <sys/quota.h>
 #include <ufs/ufs/quota.h>
@@ -84,14 +84,9 @@
  * directory "ip".  If "res" is non-zero, fill it in with a pointer to the
  * remaining space in the directory.
  */
+__private_extern__
 int
-ffs_blkatoff(ap)
-	struct vop_blkatoff_args /* {
-		struct vnode *a_vp;
-		off_t a_offset;
-		char **a_res;
-		struct buf **a_bpp;
-	} */ *ap;
+ffs_blkatoff(vnode_t vp, off_t offset, char **res, buf_t *bpp)
 {
 	struct inode *ip;
 	register struct fs *fs;
@@ -99,28 +94,28 @@ ffs_blkatoff(ap)
 	ufs_daddr_t lbn;
 	int bsize, error;
 #if REV_ENDIAN_FS
-	struct mount *mp=(ap->a_vp)->v_mount;
+	struct mount *mp = vnode_mount(vp);
 	int rev_endian=(mp->mnt_flag & MNT_REVEND);
 #endif /* REV_ENDIAN_FS */
 
-	ip = VTOI(ap->a_vp);
+	ip = VTOI(vp);
 	fs = ip->i_fs;
-	lbn = lblkno(fs, ap->a_offset);
+	lbn = lblkno(fs, offset);
 	bsize = blksize(fs, ip, lbn);
 
-	*ap->a_bpp = NULL;
-	if (error = bread(ap->a_vp, lbn, bsize, NOCRED, &bp)) {
-		brelse(bp);
+	*bpp = NULL;
+	if (error = (int)buf_bread(vp, (daddr64_t)((unsigned)lbn), bsize, NOCRED, &bp)) {
+		buf_brelse(bp);
 		return (error);
 	}
 #if	REV_ENDIAN_FS
 	if (rev_endian)
-		byte_swap_dir_block_in(bp->b_data, bp->b_bcount);
+		byte_swap_dir_block_in((char *)buf_dataptr(bp), buf_count(bp));
 #endif	/* REV_ENDIAN_FS */
 
-	if (ap->a_res)
-		*ap->a_res = (char *)bp->b_data + blkoff(fs, ap->a_offset);
-	*ap->a_bpp = bp;
+	if (res)
+		*res = (char *)buf_dataptr(bp) + blkoff(fs, offset);
+	*bpp = bp;
 	return (0);
 }
 #endif
@@ -160,59 +155,6 @@ ffs_fragacct(fs, fragmap, fraglist, cnt)
 	}
 }
 
-#if defined(KERNEL) && DIAGNOSTIC
-void
-ffs_checkoverlap(bp, ip)
-	struct buf *bp;
-	struct inode *ip;
-{
-	register struct buf *ebp, *ep;
-	register ufs_daddr_t start, last;
-	struct vnode *vp;
-#ifdef NeXT
-	int devBlockSize=0;
-#endif /* NeXT */
-
-	ebp = &buf[nbuf];
-	start = bp->b_blkno;
-#ifdef NeXT
-	VOP_DEVBLOCKSIZE(ip->i_devvp,&devBlockSize);
-	last = start + btodb(bp->b_bcount, devBlockSize) - 1;
-#else
-	last = start + btodb(bp->b_bcount) - 1;
-#endif /* NeXT */
-	for (ep = buf; ep < ebp; ep++) {
-		if (ep == bp || (ep->b_flags & B_INVAL) ||
-		    ep->b_vp == NULLVP)
-			continue;
-		if (VOP_BMAP(ep->b_vp, (ufs_daddr_t)0, &vp, (ufs_daddr_t)0,
-		    NULL))
-			continue;
-		if (vp != ip->i_devvp)
-			continue;
-		/* look for overlap */
-#ifdef NeXT
-		if (ep->b_bcount == 0 || ep->b_blkno > last ||
-		    ep->b_blkno + btodb(ep->b_bcount, devBlockSize) <= start)
-			continue;
-		vprint("Disk overlap", vp);
-		(void)printf("\tstart %d, end %d overlap start %d, end %d\n",
-			start, last, ep->b_blkno,
-			ep->b_blkno + btodb(ep->b_bcount, devBlockSize) - 1);
-#else
-		if (ep->b_bcount == 0 || ep->b_blkno > last ||
-		    ep->b_blkno + btodb(ep->b_bcount) <= start)
-			continue;
-		vprint("Disk overlap", vp);
-		(void)printf("\tstart %d, end %d overlap start %d, end %d\n",
-			start, last, ep->b_blkno,
-			ep->b_blkno + btodb(ep->b_bcount) - 1);
-#endif /* NeXT */
-		panic("Disk buffer overlap");
-	}
-}
-#endif /* DIAGNOSTIC */
-
 /*
  * block operations
  *
@@ -241,6 +183,8 @@ ffs_isblock(fs, cp, h)
 	default:
 		panic("ffs_isblock");
 	}
+	/* NOTREACHED */
+	return 0;
 }
 
 /*

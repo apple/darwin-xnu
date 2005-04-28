@@ -87,7 +87,9 @@
 #define MRT_ASSERT      107     /* enable PIM assert processing */
 
 
+#ifdef KERNEL_PRIVATE
 #define GET_TIME(t)	microtime(&t)
+#endif KERNEL_PRIVATE
 
 /*
  * Types and macros for handling bitmaps with one bit per virtual interface.
@@ -172,11 +174,14 @@ struct sioc_vif_req {
     u_long ibytes;		/* Input byte count on vif		*/
     u_long obytes;		/* Output byte count on vif		*/
 };
-    
 
+#ifdef PRIVATE
 /*
  * The kernel's virtual-interface structure.
  */
+struct tbf;
+struct ifnet;
+struct socket;
 struct vif {
     u_char   		v_flags;     	/* VIFF_ flags defined above         */
     u_char   		v_threshold;	/* min ttl required to forward on vif*/
@@ -193,6 +198,7 @@ struct vif {
     u_int		v_rsvp_on;	/* RSVP listening on this vif */
     struct socket      *v_rsvpd;	/* RSVP daemon socket */
 };
+#endif
 
 /*
  * The kernel's multicast forwarding cache entry structure 
@@ -228,7 +234,9 @@ struct igmpmsg {
     u_char	    unused3;
     struct in_addr  im_src, im_dst;
 };
+#define MFCTBLSIZ       256
 
+#ifdef KERNEL_PRIVATE
 /*
  * Argument structure used for pkt info. while upcall is made
  */
@@ -242,7 +250,6 @@ struct rtdetq {
     struct rtdetq	*next;		/* Next in list of packets          */
 };
 
-#define MFCTBLSIZ	256
 #if (MFCTBLSIZ & (MFCTBLSIZ - 1)) == 0	  /* from sys:route.h */
 #define MFCHASHMOD(h)	((h) & (MFCTBLSIZ - 1))
 #else
@@ -270,21 +277,17 @@ struct tbf
     struct mbuf *tbf_t;		/* tail-insertion pointer	*/
 };
 
-#ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
 
 struct sockopt;
 
-extern int	(*ip_mrouter_set) __P((struct socket *, struct sockopt *));
-extern int	(*ip_mrouter_get) __P((struct socket *, struct sockopt *));
-extern int	(*ip_mrouter_done) __P((void));
+extern int	(*ip_mrouter_set)(struct socket *, struct sockopt *);
+extern int	(*ip_mrouter_get)(struct socket *, struct sockopt *);
+extern int	(*ip_mrouter_done)(void);
 #if MROUTING
-extern int	(*mrt_ioctl) __P((int, caddr_t));
+extern int	(*mrt_ioctl)(int, caddr_t);
 #else
-extern int	(*mrt_ioctl) __P((int, caddr_t, struct proc *));
+extern int	(*mrt_ioctl)(int, caddr_t, struct proc *);
 #endif
 
-#endif /* __APPLE_API_PRIVATE */
-#endif /* KERNEL */
-
-#endif /* _NETINET_IP_MROUTE_H_ */
+#endif KERNEL_PRIVATE
+#endif _NETINET_IP_MROUTE_H_

@@ -42,7 +42,7 @@
 .Sh SYNOPSIS
 .Fd #include <sys/socket.h>
 .Ft int
-.Fn getpeername "int s" "struct sockaddr *name" "int *namelen"
+.Fn getpeername "int s" "struct sockaddr *name" "socklen_t *namelen"
 .Sh DESCRIPTION
 .Fn Getpeername
 returns the name of the peer connected to

@@ -38,15 +38,15 @@ struct aio_workq_entry
 {
 	TAILQ_ENTRY( aio_workq_entry )	aio_workq_link;
 	struct proc						*procp;		/* user proc that queued this request */
-	struct aiocb					*uaiocbp;  	/* pointer passed in from user land */
-	struct aiocb					*fsyncp;	/* not NULL means this request must complete */
+	user_addr_t						uaiocbp;  	/* pointer passed in from user land */
+	user_addr_t						fsyncp;		/* not NULL means this request must complete */
 												/* before an aio_fsync call can proceed. */
 	vm_map_t						aio_map;	/* user land map we have a reference to */
-	ssize_t							returnval;	/* return value from read / write request */	
+	user_ssize_t					returnval;	/* return value from read / write request */	
 	int								errorval;	/* error value from read / write request */
 	int								flags;		
 	long							group_tag;	/* identifier used to group IO requests */
-	struct aiocb					aiocb;		/* copy of aiocb from user land */
+	struct user_aiocb				aiocb;		/* copy of aiocb from user land */
 };
 typedef struct aio_workq_entry aio_workq_entry;
 
@@ -66,11 +66,27 @@ typedef struct aio_workq_entry aio_workq_entry;
 									/* 	waiting for one or more active IO requests to */
 									/*	complete */
 
+/*
+ * Prototypes
+ */
 
-__private_extern__ void		_aio_close( struct proc *p, int fd );
-__private_extern__ void		_aio_exit( struct proc *p );
-__private_extern__ void		_aio_exec( struct proc *p );
-__private_extern__ void		_aio_create_worker_threads( int num );
+__private_extern__ void		
+_aio_close(struct proc *p, int fd);
+
+__private_extern__ void		
+_aio_exit(struct proc *p);
+
+__private_extern__ void		
+_aio_exec(struct proc *p);
+
+__private_extern__ void		
+_aio_create_worker_threads(int num);
+
+__private_extern__ void		
+aio_init(void);
+
+task_t						
+get_aiotask(void);
 
 #endif /* KERNEL */
 

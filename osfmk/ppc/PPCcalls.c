@@ -22,7 +22,6 @@
 
 #include <kern/task.h>
 #include <kern/thread.h>
-#include <kern/thread_act.h>
 #include <mach/vm_prot.h>
 #include <ppc/pmap.h>
 #include <ppc/exception.h>

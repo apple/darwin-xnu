@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2001-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -30,11 +30,11 @@
 #include <sys/kernel.h>
 #include <sys/conf.h>
 #include <sys/ioctl.h>
-#include <sys/proc.h>
-#include <sys/mount.h>
+#include <sys/proc_internal.h>
+#include <sys/mount_internal.h>
 #include <sys/mbuf.h>
 #include <sys/filedesc.h>
-#include <sys/vnode.h>
+#include <sys/vnode_internal.h>
 #include <sys/malloc.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
@@ -46,8 +46,10 @@
 #include <netinet/in.h>
 #include <netinet/if_ether.h>
 #include <netinet/dhcp_options.h>
-#include <kern/kalloc.h>
 #include <pexpert/pexpert.h>
+
+#include <kern/kern_types.h>
+#include <kern/kalloc.h>
 
 //#include <libkern/libkern.h>
 extern struct filedesc 	filedesc0;
@@ -250,6 +252,7 @@ static __inline__ boolean_t
 parse_netboot_path(char * path, struct in_addr * iaddr_p, char * * host,
 		   char * * mount_dir, char * * image_path)
 {
+	static char	tmp[MAX_IPv4_STR_LEN];	/* Danger - not thread safe */
     char *	start;
     char *	colon;
 
@@ -283,7 +286,7 @@ parse_netboot_path(char * path, struct in_addr * iaddr_p, char * * host,
 	(void)find_colon(start);
 	*image_path = start;
     }
-    *host = inet_ntoa(*iaddr_p);
+    *host = inet_ntop(AF_INET, iaddr_p, tmp, sizeof(tmp));
     return (TRUE);
 }
 
@@ -353,6 +356,8 @@ netboot_info_init(struct in_addr iaddr)
     char *			vndevice = NULL;
 
     MALLOC_ZONE(vndevice, caddr_t, MAXPATHLEN, M_NAMEI, M_WAITOK);
+    if (vndevice == NULL)
+    	panic("netboot_info_init: M_NAMEI zone exhausted");
     if (PE_parse_boot_arg("vndevice", vndevice) == TRUE) {
 	use_hdix = FALSE;
     }
@@ -366,6 +371,8 @@ netboot_info_init(struct in_addr iaddr)
 
     /* check for a booter-specified path then a NetBoot path */
     MALLOC_ZONE(root_path, caddr_t, MAXPATHLEN, M_NAMEI, M_WAITOK);
+    if (root_path  == NULL)
+    	panic("netboot_info_init: M_NAMEI zone exhausted");
     if (PE_parse_boot_arg("rp", root_path) == TRUE
 	|| PE_parse_boot_arg("rootpath", root_path) == TRUE
 	|| get_root_path(root_path) == TRUE) {
@@ -431,15 +438,15 @@ netboot_info_free(struct netboot_info * * info_p)
 
     if (info) {
 	if (info->mount_point) {
-	    kfree((vm_offset_t)info->mount_point, info->mount_point_length);
+	    kfree(info->mount_point, info->mount_point_length);
 	}
 	if (info->server_name) {
-	    kfree((vm_offset_t)info->server_name, info->server_name_length);
+	    kfree(info->server_name, info->server_name_length);
 	}
 	if (info->image_path) {
-	    kfree((vm_offset_t)info->image_path, info->image_path_length);
+	    kfree(info->image_path, info->image_path_length);
 	}
-	kfree((vm_offset_t)info, sizeof(*info));
+	kfree(info, sizeof(*info));
     }
     *info_p = NULL;
     return;
@@ -617,13 +624,14 @@ find_interface(void)
     struct ifnet *		ifp = NULL;
 
     if (rootdevice[0]) {
-	ifp = ifunit(rootdevice);
+		ifp = ifunit(rootdevice);
     }
     if (ifp == NULL) {
-	TAILQ_FOREACH(ifp, &ifnet, if_link)
-	    if ((ifp->if_flags &
-		 (IFF_LOOPBACK|IFF_POINTOPOINT)) == 0)
-		break;
+		ifnet_head_lock_shared();
+		TAILQ_FOREACH(ifp, &ifnet_head, if_link)
+			if ((ifp->if_flags & (IFF_LOOPBACK|IFF_POINTOPOINT)) == 0)
+				break;
+		ifnet_head_done();
     }
     return (ifp);
 }
@@ -643,7 +651,6 @@ netboot_mountroot(void)
 
     bzero(&ifr, sizeof(ifr));
 
-    thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
 
     /* find the interface */
     ifp = find_interface();
@@ -701,7 +708,6 @@ netboot_mountroot(void)
     }
 
     soclose(so);
-    thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
 
     S_netboot_info_p = netboot_info_init(iaddr);
     switch (S_netboot_info_p->image_type) {
@@ -760,7 +766,6 @@ failed:
     if (so != NULL) {
 	soclose(so);
     }
-    thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
     return (error);
 }
 
@@ -799,20 +804,24 @@ netboot_setup(struct proc * p)
     if (error == 0 && rootvnode != NULL) {
         struct vnode *tvp;
         struct vnode *newdp;
+	struct vfs_context context;
+
+	context.vc_proc = p;
+	context.vc_ucred = proc_ucred(p);	/* XXX kauth_cred_get() ??? proxy */
 
 	/* Get the vnode for '/'.  Set fdp->fd_fd.fd_cdir to reference it. */
-	if (VFS_ROOT(mountlist.cqh_last, &newdp))
+	if (VFS_ROOT(mountlist.tqh_last, &newdp, &context))
 		panic("netboot_setup: cannot find root vnode");
-	VREF(newdp);
+	vnode_ref(newdp);
+	vnode_put(newdp);
 	tvp = rootvnode;
-	vrele(tvp);
+	vnode_rele(tvp);
 	filedesc0.fd_cdir = newdp;
 	rootvnode = newdp;
-	simple_lock(&mountlist_slock);
-	CIRCLEQ_REMOVE(&mountlist, CIRCLEQ_FIRST(&mountlist), mnt_list);
-	simple_unlock(&mountlist_slock);
-	VOP_UNLOCK(rootvnode, 0, p);
-	mountlist.cqh_first->mnt_flag |= MNT_ROOTFS;
+	mount_list_lock();
+	TAILQ_REMOVE(&mountlist, TAILQ_FIRST(&mountlist), mnt_list);
+	mount_list_unlock();
+	mountlist.tqh_first->mnt_flag |= MNT_ROOTFS;
     }
  done:
     netboot_info_free(&S_netboot_info_p);

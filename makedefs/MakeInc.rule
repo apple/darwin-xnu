@@ -2,10 +2,6 @@
 # Generic Install rules
 #
 
-#
-# gvdl: Let's optionally have a different list of local installs and 
-# regular installs.
-#
 ifndef INSTALL_MI_LCL_LIST
     INSTALL_MI_LCL_LIST = $(INSTALL_MI_LIST)
 endif
@@ -22,184 +18,137 @@ ifndef INSTALL_MD_LCL_GEN_LIST
     INSTALL_MD_LCL_GEN_LIST = $(INSTALL_MD_GEN_LIST)
 endif
 
-ifeq ($(INCR_INSTALLHDRS), TRUE)
+ifndef INSTALL_KF_MI_LCL_LIST
+    INSTALL_KF_MI_LCL_LIST = $(EXPORT_MI_LIST)
+endif
 
-#
-# These are the machine independent headers that end up in /usr/include
-# Eventually they're copied to System framework's headers directory
-#
-INSTALL_MI_INC_FILES = $(addprefix $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_MI_LIST))
-INSTALL_MI_GEN_INC_FILES = $(addprefix $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_MI_GEN_LIST))
+ifndef INSTALL_KF_MI_LCL_GEN_LIST
+    INSTALL_KF_MI_LCL_GEN_LIST = $(EXPORT_MI_GEN_LIST)
+endif
 
-$(INSTALL_MI_INC_FILES) $(INSTALL_MI_GEN_INC_FILES): $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR)/% : %
+ifndef INSTALL_KF_MD_LCL_LIST
+    INSTALL_KF_MD_LCL_LIST = $(EXPORT_MD_LIST)
+endif
+
+ifndef INSTALL_KF_MD_LCL_GEN_LIST
+    INSTALL_KF_MD_LCL_GEN_LIST = $(EXPORT_MD_GEN_LIST)
+endif
+
+ifndef INSTALL_KF_MI_LIST
+    INSTALL_KF_MI_LIST = $(EXPORT_MI_LIST)
+endif
+
+ifndef INSTALL_KF_MI_GEN_LIST
+    INSTALL_KF_MI_GEN_LIST = $(EXPORT_MI_GEN_LIST)
+endif
+
+ifndef INSTALL_KF_MD_LIST
+    INSTALL_KF_MD_LIST = $(EXPORT_MD_LIST)
+endif
+
+ifndef INSTALL_KF_MD_GEN_LIST
+    INSTALL_KF_MD_GEN_LIST = $(EXPORT_MD_GEN_LIST)
+endif
+
+INSTALL_MI_GEN_FILES = $(addprefix $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_MI_GEN_LIST))
+
+$(INSTALL_MI_GEN_FILES): $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR)/% : %
 	@true echo Installing $< in $(dir $@);			\
-	$(MKDIR) $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR);	\
+	[ -d $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR) ] ||$(MKDIR) $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR);	\
 	filename=`$(BASENAME) $<`;				\
 	filename_strip=$(addsuffix .strip,$${filename});	\
 	$(RM) $(RMFLAGS) $@;					\
-	$(MKDIR) ./incdir;					\
-	echo garbage > ./incdir/$${filename_strip};		\
-	$(UNIFDEF) -UKERNEL_PRIVATE -UDRIVER_PRIVATE		\
-		$< > ./incdir/$${filename} ||			\
-		$(DECOMMENT) ./incdir/$${filename} r >		\
-		./incdir/$${filename_strip};			\
-	if [ -s ./incdir/$${filename_strip} ];			\
+	[ -d ./incmidir ] || $(MKDIR) ./incmidir;			\
+	echo garbage > ./incmidir/$${filename_strip};		\
+	$(UNIFDEF) $(SINCFRAME_UNIFDEF)				\
+		$< > ./incmidir/$${filename} ||			\
+		$(DECOMMENT) ./incmidir/$${filename} r >		\
+		./incmidir/$${filename_strip};			\
+	if [ -s ./incmidir/$${filename_strip} ];			\
 	then (							\
-		install $(INSTALL_FLAGS) ./incdir/$${filename} $(dir $@);\
+		install $(INSTALL_FLAGS) ./incmidir/$${filename} $(dir $@);\
 	);							\
 	else							\
 		echo Header file $< not exported;		\
-	fi;							\
-	$(RM) -rf ./incdir;
+	fi;
 
-#
-# These are usually machine independent System framework private headers
-# Unless LCLDIR is specified as something else
-#
-INSTALL_MI_LCL_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_MI_LCL_LIST))
-INSTALL_MI_GEN_LCL_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_MI_LCL_GEN_LIST))
+INSTALL_KF_MI_GEN_FILES = $(addprefix  $(DSTROOT)/$(KINCDIR)/$(EXPORT_MI_DIR)/, $(INSTALL_KF_MI_GEN_LIST))
 
-$(INSTALL_MI_LCL_FILES) $(INSTALL_MI_GEN_LCL_FILES): $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR)/% : %
-	@true echo Installing $< in $(dir $@);			\
-	$(MKDIR) $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR);	\
-	$(RM) $(RMFLAGS) $@;					\
-	install $(INSTALL_FLAGS) $< $(dir $@);
-
-#
-# These are the Kernel framework's machine independent private headers
-# They should be specified in INSTALL_MI_LCL_KERN_LIST and INSTALL_MI_LCL_GEN_KERN_LIST
-#
-INSTALL_MI_LCL_KERN_FILES = $(addprefix $(DSTROOT)/$(KPINCDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_MI_LCL_KERN_LIST))
-INSTALL_MI_GEN_LCL_KERN_FILES = $(addprefix $(DSTROOT)/$(KPINCDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_MI_LCL_GEN_KERN_LIST))
-
-$(INSTALL_MI_LCL_KERN_FILES) $(INSTALL_MI_GEN_LCL_KERN_FILES): $(DSTROOT)/$(KPINCDIR)/$(INSTALL_MI_DIR)/% : %
-	@true echo Installing $< in $(dir $@);			\
-	$(MKDIR) $(DSTROOT)/$(KPINCDIR)/$(INSTALL_MI_DIR);	\
-	$(RM) $(RMFLAGS) $@;					\
-	install $(INSTALL_FLAGS) $< $(dir $@);
-
-#
-# These are the machine dependent headers that end up in /usr/include
-# Eventually they're copied to System framework's headers directory
-#
-INSTALL_MD_INC_FILES = $(addprefix $(DSTROOT)/$(INCDIR)/$(INSTALL_MD_DIR)/, $(INSTALL_MD_LIST))
-INSTALL_MD_GEN_INC_FILES = $(addprefix $(DSTROOT)/$(INCDIR)/$(INSTALL_MD_DIR)/, $(INSTALL_MD_GEN_LIST))
-
-$(INSTALL_MD_INC_FILES) $(INSTALL_MD_GEN_INC_FILES): $(DSTROOT)/$(INCDIR)/$(INSTALL_MD_DIR)/% : %
-	@true echo Installing $< in $(dir $@);			\
-	$(MKDIR) $(DSTROOT)/$(INCDIR)/$(INSTALL_MD_DIR);	\
+$(INSTALL_KF_MI_GEN_FILES): $(DSTROOT)/$(KINCDIR)/$(EXPORT_MI_DIR)/% : %
+	@true echo Installing $< in $(midir $@);			\
+	[ -d $(DSTROOT)/$(KINCDIR)/$(EXPORT_MI_DIR) ] ||$(MKDIR) $(DSTROOT)/$(KINCDIR)/$(EXPORT_MI_DIR);	\
 	filename=`$(BASENAME) $<`;				\
 	filename_strip=$(addsuffix .strip,$${filename});	\
 	$(RM) $(RMFLAGS) $@;					\
-	$(MKDIR) ./incdir;					\
-	echo garbage > ./incdir/$${filename_strip};		\
-	$(UNIFDEF) -UKERNEL_PRIVATE -UDRIVER_PRIVATE		\
-		$< > ./incdir/$${filename} ||			\
-		$(DECOMMENT) ./incdir/$${filename} r >		\
-		./incdir/$${filename_strip};			\
-	if [ -s ./incdir/$${filename_strip} ];			\
+	[ -d ./kincmidir ] || $(MKDIR) ./kincmidir;			\
+	echo garbage > ./kincmidir/$${filename_strip};		\
+	$(UNIFDEF) $(KINCFRAME_UNIFDEF)				\
+		$< > ./kincmidir/$${filename} ||			\
+		$(DECOMMENT) ./kincmidir/$${filename} r >		\
+		./kincmidir/$${filename_strip};			\
+	if [ -s ./kincmidir/$${filename_strip} ];			\
 	then (							\
-		install $(INSTALL_FLAGS) ./incdir/$${filename} $(dir $@);\
+		install $(INSTALL_FLAGS) ./kincmidir/$${filename} $(dir $@);\
 	);							\
 	else							\
 		echo Header file $< not exported;		\
-	fi;							\
-	$(RM) -rf ./incdir;
+	fi;
 
-#
-# These are usually machine dependent System framework private headers
-# Unless LCLDIR is specified as something else
-#
-INSTALL_MD_LCL_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR)/, $(INSTALL_MD_LCL_LIST))
-INSTALL_MD_GEN_LCL_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR)/, $(INSTALL_MD_LCL_GEN_LIST))
-
-$(INSTALL_MD_LCL_FILES) $(INSTALL_MD_GEN_LCL_FILES): $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR)/% : %
-	@true echo Installing $< in $(dir $@);			\
-	$(MKDIR) $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR);	\
-	$(RM) $(RMFLAGS) $@;					\
-	install $(INSTALL_FLAGS) $< $(dir $@);
-
-#
-# These are the Kernel framework's machine dependent private headers
-# They should be specified in INSTALL_MD_LCL_KERN_LIST and INSTALL_MD_LCL_GEN_KERN_LIST
-#
-INSTALL_MD_LCL_KERN_FILES = $(addprefix $(DSTROOT)/$(KPINCDIR)/$(INSTALL_MD_DIR)/, $(INSTALL_MD_LCL_KERN_LIST))
-INSTALL_MD_GEN_LCL_KERN_FILES = $(addprefix $(DSTROOT)/$(KPINCDIR)/$(INSTALL_MD_DIR)/, $(INSTALL_MD_LCL_GEN_KERN_LIST))
-
-$(INSTALL_MD_LCL_KERN_FILES) $(INSTALL_MD_GEN_LCL_KERN_FILES): $(DSTROOT)/$(KPINCDIR)/$(INSTALL_MD_DIR)/% : %
-	@true echo Installing $< in $(dir $@);			\
-	$(MKDIR) $(DSTROOT)/$(KPINCDIR)/$(INSTALL_MD_DIR);	\
-	$(RM) $(RMFLAGS) $@;					\
-	install $(INSTALL_FLAGS) $< $(dir $@);
-
-setup_installhdrs_mi: 
-	@echo "[ $(SOURCE) ] make setup_installhdrs_mi $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
-
-do_installhdrs_mi: $(INSTALL_MI_INC_FILES) $(INSTALL_MI_GEN_INC_FILES) $(INSTALL_MI_LCL_FILES) $(INSTALL_MI_GEN_LCL_FILES) $(INSTALL_MI_LCL_KERN_FILES) $(INSTALL_MI_GEN_LCL_KERN_FILES)
-	@true echo "[ $(SOURCE) ] make do_installhdrs_mi $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
-
-setup_installhdrs_md:
-	@echo "[ $(SOURCE) ] make setup_installhdrs_md $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
-
-do_installhdrs_md: $(INSTALL_MD_INC_FILES) $(INSTALL_MD_GEN_INC_FILES) $(INSTALL_MD_LCL_FILES) $(INSTALL_MD_GEN_LCL_FILES) $(INSTALL_MD_LCL_KERN_FILES) $(INSTALL_MD_GEN_LCL_KERN_FILES)
-	@true echo "[ $(SOURCE) ] make do_installhdrs_md $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
-
-else
-
-INSTALL_MI_INC_FILES = $(addprefix $(SOURCE), $(INSTALL_MI_LIST))
-INSTALL_MI_GEN_INC_FILES = $(addprefix $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_MI_GEN_LIST))
-
-$(INSTALL_MI_GEN_INC_FILES): $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR)/% : %
-	@true echo Installing $< in $(dir $@);			\
-	$(MKDIR) $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR);	\
-	filename=`$(BASENAME) $<`;				\
-	filename_strip=$(addsuffix .strip,$${filename});	\
-	$(RM) $(RMFLAGS) $@;					\
-	$(MKDIR) ./incdir;					\
-	echo garbage > ./incdir/$${filename_strip};		\
-	$(UNIFDEF) -UKERNEL_PRIVATE -UDRIVER_PRIVATE		\
-		$< > ./incdir/$${filename} ||			\
-		$(DECOMMENT) ./incdir/$${filename} r >		\
-		./incdir/$${filename_strip};			\
-	if [ -s ./incdir/$${filename_strip} ];			\
-	then (							\
-		install $(INSTALL_FLAGS) ./incdir/$${filename} $(dir $@);\
-	);							\
-	else							\
-		echo Header file $< not exported;		\
-	fi;							\
-	$(RM) -rf ./incdir;
-
-INSTALL_MI_LCL_FILES = $(addprefix $(SOURCE), $(INSTALL_MI_LCL_LIST))
 INSTALL_MI_GEN_LCL_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_MI_LCL_GEN_LIST))
 
 $(INSTALL_MI_GEN_LCL_FILES): $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR)/% : %
 	@true echo Installing $< in $(dir $@);			\
-	$(MKDIR) $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR);	\
+	[ -d $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR) ] ||$(MKDIR) $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR);	\
+	filename=`$(BASENAME) $<`;				\
+	filename_strip=$(addsuffix .strip,$${filename});	\
 	$(RM) $(RMFLAGS) $@;					\
-	install $(INSTALL_FLAGS) $< $(dir $@);
+	[ -d ./pincmidir ] || $(MKDIR) ./pincmidir;			\
+	echo garbage > ./pincmidir/$${filename_strip};		\
+	$(UNIFDEF) $(SPINCFRAME_UNIFDEF)			\
+		$< > ./pincmidir/$${filename} ||			\
+		$(DECOMMENT) ./pincmidir/$${filename} r >		\
+		./pincmidir/$${filename_strip};			\
+	if [ -s ./pincmidir/$${filename_strip} ];			\
+	then (							\
+		install $(INSTALL_FLAGS) ./pincmidir/$${filename} $(dir $@);\
+	);							\
+	else							\
+		echo Header file $< not exported;		\
+	fi;
 
-INSTALL_MI_LCL_KERN_FILES = $(addprefix $(SOURCE), $(INSTALL_MI_LCL_KERN_LIST))
-INSTALL_MI_GEN_LCL_KERN_FILES = $(addprefix $(KPINCDIR)/$(LCLDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_MI_LCL_KERN_GEN_LIST))
+INSTALL_KF_MI_LCL_GEN_FILES = $(addprefix  $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MI_DIR)/, $(INSTALL_KF_MI_LCL_GEN_LIST))
 
-$(INSTALL_MI_GEN_LCL_KERN_FILES): $(DSTROOT)/$(KPINCDIR)/$(INSTALL_MI_DIR)/% : %
+$(INSTALL_KF_MI_LCL_GEN_FILES): $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MI_DIR)/% : %
 	@true echo Installing $< in $(dir $@);			\
-	$(MKDIR) $(DSTROOT)/$(KPINCDIR)/$(INSTALL_MI_DIR);	\
+	[ -d $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MI_DIR) ] ||$(MKDIR) $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MI_DIR);	\
+	filename=`$(BASENAME) $<`;				\
+	filename_strip=$(addsuffix .strip,$${filename});	\
 	$(RM) $(RMFLAGS) $@;					\
-	install $(INSTALL_FLAGS) $< $(dir $@);
+	[ -d ./kpincmidir ] || $(MKDIR) ./kpincmidir;			\
+	echo garbage > ./kpincmidir/$${filename_strip};		\
+	$(UNIFDEF) $(KPINCFRAME_UNIFDEF)			\
+		$< > ./kpincmidir/$${filename} ||			\
+		$(DECOMMENT) ./kpincmidir/$${filename} r >		\
+		./kpincmidir/$${filename_strip};			\
+	if [ -s ./kpincmidir/$${filename_strip} ];			\
+	then (							\
+		install $(INSTALL_FLAGS) ./kpincmidir/$${filename} $(dir $@);\
+	);							\
+	else							\
+		echo Header file $< not exported;		\
+	fi;
 
-INSTALL_MD_INC_FILES = $(addprefix $(SOURCE), $(INSTALL_MD_LIST))
 INSTALL_MD_GEN_INC_FILES = $(addprefix $(DSTROOT)/$(INCDIR)/$(INSTALL_MD_DIR)/, $(INSTALL_MD_GEN_LIST))
 
 $(INSTALL_MD_GEN_INC_FILES): $(DSTROOT)/$(INCDIR)/$(INSTALL_MD_DIR)/% : %
 	@true echo Installing $< in $(dir $@);			\
-	$(MKDIR) $(DSTROOT)/$(INCDIR)/$(INSTALL_MD_DIR);	\
+	[ -d $(DSTROOT)/$(INCDIR)/$(INSTALL_MD_DIR) ] ||$(MKDIR) $(DSTROOT)/$(INCDIR)/$(INSTALL_MD_DIR);	\
 	filename=`$(BASENAME) $<`;				\
 	filename_strip=$(addsuffix .strip,$${filename});	\
 	$(RM) $(RMFLAGS) $@;					\
-	$(MKDIR) ./incdir;					\
+	[ -d ./incdir ] || $(MKDIR) ./incdir;			\
 	echo garbage > ./incdir/$${filename_strip};		\
-	$(UNIFDEF) -UKERNEL_PRIVATE -UDRIVER_PRIVATE		\
+	$(UNIFDEF) $(SINCFRAME_UNIFDEF)				\
 		$< > ./incdir/$${filename} ||		\
 		$(DECOMMENT) ./incdir/$${filename} r >		\
 		./incdir/$${filename_strip};			\
@@ -209,89 +158,188 @@ $(INSTALL_MD_GEN_INC_FILES): $(DSTROOT)/$(INCDIR)/$(INSTALL_MD_DIR)/% : %
 	);							\
 	else							\
 		echo Header file $< not exported;		\
-	fi;							\
-	$(RM) -rf /incdir;
+	fi;
+
+INSTALL_KF_MD_GEN_FILES = $(addprefix $(DSTROOT)/$(KINCDIR)/$(EXPORT_MD_DIR)/, $(INSTALL_KF_MD_GEN_LIST))
+
+$(INSTALL_KF_MD_GEN_FILES): $(DSTROOT)/$(KINCDIR)/$(EXPORT_MD_DIR)/% : %
+	@true echo Installing $< in $(dir $@);			\
+	[ -d $(DSTROOT)/$(KINCDIR)/$(EXPORT_MD_DIR) ] ||$(MKDIR) $(DSTROOT)/$(KINCDIR)/$(EXPORT_MD_DIR);	\
+	filename=`$(BASENAME) $<`;				\
+	filename_strip=$(addsuffix .strip,$${filename});	\
+	$(RM) $(RMFLAGS) $@;					\
+	[ -d ./kincdir ] || $(MKDIR) ./kincdir;			\
+	echo garbage > ./kincdir/$${filename_strip};		\
+	$(UNIFDEF) $(KINCFRAME_UNIFDEF)				\
+		$< > ./kincdir/$${filename} ||			\
+		$(DECOMMENT) ./kincdir/$${filename} r >		\
+		./kincdir/$${filename_strip};			\
+	if [ -s ./kincdir/$${filename_strip} ];			\
+	then (							\
+		install $(INSTALL_FLAGS) ./kincdir/$${filename} $(dir $@);\
+	);							\
+	else							\
+		echo Header file $< not exported;		\
+	fi;
 
 INSTALL_MD_LCL_FILES = $(addprefix $(SOURCE), $(INSTALL_MD_LCL_LIST))
 INSTALL_MD_GEN_LCL_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR)/, $(INSTALL_MD_LCL_GEN_LIST))
 
 $(INSTALL_MD_GEN_LCL_FILES): $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR)/% : %
 	@true echo Installing $< in $(dir $@);			\
-	$(MKDIR) $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR);	\
+	[ -d $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR) ] ||$(MKDIR) $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR);	\
+	filename=`$(BASENAME) $<`;				\
+	filename_strip=$(addsuffix .strip,$${filename});	\
 	$(RM) $(RMFLAGS) $@;					\
-	install $(INSTALL_FLAGS) $< $(dir $@);
+	[ -d ./pincdir ] || $(MKDIR) ./pincdir;			\
+	echo garbage > ./pincdir/$${filename_strip};		\
+	$(UNIFDEF) $(SPINCFRAME_UNIFDEF)			\
+		$< > ./pincdir/$${filename} ||			\
+		$(DECOMMENT) ./pincdir/$${filename} r >		\
+		./pincdir/$${filename_strip};			\
+	if [ -s ./pincdir/$${filename_strip} ];			\
+	then (							\
+		install $(INSTALL_FLAGS) ./pincdir/$${filename} $(dir $@);\
+	);							\
+	else							\
+		echo Header file $< not exported;		\
+	fi;
 
-INSTALL_MD_LCL_KERN_FILES = $(addprefix $(SOURCE), $(INSTALL_MD_LCL_KERN_LIST))
-INSTALL_MD_GEN_LCL_KERN_FILES = $(addprefix $(KPINCDIR)/$(LCLDIR)/$(INSTALL_MD_DIR)/, $(INSTALL_MD_LCL_KERN_GEN_LIST))
+INSTALL_KF_MD_LCL_FILES = $(addprefix $(SOURCE), $(INSTALL_KF_MD_LCL_LIST))
+INSTALL_KF_MD_LCL_GEN_FILES = $(addprefix $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MD_DIR)/, $(INSTALL_KF_MD_LCL_GEN_LIST))
 
-$(INSTALL_MD_GEN_LCL_KERN_FILES): $(DSTROOT)/$(KPINCDIR)/$(INSTALL_MD_DIR)/% : %
+$(INSTALL_KF_MD_LCL_GEN_FILES): $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MD_DIR)/% : %
 	@true echo Installing $< in $(dir $@);			\
-	$(MKDIR) $(DSTROOT)/$(KPINCDIR)/$(INSTALL_MD_DIR);	\
+	[ -d $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MD_DIR) ] ||$(MKDIR) $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MD_DIR);	\
+	filename=`$(BASENAME) $<`;				\
+	filename_strip=$(addsuffix .strip,$${filename});	\
 	$(RM) $(RMFLAGS) $@;					\
-	install $(INSTALL_FLAGS) $< $(dir $@);
+	[ -d ./kpincdir ] || $(MKDIR) ./kpincdir;			\
+	echo garbage > ./kpincdir/$${filename_strip};		\
+	$(UNIFDEF) $(KPINCFRAME_UNIFDEF)			\
+		$< > ./kpincdir/$${filename} ||			\
+		$(DECOMMENT) ./kpincdir/$${filename} r >		\
+		./kpincdir/$${filename_strip};			\
+	if [ -s ./kpincdir/$${filename_strip} ];			\
+	then (							\
+		install $(INSTALL_FLAGS) ./kpincdir/$${filename} $(dir $@);\
+	);							\
+	else							\
+		echo Header file $< not exported;		\
+	fi;
 
 setup_installhdrs_mi: 
 	@echo "[ $(SOURCE) ] make setup_installhdrs_mi $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
 
-do_installhdrs_mi: $(INSTALL_MI_GEN_INC_FILES) $(INSTALL_MI_GEN_LCL_FILES) $(INSTALL_MI_GEN_LCL_KERN_FILES)
-	@true echo "[ $(SOURCE) ] make do_installhdrs_mi $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
-	@if [ -n "$(strip $(INSTALL_MI_LIST))" ]; then			\
+do_installhdrs_mi: $(INSTALL_MI_GEN_FILES) $(INSTALL_MI_GEN_LCL_FILES) $(INSTALL_KF_MI_GEN_FILES) $(INSTALL_KF_MI_LCL_GEN_FILES)
+	@true echo "[ $(SOURCE) ] make do_installhdrs_mi $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)";	\
+	$(MKDIR) ./incmidir ./pincmidir ./kincmidir ./kpincmidir;				\
+	if [ -n "$(strip $(INSTALL_MI_LIST))" ]; then			\
 	    if [ -d $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR) ]; then	\
 		(cd $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR);$(RM) $(RMFLAGS) $(INSTALL_MI_LIST) );       \
 	    else								\
 		$(MKDIR) $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR);	\
 	    fi;								\
-	    $(MKDIR) ./incdir;						\
 	    for j in $(INSTALL_MI_LIST);				\
 	    do								\
-		echo garbage > ./incdir/$$j.strip;			\
-		$(UNIFDEF) -UKERNEL_PRIVATE -UDRIVER_PRIVATE		\
-		    $(SOURCE)/$$j > ./incdir/$$j ||			\
-		    $(DECOMMENT) ./incdir/$$j r >			\
-		    ./incdir/$$j.strip;				\
-		if [ -s ./incdir/$$j.strip ];				\
+		echo garbage > ./incmidir/$$j.strip;			\
+		$(UNIFDEF) $(SINCFRAME_UNIFDEF)				\
+		    $(SOURCE)/$$j > ./incmidir/$$j ||			\
+		    $(DECOMMENT) ./incmidir/$$j r >			\
+		    ./incmidir/$$j.strip;				\
+		if [ -s ./incmidir/$$j.strip ];				\
 		then (							\
-		    install $(INSTALL_FLAGS) ./incdir/$$j $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR);	\
+		    install $(INSTALL_FLAGS) ./incmidir/$$j $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR);	\
 		);							\
 		else							\
 		    echo Header file $$j not exported;		\
 		fi;							\
 	    done;							\
-	    $(RM) -rf ./incdir;						\
-	fi
-	@if [ -n "$(strip $(INSTALL_MI_LCL_LIST))" ]; then	\
+	fi;								\
+	if [ -n "$(strip $(INSTALL_MI_LCL_LIST))" ]; then			\
 	    if [ -d $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR) ]; then	\
 		(cd $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR);$(RM) $(RMFLAGS) $(INSTALL_MI_LCL_LIST) );       \
-	    else							\
+	    else								\
 		$(MKDIR) $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR);	\
 	    fi;								\
-	    install $(INSTALL_FLAGS) $(INSTALL_MI_LCL_FILES) $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR);	\
-	fi
-	@if [ -n "$(strip $(INSTALL_MI_LCL_KERN_LIST))" ]; then	\
-	    if [ -d $(DSTROOT)/$(KPINCDIR)/$(INSTALL_MI_DIR) ]; then	\
-		(cd $(DSTROOT)/$(KPINCDIR)/$(INSTALL_MI_DIR);$(RM) $(RMFLAGS) $(INSTALL_MI_LCL_KERN_LIST) );       \
-	    else							\
-		$(MKDIR) $(DSTROOT)/$(KPINCDIR)/$(INSTALL_MI_DIR);	\
+	    for j in $(INSTALL_MI_LCL_LIST);				\
+	    do								\
+		echo garbage > ./pincmidir/$$j.strip;			\
+		$(UNIFDEF) $(SPINCFRAME_UNIFDEF)				\
+		    $(SOURCE)/$$j > ./pincmidir/$$j ||			\
+		    $(DECOMMENT) ./pincmidir/$$j r >			\
+		    ./pincmidir/$$j.strip;				\
+		if [ -s ./pincmidir/$$j.strip ];				\
+		then (							\
+		    install $(INSTALL_FLAGS) ./pincmidir/$$j $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR);	\
+		);							\
+		else							\
+		    echo Header file $$j not exported;		\
+		fi;							\
+	    done;							\
+	fi;								\
+	if [ -n "$(strip $(INSTALL_KF_MI_LIST))" ]; then			\
+	    if [ -d $(DSTROOT)/$(KINCDIR)/$(EXPORT_MI_DIR) ]; then	\
+		(cd $(DSTROOT)/$(KINCDIR)/$(EXPORT_MI_DIR);$(RM) $(RMFLAGS) $(INSTALL_KF_MI_LIST) );       \
+	    else								\
+		$(MKDIR) $(DSTROOT)/$(KINCDIR)/$(EXPORT_MI_DIR);	\
 	    fi;								\
-	    install $(INSTALL_FLAGS) $(INSTALL_MI_LCL_KERN_FILES) $(DSTROOT)/$(KPINCDIR)/$(INSTALL_MI_DIR);	\
-	fi
+	    for j in $(INSTALL_KF_MI_LIST);				\
+	    do								\
+		echo garbage > ./kincmidir/$$j.strip;			\
+		$(UNIFDEF) $(KINCFRAME_UNIFDEF)				\
+		    $(SOURCE)/$$j > ./kincmidir/$$j ||			\
+		    $(DECOMMENT) ./kincmidir/$$j r >			\
+		    ./kincmidir/$$j.strip;				\
+		if [ -s ./kincmidir/$$j.strip ];				\
+		then (							\
+		    install $(INSTALL_FLAGS) ./kincmidir/$$j $(DSTROOT)/$(KINCDIR)/$(EXPORT_MI_DIR);	\
+		);							\
+		else							\
+		    echo Header file $$j not exported;		\
+		fi;							\
+	    done;							\
+	fi;								\
+	if [ -n "$(strip $(INSTALL_KF_MI_LCL_LIST))" ]; then			\
+	    if [ -d $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MI_DIR) ]; then	\
+		(cd $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MI_DIR);$(RM) $(RMFLAGS) $(INSTALL_KF_MI_LCL_LIST) );       \
+	    else								\
+		$(MKDIR) $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MI_DIR);	\
+	    fi;								\
+	    for j in $(INSTALL_KF_MI_LCL_LIST);				\
+	    do								\
+		echo garbage > ./kpincmidir/$$j.strip;			\
+		$(UNIFDEF) $(KPINCFRAME_UNIFDEF)				\
+		    $(SOURCE)/$$j > ./kpincmidir/$$j ||			\
+		    $(DECOMMENT) ./kpincmidir/$$j r >			\
+		    ./kpincmidir/$$j.strip;				\
+		if [ -s ./kpincmidir/$$j.strip ];				\
+		then (							\
+		    install $(INSTALL_FLAGS) ./kpincmidir/$$j $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MI_DIR);	\
+		);							\
+		else							\
+		    echo Header file $$j not exported;		\
+		fi;							\
+	    done;							\
+	fi;								\
+	$(RM) -rf ./incmidir ./pincmidir ./kincmidir ./kpincmidir;
 
 setup_installhdrs_md:
 	@echo "[ $(SOURCE) ] make setup_installhdrs_md $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
 
-do_installhdrs_md: $(INSTALL_MD_GEN_INC_FILES) $(INSTALL_MD_GEN_LCL_FILES) $(INSTALL_MI_GEN_LCL_KERN_FILES)
-	@true echo "[ $(SOURCE) ] make do_installhdrs_md $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
-	@if [ -n "$(strip $(INSTALL_MD_LIST))" ]; then			\
+do_installhdrs_md: $(INSTALL_MD_GEN_INC_FILES) $(INSTALL_MD_GEN_LCL_FILES) $(INSTALL_KF_MD_GEN_FILES) $(INSTALL_KF_MD_LCL_GEN_FILES)
+	@true echo "[ $(SOURCE) ] make do_installhdrs_md $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)";	\
+	$(MKDIR) ./incdir ./pincdir ./kincdir ./kpincdir;				\
+	if [ -n "$(strip $(INSTALL_MD_LIST))" ]; then			\
 	    if [ -d $(DSTROOT)/$(INCDIR)/$(INSTALL_MD_DIR) ]; then	\
 		(cd $(DSTROOT)/$(INCDIR)/$(INSTALL_MD_DIR);$(RM) $(RMFLAGS) $(INSTALL_MD_LIST) );       \
 	    else							\
 		$(MKDIR) $(DSTROOT)/$(INCDIR)/$(INSTALL_MD_DIR);	\
 	    fi;								\
-	    $(MKDIR) ./incdir;						\
 	    for j in $(INSTALL_MD_LIST);				\
 	    do								\
 		echo garbage > ./incdir/$$j.strip;			\
-		$(UNIFDEF) -UKERNEL_PRIVATE -UDRIVER_PRIVATE		\
+		$(UNIFDEF) $(SINCFRAME_UNIFDEF)				\
 		    $(SOURCE)/$$j > ./incdir/$$j ||			\
 		    $(DECOMMENT) ./incdir/$$j r >			\
 		    ./incdir/$$j.strip;				\
@@ -303,27 +351,75 @@ do_installhdrs_md: $(INSTALL_MD_GEN_INC_FILES) $(INSTALL_MD_GEN_LCL_FILES) $(INS
 		    echo Header file $$j not exported;		\
 		fi;							\
 	    done;							\
-	    $(RM) -rf ./incdir;						\
-	fi
-	@if [ -n "$(strip $(INSTALL_MD_LCL_LIST))" ]; then		\
+	fi;								\
+	if [ -n "$(strip $(INSTALL_MD_LCL_LIST))" ]; then			\
 	    if [ -d $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR) ]; then	\
 		(cd $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR);$(RM) $(RMFLAGS) $(INSTALL_MD_LCL_LIST) );       \
 	    else							\
 		$(MKDIR) $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR);	\
 	    fi;								\
-	    install $(INSTALL_FLAGS) $(INSTALL_MD_LCL_FILES) $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR);	\
-	fi
-	@if [ -n "$(strip $(INSTALL_MD_LCL_KERN_LIST))" ]; then	\
-	    if [ -d $(DSTROOT)/$(KPINCDIR)/$(INSTALL_MD_DIR) ]; then	\
-		(cd $(DSTROOT)/$(KPINCDIR)/$(INSTALL_MD_DIR);$(RM) $(RMFLAGS) $(INSTALL_MD_LCL_KERN_LIST) );       \
+	    for j in $(INSTALL_MD_LCL_LIST);				\
+	    do								\
+		echo garbage > ./pincdir/$$j.strip;			\
+		$(UNIFDEF) $(SPINCFRAME_UNIFDEF)				\
+		    $(SOURCE)/$$j > ./pincdir/$$j ||			\
+		    $(DECOMMENT) ./pincdir/$$j r >			\
+		    ./pincdir/$$j.strip;				\
+		if [ -s ./pincdir/$$j.strip ];				\
+		then (							\
+		    install $(INSTALL_FLAGS) ./pincdir/$$j $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR);	\
+		);							\
+		else							\
+		    echo Header file $$j not exported;		\
+		fi;							\
+	    done;							\
+	fi;								\
+	if [ -n "$(strip $(INSTALL_KF_MD_LIST))" ]; then			\
+	    if [ -d $(DSTROOT)/$(KINCDIR)/$(EXPORT_MD_DIR) ]; then	\
+		(cd $(DSTROOT)/$(KINCDIR)/$(EXPORT_MD_DIR);$(RM) $(RMFLAGS) $(INSTALL_KF_MD_LIST) );       \
 	    else							\
-		$(MKDIR) $(DSTROOT)/$(KPINCDIR)/$(INSTALL_MD_DIR);	\
+		$(MKDIR) $(DSTROOT)/$(KINCDIR)/$(EXPORT_MD_DIR);	\
 	    fi;								\
-	    install $(INSTALL_FLAGS) $(INSTALL_MD_LCL_KERN_FILES) $(DSTROOT)/$(KPINCDIR)/$(INSTALL_MD_DIR);	\
-	fi
+	    for j in $(INSTALL_KF_MD_LIST);				\
+	    do								\
+		echo garbage > ./kincdir/$$j.strip;			\
+		$(UNIFDEF) $(KINCFRAME_UNIFDEF)				\
+		    $(SOURCE)/$$j > ./kincdir/$$j ||			\
+		    $(DECOMMENT) ./kincdir/$$j r >			\
+		    ./kincdir/$$j.strip;				\
+		if [ -s ./kincdir/$$j.strip ];				\
+		then (							\
+		    install $(INSTALL_FLAGS) ./kincdir/$$j $(DSTROOT)/$(KINCDIR)/$(EXPORT_MD_DIR);	\
+		);							\
+		else							\
+		    echo Header file $$j not exported;		\
+		fi;							\
+	    done;							\
+	fi;								\
+	if [ -n "$(strip $(INSTALL_KF_MD_LCL_LIST))" ]; then			\
+	    if [ -d $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MD_DIR) ]; then	\
+		(cd $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MD_DIR);$(RM) $(RMFLAGS) $(INSTALL_KF_MD_LCL_LIST) );       \
+	    else							\
+		$(MKDIR) $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MD_DIR);	\
+	    fi;								\
+	    for j in $(INSTALL_KF_MD_LCL_LIST);				\
+	    do								\
+		echo garbage > ./kpincdir/$$j.strip;			\
+		$(UNIFDEF) $(KPINCFRAME_UNIFDEF)				\
+		    $(SOURCE)/$$j > ./kpincdir/$$j ||			\
+		    $(DECOMMENT) ./kpincdir/$$j r >			\
+		    ./kpincdir/$$j.strip;				\
+		if [ -s ./kpincdir/$$j.strip ];				\
+		then (							\
+		    install $(INSTALL_FLAGS) ./kpincdir/$$j $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MD_DIR);	\
+		);							\
+		else							\
+		    echo Header file $$j not exported;		\
+		fi;							\
+	    done;							\
+	fi;								\
+	$(RM) -rf ./incdir ./pincdir ./kincdir ./kpincdir;
 
-
-endif
 
 #
 # Generic Export rules
@@ -335,7 +431,7 @@ EXPORT_MI_GEN_INC_FILES = $(addprefix $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR)/, $(
 
 $(EXPORT_MI_INC_FILES) $(EXPORT_MI_GEN_INC_FILES): $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR)/% : %
 	@true echo Exporting $< in $(dir $@);			\
-	$(MKDIR) $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR);	\
+	[ -d $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR) ] ||$(MKDIR) $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR);	\
 	${CP} -p $< $(dir $@);	\
 
 
@@ -344,7 +440,7 @@ EXPORT_MD_GEN_INC_FILES = $(addprefix $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR)/, $(
 
 $(EXPORT_MD_INC_FILES) $(EXPORT_MD_GEN_INC_FILES): $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR)/% : %
 	@true echo Exporting $< in $(dir $@);			\
-	$(MKDIR) $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR);	\
+	[ -d $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR) ] ||$(MKDIR) $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR);	\
 	${CP} -p $< $(dir $@);	\
 
 setup_exporthdrs_mi:
@@ -366,7 +462,7 @@ EXPORT_MI_GEN_INC_FILES = $(addprefix $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR)/, $(
 
 $(EXPORT_MI_GEN_INC_FILES): $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR)/% : %
 	@true echo Exporting $< in $(dir $@);			\
-	$(MKDIR) $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR);	\
+	[ -d $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR) ] ||$(MKDIR) $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR);	\
 	${CP} -p $< $(dir $@);	\
 
 
@@ -375,7 +471,7 @@ EXPORT_MD_GEN_INC_FILES = $(addprefix $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR)/, $(
 
 $(EXPORT_MD_GEN_INC_FILES): $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR)/% : %
 	@true echo Exporting $< in $(dir $@);			\
-	$(MKDIR) $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR);	\
+	[ -d $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR) ] ||$(MKDIR) $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR);	\
 	${CP} -p $< $(dir $@);	\
 
 setup_exporthdrs_mi:
@@ -443,7 +539,7 @@ $(COMP_COBJ_FILES): $(TARGET)$(COMP_OBJ_DIR)%.o : %.c
 #
 # Compilation rules to generate .o from .c for normal files
 #
-C_RULE_1A=${KCC} -c ${filter-out ${${join $@,_CFLAGS_RM}}, ${CFLAGS}} -MD ${${join $@,_CFLAGS_ADD}} ${INCFLAGS} ${${join $@,_INCFLAGS}} 
+C_RULE_1A=${KCC} -c ${filter-out ${${join $@,_CFLAGS_RM}}, ${CFLAGS} ${CWARNFLAGS}} -MD ${${join $@,_CFLAGS_ADD}} ${INCFLAGS} ${${join $@,_INCFLAGS}} 
 C_RULE_1B=$*.c
 C_RULE_2=
 C_RULE_3=
@@ -461,7 +557,7 @@ C_RULE_4_D=${C_RULE_4}
 #
 # Compilation rules to generate .o from .m
 #
-M_RULE_1A=${KCC} -c ${filter-out ${${join $@,_CFLAGS_RM}}, ${CFLAGS}} -MD ${${join $@,_CFLAGS_ADD}} ${INCFLAGS} ${${join $@,_INCFLAGS}} 
+M_RULE_1A=${KCC} -c ${filter-out ${${join $@,_CFLAGS_RM}}, ${CFLAGS} ${MWARNFLAGS}} -MD ${${join $@,_CFLAGS_ADD}} ${INCFLAGS} ${${join $@,_INCFLAGS}} 
 M_RULE_1B=$*.m
 M_RULE_2=
 M_RULE_3=
@@ -472,7 +568,7 @@ M_RULE_4=
 #   The config tool slickly changes the last source filename char to 'o'
 #   for the object filename.
 #
-P_RULE_1A=${KC++} -o $@ -c ${CXXFLAGS} ${filter-out ${${join $@,_CFLAGS_RM}}, ${CFLAGS}} -MD ${${join $@,_CFLAGS_ADD}} ${INCFLAGS} ${${join $@,_INCFLAGS}} 
+P_RULE_1A=${KC++} -o $@ -c ${CXXFLAGS} ${filter-out ${${join $@,_CFLAGS_RM}}, ${CFLAGS} ${CXXWARNFLAGS}} -MD ${${join $@,_CFLAGS_ADD}} ${INCFLAGS} ${${join $@,_INCFLAGS}} 
 P_RULE_1B=$(<F)
 P_RULE_2=@sed 's/.c.o: /.cpo: /' $(@:.cpo=.d) > $(@:.cpo=.d~) && mv $(@:.cpo=.d~) $(@:.cpo=.d)
 P_RULE_3=
@@ -505,12 +601,10 @@ endif
 #
 do_build_mach_kernel: $(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/kgmacros
 	@echo "[ building mach_kernel ]";
-	$(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/kernel_newvers	\
-	    "`${CAT} $(SRCROOT)/osfmk/conf/kernelversion.major`"	\
-	    "`${CAT} $(SRCROOT)/osfmk/conf/kernelversion.minor`"	\
-	    "`${CAT} $(SRCROOT)/osfmk/conf/kernelversion.variant`";				\
-	${KCC} $(CFLAGS) $(INCLUDES) -c kernel_vers.c;						\
-	$(LD) $(LDFLAGS_KERNEL) $(addprefix $(TARGET)/,$(foreach component,$(COMPONENT_LIST), $(addprefix $(component)/$(firstword $($(addsuffix _KERNEL_CONFIG, $(shell echo -n $(component) | tr a-z A-Z))) $(KERNEL_CONFIG))/, $(addsuffix .o, $(component))))) kernel_vers.o -o $(TARGET)/mach_kernel.sys $(LD_KERNEL_LIBS);	\
+	@install $(DATA_INSTALL_FLAGS) $(SRCROOT)/config/version.c $(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/version.c;
+	@$(SRCROOT)/config/newvers.pl $(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/version.c;
+	${KCC} -c ${filter-out ${${join $@,_CFLAGS_RM}}, ${CFLAGS}} ${${join $@,_CFLAGS_ADD}} ${INCFLAGS} ${${join $@,_INCFLAGS}} $(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/version.c -o $(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/version.o
+	$(LD) $(LDFLAGS_KERNEL) $(addprefix $(TARGET)/,$(foreach component,$(COMPONENT_LIST), $(addprefix $(component)/$(firstword $($(addsuffix _KERNEL_CONFIG, $(shell echo -n $(component) | tr a-z A-Z))) $(KERNEL_CONFIG))/, $(addsuffix .o, $(component))))) $(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/version.o -o $(TARGET)/mach_kernel.sys $(LD_KERNEL_LIBS);	\
 	$(STRIP) $(STRIP_FLAGS) $(TARGET)/mach_kernel.sys -o $(TARGET)/mach_kernel;
 
 $(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/kgmacros: $(SRCROOT)/kgmacros
@@ -568,7 +662,7 @@ INSTALL_DATA_FILES = $(addprefix $(DSTROOT)$(INSTALL_DATA_DIR), $(INSTALL_DATA_L
 
 $(INSTALL_DATA_FILES): $(DSTROOT)$(INSTALL_DATA_DIR)% : $(SOURCE)/%
 	@echo Installing $< in $@;
-	@$(MKDIR) $(dir $@);		\
+	@[ -d $(dir $@) ] ||$(MKDIR) $(dir $@);		\
 	$(RM) $(RMFLAGS) $@;		\
 	install $(DATA_INSTALL_FLAGS) $< $(dir $@);
 
@@ -587,13 +681,25 @@ do_installman: $(INSTALL_MAN_FILES)
 		if [ -d $$man_dir ]; then       \
 			cur_dir=`pwd`;  \
 			cd $$man_dir;   \
-			$(RM) $(RMFLAGS) $(INSTALL_MAN_LIST); \
+			$(RM) $(RMFLAGS) $(INSTALL_MAN_LIST) $(INSTALL_MAN_LINKS); \
 			cd $$cur_dir;   \
 		else                    \
 			$(MKDIR) $$man_dir;     \
 		fi;                             \
 		echo Installing $(INSTALL_MAN_LIST) in $$man_dir;	\
 		install $(INSTALL_FLAGS) $(INSTALL_MAN_LIST) $$man_dir;	\
+		if [ -n "$(strip $(INSTALL_MAN_LINKS))" ]; then \
+			set `echo ${INSTALL_MAN_LINKS}`; \
+			while : ; do \
+				case $$# in \
+					0) break;; \
+					1) echo "warn: empty INSTALL_MAN_LINKS: $$1"; break;; \
+				esac; \
+				link_src=$$1; shift; link_dst=$$1; shift; \
+				echo "hard linking $${link_src} to $${link_dst}"; \
+				ln -f $${man_dir}/$${link_src} $${man_dir}/$${link_dst} ; \
+			done; \
+		fi; \
 	fi
 
 $(INSTALL_MAN_FILES): $(DSTROOT)/$(MANDIR)/$(INSTALL_MAN_DIR)/% : %

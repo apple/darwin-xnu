@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -37,25 +37,31 @@
  */
 
 #include <sys/systm.h>
-#include <sys/buf.h>
 #include <sys/fcntl.h>
-#include <sys/file.h>
+#include <sys/file_internal.h>
 #include <sys/filedesc.h>
 #include <sys/kernel.h>
-#include <sys/vnode.h>
+#include <sys/vnode_internal.h>
 #include <sys/malloc.h>
-#include <sys/mount.h>
+#include <sys/mount_internal.h>
 #include <sys/param.h>
-#include <sys/proc.h>
+#include <sys/proc_internal.h>
 #include <sys/sysctl.h>
 #include <sys/unistd.h>
 #include <sys/user.h>
 
 #include <sys/aio_kern.h>
+#include <sys/sysproto.h>
 
 #include <machine/limits.h>
+
+#include <mach/mach_types.h>
+#include <kern/kern_types.h>
 #include <kern/zalloc.h>
 #include <kern/task.h>
+#include <kern/sched_prim.h>
+
+#include <vm/vm_map.h>
 
 #include <sys/kdebug.h>
 #define AIO_work_queued					1
@@ -130,8 +136,8 @@ typedef struct aio_anchor_cb aio_anchor_cb;
 /*
  * aysnc IO locking macros used to protect critical sections.
  */
-#define AIO_LOCK	usimple_lock( &aio_lock )
-#define AIO_UNLOCK	usimple_unlock( &aio_lock )
+#define AIO_LOCK	lck_mtx_lock(aio_lock)
+#define AIO_UNLOCK	lck_mtx_unlock(aio_lock)
 
 
 /*
@@ -146,45 +152,44 @@ static aio_workq_entry *  aio_get_some_work( void );
 static boolean_t	aio_last_group_io( aio_workq_entry *entryp );
 static void			aio_mark_requests( aio_workq_entry *entryp );
 static int			aio_queue_async_request( struct proc *procp, 
-									 		 struct aiocb *aiocbp,
+									 		 user_addr_t aiocbp,
 									   		 int kindOfIO );
 static int			aio_validate( aio_workq_entry *entryp );
 static void			aio_work_thread( void );
 static int			do_aio_cancel(	struct proc *p, 
 									int fd, 
-									struct aiocb *aiocbp, 
+									user_addr_t aiocbp, 
 									boolean_t wait_for_completion,
 									boolean_t disable_notification );
 static void			do_aio_completion( aio_workq_entry *entryp );
 static int			do_aio_fsync( aio_workq_entry *entryp );
 static int			do_aio_read( aio_workq_entry *entryp );
 static int			do_aio_write( aio_workq_entry *entryp );
+static void 		do_munge_aiocb( struct aiocb *my_aiocbp, struct user_aiocb *the_user_aiocbp );
 static boolean_t	is_already_queued( 	struct proc *procp, 
-										struct aiocb *aiocbp );
+										user_addr_t aiocbp );
 static int			lio_create_async_entry( struct proc *procp, 
-											 struct aiocb *aiocbp, 
-						 					 struct sigevent *sigp, 
+											 user_addr_t aiocbp, 
+						 					 user_addr_t sigp, 
 						 					 long group_tag,
 						 					 aio_workq_entry **entrypp );
 static int			lio_create_sync_entry( struct proc *procp, 
-											struct aiocb *aiocbp, 
+											user_addr_t aiocbp, 
 											long group_tag,
 											aio_workq_entry **entrypp );
+
 
 /*
  *  EXTERNAL PROTOTYPES
  */
 
 /* in ...bsd/kern/sys_generic.c */
-extern struct file*	holdfp( struct filedesc* fdp, int fd, int flag );
-extern int			dofileread( struct proc *p, struct file *fp, int fd, 
-								void *buf, size_t nbyte, off_t offset, 
-								int flags, int *retval );
-extern int			dofilewrite( struct proc *p, struct file *fp, int fd, 
-								 const void *buf, size_t nbyte, off_t offset, 
-								 int flags, int *retval );
-extern vm_map_t 	vm_map_switch( vm_map_t    map );
-
+extern int			dofileread( struct proc *p, struct fileproc *fp, int fd, 
+								user_addr_t bufp, user_size_t nbyte, 
+								off_t offset, int flags, user_ssize_t *retval );
+extern int			dofilewrite( struct proc *p, struct fileproc *fp, int fd, 
+								 user_addr_t bufp, user_size_t nbyte, off_t offset, 
+								 int flags, user_ssize_t *retval );
 
 /*
  * aio external global variables.
@@ -198,55 +203,13 @@ extern int aio_worker_threads;				/* AIO_THREAD_COUNT - configurable */
  * aio static variables.
  */
 static aio_anchor_cb		aio_anchor;
-static simple_lock_data_t 	aio_lock;
+static lck_mtx_t * 		aio_lock;
+static lck_grp_t * 		aio_lock_grp;
+static lck_attr_t * 		aio_lock_attr;
+static lck_grp_attr_t * 	aio_lock_grp_attr;
 static struct zone  		*aio_workq_zonep;
 
 
-/*
- * syscall input parameters
- */
-#ifndef _SYS_SYSPROTO_H_
-
-struct	aio_cancel_args {
-	int				fd;	
-	struct aiocb 	*aiocbp;	
-};
-
-struct	aio_error_args {
-	struct aiocb 			*aiocbp;	
-};
-
-struct	aio_fsync_args {
-	int						op;	
-	struct aiocb 			*aiocbp;	
-};
-
-struct	aio_read_args {
-	struct aiocb 			*aiocbp;	
-};
-
-struct	aio_return_args {
-	struct aiocb 	*aiocbp;	
-};
-
-struct	aio_suspend_args {
-	struct aiocb *const 	*aiocblist;	
-	int						nent;	
-	const struct timespec 	*timeoutp;	
-};
-
-struct	aio_write_args {
-	struct aiocb 			*aiocbp;	
-};
-
-struct	lio_listio_args {
-	int						mode;	
-	struct aiocb *const 	*aiocblist;	
-	int						nent;	
-	struct sigevent 		*sigp;	
-};
-
-#endif /* _SYS_SYSPROTO_H_ */
 
 
 /*
@@ -260,9 +223,8 @@ struct	lio_listio_args {
 int
 aio_cancel( struct proc *p, struct aio_cancel_args *uap, int *retval )
 {
-	struct aiocb				my_aiocb;
+	struct user_aiocb		my_aiocb;
 	int							result;
-	boolean_t					funnel_state;
 
 	KERNEL_DEBUG( (BSDDBG_CODE(DBG_BSD_AIO, AIO_cancel)) | DBG_FUNC_START,
 		     	  (int)p, (int)uap->aiocbp, 0, 0, 0 );
@@ -277,8 +239,16 @@ aio_cancel( struct proc *p, struct aio_cancel_args *uap, int *retval )
 	}
 	
 	*retval = -1; 
-	if ( uap->aiocbp != NULL ) {
-		result = copyin( uap->aiocbp, &my_aiocb, sizeof(my_aiocb) );
+	if ( uap->aiocbp != USER_ADDR_NULL ) {
+		if ( !IS_64BIT_PROCESS(p) ) {
+			struct aiocb aiocb32;
+
+			result = copyin( uap->aiocbp, &aiocb32, sizeof(aiocb32) );
+			if ( result == 0 )
+				do_munge_aiocb( &aiocb32, &my_aiocb );
+		} else
+			result = copyin( uap->aiocbp, &my_aiocb, sizeof(my_aiocb) );
+
 		if ( result != 0 ) {
 			result = EAGAIN; 
 			goto ExitRoutine;
@@ -293,11 +263,7 @@ aio_cancel( struct proc *p, struct aio_cancel_args *uap, int *retval )
 			goto ExitRoutine;
 		}
 	}
-
-	/* current BSD code assumes funnel lock is held */
-	funnel_state = thread_funnel_set( kernel_flock, TRUE );
 	result = do_aio_cancel( p, uap->fd, uap->aiocbp, FALSE, FALSE );
-	(void) thread_funnel_set( kernel_flock, funnel_state );
 
 	if ( result != -1 ) {
 		*retval = result;
@@ -319,7 +285,6 @@ ExitRoutine:
 /*
  * _aio_close - internal function used to clean up async IO requests for 
  * a file descriptor that is closing.  
- * NOTE - kernel funnel lock is held when we get called. 
  * THIS MAY BLOCK.
  */
 
@@ -339,7 +304,7 @@ _aio_close( struct proc *p, int fd )
 		     	  (int)p, fd, 0, 0, 0 );
 	
 	/* cancel all async IO requests on our todo queues for this file descriptor */
-	error = do_aio_cancel( p, fd, NULL, TRUE, FALSE );
+	error = do_aio_cancel( p, fd, 0, TRUE, FALSE );
 	if ( error == AIO_NOTCANCELED ) {
 		/* 
 		 * AIO_NOTCANCELED is returned when we find an aio request for this process 
@@ -450,7 +415,8 @@ aio_fsync( struct proc *p, struct aio_fsync_args *uap, int *retval )
 		     	  (int)p, (int)uap->aiocbp, uap->op, 0, 0 );
 
 	*retval = 0;
-	if ( uap->op == O_SYNC )
+	/* 0 := O_SYNC for binary backward compatibility with Panther */
+	if (uap->op == O_SYNC || uap->op == 0)
 		fsync_kind = AIO_FSYNC;
 #if 0 // we don't support fdatasync() call yet
 	else if ( uap->op == O_DSYNC )
@@ -511,7 +477,7 @@ aio_read( struct proc *p, struct aio_read_args *uap, int *retval )
  */
 
 int
-aio_return( struct proc *p, struct aio_return_args *uap, register_t *retval )
+aio_return( struct proc *p, struct aio_return_args *uap, user_ssize_t *retval )
 {
 	aio_workq_entry		 		*entryp;
 	int							error;
@@ -596,7 +562,6 @@ ExitRoutine:
  * a process that is going away due to exec().  We cancel any async IOs   
  * we can and wait for those already active.  We also disable signaling
  * for cancelled or active aio requests that complete. 
- * NOTE - kernel funnel lock is held when we get called. 
  * This routine MAY block!
  */
 
@@ -622,7 +587,6 @@ _aio_exec( struct proc *p )
  * a process that is terminating (via exit() or exec() ).  We cancel any async IOs   
  * we can and wait for those already active.  We also disable signaling
  * for cancelled or active aio requests that complete.  This routine MAY block!
- * NOTE - kernel funnel lock is held when we get called. 
  */
 
 __private_extern__ void
@@ -646,7 +610,7 @@ _aio_exit( struct proc *p )
 	 * cancel async IO requests on the todo work queue and wait for those  
 	 * already active to complete. 
 	 */
-	error = do_aio_cancel( p, 0, NULL, TRUE, TRUE );
+	error = do_aio_cancel( p, 0, 0, TRUE, TRUE );
 	if ( error == AIO_NOTCANCELED ) {
 		/* 
 		 * AIO_NOTCANCELED is returned when we find an aio request for this process 
@@ -696,7 +660,6 @@ _aio_exit( struct proc *p )
 	}
 	AIO_UNLOCK;
 
-ExitRoutine:
 	KERNEL_DEBUG( (BSDDBG_CODE(DBG_BSD_AIO, AIO_exit)) | DBG_FUNC_END,
 		     	  (int)p, 0, 0, 0, 0 );
 
@@ -718,11 +681,10 @@ ExitRoutine:
  * were already complete.
  * WARNING - do not deference aiocbp in this routine, it may point to user 
  * land data that has not been copied in (when called from aio_cancel() )
- * NOTE - kernel funnel lock is held when we get called. 
  */
 
 static int
-do_aio_cancel( 	struct proc *p, int fd, struct aiocb *aiocbp, 
+do_aio_cancel( 	struct proc *p, int fd, user_addr_t aiocbp, 
 				boolean_t wait_for_completion, boolean_t disable_notification )
 {
 	aio_workq_entry		 	*entryp;
@@ -738,9 +700,9 @@ do_aio_cancel( 	struct proc *p, int fd, struct aiocb *aiocbp,
 		
 		next_entryp = TAILQ_NEXT( entryp, aio_workq_link );
 		if ( p == entryp->procp ) {
-			if ( (aiocbp == NULL && fd == 0) ||
-				 (aiocbp != NULL && entryp->uaiocbp == aiocbp) ||
-				 (aiocbp == NULL && fd == entryp->aiocb.aio_fildes) ) {
+			if ( (aiocbp == USER_ADDR_NULL && fd == 0) ||
+				 (aiocbp != USER_ADDR_NULL && entryp->uaiocbp == aiocbp) ||
+				 (aiocbp == USER_ADDR_NULL && fd == entryp->aiocb.aio_fildes) ) {
 				/* we found a match so we remove the entry from the */
 				/* todo work queue and place it on the done queue */
 				TAILQ_REMOVE( &aio_anchor.aio_async_workq, entryp, aio_workq_link );
@@ -776,7 +738,7 @@ do_aio_cancel( 	struct proc *p, int fd, struct aiocb *aiocbp,
 				else
 					AIO_UNLOCK;
 
-				if ( aiocbp != NULL ) {
+				if ( aiocbp != USER_ADDR_NULL ) {
 					return( result );
 				}
 				
@@ -801,9 +763,9 @@ do_aio_cancel( 	struct proc *p, int fd, struct aiocb *aiocbp,
 		
 		next_entryp = TAILQ_NEXT( entryp, aio_workq_link );
 		if ( p == entryp->procp ) {
-			if ( (aiocbp == NULL && fd == 0) ||
-				 (aiocbp != NULL && entryp->uaiocbp == aiocbp) ||
-				 (aiocbp == NULL && fd == entryp->aiocb.aio_fildes) ) {
+			if ( (aiocbp == USER_ADDR_NULL && fd == 0) ||
+				 (aiocbp != USER_ADDR_NULL && entryp->uaiocbp == aiocbp) ||
+				 (aiocbp == USER_ADDR_NULL && fd == entryp->aiocb.aio_fildes) ) {
 				/* we found a match so we remove the entry from the */
 				/* todo work queue and place it on the done queue */
 				TAILQ_REMOVE( &aio_anchor.lio_sync_workq, entryp, aio_workq_link );
@@ -820,7 +782,7 @@ do_aio_cancel( 	struct proc *p, int fd, struct aiocb *aiocbp,
 				TAILQ_INSERT_TAIL( &p->aio_doneq, entryp, aio_workq_link );
 				aio_anchor.aio_done_count++;
 				p->aio_done_count++;
-				if ( aiocbp != NULL ) {
+				if ( aiocbp != USER_ADDR_NULL ) {
 					AIO_UNLOCK;
 					return( result );
 				}
@@ -834,9 +796,9 @@ do_aio_cancel( 	struct proc *p, int fd, struct aiocb *aiocbp,
 	 * return AIO_NOTCANCELED result. 
 	 */
 	TAILQ_FOREACH( entryp, &p->aio_activeq, aio_workq_link ) {
-		if ( (aiocbp == NULL && fd == 0) ||
-			 (aiocbp != NULL && entryp->uaiocbp == aiocbp) ||
-			 (aiocbp == NULL && fd == entryp->aiocb.aio_fildes) ) {
+		if ( (aiocbp == USER_ADDR_NULL && fd == 0) ||
+			 (aiocbp != USER_ADDR_NULL && entryp->uaiocbp == aiocbp) ||
+			 (aiocbp == USER_ADDR_NULL && fd == entryp->aiocb.aio_fildes) ) {
 			result = AIO_NOTCANCELED;
 
 			KERNEL_DEBUG( (BSDDBG_CODE(DBG_BSD_AIO, AIO_cancel_activeq)) | DBG_FUNC_NONE,
@@ -846,7 +808,7 @@ do_aio_cancel( 	struct proc *p, int fd, struct aiocb *aiocbp,
 				entryp->flags |= AIO_WAITING; /* flag for special completion processing */
 			if ( disable_notification )
 				entryp->flags |= AIO_DISABLE; /* flag for special completion processing */
-			if ( aiocbp != NULL ) {
+			if ( aiocbp != USER_ADDR_NULL ) {
 				AIO_UNLOCK;
 				return( result );
 			}
@@ -860,15 +822,15 @@ do_aio_cancel( 	struct proc *p, int fd, struct aiocb *aiocbp,
 	 */
 	if ( result == -1 ) {
 		TAILQ_FOREACH( entryp, &p->aio_doneq, aio_workq_link ) {
-		if ( (aiocbp == NULL && fd == 0) ||
-			 (aiocbp != NULL && entryp->uaiocbp == aiocbp) ||
-			 (aiocbp == NULL && fd == entryp->aiocb.aio_fildes) ) {
+		if ( (aiocbp == USER_ADDR_NULL && fd == 0) ||
+			 (aiocbp != USER_ADDR_NULL && entryp->uaiocbp == aiocbp) ||
+			 (aiocbp == USER_ADDR_NULL && fd == entryp->aiocb.aio_fildes) ) {
 				result = AIO_ALLDONE;
 
 				KERNEL_DEBUG( (BSDDBG_CODE(DBG_BSD_AIO, AIO_cancel_doneq)) | DBG_FUNC_NONE,
 							  (int)entryp->procp, (int)entryp->uaiocbp, fd, 0, 0 );
 
-				if ( aiocbp != NULL ) {
+				if ( aiocbp != USER_ADDR_NULL ) {
 					AIO_UNLOCK;
 					return( result );
 				}
@@ -898,10 +860,9 @@ aio_suspend( struct proc *p, struct aio_suspend_args *uap, int *retval )
 	int					error;
 	int					i, count;
 	uint64_t			abstime;
-	struct timespec		ts;
-	struct timeval 		tv;
+	struct user_timespec ts;
 	aio_workq_entry 	*entryp;
-	struct aiocb *		*aiocbpp;
+	user_addr_t			*aiocbpp;
 	
 	KERNEL_DEBUG( (BSDDBG_CODE(DBG_BSD_AIO, AIO_suspend)) | DBG_FUNC_START,
 		     	  (int)p, uap->nent, 0, 0, 0 );
@@ -919,13 +880,23 @@ aio_suspend( struct proc *p, struct aio_suspend_args *uap, int *retval )
 		goto ExitThisRoutine;
 	}
 
-	if ( uap->nent < 1 || uap->nent > AIO_LISTIO_MAX ) {
+	if ( uap->nent < 1 || uap->nent > aio_max_requests_per_process ) {
 		error = EINVAL;
 		goto ExitThisRoutine;
 	}
 
-	if ( uap->timeoutp != NULL ) {
-		error = copyin( (void *)uap->timeoutp, &ts, sizeof(ts) );
+	if ( uap->timeoutp != USER_ADDR_NULL ) {
+		if ( proc_is64bit(p) ) {
+			error = copyin( uap->timeoutp, &ts, sizeof(ts) );
+		}
+		else {
+			struct timespec temp;
+			error = copyin( uap->timeoutp, &temp, sizeof(temp) );
+			if ( error == 0 ) {
+				ts.tv_sec = temp.tv_sec;
+				ts.tv_nsec = temp.tv_nsec;
+			}
+		}
 		if ( error != 0 ) {
 			error = EAGAIN;
 			goto ExitThisRoutine;
@@ -941,30 +912,44 @@ aio_suspend( struct proc *p, struct aio_suspend_args *uap, int *retval )
 		clock_absolutetime_interval_to_deadline( abstime, &abstime );
 	}
 
-	MALLOC( aiocbpp, void *, (uap->nent * sizeof(struct aiocb *)), M_TEMP, M_WAITOK );
+	/* we reserve enough space for largest possible pointer size */
+	MALLOC( aiocbpp, user_addr_t *, (uap->nent * sizeof(user_addr_t)), M_TEMP, M_WAITOK );
 	if ( aiocbpp == NULL ) {
 		error = EAGAIN;
 		goto ExitThisRoutine;
 	}
 
-	/* check list of aio requests to see if any have completed */
-	for ( i = 0; i < uap->nent; i++ ) {
-		struct aiocb	*aiocbp;
+	/* copyin our aiocb pointers from list */
+	error = copyin( uap->aiocblist, aiocbpp, 
+					proc_is64bit(p) ? (uap->nent * sizeof(user_addr_t)) 
+									: (uap->nent * sizeof(uintptr_t)) );
+	if ( error != 0 ) {
+		error = EAGAIN;
+		goto ExitThisRoutine;
+	}
 	
-		/* copyin in aiocb pointer from list */
-		error = copyin( (void *)(uap->aiocblist + i), (aiocbpp + i), sizeof(aiocbp) );
-		if ( error != 0 ) {
-			error = EAGAIN;
-			goto ExitThisRoutine;
+	/* we depend on a list of user_addr_t's so we need to munge and expand */
+	/* when these pointers came from a 32-bit process */
+	if ( !proc_is64bit(p) && sizeof(uintptr_t) < sizeof(user_addr_t) ) {
+		/* position to the last entry and work back from there */
+		uintptr_t 	*my_ptrp = ((uintptr_t *)aiocbpp) + (uap->nent - 1);
+		user_addr_t *my_addrp = aiocbpp + (uap->nent - 1);
+		for (i = 0; i < uap->nent; i++, my_ptrp--, my_addrp--) {
+			*my_addrp = (user_addr_t) (*my_ptrp);
 		}
+	}
 	
+	/* check list of aio requests to see if any have completed */
+	AIO_LOCK;
+	for ( i = 0; i < uap->nent; i++ ) {
+		user_addr_t	aiocbp;  
+
 		/* NULL elements are legal so check for 'em */
 		aiocbp = *(aiocbpp + i);
-		if ( aiocbp == NULL )
+		if ( aiocbp == USER_ADDR_NULL )
 			continue;
-
+	
 		/* return immediately if any aio request in the list is done */
-		AIO_LOCK;
 		TAILQ_FOREACH( entryp, &p->aio_doneq, aio_workq_link ) {
 			if ( entryp->uaiocbp == aiocbp ) {
 				*retval = 0;
@@ -973,7 +958,6 @@ aio_suspend( struct proc *p, struct aio_suspend_args *uap, int *retval )
 				goto ExitThisRoutine;
 			}
 		}
-		AIO_UNLOCK;
 	} /* for ( ; i < uap->nent; ) */
 
 	KERNEL_DEBUG( (BSDDBG_CODE(DBG_BSD_AIO, AIO_suspend_sleep)) | DBG_FUNC_NONE,
@@ -983,19 +967,15 @@ aio_suspend( struct proc *p, struct aio_suspend_args *uap, int *retval )
 	 * wait for an async IO to complete or a signal fires or timeout expires. 
 	 * we return EAGAIN (35) for timeout expiration and EINTR (4) when a signal 
 	 * interrupts us.  If an async IO completes before a signal fires or our 
-	 * timeout expires, we get a wakeup call from aio_work_thread().  We do not
-	 * use tsleep() here in order to avoid getting kernel funnel lock.
+	 * timeout expires, we get a wakeup call from aio_work_thread().
 	 */
-	assert_wait( (event_t) &p->AIO_SUSPEND_SLEEP_CHAN, THREAD_ABORTSAFE );
-	if ( abstime > 0 ) {
-		thread_set_timer_deadline( abstime );
-	}
+	assert_wait_deadline( (event_t) &p->AIO_SUSPEND_SLEEP_CHAN, THREAD_ABORTSAFE, abstime );
+	AIO_UNLOCK;
+
 	error = thread_block( THREAD_CONTINUE_NULL );
+
 	if ( error == THREAD_AWAKENED ) {
 		/* got our wakeup call from aio_work_thread() */
-		if ( abstime > 0 ) {
-			thread_cancel_timer();
-		}
 		*retval = 0;
 		error = 0;
 	}
@@ -1005,9 +985,6 @@ aio_suspend( struct proc *p, struct aio_suspend_args *uap, int *retval )
 	}
 	else {
 		/* we were interrupted */
-		if ( abstime > 0 ) {
-			thread_cancel_timer();
-		}
 		error = EINTR;
 	}
 
@@ -1066,11 +1043,13 @@ lio_listio( struct proc *p, struct lio_listio_args *uap, int *retval )
 	int							result;
 	long						group_tag;
 	aio_workq_entry	*	 		*entryp_listp;
+	user_addr_t					*aiocbpp;
 
 	KERNEL_DEBUG( (BSDDBG_CODE(DBG_BSD_AIO, AIO_listio)) | DBG_FUNC_START,
 		     	  (int)p, uap->nent, uap->mode, 0, 0 );
 	
 	entryp_listp = NULL;
+	aiocbpp = NULL;
 	call_result = -1;
 	*retval = -1;
 	if ( !(uap->mode == LIO_NOWAIT || uap->mode == LIO_WAIT) ) {
@@ -1095,27 +1074,48 @@ lio_listio( struct proc *p, struct lio_listio_args *uap, int *retval )
 	 * allocate a list of aio_workq_entry pointers that we will use to queue
 	 * up all our requests at once while holding our lock.
 	 */
-	MALLOC( entryp_listp, void *, (uap->nent * sizeof(struct aiocb *)), M_TEMP, M_WAITOK );
+	MALLOC( entryp_listp, void *, (uap->nent * sizeof(aio_workq_entry *)), M_TEMP, M_WAITOK );
 	if ( entryp_listp == NULL ) {
 		call_result = EAGAIN;
 		goto ExitRoutine;
 	}
 
+	/* we reserve enough space for largest possible pointer size */
+	MALLOC( aiocbpp, user_addr_t *, (uap->nent * sizeof(user_addr_t)), M_TEMP, M_WAITOK );
+	if ( aiocbpp == NULL ) {
+		call_result = EAGAIN;
+		goto ExitRoutine;
+	}
+
+	/* copyin our aiocb pointers from list */
+	result = copyin( uap->aiocblist, aiocbpp, 
+					IS_64BIT_PROCESS(p) ? (uap->nent * sizeof(user_addr_t)) 
+										: (uap->nent * sizeof(uintptr_t)) );
+	if ( result != 0 ) {
+		call_result = EAGAIN;
+		goto ExitRoutine;
+	}
+	
+	/* we depend on a list of user_addr_t's so we need to munge and expand */
+	/* when these pointers came from a 32-bit process */
+	if ( !IS_64BIT_PROCESS(p) && sizeof(uintptr_t) < sizeof(user_addr_t) ) {
+		/* position to the last entry and work back from there */
+		uintptr_t 	*my_ptrp = ((uintptr_t *)aiocbpp) + (uap->nent - 1);
+		user_addr_t *my_addrp = aiocbpp + (uap->nent - 1);
+		for (i = 0; i < uap->nent; i++, my_ptrp--, my_addrp--) {
+			*my_addrp = (user_addr_t) (*my_ptrp);
+		}
+	}
+
 	/* process list of aio requests */
 	for ( i = 0; i < uap->nent; i++ ) {
-		struct aiocb	*my_aiocbp;
+		user_addr_t my_aiocbp; 
 	
 		*(entryp_listp + i) = NULL;
+		my_aiocbp = *(aiocbpp + i);
 		
-		/* copyin in aiocb pointer from list */
-		result = copyin( (void *)(uap->aiocblist + i), &my_aiocbp, sizeof(my_aiocbp) );
-		if ( result != 0 ) {
-			call_result = EAGAIN;
-			continue;
-		}
-	
 		/* NULL elements are legal so check for 'em */
-		if ( my_aiocbp == NULL )
+		if ( my_aiocbp == USER_ADDR_NULL )
 			continue;
 
 		if ( uap->mode == LIO_NOWAIT )
@@ -1150,7 +1150,8 @@ lio_listio( struct proc *p, struct lio_listio_args *uap, int *retval )
 			
 			my_map = entryp->aio_map;
 			entryp->aio_map = VM_MAP_NULL;
-			result = EAGAIN; 
+			if ( call_result == -1 )
+				call_result = EAGAIN; 
 			AIO_UNLOCK;
 			aio_free_request( entryp, my_map );
 			AIO_LOCK;
@@ -1170,11 +1171,11 @@ lio_listio( struct proc *p, struct lio_listio_args *uap, int *retval )
 			aio_anchor.lio_sync_workq_count++;
 		}
 	}
-	AIO_UNLOCK;
 
-	if ( uap->mode == LIO_NOWAIT ) 
+	if ( uap->mode == LIO_NOWAIT ) { 
 		/* caller does not want to wait so we'll fire off a worker thread and return */
-		wakeup_one( &aio_anchor.aio_async_workq );
+		wakeup_one( (caddr_t) &aio_anchor.aio_async_workq );
+	}
 	else {
 		aio_workq_entry		 	*entryp;
 		int 					error;
@@ -1182,18 +1183,14 @@ lio_listio( struct proc *p, struct lio_listio_args *uap, int *retval )
 		/* 
 		 * mode is LIO_WAIT - handle the IO requests now.
 		 */
-		AIO_LOCK;
  		entryp = TAILQ_FIRST( &aio_anchor.lio_sync_workq );
  		while ( entryp != NULL ) {
 			if ( p == entryp->procp && group_tag == entryp->group_tag ) {
-				boolean_t	funnel_state;
 					
 				TAILQ_REMOVE( &aio_anchor.lio_sync_workq, entryp, aio_workq_link );
 				aio_anchor.lio_sync_workq_count--;
 				AIO_UNLOCK;
 				
-				// file system IO code path requires kernel funnel lock
-				funnel_state = thread_funnel_set( kernel_flock, TRUE );
 				if ( (entryp->flags & AIO_READ) != 0 ) {
 					error = do_aio_read( entryp );
 				}
@@ -1211,7 +1208,6 @@ lio_listio( struct proc *p, struct lio_listio_args *uap, int *retval )
 				entryp->errorval = error;	
 				if ( error != 0 && call_result == -1 )
 					call_result = EIO;
-				(void) thread_funnel_set( kernel_flock, funnel_state );
 
 				AIO_LOCK;
 				/* we're done with the IO request so move it on the done queue */
@@ -1227,8 +1223,8 @@ lio_listio( struct proc *p, struct lio_listio_args *uap, int *retval )
 			
  			entryp = TAILQ_NEXT( entryp, aio_workq_link );
         } /* while ( entryp != NULL ) */
-		AIO_UNLOCK;
 	} /* uap->mode == LIO_WAIT */
+	AIO_UNLOCK;
 
 	/* call_result == -1 means we had no trouble queueing up requests */
 	if ( call_result == -1 ) {
@@ -1239,6 +1235,8 @@ lio_listio( struct proc *p, struct lio_listio_args *uap, int *retval )
 ExitRoutine:		
 	if ( entryp_listp != NULL )
 		FREE( entryp_listp, M_TEMP );
+	if ( aiocbpp != NULL )
+		FREE( aiocbpp, M_TEMP );
 
 	KERNEL_DEBUG( (BSDDBG_CODE(DBG_BSD_AIO, AIO_listio)) | DBG_FUNC_END,
 		     	  (int)p, call_result, 0, 0, 0 );
@@ -1258,30 +1256,31 @@ static void
 aio_work_thread( void )
 {
 	aio_workq_entry		 	*entryp;
-	struct uthread			*uthread = (struct uthread *)get_bsdthread_info(current_act());
 	
 	for( ;; ) {
+		AIO_LOCK;
 		entryp = aio_get_some_work();
         if ( entryp == NULL ) {
         	/* 
         	 * aio worker threads wait for some work to get queued up 
         	 * by aio_queue_async_request.  Once some work gets queued 
         	 * it will wake up one of these worker threads just before 
-        	 * returning to our caller in user land.   We do not use
-			 * tsleep() here in order to avoid getting kernel funnel lock.
+        	 * returning to our caller in user land.
         	 */
 			assert_wait( (event_t) &aio_anchor.aio_async_workq, THREAD_UNINT );
-			thread_block( THREAD_CONTINUE_NULL );
+			AIO_UNLOCK; 
 			
-			KERNEL_DEBUG( (BSDDBG_CODE(DBG_BSD_AIO, AIO_worker_wake)) | DBG_FUNC_NONE,
-						  0, 0, 0, 0, 0 );
+			thread_block( (thread_continue_t)aio_work_thread );
+			/* NOT REACHED */
         }
 		else {
 			int 			error;
-			boolean_t 		funnel_state;
 			vm_map_t 		currentmap;
 			vm_map_t 		oldmap = VM_MAP_NULL;
 			task_t			oldaiotask = TASK_NULL;
+			struct uthread	*uthreadp = NULL;
+
+			AIO_UNLOCK; 
 
 			KERNEL_DEBUG( (BSDDBG_CODE(DBG_BSD_AIO, AIO_worker_thread)) | DBG_FUNC_START,
 						  (int)entryp->procp, (int)entryp->uaiocbp, entryp->flags, 0, 0 );
@@ -1290,12 +1289,11 @@ aio_work_thread( void )
 			 * Assume the target's address space identity for the duration
 			 * of the IO.
 			 */
-			funnel_state = thread_funnel_set( kernel_flock, TRUE );
-			
 			currentmap = get_task_map( (current_proc())->task );
 			if ( currentmap != entryp->aio_map ) {
-				oldaiotask = uthread->uu_aio_task;
-				uthread->uu_aio_task = entryp->procp->task;
+				uthreadp = (struct uthread *) get_bsdthread_info(current_thread());
+				oldaiotask = uthreadp->uu_aio_task;
+				uthreadp->uu_aio_task = entryp->procp->task;
 				oldmap = vm_map_switch( entryp->aio_map );
 			}
 			
@@ -1316,7 +1314,7 @@ aio_work_thread( void )
 			entryp->errorval = error;		
 			if ( currentmap != entryp->aio_map ) {
 				(void) vm_map_switch( oldmap );
-				uthread->uu_aio_task = oldaiotask;
+				uthreadp->uu_aio_task = oldaiotask;
 			}
 				
 			/* we're done with the IO request so pop it off the active queue and */
@@ -1344,7 +1342,6 @@ aio_work_thread( void )
 			}
 			
 			do_aio_completion( entryp );
-			(void) thread_funnel_set( kernel_flock, funnel_state );
 			
 			KERNEL_DEBUG( (BSDDBG_CODE(DBG_BSD_AIO, AIO_worker_thread)) | DBG_FUNC_END,
 						  (int)entryp->procp, (int)entryp->uaiocbp, entryp->errorval, 
@@ -1374,16 +1371,15 @@ aio_work_thread( void )
  * aio_get_some_work - get the next async IO request that is ready to be executed.
  * aio_fsync complicates matters a bit since we cannot do the fsync until all async
  * IO requests at the time the aio_fsync call came in have completed.
+ * NOTE - AIO_LOCK must be held by caller
  */
 
 static aio_workq_entry *
 aio_get_some_work( void )
 {
 	aio_workq_entry		 		*entryp;
-	int							skip_count = 0;
 	
 	/* pop some work off the work queue and add to our active queue */
-	AIO_LOCK;
 	for ( entryp = TAILQ_FIRST( &aio_anchor.aio_async_workq );
 		  entryp != NULL;
 		  entryp = TAILQ_NEXT( entryp, aio_workq_link ) ) {
@@ -1408,7 +1404,6 @@ aio_get_some_work( void )
 		aio_anchor.aio_active_count++;
 		entryp->procp->aio_active_count++;
 	}
-	AIO_UNLOCK;
 		
 	return( entryp );
 	
@@ -1427,7 +1422,7 @@ aio_delay_fsync_request( aio_workq_entry *entryp )
 	aio_workq_entry 		*my_entryp;
 
 	TAILQ_FOREACH( my_entryp, &entryp->procp->aio_activeq, aio_workq_link ) {
-		if ( my_entryp->fsyncp != NULL &&
+		if ( my_entryp->fsyncp != USER_ADDR_NULL &&
 			 entryp->uaiocbp == my_entryp->fsyncp &&
 			 entryp->aiocb.aio_fildes == my_entryp->aiocb.aio_fildes ) {
 			return( TRUE );
@@ -1447,7 +1442,7 @@ aio_delay_fsync_request( aio_workq_entry *entryp )
  */
 
 static int
-aio_queue_async_request( struct proc *procp, struct aiocb *aiocbp, int kindOfIO )
+aio_queue_async_request( struct proc *procp, user_addr_t aiocbp, int kindOfIO )
 {
 	aio_workq_entry		 	*entryp;
 	int						result;
@@ -1464,7 +1459,16 @@ aio_queue_async_request( struct proc *procp, struct aiocb *aiocbp, int kindOfIO 
 	entryp->uaiocbp = aiocbp;
 	entryp->flags |= kindOfIO;
 	entryp->aio_map = VM_MAP_NULL;
-	result = copyin( aiocbp, &entryp->aiocb, sizeof(entryp->aiocb) );
+
+	if ( !IS_64BIT_PROCESS(procp) ) {
+		struct aiocb aiocb32;
+
+		result = copyin( aiocbp, &aiocb32, sizeof(aiocb32) );
+		if ( result == 0 )
+			do_munge_aiocb( &aiocb32, &entryp->aiocb );
+	} else 
+		result = copyin( aiocbp, &entryp->aiocb, sizeof(entryp->aiocb) );
+
 	if ( result != 0 ) {
 		result = EAGAIN;
 		goto error_exit;
@@ -1510,13 +1514,12 @@ aio_queue_async_request( struct proc *procp, struct aiocb *aiocbp, int kindOfIO 
 	TAILQ_INSERT_TAIL( &aio_anchor.aio_async_workq, entryp, aio_workq_link );
 	aio_anchor.aio_async_workq_count++;
 	
-	AIO_UNLOCK;
+	wakeup_one( (caddr_t) &aio_anchor.aio_async_workq );
+	AIO_UNLOCK; 
 
 	KERNEL_DEBUG( (BSDDBG_CODE(DBG_BSD_AIO, AIO_work_queued)) | DBG_FUNC_NONE,
 		     	  (int)procp, (int)aiocbp, 0, 0, 0 );
-
-	wakeup_one( &aio_anchor.aio_async_workq );
-
+	
 	return( 0 );
 	
 error_exit:
@@ -1542,8 +1545,8 @@ error_exit:
  */
 
 static int
-lio_create_async_entry( struct proc *procp, struct aiocb *aiocbp, 
-						 struct sigevent *sigp, long group_tag,
+lio_create_async_entry( struct proc *procp, user_addr_t aiocbp, 
+						 user_addr_t sigp, long group_tag,
 						 aio_workq_entry **entrypp )
 {
 	aio_workq_entry		 		*entryp;
@@ -1562,7 +1565,16 @@ lio_create_async_entry( struct proc *procp, struct aiocb *aiocbp,
 	entryp->flags |= AIO_LIO;
 	entryp->group_tag = group_tag;
 	entryp->aio_map = VM_MAP_NULL;
-	result = copyin( aiocbp, &entryp->aiocb, sizeof(entryp->aiocb) );
+
+	if ( !IS_64BIT_PROCESS(procp) ) {
+		struct aiocb aiocb32;
+
+		result = copyin( aiocbp, &aiocb32, sizeof(aiocb32) );
+		if ( result == 0 )
+			do_munge_aiocb( &aiocb32, &entryp->aiocb );
+	} else
+		result = copyin( aiocbp, &entryp->aiocb, sizeof(entryp->aiocb) );
+
 	if ( result != 0 ) {
 		result = EAGAIN;
 		goto error_exit;
@@ -1577,8 +1589,32 @@ lio_create_async_entry( struct proc *procp, struct aiocb *aiocbp,
 
 	/* use sigevent passed in to lio_listio for each of our calls, but only */
 	/* do completion notification after the last request completes. */
-	if ( sigp != NULL ) {
-		result = copyin( sigp, &entryp->aiocb.aio_sigevent, sizeof(entryp->aiocb.aio_sigevent) );
+	if ( sigp != USER_ADDR_NULL ) {
+		if ( !IS_64BIT_PROCESS(procp) ) {
+			struct sigevent sigevent32;
+
+			result = copyin( sigp, &sigevent32, sizeof(sigevent32) );
+			if ( result == 0 ) {
+				/* also need to munge aio_sigevent since it contains pointers */
+				/* special case here.  since we do not know if sigev_value is an */
+				/* int or a ptr we do NOT cast the ptr to a user_addr_t.   This  */
+				/* means if we send this info back to user space we need to remember */
+				/* sigev_value was not expanded for the 32-bit case.  */
+				/* NOTE - this does NOT affect us since we don't support sigev_value */
+				/* yet in the aio context.  */
+				//LP64
+				entryp->aiocb.aio_sigevent.sigev_notify = sigevent32.sigev_notify;
+				entryp->aiocb.aio_sigevent.sigev_signo = sigevent32.sigev_signo;
+				entryp->aiocb.aio_sigevent.sigev_value.size_equivalent.sival_int = 
+					sigevent32.sigev_value.sival_int;
+				entryp->aiocb.aio_sigevent.sigev_notify_function = 
+					CAST_USER_ADDR_T(sigevent32.sigev_notify_function);
+				entryp->aiocb.aio_sigevent.sigev_notify_attributes = 
+					CAST_USER_ADDR_T(sigevent32.sigev_notify_attributes);
+			}
+		} else
+			result = copyin( sigp, &entryp->aiocb.aio_sigevent, sizeof(entryp->aiocb.aio_sigevent) );
+
 		if ( result != 0 ) {
 			result = EAGAIN;
 			goto error_exit;
@@ -1599,7 +1635,7 @@ lio_create_async_entry( struct proc *procp, struct aiocb *aiocbp,
 	
 error_exit:
 	if ( entryp != NULL )
-		zfree( aio_workq_zonep, (vm_offset_t) entryp );
+		zfree( aio_workq_zonep, entryp );
 		
 	return( result );
 	
@@ -1645,7 +1681,7 @@ aio_mark_requests( aio_workq_entry *entryp )
  */
 
 static int
-lio_create_sync_entry( struct proc *procp, struct aiocb *aiocbp, 
+lio_create_sync_entry( struct proc *procp, user_addr_t aiocbp, 
 						long group_tag, aio_workq_entry **entrypp )
 {
 	aio_workq_entry		 		*entryp;
@@ -1664,7 +1700,16 @@ lio_create_sync_entry( struct proc *procp, struct aiocb *aiocbp,
 	entryp->flags |= AIO_LIO;
 	entryp->group_tag = group_tag;
 	entryp->aio_map = VM_MAP_NULL;
-	result = copyin( aiocbp, &entryp->aiocb, sizeof(entryp->aiocb) );
+
+	if ( !IS_64BIT_PROCESS(procp) ) {
+		struct aiocb aiocb32;
+
+		result = copyin( aiocbp, &aiocb32, sizeof(aiocb32) );
+		if ( result == 0 )
+			do_munge_aiocb( &aiocb32, &entryp->aiocb );
+	} else 
+		result = copyin( aiocbp, &entryp->aiocb, sizeof(entryp->aiocb) );
+
 	if ( result != 0 ) {
 		result = EAGAIN;
 		goto error_exit;
@@ -1687,7 +1732,7 @@ lio_create_sync_entry( struct proc *procp, struct aiocb *aiocbp,
 	
 error_exit:
 	if ( entryp != NULL )
-		zfree( aio_workq_zonep, (vm_offset_t) entryp );
+		zfree( aio_workq_zonep, entryp );
 		
 	return( result );
 	
@@ -1709,7 +1754,7 @@ aio_free_request( aio_workq_entry *entryp, vm_map_t the_map )
 		vm_map_deallocate( the_map );
 	}
 		
-	zfree( aio_workq_zonep, (vm_offset_t) entryp );
+	zfree( aio_workq_zonep, entryp );
 
 	return( 0 );
 	
@@ -1722,8 +1767,7 @@ aio_free_request( aio_workq_entry *entryp, vm_map_t the_map )
 static int
 aio_validate( aio_workq_entry *entryp ) 
 {
-	boolean_t 					funnel_state;
-	struct file 				*fp;
+	struct fileproc 				*fp;
 	int							flag;
 	int							result;
 	
@@ -1746,10 +1790,10 @@ aio_validate( aio_workq_entry *entryp )
 	}
 
 	if ( (entryp->flags & (AIO_READ | AIO_WRITE)) != 0 ) {
-		if ( entryp->aiocb.aio_offset < 0 			||
-			 entryp->aiocb.aio_nbytes < 0 			||
-			 entryp->aiocb.aio_nbytes > INT_MAX  	||
-			 entryp->aiocb.aio_buf == NULL )
+		// LP64todo - does max value for aio_nbytes need to grow? 
+		if ( entryp->aiocb.aio_nbytes > INT_MAX		||
+			 entryp->aiocb.aio_buf == USER_ADDR_NULL ||
+			 entryp->aiocb.aio_offset < 0 )
 			return( EINVAL );
 	}
 
@@ -1769,27 +1813,29 @@ aio_validate( aio_workq_entry *entryp )
 		return (EINVAL);
 	
 	/* validate the file descriptor and that the file was opened
-	 * for the appropriate read / write access.  This section requires 
-	 * kernel funnel lock.
+	 * for the appropriate read / write access.
 	 */
-	funnel_state = thread_funnel_set( kernel_flock, TRUE );
+	proc_fdlock(entryp->procp);
 
-	result = fdgetf( entryp->procp, entryp->aiocb.aio_fildes, &fp );
+	result = fp_lookup( entryp->procp, entryp->aiocb.aio_fildes, &fp , 1);
 	if ( result == 0 ) {
-		if ( (fp->f_flag & flag) == 0 ) {
+		if ( (fp->f_fglob->fg_flag & flag) == 0 ) {
 			/* we don't have read or write access */
 			result = EBADF;
 		}
-		else if ( fp->f_type != DTYPE_VNODE ) {
+		else if ( fp->f_fglob->fg_type != DTYPE_VNODE ) {
 			/* this is not a file */
 			result = ESPIPE;
-		}
+		} else
+		        fp->f_flags |= FP_AIOISSUED;
+
+		fp_drop(entryp->procp, entryp->aiocb.aio_fildes, fp , 1);
 	}
 	else {
 		result = EBADF;
 	}
 	
-	(void) thread_funnel_set( kernel_flock, funnel_state );
+	proc_fdunlock(entryp->procp);
 
 	return( result );
 
@@ -1807,7 +1853,6 @@ static int
 aio_get_process_count( struct proc *procp ) 
 {
 	aio_workq_entry		 		*entryp;
-	int							error;
 	int							count;
 	
 	/* begin with count of completed async IO requests for this process */
@@ -1898,15 +1943,15 @@ do_aio_completion( aio_workq_entry *entryp )
 		
 		AIO_LOCK;
 		active_requests = aio_active_requests_for_process( entryp->procp );
-		AIO_UNLOCK;
+		//AIO_UNLOCK;
 		if ( active_requests < 1 ) {
 			/* no active aio requests for this process, continue exiting */
+			wakeup_one( (caddr_t) &entryp->procp->AIO_CLEANUP_SLEEP_CHAN );
 
 			KERNEL_DEBUG( (BSDDBG_CODE(DBG_BSD_AIO, AIO_completion_cleanup_wake)) | DBG_FUNC_NONE,
 					  	  (int)entryp->procp, (int)entryp->uaiocbp, 0, 0, 0 );
-		
-			wakeup_one( &entryp->procp->AIO_CLEANUP_SLEEP_CHAN );
 		}
+		AIO_UNLOCK;
 		return;
 	}
 
@@ -1920,10 +1965,12 @@ do_aio_completion( aio_workq_entry *entryp )
 	 * call wakeup for them.  If we do mark them we should unmark them after
 	 * the aio_suspend wakes up.
 	 */
+	AIO_LOCK; 
+	wakeup_one( (caddr_t) &entryp->procp->AIO_SUSPEND_SLEEP_CHAN ); 
+	AIO_UNLOCK;
+
 	KERNEL_DEBUG( (BSDDBG_CODE(DBG_BSD_AIO, AIO_completion_suspend_wake)) | DBG_FUNC_NONE,
 				  (int)entryp->procp, (int)entryp->uaiocbp, 0, 0, 0 );
-		
-	wakeup_one( &entryp->procp->AIO_SUSPEND_SLEEP_CHAN ); 
 	
 	return;
 	
@@ -1971,20 +2018,27 @@ aio_last_group_io( aio_workq_entry *entryp )
 static int
 do_aio_read( aio_workq_entry *entryp )
 {
-	struct file 			*fp;
+	struct fileproc 			*fp;
 	int						error;
 
-	fp = holdfp( entryp->procp->p_fd, entryp->aiocb.aio_fildes, FREAD );
+	if ( (error = fp_lookup(entryp->procp, entryp->aiocb.aio_fildes, &fp , 0)) )
+		return(error);
+	if ( (fp->f_fglob->fg_flag & FREAD) == 0 ) {
+		fp_drop(entryp->procp, entryp->aiocb.aio_fildes, fp, 0);
+		return(EBADF);
+	}
 	if ( fp != NULL ) {
 		error = dofileread( entryp->procp, fp, entryp->aiocb.aio_fildes, 
-							(void *)entryp->aiocb.aio_buf, 
+							entryp->aiocb.aio_buf, 
 							entryp->aiocb.aio_nbytes,
 							entryp->aiocb.aio_offset, FOF_OFFSET, 
 							&entryp->returnval );
-		frele( fp );
+		fp_drop(entryp->procp, entryp->aiocb.aio_fildes, fp, 0);
 	}
-	else
+	else {
+		fp_drop(entryp->procp, entryp->aiocb.aio_fildes, fp, 0);
 		error = EBADF;
+	}
 			
 	return( error );
 	
@@ -1997,20 +2051,28 @@ do_aio_read( aio_workq_entry *entryp )
 static int
 do_aio_write( aio_workq_entry *entryp )
 {
-	struct file 			*fp;
+	struct fileproc 		*fp;
 	int						error;
 
-	fp = holdfp( entryp->procp->p_fd, entryp->aiocb.aio_fildes, FWRITE );
+	if ( (error = fp_lookup(entryp->procp, entryp->aiocb.aio_fildes, &fp , 0)) )
+		return(error);
+	if ( (fp->f_fglob->fg_flag & FWRITE) == 0 ) {
+		fp_drop(entryp->procp, entryp->aiocb.aio_fildes, fp, 0);
+		return(EBADF);
+	}
 	if ( fp != NULL ) {
 		error = dofilewrite( entryp->procp, fp, entryp->aiocb.aio_fildes, 
-							 (const void *)entryp->aiocb.aio_buf, 
+							 entryp->aiocb.aio_buf, 
 							 entryp->aiocb.aio_nbytes,
 							 entryp->aiocb.aio_offset, FOF_OFFSET, 
 							 &entryp->returnval );
-		frele( fp );
+		
+		fp_drop(entryp->procp, entryp->aiocb.aio_fildes, fp, 0);
 	}
-	else
+	else {
+		fp_drop(entryp->procp, entryp->aiocb.aio_fildes, fp, 0);
 		error = EBADF;
+	}
 
 	return( error );
 
@@ -2038,21 +2100,32 @@ aio_active_requests_for_process( struct proc *procp )
 static int
 do_aio_fsync( aio_workq_entry *entryp )
 {
-	register struct vnode 	*vp;
-	struct file 			*fp;
-	int						error;
+	struct vfs_context 	context;
+	struct vnode 		*vp;
+	struct fileproc		*fp;
+	int					error;
 	
 	/* 
 	 * NOTE - we will not support AIO_DSYNC until fdatasync() is supported.  
 	 * AIO_DSYNC is caught before we queue up a request and flagged as an error.  
 	 * The following was shamelessly extracted from fsync() implementation. 
 	 */
-	error = getvnode( entryp->procp, entryp->aiocb.aio_fildes, &fp );
+
+	error = fp_getfvp( entryp->procp, entryp->aiocb.aio_fildes, &fp, &vp);
 	if ( error == 0 ) {
-		vp = (struct vnode *)fp->f_data;
-		vn_lock( vp, LK_EXCLUSIVE | LK_RETRY, entryp->procp );
-		error = VOP_FSYNC( vp, fp->f_cred, MNT_WAIT, entryp->procp );
-		VOP_UNLOCK( vp, 0, entryp->procp );
+		if ( (error = vnode_getwithref(vp)) ) {
+		        fp_drop(entryp->procp, entryp->aiocb.aio_fildes, fp, 0);
+			entryp->returnval = -1;
+			return(error);
+		}
+		context.vc_proc = entryp->procp;
+		context.vc_ucred = fp->f_fglob->fg_cred;
+
+		error = VNOP_FSYNC( vp, MNT_WAIT, &context);
+
+		(void)vnode_put(vp);
+
+		fp_drop(entryp->procp, entryp->aiocb.aio_fildes, fp, 0);
 	}
 	if ( error != 0 )
 		entryp->returnval = -1;
@@ -2071,7 +2144,7 @@ do_aio_fsync( aio_workq_entry *entryp )
 
 static boolean_t
 is_already_queued( 	struct proc *procp, 
-					struct aiocb *aiocbp ) 
+					user_addr_t aiocbp ) 
 {
 	aio_workq_entry		 	*entryp;
 	boolean_t				result;
@@ -2124,7 +2197,13 @@ aio_init( void )
 {
 	int			i;
 	
-	simple_lock_init( &aio_lock );
+	aio_lock_grp_attr = lck_grp_attr_alloc_init();
+	lck_grp_attr_setstat(aio_lock_grp_attr);
+	aio_lock_grp = lck_grp_alloc_init("aio", aio_lock_grp_attr);
+	aio_lock_attr = lck_attr_alloc_init();
+	//lck_attr_setdebug(aio_lock_attr);
+
+	aio_lock = lck_mtx_alloc_init(aio_lock_grp, aio_lock_attr);
 
 	AIO_LOCK;
 	TAILQ_INIT( &aio_anchor.aio_async_workq );	
@@ -2173,5 +2252,39 @@ _aio_create_worker_threads( int num )
 task_t
 get_aiotask(void)
 {
-	return  ((struct uthread *)get_bsdthread_info(current_act()))->uu_aio_task;  
+	return  ((struct uthread *)get_bsdthread_info(current_thread()))->uu_aio_task;  
+}
+
+
+/*
+ * In the case of an aiocb from a
+ * 32-bit process we need to expand some longs and pointers to the correct
+ * sizes in order to let downstream code always work on the same type of
+ * aiocb (in our case that is a user_aiocb)
+ */
+static void 
+do_munge_aiocb( struct aiocb *my_aiocbp, struct user_aiocb *the_user_aiocbp ) 
+{
+	the_user_aiocbp->aio_fildes = my_aiocbp->aio_fildes;
+	the_user_aiocbp->aio_offset = my_aiocbp->aio_offset;
+	the_user_aiocbp->aio_buf = CAST_USER_ADDR_T(my_aiocbp->aio_buf);
+	the_user_aiocbp->aio_nbytes = my_aiocbp->aio_nbytes;
+	the_user_aiocbp->aio_reqprio = my_aiocbp->aio_reqprio;
+	the_user_aiocbp->aio_lio_opcode = my_aiocbp->aio_lio_opcode;
+
+	/* special case here.  since we do not know if sigev_value is an */
+	/* int or a ptr we do NOT cast the ptr to a user_addr_t.   This  */
+	/* means if we send this info back to user space we need to remember */
+	/* sigev_value was not expanded for the 32-bit case.  */
+	/* NOTE - this does NOT affect us since we don't support sigev_value */
+	/* yet in the aio context.  */
+	//LP64
+	the_user_aiocbp->aio_sigevent.sigev_notify = my_aiocbp->aio_sigevent.sigev_notify;
+	the_user_aiocbp->aio_sigevent.sigev_signo = my_aiocbp->aio_sigevent.sigev_signo;
+	the_user_aiocbp->aio_sigevent.sigev_value.size_equivalent.sival_int = 
+		my_aiocbp->aio_sigevent.sigev_value.sival_int;
+	the_user_aiocbp->aio_sigevent.sigev_notify_function = 
+		CAST_USER_ADDR_T(my_aiocbp->aio_sigevent.sigev_notify_function);
+	the_user_aiocbp->aio_sigevent.sigev_notify_attributes = 
+		CAST_USER_ADDR_T(my_aiocbp->aio_sigevent.sigev_notify_attributes);
 }

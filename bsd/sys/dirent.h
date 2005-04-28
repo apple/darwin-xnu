@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -69,19 +69,50 @@
 #ifndef _SYS_DIRENT_H 
 #define _SYS_DIRENT_H 
 
-struct dirent {
-	u_int32_t d_fileno;		/* file number of entry */
-	u_int16_t d_reclen;		/* length of this record */
-	u_int8_t  d_type; 		/* file type, see below */
-	u_int8_t  d_namlen;		/* length of string in d_name */
-#ifdef _POSIX_SOURCE
-	char	d_name[255 + 1];	/* name must be no longer than this */
-#else
-#define	MAXNAMLEN	255
-	char	d_name[MAXNAMLEN + 1];	/* name must be no longer than this */
+#include <sys/_types.h>
+#include <sys/cdefs.h>
+
+#ifndef	_INO_T
+typedef	__darwin_ino_t	ino_t;		/* inode number */
+#define _INO_T
 #endif
+
+#define __DARWIN_MAXNAMLEN	255
+
+#if __DARWIN_ALIGN_POWER
+#pragma options align=power
+#endif
+
+struct dirent {
+	ino_t d_ino;			/* file number of entry */
+	__uint16_t d_reclen;		/* length of this record */
+	__uint8_t  d_type; 		/* file type, see below */
+	__uint8_t  d_namlen;		/* length of string in d_name */
+	char d_name[__DARWIN_MAXNAMLEN + 1];	/* name must be no longer than this */
 };
 
+#if __DARWIN_ALIGN_POWER
+#pragma options align=reset
+#endif
+
+#ifdef KERNEL
+#include <sys/kernel_types.h>
+
+/* Extended directory entry */
+struct direntry{
+	ino64_t     d_ino;      /* file number of entry */
+	__uint64_t  d_seekoff;   /* seek offset (optional, used by servers) */
+	__uint16_t  d_reclen;   /* length of this record */
+	__uint16_t  d_namlen;   /* length of string in d_name */
+	__uint8_t   d_type;     /* file type, see below */
+	u_char      d_name[MAXPATHLEN - 1]; /* entry name (up to MAXPATHLEN - 1 bytes) */
+};
+#endif
+
+
+#ifndef _POSIX_C_SOURCE
+#define	d_fileno	d_ino		/* backward compatibility */
+#define	MAXNAMLEN	__DARWIN_MAXNAMLEN
 /*
  * File types
  */
@@ -100,5 +131,6 @@ struct dirent {
  */
 #define	IFTODT(mode)	(((mode) & 0170000) >> 12)
 #define	DTTOIF(dirtype)	((dirtype) << 12)
+#endif
 
 #endif /* _SYS_DIRENT_H  */

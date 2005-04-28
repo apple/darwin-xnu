@@ -84,7 +84,7 @@ static u_int32_t _K[] = { 0x5a827999, 0x6ed9eba1, 0x8f1bbcdc, 0xca62c1d6 };
 		sha1_step(ctxt);		\
      }
 
-static void sha1_step __P((struct sha1_ctxt *));
+static void sha1_step(struct sha1_ctxt *);
 
 static void
 sha1_step(ctxt)

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -56,6 +56,7 @@
 #include <mach/mach_types.h>
 #include <mach/kern_return.h>
 #include <mach/message.h>
+#include <mach/mach_traps.h>
 
 /*
  *	Constant definitions for thread_switch trap.
@@ -67,9 +68,4 @@
 
 #define valid_switch_option(opt)	(0 <= (opt) && (opt) <= 2)
 
-extern kern_return_t	thread_switch(
-							mach_port_name_t	thread_name,
-							int					option,
-							mach_msg_timeout_t	option_time);
-     
 #endif	/* _MACH_THREAD_SWITCH_H_ */

@@ -62,10 +62,10 @@
 #include <sys/systm.h>
 #include <sys/conf.h>
 #include <sys/ioctl.h>
-#include <sys/proc.h>
+#include <sys/proc_internal.h>
 #include <sys/tty.h>
-#include <sys/vnode.h>
-#include <sys/file.h>
+#include <sys/vnode_internal.h>
+#include <sys/file_internal.h>
 #ifndef NeXT
 #include <sys/kernel.h>
 #ifdef DEVFS
@@ -77,6 +77,18 @@ static	d_read_t	cttyread;
 static	d_write_t	cttywrite;
 static	d_ioctl_t	cttyioctl;
 static	d_select_t	cttyselect;
+
+#endif /* !NeXT */
+
+/* Forward declarations for cdevsw[] entry */
+/* XXX we should consider making these static */
+int cttyopen(dev_t dev, int flag, int mode, struct proc *p);
+int cttyread(dev_t dev, struct uio *uio, int flag);
+int cttywrite(dev_t dev, struct uio *uio, int flag);
+int cttyioctl(dev_t dev, u_long cmd, caddr_t addr, int flag, struct proc *p);
+int cttyselect(dev_t dev, int flag, void* wql, struct proc *p);
+
+#ifndef NeXT
 
 #define CDEV_MAJOR 1
 /* Don't make static, fdesc_vnops uses this. */
@@ -91,80 +103,59 @@ struct cdevsw ctty_cdevsw =
 
 /*ARGSUSED*/
 int
-cttyopen(dev, flag, mode, p)
-	dev_t dev;
-	int flag, mode;
-	struct proc *p;
+cttyopen(__unused dev_t dev, int flag, __unused int mode, struct proc *p)
 {
 	struct vnode *ttyvp = cttyvp(p);
+	struct vfs_context context;
 	int error;
 
 	if (ttyvp == NULL)
 		return (ENXIO);
-#ifndef NeXT
-	VOP_LOCK(ttyvp);
-#else
-	/*
-	 * This is the only place that NeXT Guarding has been used for
-	 * VOP_.*LOCK style calls.  Note all of the other diffs should
-	 * use the three paramater lock/unlock.
-	 */
-	vn_lock(ttyvp, LK_EXCLUSIVE | LK_RETRY, p);
-#endif
 
-#ifdef PARANOID
-	/*
-	 * Since group is tty and mode is 620 on most terminal lines
-	 * and since sessions protect terminals from processes outside
-	 * your session, this check is probably no longer necessary.
-	 * Since it inhibits setuid root programs that later switch
-	 * to another user from accessing /dev/tty, we have decided
-	 * to delete this test. (mckusick 5/93)
-	 */
-	error = VOP_ACCESS(ttyvp,
-	  (flag&FREAD ? VREAD : 0) | (flag&FWRITE ? VWRITE : 0), p->p_ucred, p);
-	if (!error)
-#endif /* PARANOID */
-		error = VOP_OPEN(ttyvp, flag, NOCRED, p);
-	VOP_UNLOCK(ttyvp, 0, p);
+	context.vc_proc = p;
+	context.vc_ucred = p->p_ucred;
+	error = VNOP_OPEN(ttyvp, flag, &context);
+
 	return (error);
 }
 
 /*ARGSUSED*/
 int
-cttyread(dev, uio, flag)
-	dev_t dev;
-	struct uio *uio;
-	int flag;
+cttyread(__unused dev_t dev, struct uio *uio, int flag)
 {
-	struct proc *p = uio->uio_procp;
-	register struct vnode *ttyvp = cttyvp(uio->uio_procp);
+	struct proc *p = current_proc();
+	register struct vnode *ttyvp = cttyvp(p);
+	struct vfs_context context;
 	int error;
 
 	if (ttyvp == NULL)
 		return (EIO);
-	vn_lock(ttyvp, LK_EXCLUSIVE | LK_RETRY, p);
-	error = VOP_READ(ttyvp, uio, flag, NOCRED);
-	VOP_UNLOCK(ttyvp, 0, p);
+
+	context.vc_proc = p;
+	context.vc_ucred = NOCRED;
+
+	error = VNOP_READ(ttyvp, uio, flag, &context);
+
 	return (error);
 }
 
 /*ARGSUSED*/
 int
-cttywrite(dev, uio, flag)
-	dev_t dev;
-	struct uio *uio;
-	int flag;
+cttywrite(__unused dev_t dev, struct uio *uio, int flag)
 {
-	struct proc *p = uio->uio_procp;
-	register struct vnode *ttyvp = cttyvp(uio->uio_procp);
+	struct proc *p = current_proc();
+	register struct vnode *ttyvp = cttyvp(p);
+	struct vfs_context context;
 	int error;
 
 	if (ttyvp == NULL)
 		return (EIO);
-	vn_lock(ttyvp, LK_EXCLUSIVE | LK_RETRY, p);
-	error = VOP_WRITE(ttyvp, uio, flag, NOCRED);
-	VOP_UNLOCK(ttyvp, 0, p);
+
+	context.vc_proc = p;
+	context.vc_ucred = NOCRED;
+
+	error = VNOP_WRITE(ttyvp, uio, flag, &context);
+
 	return (error);
 }
 
@@ -179,15 +170,12 @@ cttyioctl(dev, cmd, addr, flag, p)
 	struct proc *p;
 #else
 int
-cttyioctl(dev, cmd, addr, flag, p)
-	dev_t dev;
-	u_long cmd;
-	caddr_t addr;
-	int flag;
-	struct proc *p;
+cttyioctl(__unused dev_t dev, u_long cmd, caddr_t addr, int flag,
+	struct proc *p)
 #endif /* !NeXT */
 {
 	struct vnode *ttyvp = cttyvp(p);
+	struct vfs_context context;
 
 	if (ttyvp == NULL)
 		return (EIO);
@@ -200,22 +188,25 @@ cttyioctl(dev, cmd, addr, flag, p)
 		} else
 			return (EINVAL);
 	}
-	return (VOP_IOCTL(ttyvp, cmd, addr, flag, NOCRED, p));
+	context.vc_proc = p;
+	context.vc_ucred = NOCRED;
+
+	return (VNOP_IOCTL(ttyvp, cmd, addr, flag, &context));
 }
 
 /*ARGSUSED*/
 int
-cttyselect(dev, flag, wql, p)
-	dev_t dev;
-	int flag;
-	void * wql;
-	struct proc *p;
+cttyselect(__unused dev_t dev, int flag, void* wql, struct proc *p)
 {
 	struct vnode *ttyvp = cttyvp(p);
+	struct vfs_context context;
+
+	context.vc_proc = p;
+	context.vc_ucred = NOCRED;
 
 	if (ttyvp == NULL)
 		return (1);	/* try operation to get EOF/failure */
-	return (VOP_SELECT(ttyvp, flag, FREAD|FWRITE, NOCRED, wql, p));
+	return (VNOP_SELECT(ttyvp, flag, FREAD|FWRITE, wql, &context));
 }
 
 #ifndef NeXT

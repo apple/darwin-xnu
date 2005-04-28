@@ -58,34 +58,53 @@
 #define _SYS_UN_H_
 
 #include <sys/appleapiopts.h>
+#include <sys/cdefs.h>
+#include <sys/_types.h>
+
+/* [XSI] The sa_family_t type shall be defined as described in <sys/socket.h> */
+#ifndef _SA_FAMILY_T
+#define _SA_FAMILY_T
+typedef __uint8_t		sa_family_t;
+#endif
 
 /*
- * Definitions for UNIX IPC domain.
+ * [XSI] Definitions for UNIX IPC domain.
  */
 struct	sockaddr_un {
-	u_char	sun_len;		/* sockaddr len including null */
-	u_char	sun_family;		/* AF_UNIX */
-	char	sun_path[104];		/* path name (gag) */
+	unsigned char	sun_len;	/* sockaddr len including null */
+	sa_family_t	sun_family;	/* [XSI] AF_UNIX */
+	char		sun_path[104];	/* [XSI] path name (gag) */
 };
 
+#ifndef _POSIX_C_SOURCE
+/* Socket options. */
+#define LOCAL_PEERCRED          0x001           /* retrieve peer credentails */
+#endif	/* !_POSIX_C_SOURCE */
+
+
 #ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
+#ifdef PRIVATE
+__BEGIN_DECLS
 struct mbuf;
 struct socket;
 
-int	uipc_usrreq __P((struct socket *so, int req, struct mbuf *m,
-		struct mbuf *nam, struct mbuf *control));
-int	unp_connect2 __P((struct socket *so, struct socket *so2));
-void	unp_dispose __P((struct mbuf *m));
-int	unp_externalize __P((struct mbuf *rights));
-void	unp_init __P((void));
+int	uipc_usrreq(struct socket *so, int req, struct mbuf *m,
+		struct mbuf *nam, struct mbuf *control);
+int	uipc_ctloutput (struct socket *so, struct sockopt *sopt);
+int	unp_connect2(struct socket *so, struct socket *so2);
+void	unp_dispose(struct mbuf *m);
+int	unp_externalize(struct mbuf *rights);
+void	unp_init(void);
 extern	struct pr_usrreqs uipc_usrreqs;
-#endif /* __APPLE_API_PRIVATE */
+__END_DECLS
+#endif /* PRIVATE */
 #else /* !KERNEL */
 
+#ifndef _POSIX_C_SOURCE
 /* actual length of an initialized sockaddr_un */
 #define SUN_LEN(su) \
 	(sizeof(*(su)) - sizeof((su)->sun_path) + strlen((su)->sun_path))
+#endif	/* !_POSIX_C_SOURCE */
 
 #endif /* KERNEL */
 

@@ -89,7 +89,7 @@ struct ttysize {
 #include <sys/cdefs.h>
 
 __BEGIN_DECLS
-int	ioctl __P((int, unsigned long, ...));
+int	ioctl(int, unsigned long, ...);
 __END_DECLS
 #endif /* !KERNEL */
 #endif /* !_SYS_IOCTL_H_ */
@@ -99,9 +99,9 @@ __END_DECLS
  * Compatability with old terminal driver
  *
  * Source level -> #define USE_OLD_TTY
- * Kernel level -> options COMPAT_43 or COMPAT_SUNOS
+ * Kernel level -> options COMPAT_SUNOS
  */
 #if defined(USE_OLD_TTY) || COMPAT_43 || defined(COMPAT_SUNOS) || \
-    defined(COMPAT_SVR4) || defined(COMPAT_NEXT_3X)
+    defined(COMPAT_SVR4) || defined(COMPAT_NEXT_3X) || COMPAT_43_TTY
 #include <sys/ioctl_compat.h>
 #endif /* !_SYS_IOCTL_H_ */

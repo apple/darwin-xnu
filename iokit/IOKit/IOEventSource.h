@@ -68,7 +68,7 @@ attempting to move it.
 	All subclasses of the IOEventSource are expected to implement the checkForWork() member function.
 
 <br><br>
-	checkForWork() is the key method in this class.	 It is called by some work-loop when convienient and is expected to evaluate it's internal state and determine if an event has occured since the last call.  In the case of an event having occurred then the instance defined target(owner)/action will be called.	 The action is stored as an ordinary C function pointer but the first parameter is always the owner.  This means that a C++ member function can be used as an action function though this depends on the ABI.
+	checkForWork() is the key method in this class.	 It is called by some work-loop when convienient and is expected to evaluate it's internal state and determine if an event has occurred since the last call.  In the case of an event having occurred then the instance defined target(owner)/action will be called.	 The action is stored as an ordinary C function pointer but the first parameter is always the owner.  This means that a C++ member function can be used as an action function though this depends on the ABI.
 <br><br>
 	Although the eventChainNext variable contains a reference to the next event source in the chain this reference is not retained.  The list 'owner' i.e. the client that creates the event, not the work-loop, is expected to retain the source.
 */

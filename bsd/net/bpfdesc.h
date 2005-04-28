@@ -64,7 +64,7 @@
 #ifndef _NET_BPFDESC_H_
 #define _NET_BPFDESC_H_
 #include <sys/appleapiopts.h>
-#ifdef __APPLE_API_PRIVATE
+#ifdef KERNEL_PRIVATE
 /*
  * The items in this header file should be wrapped in #ifdef KERNEL.
  */
@@ -134,5 +134,5 @@ struct bpf_if {
 	struct ifnet *bif_ifp;		/* corresponding interface */
 };
 
-#endif /* __APPLE_API_PRIVATE */
+#endif /* KERNEL_PRIVATE */
 #endif

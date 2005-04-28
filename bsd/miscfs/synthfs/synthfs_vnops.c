@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -35,15 +35,16 @@
 #include <sys/kernel.h>
 #include <sys/file.h>
 #include <sys/stat.h>
-#include <sys/buf.h>
 #include <sys/proc.h>
+#include <sys/kauth.h>
 #include <sys/conf.h>
-#include <sys/mount.h>
-#include <sys/vnode.h>
+#include <sys/mount_internal.h>
+#include <sys/vnode_internal.h>
 #include <sys/malloc.h>
 #include <sys/dirent.h>
 #include <sys/namei.h>
 #include <sys/attr.h>
+#include <sys/uio_internal.h>
 
 #include <sys/vm.h>
 #include <sys/errno.h>
@@ -55,81 +56,61 @@
 
 #if RWSUPPORT
 #error NOT PORTED FOR UBC
-/* when porting to UBC,  do not just replace 
- * vnode_uncache by ubc_uncache - there's more
- * to it than that!
- */
 #include <sys/ubc.h>
 #endif
 
-extern int groupmember(gid_t gid, struct ucred* cred);
+static int synthfs_remove_internal(struct vnode *dvp, struct vnode *vp,
+                                   struct componentname *cnp, vfs_context_t context);
+
 
 #define VOPFUNC int (*)(void *)
 
 /* Global vfs data structures for synthfs. */
 int (**synthfs_vnodeop_p) (void *);
 struct vnodeopv_entry_desc synthfs_vnodeop_entries[] = {
-    {&vop_default_desc, (VOPFUNC)vn_default_error},
-    {&vop_strategy_desc, (VOPFUNC)err_strategy},		/* strategy		- not supported  */
-    {&vop_bwrite_desc, (VOPFUNC)err_bwrite},			/* bwrite		- not supported  */
-    {&vop_lookup_desc, (VOPFUNC)synthfs_cached_lookup},	/* cached lookup */
-    {&vop_create_desc, (VOPFUNC)synthfs_create},		/* create		- DEBUGGER */
-    {&vop_whiteout_desc, (VOPFUNC)err_whiteout},		/* whiteout		- not supported  */
-    {&vop_mknod_desc, (VOPFUNC)err_mknod},			/* mknod		- not supported  */
-    {&vop_mkcomplex_desc, (VOPFUNC)err_mkcomplex},		/* mkcomplex	- not supported  */
-    {&vop_open_desc, (VOPFUNC)synthfs_open},			/* open			- DEBUGGER */
-    {&vop_close_desc, (VOPFUNC)nop_close},			/* close		- NOP */
-    {&vop_access_desc, (VOPFUNC)synthfs_access},		/* access */
-    {&vop_getattr_desc, (VOPFUNC)synthfs_getattr},		/* getattr */
-    {&vop_setattr_desc, (VOPFUNC)synthfs_setattr},		/* setattr */
-    {&vop_getattrlist_desc, (VOPFUNC)err_getattrlist},	/* getattrlist	- not supported  */
-    {&vop_setattrlist_desc, (VOPFUNC)err_setattrlist},	/* setattrlist	- not supported  */
-    {&vop_read_desc, (VOPFUNC)err_read},			/* read			- not supported  */
-    {&vop_write_desc, (VOPFUNC)err_write},			/* write		- not supported  */
-    {&vop_lease_desc, (VOPFUNC)err_lease},			/* lease		- not supported  */
-    {&vop_ioctl_desc, (VOPFUNC)err_ioctl},			/* ioctl		- not supported  */
-    {&vop_select_desc, (VOPFUNC)synthfs_select},		/* select */
-    {&vop_exchange_desc, (VOPFUNC)err_exchange},		/* exchange		- not supported  */
-    {&vop_revoke_desc, (VOPFUNC)nop_revoke},			/* revoke		- NOP */
-    {&vop_mmap_desc, (VOPFUNC)synthfs_mmap},			/* mmap			- DEBUGGER */
-    {&vop_fsync_desc, (VOPFUNC)nop_fsync},			/* fsync		- NOP */
-    {&vop_seek_desc, (VOPFUNC)nop_seek},			/* seek			- NOP */
-    {&vop_remove_desc, (VOPFUNC)synthfs_remove},		/* remove */
-    {&vop_link_desc, (VOPFUNC)err_link},			/* link			- not supported  */
-    {&vop_rename_desc, (VOPFUNC)synthfs_rename},		/* rename */
-    {&vop_mkdir_desc, (VOPFUNC)synthfs_mkdir},			/* mkdir */
-    {&vop_rmdir_desc, (VOPFUNC)synthfs_rmdir},			/* rmdir */
-    {&vop_symlink_desc, (VOPFUNC)synthfs_symlink},		/* symlink */
-    {&vop_readdir_desc, (VOPFUNC)synthfs_readdir},		/* readdir */
-    {&vop_readdirattr_desc, (VOPFUNC)err_readdirattr},	/* readdirattr	- not supported  */
-    {&vop_readlink_desc, (VOPFUNC)synthfs_readlink},		/* readlink */
-    {&vop_abortop_desc, (VOPFUNC)nop_abortop},			/* abortop		- NOP */
-    {&vop_inactive_desc, (VOPFUNC)synthfs_inactive},		/* inactive */
-    {&vop_reclaim_desc, (VOPFUNC)synthfs_reclaim},		/* reclaim */
-    {&vop_lock_desc, (VOPFUNC)synthfs_lock},			/* lock */
-    {&vop_unlock_desc, (VOPFUNC)synthfs_unlock},		/* unlock */
-    {&vop_bmap_desc, (VOPFUNC)err_bmap},					/* bmap			- not supported  */
-    {&vop_print_desc, (VOPFUNC)err_print},			/* print		- not supported  */
-    {&vop_islocked_desc, (VOPFUNC)synthfs_islocked},		/* islocked */
-    {&vop_pathconf_desc, (VOPFUNC)synthfs_pathconf},		/* pathconf */
-    {&vop_advlock_desc, (VOPFUNC)err_advlock},			/* advlock		- not supported  */
-    {&vop_blkatoff_desc, (VOPFUNC)err_blkatoff},		/* blkatoff		- not supported  */
-    {&vop_valloc_desc, (VOPFUNC)err_valloc},			/* valloc		- not supported  */
-    {&vop_reallocblks_desc, (VOPFUNC)err_reallocblks},	/* reallocblks	- not supported  */
-    {&vop_vfree_desc, (VOPFUNC)err_vfree},			/* vfree		- not supported  */
-    {&vop_truncate_desc, (VOPFUNC)err_truncate},		/* truncate		- not supported  */
-    {&vop_allocate_desc, (VOPFUNC)err_allocate},		/* allocate		- not supported  */
-    {&vop_update_desc, (VOPFUNC)synthfs_update},		/* update */
-	{&vop_pgrd_desc, (VOPFUNC)err_pgrd},			/* pgrd			- not supported  */
-	{&vop_pgwr_desc, (VOPFUNC)err_pgwr},			/* pgwr			- not supported  */
-	{&vop_pagein_desc, (VOPFUNC)err_pagein},		/* pagein		- not supported  */
-	{&vop_pageout_desc, (VOPFUNC)err_pageout},		/* pageout		- not supported  */
-	{&vop_devblocksize_desc, (VOPFUNC)err_devblocksize},	/* devblocksize - not supported  */
-	{&vop_searchfs_desc, (VOPFUNC)err_searchfs},		/* searchfs		- not supported */
-	{&vop_copyfile_desc, (VOPFUNC)err_copyfile},		/* copyfile - not supported */
- 	{ &vop_blktooff_desc, (VOPFUNC)err_blktooff },		/* blktooff not supported */
-	{ &vop_offtoblk_desc, (VOPFUNC)err_offtoblk },		/* offtoblk  not supported */
-	{ &vop_cmap_desc, (VOPFUNC)err_cmap },		/* cmap  not supported */
+    {&vnop_default_desc, (VOPFUNC)vn_default_error},
+    {&vnop_strategy_desc, (VOPFUNC)err_strategy},		/* strategy		- not supported  */
+    {&vnop_bwrite_desc, (VOPFUNC)err_bwrite},			/* bwrite		- not supported  */
+    {&vnop_lookup_desc, (VOPFUNC)synthfs_cached_lookup},	/* cached lookup */
+    {&vnop_create_desc, (VOPFUNC)synthfs_create},		/* create		- DEBUGGER */
+    {&vnop_whiteout_desc, (VOPFUNC)err_whiteout},		/* whiteout		- not supported  */
+    {&vnop_mknod_desc, (VOPFUNC)err_mknod},			/* mknod		- not supported  */
+    {&vnop_open_desc, (VOPFUNC)synthfs_open},			/* open			- DEBUGGER */
+    {&vnop_close_desc, (VOPFUNC)nop_close},			/* close		- NOP */
+    {&vnop_getattr_desc, (VOPFUNC)synthfs_getattr},		/* getattr */
+    {&vnop_setattr_desc, (VOPFUNC)synthfs_setattr},		/* setattr */
+    {&vnop_getattrlist_desc, (VOPFUNC)err_getattrlist},	/* getattrlist	- not supported  */
+    {&vnop_setattrlist_desc, (VOPFUNC)err_setattrlist},	/* setattrlist	- not supported  */
+    {&vnop_read_desc, (VOPFUNC)err_read},			/* read			- not supported  */
+    {&vnop_write_desc, (VOPFUNC)err_write},			/* write		- not supported  */
+    {&vnop_ioctl_desc, (VOPFUNC)err_ioctl},			/* ioctl		- not supported  */
+    {&vnop_select_desc, (VOPFUNC)synthfs_select},		/* select */
+    {&vnop_exchange_desc, (VOPFUNC)err_exchange},		/* exchange		- not supported  */
+    {&vnop_revoke_desc, (VOPFUNC)nop_revoke},			/* revoke		- NOP */
+    {&vnop_mmap_desc, (VOPFUNC)synthfs_mmap},			/* mmap			- DEBUGGER */
+    {&vnop_fsync_desc, (VOPFUNC)nop_fsync},			/* fsync		- NOP */
+    {&vnop_remove_desc, (VOPFUNC)synthfs_remove},		/* remove */
+    {&vnop_link_desc, (VOPFUNC)err_link},			/* link			- not supported  */
+    {&vnop_rename_desc, (VOPFUNC)synthfs_rename},		/* rename */
+    {&vnop_mkdir_desc, (VOPFUNC)synthfs_mkdir},			/* mkdir */
+    {&vnop_rmdir_desc, (VOPFUNC)synthfs_rmdir},			/* rmdir */
+    {&vnop_symlink_desc, (VOPFUNC)synthfs_symlink},		/* symlink */
+    {&vnop_readdir_desc, (VOPFUNC)synthfs_readdir},		/* readdir */
+    {&vnop_readdirattr_desc, (VOPFUNC)err_readdirattr},	/* readdirattr	- not supported  */
+    {&vnop_readlink_desc, (VOPFUNC)synthfs_readlink},		/* readlink */
+    {&vnop_inactive_desc, (VOPFUNC)synthfs_inactive},		/* inactive */
+    {&vnop_reclaim_desc, (VOPFUNC)synthfs_reclaim},		/* reclaim */
+    {&vnop_pathconf_desc, (VOPFUNC)synthfs_pathconf},		/* pathconf */
+    {&vnop_advlock_desc, (VOPFUNC)err_advlock},			/* advlock		- not supported  */
+    {&vnop_allocate_desc, (VOPFUNC)err_allocate},		/* allocate		- not supported  */
+	{&vnop_pagein_desc, (VOPFUNC)err_pagein},		/* pagein		- not supported  */
+	{&vnop_pageout_desc, (VOPFUNC)err_pageout},		/* pageout		- not supported  */
+	{&vnop_devblocksize_desc, (VOPFUNC)err_devblocksize},	/* devblocksize - not supported  */
+	{&vnop_searchfs_desc, (VOPFUNC)err_searchfs},		/* searchfs		- not supported */
+	{&vnop_copyfile_desc, (VOPFUNC)err_copyfile},		/* copyfile - not supported */
+ 	{ &vnop_blktooff_desc, (VOPFUNC)err_blktooff },		/* blktooff not supported */
+	{ &vnop_offtoblk_desc, (VOPFUNC)err_offtoblk },		/* offtoblk  not supported */
+	{ &vnop_blockmap_desc, (VOPFUNC)err_blockmap },		/* blockmap  not supported */
    {(struct vnodeop_desc *) NULL, (int (*) ()) NULL}
 };
 
@@ -147,11 +128,11 @@ struct vnodeopv_desc synthfs_vnodeop_opv_desc =
 #% create	dvp	L U U
 #% create	vpp	- L -
 #
- vop_create {
+ vnop_create {
      IN WILLRELE struct vnode *dvp;
      OUT struct vnode **vpp;
      IN struct componentname *cnp;
-     IN struct vattr *vap;
+     IN struct vnode_attr *vap;
 	
      We are responsible for freeing the namei buffer, it is done in hfs_makenode(), unless there is
 	a previous error.
@@ -160,11 +141,12 @@ struct vnodeopv_desc synthfs_vnodeop_opv_desc =
 
 int
 synthfs_create(ap)
-struct vop_create_args /* {
+struct vnop_create_args /* {
     struct vnode *a_dvp;
     struct vnode **a_vpp;
     struct componentname *a_cnp;
-    struct vattr *a_vap;
+    struct vnode_attr *a_vap;
+    vfs_context_t a_context;
 } */ *ap;
 {
 #if DEBUG
@@ -184,20 +166,18 @@ struct vop_create_args /* {
  * Open called.
 #% open		vp	L L L
 #
- vop_open {
+ vnop_open {
      IN struct vnode *vp;
      IN int mode;
-     IN struct ucred *cred;
-     IN struct proc *p;
+     IN vfs_context_t a_context;
  */
 
 int
 synthfs_open(ap)
-struct vop_open_args /* {
+struct vnop_open_args /* {
     struct vnode *a_vp;
     int  a_mode;
-    struct ucred *a_cred;
-    struct proc *a_p;
+    vfs_context_t a_context;
 } */ *ap;
 {
 	struct vnode *vp = ap->a_vp;
@@ -225,10 +205,10 @@ struct vop_open_args /* {
  * NB Currently unsupported.
 # XXX - not used
 #
- vop_mmap {
+ vnop_mmap {
      IN struct vnode *vp;
      IN int fflags;
-     IN struct ucred *cred;
+     IN kauth_cred_t cred;
      IN struct proc *p;
 
      */
@@ -236,186 +216,74 @@ struct vop_open_args /* {
 /* ARGSUSED */
 
 int
-synthfs_mmap(ap)
-struct vop_mmap_args /* {
-    struct vnode *a_vp;
-    int  a_fflags;
-    struct ucred *a_cred;
-    struct proc *a_p;
-} */ *ap;
+synthfs_mmap(__unused struct vnop_mmap_args *ap)
 {
-#if DEBUG
-	struct vnode *vp = ap->a_vp;
-	char debugmsg[255];
-	
-	sprintf(debugmsg, "synthfs_mmap: attempt to map '/%s' ?!", VTOS(vp)->s_name);
-	Debugger(debugmsg);
-#endif
-	
     return EINVAL;
 }
 
 
 
 /*
-#% access	vp	L L L
-#
- vop_access {
-     IN struct vnode *vp;
-     IN int mode;
-     IN struct ucred *cred;
-     IN struct proc *p;
-
-*/
-
-int
-synthfs_access(ap)
-struct vop_access_args /* {
-    struct vnode *a_vp;
-    int  a_mode;
-    struct ucred *a_cred;
-    struct proc *a_p;
-} */ *ap;
-{
-    struct vnode *vp 			= ap->a_vp;
-    mode_t mode					= ap->a_mode;
-    struct ucred *cred 			= ap->a_cred;
-    struct synthfsnode *sp 		= VTOS(vp);
-    register gid_t *gp;
-    mode_t mask;
-    int retval 					= 0;
-    int i;
-
-    /*
-     * Disallow write attempts on read-only file systems;
-     * unless the file is a socket, fifo, or a block or
-     * character device resident on the file system.
-     */
-	if (mode & VWRITE) {
-        switch (vp->v_type) {
-        case VDIR:
-        case VLNK:
-        case VREG:
-            if (VTOVFS(vp)->mnt_flag & MNT_RDONLY)
-                return (EROFS);
-            break;
-		default:
-			break;
-        }
-    }
-
-    /* If immutable bit set, nobody gets to write it. */
-    if ((mode & VWRITE) && (sp->s_flags & IMMUTABLE))
-        return (EPERM);
-
-    /* Otherwise, user id 0 always gets access. */
-    if (ap->a_cred->cr_uid == 0) {
-        retval = 0;
-        goto Exit;
-    };
-
-    mask = 0;
-
-    /* Otherwise, check the owner. */
-    if (cred->cr_uid == sp->s_uid) {
-        if (mode & VEXEC)
-            mask |= S_IXUSR;
-        if (mode & VREAD)
-            mask |= S_IRUSR;
-        if (mode & VWRITE)
-            mask |= S_IWUSR;
-        retval = ((sp->s_mode & mask) == mask ? 0 : EACCES);
-        goto Exit;
-    }
- 
-    /* Otherwise, check the groups. */
-    for (i = 0, gp = cred->cr_groups; i < cred->cr_ngroups; i++, gp++)
-        if (sp->s_gid == *gp) {
-            if (mode & VEXEC)
-                mask |= S_IXGRP;
-            if (mode & VREAD)
-                mask |= S_IRGRP;
-            if (mode & VWRITE)
-                mask |= S_IWGRP;
-            retval = ((sp->s_mode & mask) == mask ? 0 : EACCES);
- 			goto Exit;
-        }
- 
-    /* Otherwise, check everyone else. */
-    if (mode & VEXEC)
-        mask |= S_IXOTH;
-    if (mode & VREAD)
-        mask |= S_IROTH;
-    if (mode & VWRITE)
-        mask |= S_IWOTH;
-    retval = ((sp->s_mode & mask) == mask ? 0 : EACCES);
- 
-Exit:
-	return (retval);    
-}
-
-/*
 #% getattr	vp	= = =
 #
- vop_getattr {
+ vnop_getattr {
      IN struct vnode *vp;
-     IN struct vattr *vap;
-     IN struct ucred *cred;
-     IN struct proc *p;
+     IN struct vnode_attr *vap;
+     IN vfs_context_t context;
 
 */
 int
 synthfs_getattr(ap)
-struct vop_getattr_args /* {
+struct vnop_getattr_args /* {
     struct vnode *a_vp;
-    struct vattr *a_vap;
-    struct ucred *a_cred;
-    struct proc *a_p;
+    struct vnode_attr *a_vap;
+    vfs_context_t a_context;
 } */ *ap;
 {
-    struct vnode *vp     = ap->a_vp;
-    struct vattr *vap    = ap->a_vap;
-    struct synthfsnode *sp = VTOS(vp);
-    struct synthfs_mntdata *smp = VTOSFS(vp);
+	struct vnode *vp     = ap->a_vp;
+	struct vnode_attr *vap    = ap->a_vap;
+	struct synthfsnode *sp = VTOS(vp);
 
-	vap->va_type = vp->v_type;
-	vap->va_mode = sp->s_mode;
-	vap->va_nlink = sp->s_linkcount;
-	vap->va_uid = sp->s_uid;
-	vap->va_gid = sp->s_gid;
-	vap->va_fsid = VTOVFS(vp)->mnt_stat.f_fsid.val[0];
-	vap->va_fileid = sp->s_nodeid;
+	VATTR_RETURN(vap, va_type, vp->v_type);
+	VATTR_RETURN(vap, va_mode, sp->s_mode);
+	VATTR_RETURN(vap, va_nlink, sp->s_linkcount);
+	VATTR_RETURN(vap, va_uid, sp->s_uid);
+	VATTR_RETURN(vap, va_gid, sp->s_gid);
+	VATTR_RETURN(vap, va_fsid, VTOVFS(vp)->mnt_vfsstat.f_fsid.val[0]);
+	VATTR_RETURN(vap, va_fileid, sp->s_nodeid);
 	switch (vp->v_type) {
-	  case VDIR:
-          vap->va_size = (sp->s_u.d.d_entrycount + 2) * sizeof(struct dirent);
+	case VDIR:
+		VATTR_RETURN(vap, va_data_size, (sp->s_u.d.d_entrycount + 2) * sizeof(struct dirent));
 		break;
 	  
-	  case VREG:
-	  	vap->va_size = sp->s_u.f.f_size;
+	case VREG:
+	  	VATTR_RETURN(vap, va_data_size, sp->s_u.f.f_size);
 	  	break;
 	
-	  case VLNK:
-		vap->va_size = sp->s_u.s.s_length;
+	case VLNK:
+		VATTR_RETURN(vap, va_data_size, sp->s_u.s.s_length);
 		break;
 	
-	  default:
-		vap->va_size = 0;
+	default:
+		VATTR_RETURN(vap, va_data_size, 0);
 	};
-    vap->va_blocksize = 512;
-    vap->va_atime.tv_sec = sp->s_accesstime.tv_sec;
-    vap->va_atime.tv_nsec = sp->s_accesstime.tv_usec * 1000;
-    vap->va_mtime.tv_sec = sp->s_modificationtime.tv_sec;
-    vap->va_mtime.tv_nsec = sp->s_modificationtime.tv_usec * 1000;
-    vap->va_ctime.tv_sec = sp->s_changetime.tv_sec;
-    vap->va_ctime.tv_nsec = sp->s_changetime.tv_usec * 1000;
-    vap->va_gen = sp->s_generation;
-    vap->va_flags = sp->s_flags;
-    vap->va_rdev = sp->s_rdev;
-    vap->va_bytes = vap->va_blocksize * ((vap->va_size + vap->va_blocksize - 1) / vap->va_blocksize);
-    vap->va_filerev = 0;
-    vap->va_vaflags = 0;
+	VATTR_RETURN(vap, va_iosize, 512);
+	vap->va_access_time.tv_sec = sp->s_accesstime.tv_sec;
+	vap->va_access_time.tv_nsec = sp->s_accesstime.tv_usec * 1000;
+	VATTR_SET_SUPPORTED(vap, va_access_time);
+	vap->va_modify_time.tv_sec = sp->s_modificationtime.tv_sec;
+	vap->va_modify_time.tv_nsec = sp->s_modificationtime.tv_usec * 1000;
+	VATTR_SET_SUPPORTED(vap, va_modify_time);
+	vap->va_change_time.tv_sec = sp->s_changetime.tv_sec;
+	vap->va_change_time.tv_nsec = sp->s_changetime.tv_usec * 1000;
+	VATTR_SET_SUPPORTED(vap, va_change_time);
+	VATTR_RETURN(vap, va_gen, sp->s_generation);
+	VATTR_RETURN(vap, va_flags, sp->s_flags);
+	VATTR_RETURN(vap, va_rdev, sp->s_rdev);
+	VATTR_RETURN(vap, va_filerev, 0);
+	VATTR_RETURN(vap, va_acl, NULL);
 
-    return (0);
+	return (0);
 }
 
 
@@ -424,20 +292,11 @@ struct vop_getattr_args /* {
  * Change the mode on a file or directory.
  * vnode vp must be locked on entry.
  */
-int synthfs_chmod(struct vnode *vp, int mode, struct ucred *cred, struct proc *p)
+int synthfs_chmod(struct vnode *vp, int mode, kauth_cred_t cred, struct proc *p)
 {
     struct synthfsnode *sp = VTOS(vp);
     int result;
 
-    if ((cred->cr_uid != sp->s_uid) &&
-        (result = suser(cred, &p->p_acflag)))
-        return result;
-    if (cred->cr_uid) {
-        if (vp->v_type != VDIR && (mode & S_ISTXT))
-            return EFTYPE;
-        if (!groupmember(sp->s_gid, cred) && (mode & S_ISGID))
-            return (EPERM);
-    }
     sp->s_mode &= ~ALLPERMS;
     sp->s_mode |= (mode & ALLPERMS);
     sp->s_nodeflags |= IN_CHANGE;
@@ -454,29 +313,11 @@ int synthfs_chmod(struct vnode *vp, int mode, struct ucred *cred, struct proc *p
  * Change the flags on a file or directory.
  * vnode vp must be locked on entry.
  */
-int synthfs_chflags(struct vnode *vp, u_long flags, struct ucred *cred, struct proc *p)
+int synthfs_chflags(struct vnode *vp, u_long flags, kauth_cred_t cred, struct proc *p)
 {
     struct synthfsnode *sp = VTOS(vp);
-    int result;
 
-    if (cred->cr_uid != sp->s_uid &&
-        (result = suser(cred, &p->p_acflag)))
-        return result;
-
-    if (cred->cr_uid == 0) {
-        if ((sp->s_flags & (SF_IMMUTABLE | SF_APPEND)) &&
-            securelevel > 0) {
-            return EPERM;
-        };
-        sp->s_flags = flags;
-    } else {
-        if (sp->s_flags & (SF_IMMUTABLE | SF_APPEND) ||
-            (flags & UF_SETTABLE) != flags) {
-            return EPERM;
-        };
-        sp->s_flags &= SF_SETTABLE;
-        sp->s_flags |= (flags & UF_SETTABLE);
-    }
+    sp->s_flags = flags;
     sp->s_nodeflags |= IN_CHANGE;
 
     return 0;
@@ -488,25 +329,16 @@ int synthfs_chflags(struct vnode *vp, u_long flags, struct ucred *cred, struct p
  * Perform chown operation on vnode vp;
  * vnode vp must be locked on entry.
  */
-int synthfs_chown(struct vnode *vp, uid_t uid, gid_t gid, struct ucred *cred, struct proc *p)
+int synthfs_chown(struct vnode *vp, uid_t uid, gid_t gid, kauth_cred_t cred, struct proc *p)
 {
     struct synthfsnode *sp = VTOS(vp);
     uid_t ouid;
     gid_t ogid;
     int result = 0;
+    int is_member;
 
     if (uid == (uid_t)VNOVAL) uid = sp->s_uid;
     if (gid == (gid_t)VNOVAL) gid = sp->s_gid;
-
-    /*
-     * If we don't own the file, are trying to change the owner
-     * of the file, or are not a member of the target group,
-     * the caller must be superuser or the call fails.
-     */
-    if ((cred->cr_uid != sp->s_uid || uid != sp->s_uid ||
-         (gid != sp->s_gid && !groupmember((gid_t)gid, cred))) &&
-        (result = suser(cred, &p->p_acflag)))
-        return result;
 
     ogid = sp->s_gid;
     ouid = sp->s_uid;
@@ -515,8 +347,8 @@ int synthfs_chown(struct vnode *vp, uid_t uid, gid_t gid, struct ucred *cred, st
     sp->s_uid = uid;
 
     if (ouid != uid || ogid != gid) sp->s_nodeflags |= IN_CHANGE;
-    if (ouid != uid && cred->cr_uid != 0) sp->s_mode &= ~S_ISUID;
-    if (ogid != gid && cred->cr_uid != 0) sp->s_mode &= ~S_ISGID;
+    if (ouid != uid && suser(cred, NULL)) sp->s_mode &= ~S_ISUID;
+    if (ogid != gid && suser(cred, NULL)) sp->s_mode &= ~S_ISGID;
 
     return 0;
 }
@@ -527,143 +359,92 @@ int synthfs_chown(struct vnode *vp, uid_t uid, gid_t gid, struct ucred *cred, st
  * Set attribute vnode op. called from several syscalls
 #% setattr      vp      L L L
 #
- vop_setattr {
+ vnop_setattr {
      IN struct vnode *vp;
-     IN struct vattr *vap;
-     IN struct ucred *cred;
-     IN struct proc *p;
-
+     IN struct vnode_attr *vap;
+     IN vfs_context_t context;
      */
 
 int
 synthfs_setattr(ap)
-struct vop_setattr_args /* {
+struct vnop_setattr_args /* {
 struct vnode *a_vp;
-struct vattr *a_vap;
-struct ucred *a_cred;
-struct proc *a_p;
+struct vnode_attr *a_vap;
+vfs_context_t a_context;
 } */ *ap;
 {
-    struct vnode *vp = ap->a_vp;
-    struct synthfsnode *sp = VTOS(vp);
-    struct vattr *vap = ap->a_vap;
-    struct ucred *cred = ap->a_cred;
-    struct proc *p = ap->a_p;
-    struct timeval atimeval, mtimeval;
-    int result;
+	struct vnode *vp = ap->a_vp;
+	struct synthfsnode *sp = VTOS(vp);
+	struct vnode_attr *vap = ap->a_vap;
+	kauth_cred_t cred = vfs_context_ucred(ap->a_context);
+	struct proc *p = vfs_context_proc(ap->a_context);
+	struct timeval atimeval, mtimeval;
+	uid_t nuid;
+	gid_t ngid;
+	int result;
 
-    /*
-     * Check for unsettable attributes.
-     */
-    if (((vap->va_type != VNON) && (vap->va_type != vp->v_type)) ||
-        (vap->va_nlink != VNOVAL) ||
-        (vap->va_fsid != VNOVAL) || (vap->va_fileid != VNOVAL) ||
-        (vap->va_blocksize != VNOVAL) || (vap->va_rdev != VNOVAL) ||
-        ((int)vap->va_bytes != VNOVAL) || (vap->va_gen != VNOVAL)) {
-        result = EINVAL;
-        goto Err_Exit;
-    }
+	result = 0;
 
-    if (vap->va_flags != VNOVAL) {
-        if (VTOVFS(vp)->mnt_flag & MNT_RDONLY) {
-            result = EROFS;
-            goto Err_Exit;
-        };
-        if ((result = synthfs_chflags(vp, vap->va_flags, cred, p))) {
-            goto Err_Exit;
-        };
-        if (vap->va_flags & (IMMUTABLE | APPEND)) {
-            result = 0;
-            goto Err_Exit;
-        };
-    }
+	if (VATTR_IS_ACTIVE(vap, va_flags)) {
+		if ((result = synthfs_chflags(vp, vap->va_flags, cred, p))) {
+			goto Err_Exit;
+		}
+	}
+	VATTR_SET_SUPPORTED(vap, va_flags);
 
-    if (sp->s_flags & (IMMUTABLE | APPEND)) {
-        result = EPERM;
-        goto Err_Exit;
-    };
+	nuid = (uid_t)ngid = (gid_t)VNOVAL;
+	if (VATTR_IS_ACTIVE(vap, va_uid))
+		nuid = vap->va_uid;
+	if (VATTR_IS_ACTIVE(vap, va_gid))
+		ngid = vap->va_gid;
+	if (nuid != (uid_t)VNOVAL || ngid != (gid_t)VNOVAL) {
+		if ((result = synthfs_chown(vp, nuid, ngid, cred, p))) {
+			goto Err_Exit;
+		}
+	}
+	VATTR_SET_SUPPORTED(vap, va_uid);
+	VATTR_SET_SUPPORTED(vap, va_gid);
 
-    /*
-     * Go through the fields and update iff not VNOVAL.
-     */
-    if (vap->va_uid != (uid_t)VNOVAL || vap->va_gid != (gid_t)VNOVAL) {
-        if (VTOVFS(vp)->mnt_flag & MNT_RDONLY) {
-            result = EROFS;
-            goto Err_Exit;
-        };
-        if ((result = synthfs_chown(vp, vap->va_uid, vap->va_gid, cred, p))) {
-            goto Err_Exit;
-        };
-    }
-    if (vap->va_size != VNOVAL) {
-        /*
-         * Disallow write attempts on read-only file systems;
-         * unless the file is a socket, fifo, or a block or
-         * character device resident on the file system.
-         */
-        switch (vp->v_type) {
-            case VDIR:
-                result = EISDIR;
-                goto Err_Exit;
-            case VLNK:
-            case VREG:
-                if (VTOVFS(vp)->mnt_flag & MNT_RDONLY) {
-                    result = EROFS;
-                    goto Err_Exit;
-                };
-                break;
-            default:
-                break;
-        }
+	if (VATTR_IS_ACTIVE(vap, va_data_size)) {
 #if RWSUPPORT
-        if ((result = VOP_TRUNCATE(vp, vap->va_size, 0, cred, p))) {
-            goto Err_Exit;
-        };
+		if ((result = vnode_setsize(vp, vap->va_data_size, 0, ap->a_context))) {
+			goto Err_Exit;
+		};
+		VATTR_SET_SUPPORTED(vap, va_data_size);
 #else
-        result = EINVAL;
-        goto Err_Exit;
+		result = EINVAL;
+		goto Err_Exit;
 #endif
-    }
+	}
 
-    sp = VTOS(vp);
-    if (vap->va_atime.tv_sec != VNOVAL || vap->va_mtime.tv_sec != VNOVAL) {
-        if (VTOVFS(vp)->mnt_flag & MNT_RDONLY) {
-            result = EROFS;
-            goto Err_Exit;
-        };
-        if (cred->cr_uid != sp->s_uid &&
-            (result = suser(cred, &p->p_acflag)) &&
-            ((vap->va_vaflags & VA_UTIMES_NULL) == 0 ||
-             (result = VOP_ACCESS(vp, VWRITE, cred, p)))) {
-            goto Err_Exit;
-        };
-        if (vap->va_atime.tv_sec != VNOVAL)
-            sp->s_nodeflags |= IN_ACCESS;
-        if (vap->va_mtime.tv_sec != VNOVAL)
-            sp->s_nodeflags |= IN_CHANGE | IN_UPDATE;
-        atimeval.tv_sec = vap->va_atime.tv_sec;
-        atimeval.tv_usec = vap->va_atime.tv_nsec / 1000;
-        mtimeval.tv_sec = vap->va_mtime.tv_sec;
-        mtimeval.tv_usec = vap->va_mtime.tv_nsec / 1000;
-        if ((result = VOP_UPDATE(vp, &atimeval, &mtimeval, 1))) {
-            goto Err_Exit;
-        };
-    }
+	sp = VTOS(vp);
+	if (VATTR_IS_ACTIVE(vap, va_access_time) || VATTR_IS_ACTIVE(vap, va_modify_time)) {
+		if (VATTR_IS_ACTIVE(vap, va_access_time)) {
+			sp->s_nodeflags |= IN_ACCESS;
+			atimeval.tv_sec = vap->va_access_time.tv_sec;
+			atimeval.tv_usec = vap->va_access_time.tv_nsec / 1000;
+		}
+		if (VATTR_IS_ACTIVE(vap, va_modify_time)) {
+			sp->s_nodeflags |= IN_CHANGE | IN_UPDATE;
+			mtimeval.tv_sec = vap->va_modify_time.tv_sec;
+			mtimeval.tv_usec = vap->va_modify_time.tv_nsec / 1000;
+		}
+		if ((result = synthfs_update(vp, &atimeval, &mtimeval, 1))) {
+			goto Err_Exit;
+		}
+	}
+	VATTR_SET_SUPPORTED(vap, va_access_time);
+	VATTR_SET_SUPPORTED(vap, va_modify_time);
 
-    result = 0;
-    if (vap->va_mode != (mode_t)VNOVAL) {
-        if (VTOVFS(vp)->mnt_flag & MNT_RDONLY) {
-            result = EROFS;
-            goto Err_Exit;
-        };
-        result = synthfs_chmod(vp, (int)vap->va_mode, cred, p);
-    };
+	if (VATTR_IS_ACTIVE(vap, va_mode))
+		result = synthfs_chmod(vp, (int)vap->va_mode, cred, p);
+	VATTR_SET_SUPPORTED(vap, va_mode);
 
-Err_Exit: ;
+	Err_Exit:
 
-    DBG_VOP(("synthfs_setattr: returning %d...\n", result));
+	DBG_VOP(("synthfs_setattr: returning %d...\n", result));
 
-    return (result);
+	return (result);
 }
 
 
@@ -675,7 +456,7 @@ Err_Exit: ;
 #% rename	targetPar_vp	L U U
 #% rename	target_vp		X U U
 #
- vop_rename {
+ vnop_rename {
      IN WILLRELE struct vnode *sourcePar_vp;
      IN WILLRELE struct vnode *source_vp;
      IN struct componentname *source_cnp;
@@ -700,13 +481,14 @@ Err_Exit: ;
 
 int
 synthfs_rename(ap)
-struct vop_rename_args  /* {
+struct vnop_rename_args  /* {
     struct vnode *a_fdvp;
     struct vnode *a_fvp;
     struct componentname *a_fcnp;
     struct vnode *a_tdvp;
     struct vnode *a_tvp;
     struct componentname *a_tcnp;
+    vfs_context_t a_context;
 } */ *ap;
 {
 	struct vnode			*target_vp = ap->a_tvp;
@@ -715,7 +497,6 @@ struct vop_rename_args  /* {
 	struct vnode			*sourcePar_vp = ap->a_fdvp;
 	struct componentname	*target_cnp = ap->a_tcnp;
 	struct componentname	*source_cnp = ap->a_fcnp;
-	struct proc				*p = source_cnp->cn_proc;
 	struct synthfsnode		*target_sp, *targetPar_sp, *source_sp, *sourcePar_sp;
 	u_short					doingdirectory = 0, oldparent = 0, newparent = 0;
 	int						retval = 0;
@@ -730,35 +511,10 @@ struct vop_rename_args  /* {
 	DBG_ASSERT((ap->a_fdvp->v_type == VDIR) && (ap->a_tdvp->v_type == VDIR));
 	target_sp = targetPar_sp = source_sp = sourcePar_sp = NULL;
 
-	/*
-	 * Check for cross-device rename.
-	 */
-	if ((source_vp->v_mount != targetPar_vp->v_mount) ||
-		(target_vp && (source_vp->v_mount != target_vp->v_mount))) {
-		retval = EXDEV;
-		goto abortit;
-	}
-
-	/*
-	 * Check for access permissions
-	 */
-	if (target_vp && ((VTOS(target_vp)->s_pflags & (IMMUTABLE | APPEND)) ||
-					  (VTOS(targetPar_vp)->s_pflags & APPEND))) {
-		retval = EPERM;
-		goto abortit;
-	}
-
-	if ((retval = vn_lock(source_vp, LK_EXCLUSIVE, p)))
-		goto abortit;
 
 	sourcePar_sp = VTOS(sourcePar_vp);
 	source_sp = VTOS(source_vp);
 	oldparent = sourcePar_sp->s_nodeid;
-	if ((source_sp->s_pflags & (IMMUTABLE | APPEND)) || (sourcePar_sp->s_pflags & APPEND)) {
-		VOP_UNLOCK(source_vp, 0, p);
-		retval = EPERM;
-		goto abortit;
-	}
 
 	/*
 	 * Be sure we are not renaming ".", "..", or an alias of ".". This
@@ -771,7 +527,6 @@ struct vop_rename_args  /* {
 			|| sourcePar_sp == source_sp
 			|| (source_cnp->cn_flags & ISDOTDOT)
 			|| (source_sp->s_nodeflags & IN_RENAME)) {
-			VOP_UNLOCK(source_vp, 0, p);
 			retval = EINVAL;
 			goto abortit;
 		}
@@ -785,11 +540,6 @@ struct vop_rename_args  /* {
     target_sp = target_vp ? VTOS(target_vp) : NULL;
     newparent = targetPar_sp->s_nodeid;
 
-    retval = VOP_ACCESS(source_vp, VWRITE, target_cnp->cn_cred, target_cnp->cn_proc);
-    if (doingdirectory && (newparent != oldparent)) {
-        if (retval)		/* write access check above */
-            goto bad;
-    }
 
 	/*
 	 * If the destination exists, then be sure its type (file or dir)
@@ -797,35 +547,15 @@ struct vop_rename_args  /* {
 	 * it is empty.	 Then delete the destination.
 	 */
 	if (target_vp) {
-        /*
-         * If the parent directory is "sticky", then the user must
-         * own the parent directory, or the destination of the rename,
-         * otherwise the destination may not be changed (except by
-         * root). This implements append-only directories.
-         */
-        if ((targetPar_sp->s_mode & S_ISTXT) && target_cnp->cn_cred->cr_uid != 0 &&
-            target_cnp->cn_cred->cr_uid != targetPar_sp->s_uid &&
-            target_sp->s_uid != target_cnp->cn_cred->cr_uid) {
-            retval = EPERM;
-            goto bad;
-        }
 
-		/*
-		 * VOP_REMOVE will vput targetPar_vp so we better bump 
-		 * its ref count and relockit, always set target_vp to
-		 * NULL afterwards to indicate that were done with it.
-		 */
-		VREF(targetPar_vp);
 #if RWSUPPORT
-        if (target_vp->v_type == VREG) {
-            (void) vnode_uncache(target_vp);
-        };
+		if (target_vp->v_type == VREG) {
+			(void) vnode_uncache(target_vp);
+		};
 #endif
-        cache_purge(target_vp);
+		cache_purge(target_vp);
             
-		target_cnp->cn_flags &= ~SAVENAME;
-		retval = VOP_REMOVE(targetPar_vp, target_vp, target_cnp);
-		(void) vn_lock(targetPar_vp, LK_EXCLUSIVE | LK_RETRY, p);
+		retval = synthfs_remove_internal(targetPar_vp, target_vp, target_cnp, ap->a_context);
 
 		target_vp = NULL;
 		target_sp = NULL;		
@@ -834,16 +564,10 @@ struct vop_rename_args  /* {
 	};
 
 
-	if (newparent != oldparent)
-		vn_lock(sourcePar_vp, LK_EXCLUSIVE | LK_RETRY, p);
-
 	/* remove the existing entry from the namei cache: */
 	if (source_vp->v_type == VREG) cache_purge(source_vp);
 
 	retval = synthfs_move_rename_entry( source_vp, targetPar_vp, target_cnp->cn_nameptr);
-
-	if (newparent != oldparent)
-		VOP_UNLOCK(sourcePar_vp, 0, p);
 
 	if (retval) goto bad;
 
@@ -857,13 +581,10 @@ struct vop_rename_args  /* {
 	 */
 	targetPar_sp->s_nodeflags |= IN_UPDATE;
 	sourcePar_sp->s_nodeflags |= IN_UPDATE;
-	tv = time;
+	
+	microtime(&tv);
 	SYNTHFSTIMES(targetPar_sp, &tv, &tv);
 	SYNTHFSTIMES(sourcePar_sp, &tv, &tv);
-
-	vput(targetPar_vp);
-	vrele(sourcePar_vp);
-	vput(source_vp);
 
 	return (retval);
 
@@ -871,41 +592,10 @@ bad:;
 	if (retval && doingdirectory)
 		source_sp->s_nodeflags &= ~IN_RENAME;
 
-    if (targetPar_vp == target_vp)
-	    vrele(targetPar_vp);
-    else
-	    vput(targetPar_vp);
-
-    if (target_vp)
-	    vput(target_vp);
-
-	vrele(sourcePar_vp);
-
-    if (VOP_ISLOCKED(source_vp))
-        vput(source_vp);
-	else
-    	vrele(source_vp);
-
-    return (retval);
+	return (retval);
 
 abortit:;
-
-    VOP_ABORTOP(targetPar_vp, target_cnp); /* XXX, why not in NFS? */
-
-    if (targetPar_vp == target_vp)
-	    vrele(targetPar_vp);
-    else
-	    vput(targetPar_vp);
-
-    if (target_vp)
-	    vput(target_vp);
-
-    VOP_ABORTOP(sourcePar_vp, source_cnp); /* XXX, why not in NFS? */
-
-	vrele(sourcePar_vp);
-    vrele(source_vp);
-
-    return (retval);
+	return (retval);
 }
 
 
@@ -916,11 +606,12 @@ abortit:;
 #% mkdir	dvp	L U U
 #% mkdir	vpp	- L -
 #
- vop_mkdir {
+ vnop_mkdir {
      IN WILLRELE struct vnode *dvp;
      OUT struct vnode **vpp;
      IN struct componentname *cnp;
-     IN struct vattr *vap;
+     IN struct vnode_attr *vap;
+     IN vfs_context_t context;
 
      We are responsible for freeing the namei buffer, it is done in synthfs_makenode(), unless there is
     a previous error.
@@ -929,11 +620,12 @@ abortit:;
 
 int
 synthfs_mkdir(ap)
-struct vop_mkdir_args /* {
+struct vnop_mkdir_args /* {
     struct vnode *a_dvp;
     struct vnode **a_vpp;
     struct componentname *a_cnp;
-    struct vattr *a_vap;
+    struct vnode_attr *a_vap;
+    vfs_context_t a_context;
 } */ *ap;
 {
 	int retval;
@@ -942,22 +634,20 @@ struct vop_mkdir_args /* {
 	int mode = MAKEIMODE(ap->a_vap->va_type, ap->a_vap->va_mode);
 	struct vnode *vp = NULL;
 
-    *ap->a_vpp = NULL;
+	*ap->a_vpp = NULL;
 
-    retval = synthfs_new_directory(VTOVFS(dvp), dvp, cnp->cn_nameptr, VTOSFS(dvp)->synthfs_nextid++, mode, ap->a_cnp->cn_proc, &vp);
-    if (retval) goto Error_Exit;
+	retval = synthfs_new_directory(VTOVFS(dvp), dvp, cnp->cn_nameptr, VTOSFS(dvp)->synthfs_nextid++, mode, vfs_context_proc(cnp->cn_context), &vp);
+	if (retval) goto Error_Exit;
 
-    retval = VOP_SETATTR(vp, ap->a_vap, cnp->cn_cred, cnp->cn_proc);
-    if (retval != 0) goto Error_Exit;
+	*ap->a_vpp = vp;
 
-    *ap->a_vpp = vp;
+	retval = vnode_setattr(vp, ap->a_vap, ap->a_context);
+	if (retval != 0) goto Error_Exit;
 
-Error_Exit:;
-    if (retval != 0) {
-        if (vp) synthfs_remove_directory(vp);
-        VOP_ABORTOP(dvp, cnp);
-    }
-    vput(dvp);
+	Error_Exit:;
+	if (retval != 0) {
+		if (vp) synthfs_remove_directory(vp);
+	}
 
 	return retval;
 }
@@ -969,37 +659,39 @@ Error_Exit:;
 #% remove	dvp	L U U
 #% remove	vp	L U U
 #
- vop_remove {
+ vnop_remove {
      IN WILLRELE struct vnode *dvp;
      IN WILLRELE struct vnode *vp;
      IN struct componentname *cnp;
-
+     IN vfs_context_t context;
+    
      */
 
 int
 synthfs_remove(ap)
-struct vop_remove_args /* {
+struct vnop_remove_args /* {
     struct vnode *a_dvp;
     struct vnode *a_vp;
     struct componentname *a_cnp;
+    vfs_context_t a_context;
 } */ *ap;
 {
-	struct vnode *vp = ap->a_vp;
-	struct vnode *dvp = ap->a_dvp;
+	return synthfs_remove_internal(ap->a_dvp, ap->a_vp, ap->a_cnp, ap->a_context);
+}
+
+static int
+synthfs_remove_internal(struct vnode *dvp, struct vnode *vp,
+			__unused struct componentname *cnp,
+			__unused vfs_context_t context)
+{
 	struct synthfsnode *sp = VTOS(vp);
-    struct timeval tv;
+	struct timeval tv;
 	int retval = 0;
 
-	if ((sp->s_flags & (IMMUTABLE | APPEND)) ||
-		(VTOS(dvp)->s_flags & APPEND)) {
-		retval = EPERM;
-		goto out;
-	};
-	
 	/* This is sort of silly right now but someday it may make sense... */
 	if (sp->s_nodeflags & IN_MODIFIED) {
-        tv = time;
-		VOP_UPDATE(vp, &tv, &tv, 0);
+		microtime(&tv);
+		synthfs_update(vp, &tv, &tv, 0);
 	};
 	
 	/* remove the entry from the namei cache: */
@@ -1028,13 +720,6 @@ out:
 	if (! retval)
 		VTOS(dvp)->s_nodeflags |= IN_CHANGE | IN_UPDATE;
 
-	if (dvp == vp) {
-		vrele(vp);
-	} else {
-		vput(vp);
-	};
-
-	vput(dvp);
 	return (retval);
 }
 
@@ -1044,23 +729,24 @@ out:
 #% rmdir	dvp	L U U
 #% rmdir	vp	L U U
 #
- vop_rmdir {
+ vnop_rmdir {
      IN WILLRELE struct vnode *dvp;
      IN WILLRELE struct vnode *vp;
      IN struct componentname *cnp;
+     IN vfs_context_t context;
 
      */
 
 int
 synthfs_rmdir(ap)
-    struct vop_rmdir_args /* {
+    struct vnop_rmdir_args /* {
     	struct vnode *a_dvp;
     	struct vnode *a_vp;
         struct componentname *a_cnp;
+	vfs_context_t a_context;
 } */ *ap;
 {
-    DBG_VOP(("synthfs_rmdir called\n"));
-	return synthfs_remove((struct vop_remove_args *)ap);
+	return synthfs_remove((struct vnop_remove_args *)ap);
 }
 
 
@@ -1071,15 +757,15 @@ synthfs_rmdir(ap)
  * Locking policy: ignore
  */
 int
-synthfs_select(ap)
-struct vop_select_args /* {
+synthfs_select(__unused
+struct vnop_select_args /* {
     struct vnode *a_vp;
     int  a_which;
     int  a_fflags;
-    struct ucred *a_cred;
+    kauth_cred_t a_cred;
 	void *a_wql;
     struct proc *a_p;
-} */ *ap;
+} */ *ap)
 {
     DBG_VOP(("synthfs_select called\n"));
 
@@ -1091,15 +777,15 @@ struct vop_select_args /* {
 #% symlink	dvp	L U U
 #% symlink	vpp	- U -
 #
-# XXX - note that the return vnode has already been vrele'ed
-#	by the filesystem layer.  To use it you must use vget,
+# XXX - note that the return vnode has already been vnode_put'ed
+#	by the filesystem layer.  To use it you must use vnode_get,
 #	possibly with a further namei.
 #
- vop_symlink {
+ vnop_symlink {
      IN WILLRELE struct vnode *dvp;
      OUT WILLRELE struct vnode **vpp;
      IN struct componentname *cnp;
-     IN struct vattr *vap;
+     IN struct vnode_attr *vap;
      IN char *target;
 
      We are responsible for freeing the namei buffer, it is done in synthfs_makenode(), unless there is
@@ -1110,12 +796,13 @@ struct vop_select_args /* {
 
 int
 synthfs_symlink(ap)
-    struct vop_symlink_args /* {
+    struct vnop_symlink_args /* {
         struct vnode *a_dvp;
         struct vnode **a_vpp;
         struct componentname *a_cnp;
-        struct vattr *a_vap;
+        struct vnode_attr *a_vap;
         char *a_target;
+	vfs_context_t a_context;
     } */ *ap;
 {
     struct vnode *dvp = ap->a_dvp;
@@ -1125,17 +812,7 @@ synthfs_symlink(ap)
 
     *vpp = NULL;
 
-    retval = synthfs_new_symlink(VTOVFS(dvp), dvp, cnp->cn_nameptr, VTOSFS(dvp)->synthfs_nextid++, ap->a_target, ap->a_cnp->cn_proc, vpp);
-    if (retval) goto Error_Exit;
-
-    VOP_UNLOCK(*vpp, 0, cnp->cn_proc);
-
-Error_Exit:;
-
-    if (retval != 0) {
-        VOP_ABORTOP(dvp, cnp);
-    }
-    vput(dvp);
+    retval = synthfs_new_symlink(VTOVFS(dvp), dvp, cnp->cn_nameptr, VTOSFS(dvp)->synthfs_nextid++, ap->a_target, vfs_context_proc(cnp->cn_context), vpp);
 
     return (retval);
 }
@@ -1146,18 +823,18 @@ Error_Exit:;
 #
 #% readlink	vp	L L L
 #
- vop_readlink {
+ vnop_readlink {
      IN struct vnode *vp;
      INOUT struct uio *uio;
-     IN struct ucred *cred;
+     IN kauth_cred_t cred;
      */
 
 int
 synthfs_readlink(ap)
-struct vop_readlink_args /* {
+struct vnop_readlink_args /* {
 	struct vnode *a_vp;
 	struct uio *a_uio;
-	struct ucred *a_cred;
+	vfs_context_t a_context;
 } */ *ap;
 {
 	struct vnode *vp = ap->a_vp;
@@ -1170,8 +847,9 @@ struct vop_readlink_args /* {
         return 0;
     };
 
-    if (uio->uio_offset + uio->uio_resid <= sp->s_u.s.s_length) {
-    	count = uio->uio_resid;
+	// LP64todo - fix this!
+    if (uio->uio_offset + uio_resid(uio) <= sp->s_u.s.s_length) {
+    	count = uio_resid(uio);
     } else {
     	count = sp->s_u.s.s_length - uio->uio_offset;
     };
@@ -1186,27 +864,17 @@ struct vop_readlink_args /* {
 
 
 /* 			
-#% readdir	vp	L L L
-#
-vop_readdir {
-    IN struct vnode *vp;
-    INOUT struct uio *uio;
-    IN struct ucred *cred;
-    INOUT int *eofflag;
-    OUT int *ncookies;
-    INOUT u_long **cookies;
-*/
-
-
+ * Read directory entries.
+ */
 int
 synthfs_readdir(ap)
-struct vop_readdir_args /* {
-    struct vnode *vp;
-    struct uio *uio;
-    struct ucred *cred;
-    int *eofflag;
-    int *ncookies;
-    u_long **cookies;
+struct vnop_readdir_args /* {
+	struct vnode *a_vp;
+	struct uio *a_uio;
+	int a_flags;
+	int *a_eofflag;
+	int *a_numdirent;
+	vfs_context_t a_context;
 } */ *ap;
 {
     struct synthfsnode *sp = VTOS(ap->a_vp);
@@ -1214,34 +882,30 @@ struct vop_readdir_args /* {
     off_t diroffset;						/* Offset into simulated directory file */
     struct synthfsnode *entry;
 
-    DBG_VOP(("\tuio_offset = %d, uio_resid = %d\n", (int) uio->uio_offset, uio->uio_resid));
+    DBG_VOP(("\tuio_offset = %d, uio_resid = %lld\n", (int) uio->uio_offset, uio_resid(uio)));
+
+	if (ap->a_flags & (VNODE_READDIR_EXTENDED | VNODE_READDIR_REQSEEKOFF))
+		return (EINVAL);
 	
 	/* We assume it's all one big buffer... */
     if (uio->uio_iovcnt > 1) {
     	DBG_VOP(("\tuio->uio_iovcnt = %d?\n", uio->uio_iovcnt));
     	return EINVAL;
     };
-
-	/*
-		NFS cookies are not supported:
-	 */
-	if ((ap->a_cookies != NULL) || (ap->a_ncookies != NULL)) {
-		return EINVAL;
-	};
 	
  	diroffset = 0;
  	
     /*
      * We must synthesize . and ..
      */
-    DBG_VOP(("\tstarting ... uio_offset = %d, uio_resid = %d\n", (int) uio->uio_offset, uio->uio_resid));
+    DBG_VOP(("\tstarting ... uio_offset = %d, uio_resid = %lld\n", (int) uio->uio_offset, uio_resid(uio)));
     if (uio->uio_offset == diroffset)
       {
         DBG_VOP(("\tAdding .\n"));
 		diroffset += synthfs_adddirentry(sp->s_nodeid, DT_DIR, ".", uio);
-        DBG_VOP(("\t   after adding ., uio_offset = %d, uio_resid = %d\n", (int) uio->uio_offset, uio->uio_resid));
+        DBG_VOP(("\t   after adding ., uio_offset = %d, uio_resid = %lld\n", (int) uio->uio_offset, uio_resid(uio)));
       }
-    if ((uio->uio_resid > 0) && (diroffset > uio->uio_offset)) {
+    if ((uio_resid(uio) > 0) && (diroffset > uio->uio_offset)) {
     	/* Oops - we skipped over a partial entry: at best, diroffset should've just matched uio->uio_offset */
 		return EINVAL;
 	};
@@ -1254,9 +918,9 @@ struct vop_readdir_args /* {
         } else {
             diroffset += synthfs_adddirentry(sp->s_nodeid, DT_DIR, "..", uio);
         }
-        DBG_VOP(("\t   after adding .., uio_offset = %d, uio_resid = %d\n", (int) uio->uio_offset, uio->uio_resid));
+        DBG_VOP(("\t   after adding .., uio_offset = %d, uio_resid = %lld\n", (int) uio->uio_offset, uio_resid(uio)));
       }
-    if ((uio->uio_resid > 0) && (diroffset > uio->uio_offset)) {
+    if ((uio_resid(uio) > 0) && (diroffset > uio->uio_offset)) {
     	/* Oops - we skipped over a partial entry: at best, diroffset should've just matched uio->uio_offset */
 		return EINVAL;
 	};
@@ -1267,7 +931,7 @@ struct vop_readdir_args /* {
 			/* Return this entry */
 			diroffset += synthfs_adddirentry(entry->s_nodeid, VTTOIF(STOV(entry)->v_type), entry->s_name, uio);
 		};
-    	if ((uio->uio_resid > 0) && (diroffset > uio->uio_offset)) {
+    	if ((uio_resid(uio) > 0) && (diroffset > uio->uio_offset)) {
 	    	/* Oops - we skipped over a partial entry: at best, diroffset should've just matched uio->uio_offset */
 			return EINVAL;
 		};
@@ -1290,7 +954,7 @@ struct vop_readdir_args /* {
 
 int
 synthfs_cached_lookup(ap)
-	struct vop_cachedlookup_args /* {
+	struct vnop_lookup_args /* {
 		struct vnode *a_dvp;
 		struct vnode **a_vpp;
 		struct componentname *a_cnp;
@@ -1300,35 +964,16 @@ synthfs_cached_lookup(ap)
     struct componentname *cnp = ap->a_cnp;
     u_long nameiop = cnp->cn_nameiop;
     u_long flags = cnp->cn_flags;
-    boolean_t lockparent = (flags & LOCKPARENT);
-    struct proc *p = cnp->cn_proc;
-    struct ucred *cred = cnp->cn_cred;
-    struct vnode *target_vp = NULL;
-    u_int32_t target_vnode_id;					/* Capability ID of the target vnode for .. unlock/relock handling check */
     struct vnode **vpp = ap->a_vpp;
     int result = 0;
 
     DBG_VOP(("synthfs_cached_lookup called, name = %s, namelen = %ld\n", ap->a_cnp->cn_nameptr, ap->a_cnp->cn_namelen));
-    if (flags & LOCKPARENT) DBG_VOP(("\tLOCKPARENT is set\n"));
+#if DEBUG
     if (flags & ISLASTCN) DBG_VOP(("\tISLASTCN is set\n"));
+#endif
 
     *vpp = NULL;
 
-    if (dp->v_type != VDIR) {
-        result = ENOTDIR;
-        goto Err_Exit;
-    };
-
-	if ((flags & ISLASTCN) &&
-		(VTOVFS(dp)->mnt_flag & MNT_RDONLY) &&
-		((nameiop == DELETE) || (nameiop == RENAME))) {
-		result = EROFS;
-		goto Err_Exit;
-	};
-	
-	result = VOP_ACCESS(dp, VEXEC, cred, cnp->cn_proc);
-	if (result != 0) goto Err_Exit;
-	
 	/*
 	 * Look up an entry in the namei cache
 	 */
@@ -1344,66 +989,21 @@ synthfs_cached_lookup(ap)
 	
 	/* An entry matching the parent vnode/name was found in the cache: */
 	
-
-	target_vp = *vpp;
-	target_vnode_id = target_vp->v_id;
-	if (target_vp == dp) {
-		/* lookup on "." */
-		VREF(target_vp);
-		result = 0;
-	} else if (flags & ISDOTDOT) {
-		/*
-		 * Carefully now: trying to step from child to parent;
-		 * must release lock on child before trying to lock parent
-		 * vnode.
-		 */
-		VOP_UNLOCK(dp, 0, p);
-		result = vget(target_vp, LK_EXCLUSIVE, p);
-		if ((result == 0) && lockparent && (flags & ISLASTCN)) {
-			result = vn_lock(dp, LK_EXCLUSIVE, p);
-		}
-	} else {
-		result = vget(target_vp, LK_EXCLUSIVE, p);
-		if (!lockparent || (result != 0) || !(flags & ISLASTCN)) {
-			VOP_UNLOCK(dp, 0, p);
-		};
-	};
-	
-	/*
-	   Check to make sure the target vnode ID didn't change while we
-	   tried to lock it:
-	 */
-	 if (result == 0) {
-	 	if (target_vnode_id == target_vp->v_id) {
-	 		return 0;					/* THIS IS THE NORMAL EXIT PATH */
-	 	};
-	 	
-	 	/* The vnode ID didn't match anymore: we've got another vnode! */
-	 	vput(target_vp);
-	 	/* Unlock the parent vnode in the cases where it should've been left locked: */
-	 	if (lockparent && (dp != target_vp) && (flags & ISLASTCN)) {
-	 		VOP_UNLOCK(dp, 0, p);
-	 	};
-	 };
-	 
-	 /* One last try for a successful lookup through the complete lookup path: */
-	 result = vn_lock(dp, LK_EXCLUSIVE, p);
-	 if (result == 0) {
-	 	return synthfs_lookup(ap);
-	 };
+	return (0);
 	
 Err_Exit:;
-   return result;
+	return result;
 }
 
 
 
 int
 synthfs_lookup(ap)
-	struct vop_cachedlookup_args /* {
+	struct vnop_lookup_args /* {
 		struct vnode *a_dvp;
 		struct vnode **a_vpp;
 		struct componentname *a_cnp;
+		vfs_context_t a_context;
 	} */ *ap;
 {
     struct vnode *dp = ap->a_dvp;
@@ -1413,8 +1013,9 @@ synthfs_lookup(ap)
 //  char *nameptr = cnp->cn_nameptr;
     u_long flags = cnp->cn_flags;
     long namelen = cnp->cn_namelen;
-    struct proc *p = cnp->cn_proc;
-    struct ucred *cred = cnp->cn_cred;
+//  struct proc *p = cnp->cn_proc;
+    vfs_context_t ctx = cnp->cn_context;
+    kauth_cred_t cred = vfs_context_ucred(ctx);
     struct synthfsnode *entry;
     struct vnode *target_vp = NULL;
     int result = 0;
@@ -1424,26 +1025,13 @@ synthfs_lookup(ap)
 	struct vnode *starting_parent = dp;
 	
     DBG_VOP(("synthfs_lookup called, name = %s, namelen = %ld\n", ap->a_cnp->cn_nameptr, ap->a_cnp->cn_namelen));
+#if DEBUG
     if (flags & LOCKPARENT) DBG_VOP(("\tLOCKPARENT is set\n"));
     if (flags & ISLASTCN) DBG_VOP(("\tISLASTCN is set\n"));
+#endif
 
     *ap->a_vpp = NULL;
 
-    if (dp->v_type != VDIR) {
-        result = ENOTDIR;
-        goto Err_Exit;
-    };
-
-	if ((flags & ISLASTCN) &&
-		(VTOVFS(dp)->mnt_flag & MNT_RDONLY) &&
-		((nameiop == DELETE) || (nameiop == RENAME))) {
-		result = EROFS;
-		goto Err_Exit;
-	};
-	
-	result = VOP_ACCESS(dp, VEXEC, cred, cnp->cn_proc);
-	if (result != 0) goto Err_Exit;
-	
 	/* first check for "." and ".." */
 	if (cnp->cn_nameptr[0] == '.') {
 		if (namelen == 1) {
@@ -1454,7 +1042,7 @@ synthfs_lookup(ap)
             found = TRUE;
 
             target_vp = dp;
-            VREF(target_vp);
+            vnode_get(target_vp);
             
             result = 0;
             
@@ -1472,18 +1060,10 @@ synthfs_lookup(ap)
                  * Special case for ".." to prevent deadlock:
                  * always release the parent vnode BEFORE trying to acquire
                  * ITS parent.  This avoids deadlocking with another lookup
-                 * starting from the target_vp trying to vget() this directory.
+                 * starting from the target_vp trying to vnode_get() this directory.
                  */
-                VOP_UNLOCK(dp, 0, p);
-                result = vget(target_vp, LK_EXCLUSIVE | LK_RETRY, p);
-                if (result != 0) {
-                    vn_lock(dp, LK_EXCLUSIVE | LK_RETRY, p);
-                    goto Err_Exit;
-                }
-                if ((flags & LOCKPARENT) && (flags & ISLASTCN)) {
-                    result = vn_lock(dp, LK_EXCLUSIVE, p);
-                    // vput(target_vp);		/* XXX WHY WAS THIS HERE? */
-                }
+                result = vnode_get(target_vp);
+
             } else {
                 target_vp = dp;
                 /* dp is alread locked and ref'ed */
@@ -1501,9 +1081,8 @@ synthfs_lookup(ap)
     		(*(entry->s_name + namelen) == (char)0)) {
             found = TRUE;
 			target_vp = STOV(entry);
-            result = vget(target_vp, LK_EXCLUSIVE | LK_RETRY, p);		/* vget is not really needed because refcount is always > 0... */
+            result = vnode_getwithref(target_vp);		/* refcount is always > 0 for any vnode in this list... */
 			if (result != 0) {
-                vrele(target_vp);
 				goto Err_Exit;
 			};
 
@@ -1517,11 +1096,6 @@ synthfs_lookup(ap)
 Std_Exit:;
     if (found) {
         if ((nameiop == DELETE) && (flags & ISLASTCN)) {
-            /*
-             * Deleting entries requires write access:
-             */
-            result = VOP_ACCESS(dp, VWRITE, cred, p);
-            if (result != 0) goto Err_Exit;
 
             /*
              * If the parent directory is "sticky" then the user must own
@@ -1530,23 +1104,21 @@ Std_Exit:;
              * append-only directories
              */
             if ((dsp->s_mode & S_ISVTX) &&
-                (cred->cr_uid != 0) &&
-                (cred->cr_uid != dsp->s_uid) &&
+                suser(cred, NULL) &&
+                (kauth_cred_getuid(cred) != dsp->s_uid) &&
                 (target_vp != NULL) &&
                 (target_vp->v_type != VLNK) &&
-                (VTOS(target_vp)->s_uid != cred->cr_uid)) {
-                vput(target_vp);
+                (VTOS(target_vp)->s_uid != kauth_cred_getuid(cred))) {
+                vnode_put(target_vp);
                 result = EPERM;
                 goto Err_Exit;
             };
         };
 
         if ((nameiop == RENAME) && (flags & WANTPARENT) && (flags * ISLASTCN)) {
-        	result = VOP_ACCESS(dp, VWRITE, cred, p);
-            if (result != 0) goto Err_Exit;
 
             if (isDot) {
-                vrele(target_vp);
+                vnode_put(target_vp);
                 result = EISDIR;
                 goto Err_Exit;
             };
@@ -1559,43 +1131,25 @@ Std_Exit:;
             ((nameiop == CREATE) ||
              (nameiop == RENAME) ||
              ((nameiop == DELETE) && (flags & DOWHITEOUT) && (flags & ISWHITEOUT)))) {
-            /* Write access is required to create entries in the directory: */
-            result = VOP_ACCESS(dp, VWRITE, cred, p);
-            if (result != 0) goto Err_Exit;
-
-			cnp->cn_flags |= SAVENAME;
-			
+		/* create a new entry */
             result = EJUSTRETURN;
         }
     };
 
-    /* XXX PPD Should we do something special in case LOCKLEAF isn't set? */
-    if (found && !isDot && !isDotDot && (!(flags & LOCKPARENT) || !(flags & ISLASTCN))) {
-        VOP_UNLOCK(dp, 0, p);
-    };
-    
     *ap->a_vpp = target_vp;
 
 Err_Exit:;
 	DBG_VOP(("synthfs_lookup: result = %d.\n", result));
 	if (found) {
 		if (target_vp) {
-			if (VOP_ISLOCKED(target_vp)) {
-				DBG_VOP(("synthfs_lookup: target_vp = 0x%08X (locked).\n", (u_long)target_vp));
-			} else {
-				DBG_VOP(("synthfs_lookup: target_vp = 0x%08X (NOT locked?).\n", (u_long)target_vp));
-			};
+				DBG_VOP(("synthfs_lookup: target_vp = 0x%08X \n", (u_long)target_vp));
 		} else {
 			DBG_VOP(("synthfs_lookup: found = true but target_vp = NULL?\n"));
 		};
 	} else {
 		DBG_VOP(("synthf_lookup: target not found.\n"));
 	};
-	if (VOP_ISLOCKED(starting_parent)) {
-		DBG_VOP(("synthfs_lookup: dp = %08X; starting_parent = 0x%08X (LOCKED).\n", (u_long)dp, (u_long)starting_parent));
-	} else {
-		DBG_VOP(("synthfs_lookup: dp = %08X; starting_parent = 0x%08X (UNLOCKED).\n", (u_long)dp, (u_long)starting_parent));
-	};
+		DBG_VOP(("synthfs_lookup: dp = %08X; starting_parent = 0x%08X .\n", (u_long)dp, (u_long)starting_parent));
 	
    return result;
 }
@@ -1606,17 +1160,18 @@ Err_Exit:;
 
 #% pathconf	vp	L L L
 #
- vop_pathconf {
+ vnop_pathconf {
      IN struct vnode *vp;
      IN int name;
      OUT register_t *retval;
 */
 int
 synthfs_pathconf(ap)
-struct vop_pathconf_args /* {
+struct vnop_pathconf_args /* {
     struct vnode *a_vp;
     int a_name;
     int *a_retval;
+    vfs_context_t a_context;
 } */ *ap;
 {
     DBG_VOP(("synthfs_pathconf called\n"));
@@ -1657,40 +1212,29 @@ struct vop_pathconf_args /* {
  * time. If waitfor is set, then wait for the disk write of the node to
  * complete.
  */
-/*
-#% update	vp	L L L
-	IN struct vnode *vp;
-	IN struct timeval *access;
-	IN struct timeval *modify;
-	IN int waitfor;
-*/
 
 int
-synthfs_update(ap)
-	struct vop_update_args /* {
-		struct vnode *a_vp;
-		struct timeval *a_access;
-		struct timeval *a_modify;
-		int a_waitfor;
-	} */ *ap;
+synthfs_update(struct vnode *vp, struct timeval *access, struct timeval *modify, __unused int waitfor)
 {
-	struct vnode *vp = ap->a_vp;
 	struct synthfsnode *sp = VTOS(vp);
+	struct timeval tv;
 
 	DBG_ASSERT(sp != NULL);
-	DBG_ASSERT(*((int*)&vp->v_interlock) == 0);
 
 	if (((sp->s_nodeflags & (IN_ACCESS | IN_CHANGE | IN_MODIFIED | IN_UPDATE)) != 0) &&
-		!(VTOVFS(ap->a_vp)->mnt_flag & MNT_RDONLY)) {
-		if (sp->s_nodeflags & IN_ACCESS) sp->s_accesstime = *ap->a_access;
-		if (sp->s_nodeflags & IN_UPDATE) sp->s_modificationtime = *ap->a_modify;
-		if (sp->s_nodeflags & IN_CHANGE) sp->s_changetime = time;
+		!(VTOVFS(vp)->mnt_flag & MNT_RDONLY)) {
+		if (sp->s_nodeflags & IN_ACCESS) sp->s_accesstime = *access;
+		if (sp->s_nodeflags & IN_UPDATE) sp->s_modificationtime = *modify;
+		if (sp->s_nodeflags & IN_CHANGE) {
+
+			microtime(&tv);
+			sp->s_changetime = tv;
+		}
 	};
 	
 	/* After the updates are finished, clear the flags */
 	sp->s_nodeflags &= ~(IN_ACCESS | IN_CHANGE | IN_MODIFIED | IN_UPDATE);
 
-//  DBG_ASSERT(*((int*)&ap->a_vp->v_interlock) == 0);
 	return 0;
 }
 
@@ -1704,70 +1248,10 @@ synthfs_update(ap)
 
 
 /*
-#% lock		vp	U L U
-#
- vop_lock {
-     IN struct vnode *vp;
-     IN int flags;
-     IN struct proc *p;
-*/
-
-int
-synthfs_lock(ap)
-struct vop_lock_args /* {
-    struct vnode *a_vp;
-    int a_flags;
-    struct proc *a_p;
-} */ *ap;
-{
-    return lockmgr(&VTOS(ap->a_vp)->s_lock, ap->a_flags, &ap->a_vp->v_interlock, ap->a_p);
-}
-
-/*
- * Unlock an synthfsnode.
-#% unlock	vp	L U L
-#
- vop_unlock {
-     IN struct vnode *vp;
-     IN int flags;
-     IN struct proc *p;
-
-     */
-int
-synthfs_unlock(ap)
-struct vop_unlock_args /* {
-    struct vnode *a_vp;
-    int a_flags;
-    struct proc *a_p;
-} */ *ap;
-{
-    return lockmgr(&VTOS(ap->a_vp)->s_lock, ap->a_flags | LK_RELEASE, &ap->a_vp->v_interlock, ap->a_p);
-}
-
-/*
- * Check for a locked synthfsnode.
-#% islocked	vp	= = =
-#
- vop_islocked {
-     IN struct vnode *vp;
-
-     */
-int
-synthfs_islocked(ap)
-struct vop_islocked_args /* {
-    struct vnode *a_vp;
-} */ *ap;
-{
-    return lockstatus(&VTOS(ap->a_vp)->s_lock);
-}
-
-
-
-/*
 #
 #% inactive	vp	L U U
 #
- vop_inactive {
+ vnop_inactive {
      IN struct vnode *vp;
      IN struct proc *p;
 
@@ -1775,18 +1259,19 @@ struct vop_islocked_args /* {
 
 int
 synthfs_inactive(ap)
-struct vop_inactive_args /* {
+struct vnop_inactive_args /* {
     struct vnode *a_vp;
-    struct proc *a_p;
+    vfs_context_t a_context;
 } */ *ap;
 {
 	struct vnode *vp = ap->a_vp;
-	struct proc *p = ap->a_p;
 	struct synthfsnode *sp = VTOS(vp);
 	struct timeval tv;
 
+#if DEBUG
 	if (vp->v_usecount != 0)
         DBG_VOP(("synthfs_inactive: bad usecount = %d\n", vp->v_usecount ));
+#endif
 
 	/*
 	 * Ignore nodes related to stale file handles.
@@ -1796,18 +1281,17 @@ struct vop_inactive_args /* {
 	
 	/* This is sort of silly but might make sense in the future: */
 	if (sp->s_nodeflags & (IN_ACCESS | IN_CHANGE | IN_MODIFIED | IN_UPDATE)) {
-		tv = time;
-		VOP_UPDATE(vp, &tv, &tv, 0);
+		microtime(&tv);
+		synthfs_update(vp, &tv, &tv, 0);
 	}
 
 out:
-	VOP_UNLOCK(vp, 0, p);
 	/*
 	 * If we are done with the inode, reclaim it
 	 * so that it can be reused immediately.
 	 */
 	if (vp->v_type == VNON) {
-		vrecycle(vp, (struct slock *)0, p);
+		vnode_recycle(vp);
 	};
 	
 	return 0;
@@ -1822,7 +1306,7 @@ out:
  */
 int
 synthfs_reclaim(ap)
-    struct vop_reclaim_args /* { struct vnode *a_vp; struct proc *a_p; } */ *ap;
+    struct vnop_reclaim_args /* { struct vnode *a_vp; struct proc *a_p; } */ *ap;
 {
     struct vnode *vp = ap->a_vp;
     struct synthfsnode *sp = VTOS(vp);

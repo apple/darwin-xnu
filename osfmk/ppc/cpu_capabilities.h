@@ -19,29 +19,16 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
+#ifdef	PRIVATE
 
 #ifndef _PPC_CPU_CAPABILITIES_H
 #define _PPC_CPU_CAPABILITIES_H
-
-/* Sadly, some clients of this interface misspell __APPLE_API_PRIVATE.
- * To avoid breaking them, we accept the incorrect _APPLE_API_PRIVATE.
- */
-#ifdef	_APPLE_API_PRIVATE
-#ifndef __APPLE_API_PRIVATE
-#define	__APPLE_API_PRIVATE
-#endif	/* __APPLE_API_PRIVATE */
-#endif	/* _APPLE_API_PRIVATE */
- 
-#ifndef __APPLE_API_PRIVATE
-#error	cpu_capabilities.h is for Apple Internal use only
-#else	/* __APPLE_API_PRIVATE */
 
 /* _cpu_capabilities
  *
  * This is the authoritative way to determine from user mode what
  * implementation-specific processor features are available.
- * This API only supported for Apple internal use.
- * 
+ * This API is only supported for Apple internal use.
  */
 
 #ifndef	__ASSEMBLER__
@@ -58,11 +45,12 @@ extern int _cpu_capabilities;
 #define	kCache64				0x00000008
 #define	kCache128				0x00000010
 #define	kDcbaRecommended		0x00000020	// PPC: dcba is available and recommended
-#define	kDcbaAvailable			0x00000040	// PPC: dcba is available but is not recommended
+#define	kDcbaAvailable			0x00000040	// PPC: dcba is available (but may or may not be recommended)
 #define	kDataStreamsRecommended	0x00000080	// PPC: dst, dstt, dstst, dss, and dssall instructions available and recommended
-#define	kDataStreamsAvailable	0x00000100	// PPC: dst, dstt, dstst, dss, and dssall instructions available but not recommended
+#define	kDataStreamsAvailable	0x00000100	// PPC: dst, dstt, dstst, dss, and dssall instructions available (may or may not be rec'd)
 #define	kDcbtStreamsRecommended	0x00000200	// PPC: enhanced dcbt instruction available and recommended
-#define	kDcbtStreamsAvailable	0x00000400	// PPC: enhanced dcbt instruction available and recommended
+#define	kDcbtStreamsAvailable	0x00000400	// PPC: enhanced dcbt instruction available (but may or may not be recommended)
+#define	kFastThreadLocalStorage	0x00000800	// TLS ptr is kept in a user-mode-readable register
 
 #define	kUP						0x00008000	// set if (kNumCPUs == 1)
 #define	kNumCPUs				0x00FF0000	// number of CPUs (see _NumCPUs() below)
@@ -102,12 +90,15 @@ static __inline__ int _NumCPUs( void ) { return (_cpu_capabilities & kNumCPUs) >
 #define _COMM_PAGE_BASE_ADDRESS			(-8*4096)						// start at page -8, ie 0xFFFF8000
 #define	_COMM_PAGE_AREA_LENGTH			( 7*4096)						// reserved length of entire comm area
 #define	_COMM_PAGE_AREA_USED			( 2*4096)						// we use two pages so far
+
+/* The Objective-C runtime fixed address page to optimize message dispatch */
+#define _OBJC_PAGE_BASE_ADDRESS			(-20*4096)						// start at page -20, ie 0xFFFEC000
  
 /* data in the comm page */
  
 #define _COMM_PAGE_SIGNATURE			(_COMM_PAGE_BASE_ADDRESS+0x000)	// first few bytes are a signature
 #define _COMM_PAGE_VERSION				(_COMM_PAGE_BASE_ADDRESS+0x01E)	// 16-bit version#
-#define	_COMM_PAGE_THIS_VERSION			1								// this is version 1 of the commarea format
+#define	_COMM_PAGE_THIS_VERSION			2								// this is version 2 of the commarea format
   
 #define _COMM_PAGE_CPU_CAPABILITIES		(_COMM_PAGE_BASE_ADDRESS+0x020)	// mirror of extern int _cpu_capabilities
 #define _COMM_PAGE_NCPUS				(_COMM_PAGE_BASE_ADDRESS+0x021)	// number of configured CPUs
@@ -115,22 +106,30 @@ static __inline__ int _NumCPUs( void ) { return (_cpu_capabilities & kNumCPUs) >
 #define _COMM_PAGE_64_BIT				(_COMM_PAGE_BASE_ADDRESS+0x025)	// nonzero if 64-bit processor
 #define _COMM_PAGE_CACHE_LINESIZE		(_COMM_PAGE_BASE_ADDRESS+0x026)	// cache line size (16-bit field)
  
-#define _COMM_PAGE_UNUSED1				(_COMM_PAGE_BASE_ADDRESS+0x030)	// 16 unused bytes
+#define _COMM_PAGE_UNUSED1				(_COMM_PAGE_BASE_ADDRESS+0x028)	// 24 unused bytes
  
 #define _COMM_PAGE_2_TO_52				(_COMM_PAGE_BASE_ADDRESS+0x040)	// double float constant 2**52
 #define _COMM_PAGE_10_TO_6				(_COMM_PAGE_BASE_ADDRESS+0x048)	// double float constant 10**6
- 
-#define _COMM_PAGE_UNUSED2				(_COMM_PAGE_BASE_ADDRESS+0x050)	// 16 unused bytes
+#define _COMM_PAGE_MAGIC_FE             (_COMM_PAGE_BASE_ADDRESS+0x050) // magic constant 0xFEFEFEFEFEFEFEFF (to find 0s)
+#define _COMM_PAGE_MAGIC_80             (_COMM_PAGE_BASE_ADDRESS+0x058) // magic constant 0x8080808080808080 (to find 0s)
  
 #define _COMM_PAGE_TIMEBASE				(_COMM_PAGE_BASE_ADDRESS+0x060)	// used by gettimeofday()
 #define _COMM_PAGE_TIMESTAMP			(_COMM_PAGE_BASE_ADDRESS+0x068)	// used by gettimeofday()
 #define _COMM_PAGE_SEC_PER_TICK			(_COMM_PAGE_BASE_ADDRESS+0x070)	// used by gettimeofday()
  
-#define _COMM_PAGE_UNUSED3				(_COMM_PAGE_BASE_ADDRESS+0x080)	// 384 unused bytes
- 
  /* jump table (bla to this address, which may be a branch to the actual code somewhere else) */
  /* When new jump table entries are added, corresponding symbols should be added below         */
  
+#define _COMM_PAGE_COMPARE_AND_SWAP32   (_COMM_PAGE_BASE_ADDRESS+0x080) // compare-and-swap word, no barrier
+#define _COMM_PAGE_COMPARE_AND_SWAP64   (_COMM_PAGE_BASE_ADDRESS+0x0c0) // compare-and-swap doubleword, no barrier
+#define _COMM_PAGE_ENQUEUE				(_COMM_PAGE_BASE_ADDRESS+0x100) // enqueue
+#define _COMM_PAGE_DEQUEUE				(_COMM_PAGE_BASE_ADDRESS+0x140) // dequeue
+#define _COMM_PAGE_MEMORY_BARRIER		(_COMM_PAGE_BASE_ADDRESS+0x180) // memory barrier
+#define _COMM_PAGE_ATOMIC_ADD32			(_COMM_PAGE_BASE_ADDRESS+0x1a0) // add atomic word
+#define _COMM_PAGE_ATOMIC_ADD64			(_COMM_PAGE_BASE_ADDRESS+0x1c0) // add atomic doubleword
+
+#define _COMM_PAGE_UNUSED3				(_COMM_PAGE_BASE_ADDRESS+0x1e0) // 32 unused bytes
+
 #define _COMM_PAGE_ABSOLUTE_TIME		(_COMM_PAGE_BASE_ADDRESS+0x200)	// mach_absolute_time()
 #define _COMM_PAGE_SPINLOCK_TRY			(_COMM_PAGE_BASE_ADDRESS+0x220)	// spinlock_try()
 #define _COMM_PAGE_SPINLOCK_LOCK		(_COMM_PAGE_BASE_ADDRESS+0x260)	// spinlock_lock()
@@ -140,7 +139,9 @@ static __inline__ int _NumCPUs( void ) { return (_cpu_capabilities & kNumCPUs) >
 #define _COMM_PAGE_FLUSH_DCACHE			(_COMM_PAGE_BASE_ADDRESS+0x4e0)	// sys_dcache_flush()
 #define _COMM_PAGE_FLUSH_ICACHE			(_COMM_PAGE_BASE_ADDRESS+0x520)	// sys_icache_invalidate()
 #define _COMM_PAGE_PTHREAD_SELF			(_COMM_PAGE_BASE_ADDRESS+0x580)	// pthread_self()
+
 #define	_COMM_PAGE_UNUSED4				(_COMM_PAGE_BASE_ADDRESS+0x5a0)	// 32 unused bytes
+
 #define	_COMM_PAGE_RELINQUISH			(_COMM_PAGE_BASE_ADDRESS+0x5c0)	// used by spinlocks
  
 #define _COMM_PAGE_UNUSED5				(_COMM_PAGE_BASE_ADDRESS+0x5e0)	// 32 unused bytes
@@ -150,11 +151,13 @@ static __inline__ int _NumCPUs( void ) { return (_cpu_capabilities & kNumCPUs) >
 #define	_COMM_PAGE_MEMCPY				(_COMM_PAGE_BASE_ADDRESS+0x7a0)	// memcpy()
 #define	_COMM_PAGE_MEMMOVE				(_COMM_PAGE_BASE_ADDRESS+0x7a0)	// memmove()
 
-#define	_COMM_PAGE_UNUSED6				(_COMM_PAGE_BASE_ADDRESS+0xF80)	// 128 unused bytes
+#define _COMM_PAGE_COMPARE_AND_SWAP32B  (_COMM_PAGE_BASE_ADDRESS+0xf80)	// compare-and-swap word w barrier
+#define _COMM_PAGE_COMPARE_AND_SWAP64B  (_COMM_PAGE_BASE_ADDRESS+0xfc0)	// compare-and-swap doubleword w barrier
 
-#define	_COMM_PAGE_BIGCOPY				(_COMM_PAGE_BASE_ADDRESS+0x1000)// very-long-operand copies
+#define	_COMM_PAGE_MEMSET_PATTERN       (_COMM_PAGE_BASE_ADDRESS+0x1000)// used by nonzero memset()
+#define	_COMM_PAGE_BIGCOPY				(_COMM_PAGE_BASE_ADDRESS+0x1140)// very-long-operand copies
 
-#define _COMM_PAGE_END					(_COMM_PAGE_BASE_ADDRESS+0x1600)// end of common page
+#define _COMM_PAGE_END					(_COMM_PAGE_BASE_ADDRESS+0x1700)// end of commpage area
 
 #ifdef __ASSEMBLER__
 #ifdef __COMM_PAGE_SYMBOLS
@@ -165,6 +168,13 @@ symbol_name: nop
 
 	.text		// Required to make a well behaved symbol file
 
+	CREATE_COMM_PAGE_SYMBOL(___compare_and_swap32, _COMM_PAGE_COMPARE_AND_SWAP32)
+	CREATE_COMM_PAGE_SYMBOL(___compare_and_swap64, _COMM_PAGE_COMPARE_AND_SWAP64)
+	CREATE_COMM_PAGE_SYMBOL(___atomic_enqueue, _COMM_PAGE_ENQUEUE)
+	CREATE_COMM_PAGE_SYMBOL(___atomic_dequeue, _COMM_PAGE_DEQUEUE)
+	CREATE_COMM_PAGE_SYMBOL(___memory_barrier, _COMM_PAGE_MEMORY_BARRIER)
+	CREATE_COMM_PAGE_SYMBOL(___atomic_add32, _COMM_PAGE_ATOMIC_ADD32)
+	CREATE_COMM_PAGE_SYMBOL(___atomic_add64, _COMM_PAGE_ATOMIC_ADD64)
 	CREATE_COMM_PAGE_SYMBOL(___mach_absolute_time, _COMM_PAGE_ABSOLUTE_TIME)
 	CREATE_COMM_PAGE_SYMBOL(___spin_lock_try, _COMM_PAGE_SPINLOCK_TRY)
 	CREATE_COMM_PAGE_SYMBOL(___spin_lock, _COMM_PAGE_SPINLOCK_LOCK)
@@ -179,7 +189,11 @@ symbol_name: nop
 	CREATE_COMM_PAGE_SYMBOL(___bcopy, _COMM_PAGE_BCOPY)
 	CREATE_COMM_PAGE_SYMBOL(___memcpy, _COMM_PAGE_MEMCPY)
 //	CREATE_COMM_PAGE_SYMBOL(___memmove, _COMM_PAGE_MEMMOVE)
+	CREATE_COMM_PAGE_SYMBOL(___compare_and_swap32b, _COMM_PAGE_COMPARE_AND_SWAP32B)
+	CREATE_COMM_PAGE_SYMBOL(___compare_and_swap64b, _COMM_PAGE_COMPARE_AND_SWAP64B)
+    CREATE_COMM_PAGE_SYMBOL(___memset_pattern, _COMM_PAGE_MEMSET_PATTERN)
 	CREATE_COMM_PAGE_SYMBOL(___bigcopy, _COMM_PAGE_BIGCOPY)
+	
 	CREATE_COMM_PAGE_SYMBOL(___end_comm_page, _COMM_PAGE_END)
 
 	.data		// Required to make a well behaved symbol file
@@ -188,5 +202,5 @@ symbol_name: nop
 #endif /* __COMM_PAGE_SYMBOLS */
 #endif /* __ASSEMBLER__ */
 
-#endif /* __APPLE_API_PRIVATE */
 #endif /* _PPC_CPU_CAPABILITIES_H */
+#endif /* PRIVATE */

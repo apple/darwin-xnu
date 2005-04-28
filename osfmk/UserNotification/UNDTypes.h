@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -49,7 +49,10 @@ typedef const char * xmlData_t;
  */
 typedef struct UNDReply *UNDReplyRef;
 
+#include <sys/cdefs.h>
+__BEGIN_DECLS
 extern UNDReplyRef convert_port_to_UNDReply(mach_port_t);
+__END_DECLS
 
 #else /* !MACH_KERNEL_PRIVATE */
 

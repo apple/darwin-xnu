@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -50,6 +50,10 @@
 #ifndef _SYS_EVENT_H_
 #define _SYS_EVENT_H_
 
+#include <machine/types.h>
+#include <sys/cdefs.h>
+#include <stdint.h>
+
 #define EVFILT_READ		(-1)
 #define EVFILT_WRITE		(-2)
 #define EVFILT_AIO		(-3)	/* attached to aio requests */
@@ -61,15 +65,41 @@
 #define EVFILT_FS		(-9)	/* Filesystem events */
 
 #define EVFILT_SYSCOUNT		9
+#define EVFILT_THREADMARKER	EVFILT_SYSCOUNT /* Internal use only */
+
+#if __DARWIN_ALIGN_POWER
+#pragma options align=power
+#endif
 
 struct kevent {
 	uintptr_t	ident;		/* identifier for this event */
 	short		filter;		/* filter for event */
-	u_short		flags;
-	u_int		fflags;
-	intptr_t	data;
+	unsigned short	flags;		/* general flags */
+	unsigned int	fflags;		/* filter-specific flags */
+	intptr_t	data;		/* filter-specific data */
+#ifdef KERNEL_PRIVATE
+	user_addr_t	udata;		/* opaque user data identifier */
+#else
 	void		*udata;		/* opaque user data identifier */
+#endif
 };
+
+#ifdef KERNEL_PRIVATE
+
+struct user_kevent {
+	uint64_t	ident;		/* identifier for this event */
+	short		filter;		/* filter for event */
+	unsigned short	flags;		/* general flags */
+	unsigned int	fflags;		/* filter-specific flags */
+	int64_t		data;		/* filter-specific data */
+	user_addr_t	udata;		/* opaque user data identifier */
+};
+
+#endif
+
+#if __DARWIN_ALIGN_POWER
+#pragma options align=reset
+#endif
 
 #define EV_SET(kevp, a, b, c, d, e, f) do {	\
 	struct kevent *__kevp__ = (kevp);	\
@@ -92,6 +122,7 @@ struct kevent {
 #define EV_CLEAR	0x0020		/* clear event state after reporting */
 
 #define EV_SYSFLAGS	0xF000		/* reserved by system */
+#define EV_FLAG0	0x1000		/* filter-specific flag */
 #define EV_FLAG1	0x2000		/* filter-specific flag */
 
 /* returned values */
@@ -99,23 +130,46 @@ struct kevent {
 #define EV_ERROR	0x4000		/* error, data contains errno */
 
 /*
- * data/hint flags for EVFILT_{READ|WRITE}, shared with userspace
+ * Filter specific flags for EVFILT_READ
+ *
+ * The default behavior for EVFILT_READ is to make the "read" determination
+ * relative to the current file descriptor read pointer. The EV_POLL
+ * flag indicates the determination should be made via poll(2) semantics
+ * (which always returns true for regular files - regardless of the amount
+ * of unread data in the file).
+ *
+ * On input, EV_OOBAND specifies that only OOB data should be looked for.
+ * The returned data count is the number of bytes beyond the current OOB marker.
+ *
+ * On output, EV_OOBAND indicates that OOB data is present
+ * If it was not specified as an input parameter, then the data count is the
+ * number of bytes before the current OOB marker. If at the marker, the
+ * data count indicates the number of bytes available after it.  In either
+ * case, it's the amount of data one could expect to receive next.
  */
-#define NOTE_LOWAT	0x0001			/* low water mark */
+#define EV_POLL	EV_FLAG0
+#define EV_OOBAND	EV_FLAG1
 
 /*
- * data/hint flags for EVFILT_VNODE, shared with userspace
+ * data/hint fflags for EVFILT_{READ|WRITE}, shared with userspace
+ *
+ * The default behavior for EVFILT_READ is to make the determination
+ * realtive to the current file descriptor read pointer.
  */
-#define	NOTE_DELETE	0x0001			/* vnode was removed */
-#define	NOTE_WRITE	0x0002			/* data contents changed */
-#define	NOTE_EXTEND	0x0004			/* size increased */
-#define	NOTE_ATTRIB	0x0008			/* attributes changed */
-#define	NOTE_LINK	0x0010			/* link count changed */
-#define	NOTE_RENAME	0x0020			/* vnode was renamed */
-#define	NOTE_REVOKE	0x0040			/* vnode access was revoked */
+#define NOTE_LOWAT	0x00000001		/* low water mark */
+/*
+ * data/hint fflags for EVFILT_VNODE, shared with userspace
+ */
+#define	NOTE_DELETE	0x00000001		/* vnode was removed */
+#define	NOTE_WRITE	0x00000002		/* data contents changed */
+#define	NOTE_EXTEND	0x00000004		/* size increased */
+#define	NOTE_ATTRIB	0x00000008		/* attributes changed */
+#define	NOTE_LINK	0x00000010		/* link count changed */
+#define	NOTE_RENAME	0x00000020		/* vnode was renamed */
+#define	NOTE_REVOKE	0x00000040		/* vnode access was revoked */
 
 /*
- * data/hint flags for EVFILT_PROC, shared with userspace
+ * data/hint fflags for EVFILT_PROC, shared with userspace
  */
 #define	NOTE_EXIT	0x80000000		/* process exited */
 #define	NOTE_FORK	0x40000000		/* process forked */
@@ -123,14 +177,36 @@ struct kevent {
 #define	NOTE_PCTRLMASK	0xf0000000		/* mask for hint bits */
 #define	NOTE_PDATAMASK	0x000fffff		/* mask for pid */
 
+/*
+ * data/hint fflags for EVFILT_TIMER, shared with userspace.
+ * The default is a (repeating) interval timer with the data
+ * specifying the timeout interval in milliseconds.
+ *
+ * All timeouts are implicitly EV_CLEAR events.
+ */
+#define NOTE_SECONDS	0x00000001		/* data is seconds         */
+#define NOTE_USECONDS	0x00000002		/* data is microseconds    */
+#define NOTE_NSECONDS	0x00000004		/* data is nanoseconds     */
+#define NOTE_ABSOLUTE	0x00000008		/* absolute timeout        */
+						/* ... implicit EV_ONESHOT */
+ 
 /* additional flags for EVFILT_PROC */
 #define	NOTE_TRACK	0x00000001		/* follow across forks */
 #define	NOTE_TRACKERR	0x00000002		/* could not track child */
 #define	NOTE_CHILD	0x00000004		/* am a child process */
 
 
-#ifdef KERNEL_PRIVATE
 
+#ifndef KERNEL
+/* Temporay solution for BootX to use inode.h till kqueue moves to vfs layer */
+#include <sys/queue.h> 
+struct knote;
+SLIST_HEAD(klist, knote);
+#endif
+
+#ifdef KERNEL
+
+#ifdef KERNEL_PRIVATE
 #include <sys/queue.h> 
 
 #ifdef MALLOC_DECLARE
@@ -143,32 +219,33 @@ MALLOC_DECLARE(M_KQUEUE);
  */
 #define NOTE_SIGNAL	0x08000000
 
+TAILQ_HEAD(kqtailq, knote);	/* a list of "queued" events */
+
 struct knote {
-	/* JMM - line these up with wait_queue_link */
-#if 0
-	struct			wait_queue_link kn_wql;	 /* wait queue linkage */
-#else
+	int		kn_inuse;	/* inuse count */
+	struct kqtailq	*kn_tq;		/* pointer to tail queue */
+	TAILQ_ENTRY(knote)	kn_tqe;		/* linkage for tail queue */
+	struct kqueue	*kn_kq;	/* which kqueue we are on */
+	SLIST_ENTRY(knote)	kn_link;	/* linkage for search list */
 	SLIST_ENTRY(knote)	kn_selnext;	/* klist element chain */
-	void		       *kn_type;	/* knote vs. thread */
-	struct klist	       *kn_list;	/* pointer to list we are on */
-	SLIST_ENTRY(knote)	kn_link;	/* members of kqueue */
-	struct			kqueue *kn_kq;	/* which kqueue we are on */
-#endif
-	TAILQ_ENTRY(knote)	kn_tqe;		/* ...ready to process */
 	union {
-		struct		file *p_fp;	/* file data pointer */
+		struct		fileproc *p_fp;	/* file data pointer */
 		struct		proc *p_proc;	/* proc pointer */
 	} kn_ptr;
 	struct			filterops *kn_fop;
-	int			kn_status;
+	int			kn_status;	/* status bits */
 	int			kn_sfflags;	/* saved filter flags */
 	struct 			kevent kn_kevent;
-	intptr_t		kn_sdata;	/* saved data field */
 	caddr_t			kn_hook;
+	int			kn_hookid;
+	int64_t			kn_sdata;	/* saved data field */
+
 #define KN_ACTIVE	0x01			/* event has been triggered */
 #define KN_QUEUED	0x02			/* event is on queue */
 #define KN_DISABLED	0x04			/* event is disabled */
-#define KN_DETACHED	0x08			/* knote is detached */
+#define KN_DROPPING	0x08			/* knote is being dropped */
+#define KN_USEWAIT	0x10			/* wait for knote use */
+#define KN_DROPWAIT	0x20			/* wait for knote drop */
 
 #define kn_id		kn_kevent.ident
 #define kn_filter	kn_kevent.filter
@@ -180,9 +257,9 @@ struct knote {
 
 struct filterops {
 	int	f_isfd;		/* true if ident == filedescriptor */
-	int	(*f_attach)	__P((struct knote *kn));
-	void	(*f_detach)	__P((struct knote *kn));
-	int	(*f_event)	__P((struct knote *kn, long hint));
+	int	(*f_attach)(struct knote *kn);
+	void	(*f_detach)(struct knote *kn);
+	int	(*f_event)(struct knote *kn, long hint);
 };
 
 struct proc;
@@ -198,42 +275,33 @@ extern void	klist_init(struct klist *list);
 extern void	knote(struct klist *list, long hint);
 extern int	knote_attach(struct klist *list, struct knote *kn);
 extern int	knote_detach(struct klist *list, struct knote *kn);
-extern void	knote_remove(struct proc *p, struct klist *list);
 extern void	knote_fdclose(struct proc *p, int fd);
-extern int 	kqueue_register(struct kqueue *kq,
-		    struct kevent *kev, struct proc *p);
 
-#else 	/* !KERNEL_PRIVATE */
+#endif /* !KERNEL_PRIVATE */
 
-/*
- * This is currently visible to userland to work around broken
- * programs which pull in <sys/proc.h> or <sys/select.h>.
- */
-#include <sys/queue.h> 
-struct knote;
-SLIST_HEAD(klist, knote);
+#else 	/* KERNEL */
 
-#include <sys/cdefs.h>
+
 struct timespec;
 
 __BEGIN_DECLS
-int     kqueue __P((void));
-int     kevent __P((int kq, const struct kevent *changelist, int nchanges,
+int     kqueue(void);
+int     kevent(int kq, const struct kevent *changelist, int nchanges,
 		    struct kevent *eventlist, int nevents,
-		    const struct timespec *timeout));
+		    const struct timespec *timeout);
 __END_DECLS
 
-#include <sys/appleapiopts.h>
 
-#ifdef __APPLE_API_PRIVATE
-#include <mach/mach.h>
+#ifdef PRIVATE
+#include <mach/port.h>
 
 __BEGIN_DECLS
-mach_port_t	kqueue_portset_np __P((int kq));
-int	kqueue_from_portset_np __P((mach_port_t portset));
+mach_port_t	kqueue_portset_np(int kq);
+int	kqueue_from_portset_np(mach_port_t portset);
 __END_DECLS
-#endif /* __APPLE_API_PRIVATE */
+#endif /* PRIVATE */
 
-#endif /* !KERNEL_PRIVATE */
+#endif /* KERNEL */
+
 
 #endif /* !_SYS_EVENT_H_ */

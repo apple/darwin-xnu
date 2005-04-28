@@ -176,8 +176,6 @@
 
 	.file	"profile-asm.s"
 
-#include <cpus.h>
-
 #include <machine/asm.h>
 
 /*
@@ -661,7 +659,7 @@ ENDDATA(_profile_do_stats)
  * except to load this pointer.
  */
 
-#if defined (MACH_KERNEL) && NCPUS > 1
+#if defined (MACH_KERNEL)
 #define ASSEMBLER
 #include <i386/mp.h>
 
@@ -675,7 +673,7 @@ ENDDATA(_profile_do_stats)
 
 #define Vload	CPU_NUMBER(%ebx); movl EXT(_profile_vars_cpus)(,%ebx,4),%ebx
 
-#else	/* not kernel or not multiprocessor */
+#else	/* not kernel */
 #define	Vload	Gload; Egaddr(%ebx,_profile_vars)
 #endif
 

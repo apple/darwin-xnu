@@ -58,6 +58,7 @@
 #ifndef _NETINET_IN_SYSTM_H_
 #define _NETINET_IN_SYSTM_H_
 #include <sys/appleapiopts.h>
+#include <sys/_types.h>
 
 /*
  * Miscellaneous internetwork
@@ -72,15 +73,13 @@
  * the bytes before transmission at each protocol level.  The n_ types
  * represent the types with the bytes in ``high-ender'' order.
  */
-typedef u_int16_t n_short;		/* short as received from the net */
-typedef u_int32_t n_long;		/* long as received from the net */
+typedef __uint16_t n_short;		/* short as received from the net */
+typedef __uint32_t n_long;		/* long as received from the net */
 
-typedef	u_int32_t n_time;		/* ms since 00:00 GMT, byte rev */
+typedef	__uint32_t n_time;		/* ms since 00:00 GMT, byte rev */
 
-#ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
-n_time	 iptime __P((void));
-#endif /* __APPLE_API_PRIVATE */
-#endif
+#ifdef KERNEL_PRIVATE
+n_time	 iptime(void);
+#endif KERNEL_PRIVATE
 
 #endif

@@ -25,7 +25,13 @@
 
 #include <sys/resource.h>
 
-#define	USRSTACK	0xc0000000
+#define	USRSTACK	(0xc0000000)
+
+/* 
+ * put the default 64-bit stack at the max address
+ * (minus one 32-bit address space for other incidentals)
+ */
+#define	USRSTACK64	(MACH_VM_MAX_ADDRESS - VM_MAX_ADDRESS)
 
 /*
  * Virtual memory related constants, all in bytes

@@ -174,7 +174,7 @@ typedef struct {
 
 typedef ptrlist_t dhcpol_t;
 
-#ifdef __APPLE_API_PRIVATE
+#ifdef KERNEL_PRIVATE
 
 void			dhcpol_init(dhcpol_t * list);
 void			dhcpol_free(dhcpol_t * list);
@@ -194,5 +194,5 @@ boolean_t		dhcpol_parse_vendor(dhcpol_t * vendor,
 					    dhcpol_t * options,
 					    unsigned char * err);
 void			dhcpol_print(dhcpol_t * list);
-#endif /* __APPLE_API_PRIVATE */
+#endif KERNEL_PRIVATE
 #endif /* _NETINET_DHCP_OPTIONS_H */

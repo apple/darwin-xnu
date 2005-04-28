@@ -75,12 +75,15 @@ io_map(phys_addr, size)
 	     */
 	    start = virtual_avail;
 	    virtual_avail += round_page(size);
+
+	    (void) pmap_map_bd(start, phys_addr, phys_addr + round_page(size),
+			       VM_PROT_READ|VM_PROT_WRITE);
 	}
 	else {
 	    (void) kmem_alloc_pageable(kernel_map, &start, round_page(size));
+	    (void) pmap_map(start, phys_addr, phys_addr + round_page(size),
+			    VM_PROT_READ|VM_PROT_WRITE);
 	}
-	(void) pmap_map_bd(start, phys_addr, phys_addr + round_page(size),
-			VM_PROT_READ|VM_PROT_WRITE);
 	return (start);
 }
 

@@ -43,27 +43,25 @@
  
 		
 #include <debug.h>
-#include <cpus.h>
 #include <ppc/asm.h>
 #include <ppc/proc_reg.h>
 #include <ppc/spec_reg.h>
 #include <mach/ppc/vm_param.h>
 #include <assym.s>
 
-;
-;		NOTE: We need this only if PREEMPTSTACK is set to non-zero in hw_lock.
-;		Make sure they are set to the same thing
-;
-#define PREEMPTSTACK 0
-
 			.data
 
 /*		4096-byte aligned areas */
 
-		.globl	EXT(per_proc_info)
+		.globl	EXT(PerProcTable)
 		.align	12
-EXT(per_proc_info):									; Per processor data area
-		.space	(ppSize*NCPUS),0				; (filled with 0s)
+EXT(PerProcTable):									; Per processor table
+		.space	(ppeSize*MAX_CPUS),0				; (filled with 0s)
+
+		.globl	EXT(BootProcInfo)
+		.align	12
+EXT(BootProcInfo):									; Per processor data area
+		.space	ppSize,0							; (filled with 0s)
 
 /*		512-byte aligned areas */
 
@@ -85,19 +83,6 @@ EXT(GratefulDebWork):								; Enough for 2 rows of 8 chars of 16-pixel wide 32-
 debstash:
 		.set	.,.+256
 
-#if PREEMPTSTACK
-
-;
-;		NOTE: We need this only if PREEMPTSTACK is set to non-zero in hw_lock.
-;
-
-		.globl	EXT(DBGpreempt)						; preemption debug stack
-		.align	8
-EXT(DBGpreempt):
-		.set	.,.+(NCPUS*PREEMPTSTACK*16)
-#endif
-
-
 /*		128-byte aligned areas */
 
 		.globl	EXT(mapCtl)
@@ -116,18 +101,6 @@ fwdisplock:
 EXT(free_mappings):
 		.long	0
 
-		.globl	EXT(syncClkSpot)
-		.align	7
-EXT(syncClkSpot):
-		.long	0
-		.long	0
-		.long	0
-		.long	0
-		.long	0
-		.long	0
-		.long	0
-		.long	0
-	
 		.globl	EXT(NMIss)
 		.align	7
 EXT(NMIss):
@@ -196,39 +169,30 @@ EXT(dbspecrs):
 		.set	.,.+(336*4)
 
 /*
- *		Interrupt and debug stacks go here
+ *		Boot processor Interrupt and debug stacks go here.
  */
- 	
+
+		.section __HIB, __data
+
 		.align  PPC_PGSHIFT
-     	.globl  EXT(FixedStackStart)
-EXT(FixedStackStart):
      
 	 	.globl  EXT(intstack)
 EXT(intstack):
-		.set	.,.+INTSTACK_SIZE*NCPUS
-	
+
+		.set	.,.+INTSTACK_SIZE
+
+
+                /* back to the regular __DATA section. */
+
+		.section __DATA, __data
+		.align  PPC_PGSHIFT
+
 /* Debugger stack - used by the debugger if present */
-/* NOTE!!! Keep the debugger stack right after the interrupt stack */
 
     	.globl  EXT(debstack)
 EXT(debstack):
-		.set	., .+KERNEL_STACK_SIZE*NCPUS
-     
-		 .globl  EXT(FixedStackEnd)
-EXT(FixedStackEnd):
+		.set	., .+KERNEL_STACK_SIZE
 
-		.align	ALIGN
-   		.globl  EXT(intstack_top_ss)
-EXT(intstack_top_ss):
-		.long	EXT(intstack)+INTSTACK_SIZE-FM_SIZE			/* intstack_top_ss points to the top of interrupt stack */
+		.section __DATA, __data
 
-		.align	ALIGN
-   	 	.globl  EXT(debstack_top_ss)	
-EXT(debstack_top_ss):
-
-		.long	EXT(debstack)+KERNEL_STACK_SIZE-FM_SIZE		/* debstack_top_ss points to the top of debug stack */
-
-    	.globl  EXT(debstackptr)
-EXT(debstackptr):	
-		.long	EXT(debstack)+KERNEL_STACK_SIZE-FM_SIZE
 

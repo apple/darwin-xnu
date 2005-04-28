@@ -1,0 +1,8 @@
+_copypv
+_cpu_number
+_master_cpu
+_master_processor
+_ml_get_max_cpus
+_mtrr_range_add
+_mtrr_range_remove
+_thread_bind

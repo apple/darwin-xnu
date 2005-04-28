@@ -206,11 +206,9 @@ struct icmp {
 	(type) == ICMP_IREQ || (type) == ICMP_IREQREPLY || \
 	(type) == ICMP_MASKREQ || (type) == ICMP_MASKREPLY)
 
-#ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
-void	icmp_error __P((struct mbuf *, int, int, n_long, struct ifnet *));
-void	icmp_input __P((struct mbuf *, int));
-#endif /* __APPLE_API_PRIVATE */
-#endif
+#ifdef KERNEL_PRIVATE
+void	icmp_error(struct mbuf *, int, int, n_long, struct ifnet *);
+void	icmp_input(struct mbuf *, int);
+#endif KERNEL_PRIVATE
 
 #endif

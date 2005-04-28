@@ -58,6 +58,7 @@ public:
     /*!
         @function withNumber
         @abstract A static constructor function to create and initialize an instance of OSNumber with a given value represented as a simple c-string.
+        @discussion This function does not work on IOKit versions prior to 8.0 (prior to 10.4).  For IOKit version 8.0 and later, it works but is limited to parsing unsigned 32 bit quantities  The format of the c-string may be decimal, hexadecimal ("0x" prefix), binary ("0b" prefix, or octal ("0" prefix).
         @param value A c-string representing a numeric value.
         @param numberOfBits The number of bit required to represent the value.
         @result Returns an instance of OSNumber or 0 if an error occurred.

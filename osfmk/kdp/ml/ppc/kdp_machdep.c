@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -27,6 +27,7 @@
 #include <kdp/kdp_internal.h>
 #include <ppc/savearea.h>
 #include <kern/debug.h>
+#include <IOKit/IOPlatformExpert.h>
 
 #define KDP_TEST_HARNESS 0
 #if KDP_TEST_HARNESS
@@ -382,21 +383,20 @@ kdp_machine_hostinfo(
     kdp_hostinfo_t *hostinfo
 )
 {
-    machine_slot_t	m;
     int			i;
 
     hostinfo->cpus_mask = 0;
     hostinfo->cpu_type = 0;
 
     for (i = 0; i < machine_info.max_cpus; i++) {
-        m = &machine_slot[i];
-        if (!m->is_cpu)
+        if ((PerProcTable[i].ppe_vaddr == (struct per_proc_info *)NULL) || 
+	    !(PerProcTable[i].ppe_vaddr->running))
             continue;
 	
         hostinfo->cpus_mask |= (1 << i);
         if (hostinfo->cpu_type == 0) {
-            hostinfo->cpu_type = m->cpu_type;
-            hostinfo->cpu_subtype = m->cpu_subtype;
+            hostinfo->cpu_type = slot_type(i);
+            hostinfo->cpu_subtype = slot_subtype(i);
         }
     }
 }
@@ -414,7 +414,12 @@ kdp_panic(
 void
 kdp_reboot(void)
 {
-	halt_all_cpus(TRUE);;
+	printf("Attempting system restart...");
+	/* Call the platform specific restart*/
+	if (PE_halt_restart) 
+		(*PE_halt_restart)(kPERestartCPU);
+	/* If we do reach this, give up */
+	halt_all_cpus(TRUE);
 }
 
 int
@@ -608,7 +613,6 @@ kdp_print_backtrace(
 {
 	extern void kdp_print_registers(struct savearea *);
 	extern void print_backtrace(struct savearea *);
-	extern unsigned int debug_mode, disableDebugOuput;
 
 	disableDebugOuput = FALSE;
 	debug_mode = TRUE;
@@ -620,7 +624,7 @@ kdp_print_backtrace(
 	while(1);
 }
 
-unsigned int kdp_ml_get_breakinsn()
+unsigned int kdp_ml_get_breakinsn(void)
 {
   return 0x7fe00008;
 }

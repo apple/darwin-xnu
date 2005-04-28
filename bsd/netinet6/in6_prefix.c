@@ -94,13 +94,14 @@ struct rr_prhead rr_prefix;
 
 #include <net/net_osdep.h>
 
-static void	add_each_addr __P((struct socket *so, struct rr_prefix *rpp,
-				   struct rp_addr *rap));
-static int create_ra_entry __P((struct rp_addr **rapp));
-static int add_each_prefix __P((struct socket *so, struct rr_prefix *rpp));
-static void free_rp_entries __P((struct rr_prefix *rpp));
-static int link_stray_ia6s __P((struct rr_prefix *rpp));
-static void	rp_remove __P((struct rr_prefix *rpp));
+static void	add_each_addr(struct socket *so, struct rr_prefix *rpp,
+				   struct rp_addr *rap);
+static int create_ra_entry(struct rp_addr **rapp);
+static int add_each_prefix(struct socket *so, struct rr_prefix *rpp);
+static void free_rp_entries(struct rr_prefix *rpp);
+static int link_stray_ia6s(struct rr_prefix *rpp);
+static void	rp_remove(struct rr_prefix *rpp);
+extern lck_mtx_t *prefix6_mutex;
 
 /*
  * Copy bits from src to tgt, from off bit for len bits.
@@ -158,6 +159,7 @@ in6_prefixwithifp(struct ifnet *ifp, int plen, struct in6_addr *dst)
 	struct ifprefix *ifpr;
 
 	/* search matched prefix */
+	ifnet_lock_shared(ifp);
 	for (ifpr = TAILQ_FIRST(&ifp->if_prefixhead); ifpr;
 	     ifpr = TAILQ_NEXT(ifpr, ifpr_list))
 	{
@@ -167,6 +169,7 @@ in6_prefixwithifp(struct ifnet *ifp, int plen, struct in6_addr *dst)
 		if (plen <= in6_matchlen(dst, IFPR_IN6(ifpr)))
 			break;
 	}
+	ifnet_lock_done(ifp);
 	return (ifpr);
 }
 
@@ -192,6 +195,7 @@ search_matched_prefix(struct ifnet *ifp, struct in6_prefixreq *ipr)
 	 * which matches the addr
 	 */
 
+	ifnet_lock_shared(ifp);
 	TAILQ_FOREACH(ifa, &ifp->if_addrlist, ifa_list)
 	{
 		if (ifa->ifa_addr->sa_family != AF_INET6)
@@ -200,13 +204,17 @@ search_matched_prefix(struct ifnet *ifp, struct in6_prefixreq *ipr)
 		    in6_matchlen(&ipr->ipr_prefix.sin6_addr, IFA_IN6(ifa)))
 			break;
 	}
-	if (ifa == NULL)
+	if (ifa == NULL) {
+		ifnet_lock_done(ifp);
 		return NULL;
+	}
 
 	rpp = ifpr2rp(((struct in6_ifaddr *)ifa)->ia6_ifpr);
-	if (rpp != 0)
+	if (rpp != 0) {
+		ifnet_lock_done(ifp);
 		return rpp;
-
+	}
+	
 	for (ifpr = TAILQ_FIRST(&ifp->if_prefixhead); ifpr;
 	     ifpr = TAILQ_NEXT(ifpr, ifpr_list))
 	{
@@ -217,6 +225,7 @@ search_matched_prefix(struct ifnet *ifp, struct in6_prefixreq *ipr)
 						    IFPR_IN6(ifpr)))
 			break;
 	}
+	ifnet_lock_done(ifp);
 	if (ifpr != NULL)
 		log(LOG_ERR,  "in6_prefix.c: search_matched_prefix: addr %s"
 		    "has no pointer to prefix %s\n", ip6_sprintf(IFA_IN6(ifa)),
@@ -237,6 +246,7 @@ mark_matched_prefixes(u_long cmd, struct ifnet *ifp, struct in6_rrenumreq *irr)
 	int matchlen, matched = 0;
 
 	/* search matched prefixes */
+	ifnet_lock_exclusive(ifp);	/* Should if_prefixhead be protected by IPv6?? */
 	for (ifpr = TAILQ_FIRST(&ifp->if_prefixhead); ifpr;
 	     ifpr = TAILQ_NEXT(ifpr, ifpr_list))
 	{
@@ -282,6 +292,7 @@ mark_matched_prefixes(u_long cmd, struct ifnet *ifp, struct in6_rrenumreq *irr)
 			    "ND autoconfigured addr?\n",
 			    ip6_sprintf(IFA_IN6(ifa)));
 	}
+	ifnet_lock_done(ifp);
 	return matched;
 }
 
@@ -294,6 +305,7 @@ delmark_global_prefixes(struct ifnet *ifp, struct in6_rrenumreq *irr)
 	struct ifprefix *ifpr;
 
 	/* search matched prefixes */
+	ifnet_lock_exclusive(ifp);
 	for (ifpr = TAILQ_FIRST(&ifp->if_prefixhead); ifpr;
 	     ifpr = TAILQ_NEXT(ifpr, ifpr_list))
 	{
@@ -305,6 +317,7 @@ delmark_global_prefixes(struct ifnet *ifp, struct in6_rrenumreq *irr)
 		    IPV6_ADDR_SCOPE_GLOBAL)
 			ifpr2rp(ifpr)->rp_statef_delmark = 1;
 	}
+	ifnet_lock_done(ifp);
 }
 
 /* Unmark prefixes */
@@ -314,6 +327,7 @@ unmark_prefixes(struct ifnet *ifp)
 	struct ifprefix *ifpr;
 
 	/* unmark all prefix */
+	ifnet_lock_exclusive(ifp);
 	for (ifpr = TAILQ_FIRST(&ifp->if_prefixhead); ifpr;
 	     ifpr = TAILQ_NEXT(ifpr, ifpr_list))
 	{
@@ -324,22 +338,26 @@ unmark_prefixes(struct ifnet *ifp)
 		ifpr2rp(ifpr)->rp_statef_addmark = 0;
 		ifpr2rp(ifpr)->rp_statef_delmark = 0;
 	}
+	ifnet_lock_done(ifp);
 }
 
 static void
 init_prefix_ltimes(struct rr_prefix *rpp)
 {
+	struct timeval timenow;
+
+	getmicrotime(&timenow);
 
 	if (rpp->rp_pltime == RR_INFINITE_LIFETIME ||
 	    rpp->rp_rrf_decrprefd == 0)
 		rpp->rp_preferred = 0;
 	else
-		rpp->rp_preferred = time_second + rpp->rp_pltime;
+		rpp->rp_preferred = timenow.tv_sec + rpp->rp_pltime;
 	if (rpp->rp_vltime == RR_INFINITE_LIFETIME ||
 	    rpp->rp_rrf_decrvalid == 0)
 		rpp->rp_expire = 0;
 	else
-		rpp->rp_expire = time_second + rpp->rp_vltime;
+		rpp->rp_expire = timenow.tv_sec + rpp->rp_vltime;
 }
 
 static int
@@ -377,6 +395,7 @@ search_ifidwithprefix(struct rr_prefix *rpp, struct in6_addr *ifid)
 {
 	struct rp_addr *rap;
 
+	lck_mtx_lock(prefix6_mutex);
 	LIST_FOREACH(rap, &rpp->rp_addrhead, ra_entry)
 	{
 		if (rr_are_ifid_equal(ifid, &rap->ra_ifid,
@@ -384,6 +403,7 @@ search_ifidwithprefix(struct rr_prefix *rpp, struct in6_addr *ifid)
 				      rpp->rp_plen))
 			break;
 	}
+	lck_mtx_unlock(prefix6_mutex);
 	return rap;
 }
 
@@ -407,9 +427,9 @@ assign_ra_entry(struct rr_prefix *rpp, int iilen, struct in6_ifaddr *ia)
 #if 0 /* Can't do this now, because rpp may be on th stack. should fix it? */
 	ia->ia6_ifpr = rp2ifpr(rpp);
 #endif
-	s = splnet();
+	lck_mtx_lock(prefix6_mutex);
 	LIST_INSERT_HEAD(&rpp->rp_addrhead, rap, ra_entry);
-	splx(s);
+	lck_mtx_unlock(prefix6_mutex);
 
 	return 0;
 }
@@ -424,7 +444,7 @@ in6_prefix_add_llifid(int iilen, struct in6_ifaddr *ia)
 	struct rr_prefix *rpp;
 	struct rp_addr *rap;
 	struct socket so;
-	int error, s;
+	int error;
 
 	if ((error = create_ra_entry(&rap)) != 0)
 		return(error);
@@ -435,6 +455,7 @@ in6_prefix_add_llifid(int iilen, struct in6_ifaddr *ia)
 	/* XXX: init dummy so */
 	bzero(&so, sizeof(so));
 	/* insert into list */
+	lck_mtx_lock(prefix6_mutex);
 	LIST_FOREACH(rpp, &rr_prefix, rp_entry)
 	{
 		/*
@@ -443,11 +464,10 @@ in6_prefix_add_llifid(int iilen, struct in6_ifaddr *ia)
 		if (rpp->rp_ifp != ia->ia_ifp)
 			continue;
 
-		s = splnet();
 		LIST_INSERT_HEAD(&rpp->rp_addrhead, rap, ra_entry);
-		splx(s);
 		add_each_addr(&so, rpp, rap);
 	}
+	lck_mtx_unlock(prefix6_mutex);
 	return 0;
 }
 
@@ -546,9 +566,9 @@ in6_prefix_remove_ifid(int iilen, struct in6_ifaddr *ia)
 		return;
 	rap = search_ifidwithprefix(ifpr2rp(ia->ia6_ifpr), IA6_IN6(ia));
 	if (rap != NULL) {
-		int s = splnet();
+		lck_mtx_lock(prefix6_mutex);
 		LIST_REMOVE(rap, ra_entry);
-		splx(s);
+		lck_mtx_unlock(prefix6_mutex);
 		if (rap->ra_addr)
 			ifafree(&rap->ra_addr->ia_ifa);
 		FREE(rap, M_RR_ADDR);
@@ -559,12 +579,13 @@ in6_prefix_remove_ifid(int iilen, struct in6_ifaddr *ia)
 }
 
 void
-in6_purgeprefix(ifp)
-	struct ifnet *ifp;
+in6_purgeprefix(
+	struct ifnet *ifp)
 {
 	struct ifprefix *ifpr, *nextifpr;
 
 	/* delete prefixes before ifnet goes away */
+	ifnet_lock_exclusive(ifp);
 	for (ifpr = TAILQ_FIRST(&ifp->if_prefixhead); ifpr;
 	     ifpr = nextifpr)
 	{
@@ -574,6 +595,7 @@ in6_purgeprefix(ifp)
  			continue;
 		(void)delete_each_prefix(ifpr2rp(ifpr), PR_ORIG_KERNEL);
 	}
+	ifnet_lock_done(ifp);
 }
 
 static void
@@ -675,6 +697,7 @@ rrpr_update(struct socket *so, struct rr_prefix *new)
 	int s;
 
 	/* search existing prefix */
+	ifnet_lock_exclusive(new->rp_ifp);
 	for (ifpr = TAILQ_FIRST(&new->rp_ifp->if_prefixhead); ifpr;
 	     ifpr = TAILQ_NEXT(ifpr, ifpr_list))
 	{
@@ -695,8 +718,10 @@ rrpr_update(struct socket *so, struct rr_prefix *new)
 		 * If the origin of the already-installed prefix is more
 		 * preferable than the new one, ignore installation request.
 		 */
-		if (rpp->rp_origin > new->rp_origin)
+		if (rpp->rp_origin > new->rp_origin) {
+			ifnet_lock_done(new->rp_ifp);
 			return(EPERM);
+		}
 
 		/* update prefix information */
 		rpp->rp_flags.prf_ra = new->rp_flags.prf_ra;
@@ -712,6 +737,7 @@ rrpr_update(struct socket *so, struct rr_prefix *new)
 		 *  add rp_addr entries in new into rpp, if they have not
 		 *  been already included in rpp.
 		 */
+		lck_mtx_lock(prefix6_mutex);
 		while (!LIST_EMPTY(&new->rp_addrhead))
 		{
 			rap = LIST_FIRST(&new->rp_addrhead);
@@ -723,10 +749,9 @@ rrpr_update(struct socket *so, struct rr_prefix *new)
 				FREE(rap, M_RR_ADDR);
 				continue;
 			}
-			s = splnet();
 			LIST_INSERT_HEAD(&rpp->rp_addrhead, rap, ra_entry);
-			splx(s);
 		}
+		lck_mtx_unlock(prefix6_mutex);
 	} else {
 		/*
 		 * We got a fresh prefix.
@@ -737,9 +762,11 @@ rrpr_update(struct socket *so, struct rr_prefix *new)
 		if (rpp == NULL) {
 			log(LOG_ERR, "in6_prefix.c: rrpr_update:%d"
 			    ": ENOBUFS for rr_prefix\n", __LINE__);
+			ifnet_lock_done(new->rp_ifp);
 			return(ENOBUFS);
 		}
 		/* initilization */
+		lck_mtx_lock(prefix6_mutex);
 		*rpp = *new;
 		LIST_INIT(&rpp->rp_addrhead);
 		/*  move rp_addr entries of new to rpp */
@@ -749,6 +776,7 @@ rrpr_update(struct socket *so, struct rr_prefix *new)
 			LIST_REMOVE(rap, ra_entry);
 			LIST_INSERT_HEAD(&rpp->rp_addrhead, rap, ra_entry);
 		}
+		lck_mtx_unlock(prefix6_mutex);
 
 		/* let rp_ifpr.ifpr_prefix point rr_prefix. */
 		rpp->rp_ifpr.ifpr_prefix = (struct sockaddr *)&rpp->rp_prefix;
@@ -769,10 +797,11 @@ rrpr_update(struct socket *so, struct rr_prefix *new)
 			rp2ifpr(rpp)->ifpr_type = IN6_PREFIX_RR;
 		}
 		/* link rr_prefix entry to rr_prefix list */
-		s = splnet();
+		lck_mtx_lock(prefix6_mutex);
 		LIST_INSERT_HEAD(&rr_prefix, rpp, rp_entry);
-		splx(s);
+		lck_mtx_unlock(prefix6_mutex);
 	}
+	ifnet_lock_done(new->rp_ifp);
 
 	if (!new->rp_raf_auto)
 		return 0;
@@ -782,6 +811,7 @@ rrpr_update(struct socket *so, struct rr_prefix *new)
 	 * If it existed but not pointing to the prefix yet,
 	 * init the prefix pointer.
 	 */
+	lck_mtx_lock(prefix6_mutex);
 	LIST_FOREACH(rap, &rpp->rp_addrhead, ra_entry)
 	{
 		if (rap->ra_addr != NULL) {
@@ -791,6 +821,7 @@ rrpr_update(struct socket *so, struct rr_prefix *new)
 		}
 		add_each_addr(so, rpp, rap);
 	}
+	lck_mtx_unlock(prefix6_mutex);
 	return 0;
 }
 
@@ -804,14 +835,14 @@ add_each_prefix(struct socket *so, struct rr_prefix *rpp)
 static void
 rp_remove(struct rr_prefix *rpp)
 {
-	int s;
 
-	s = splnet();
 	/* unlink rp_entry from if_prefixlist */
+	lck_mtx_lock(prefix6_mutex);
 	{
 		struct ifnet *ifp = rpp->rp_ifp;
 		struct ifprefix *ifpr;
 
+		ifnet_lock_exclusive(ifp);
 		if ((ifpr = TAILQ_FIRST(&ifp->if_prefixhead)) == rp2ifpr(rpp))
 			TAILQ_FIRST(&ifp->if_prefixhead) =
 				TAILQ_NEXT(ifpr, ifpr_list);
@@ -825,10 +856,11 @@ rp_remove(struct rr_prefix *rpp)
  			else
  				printf("Couldn't unlink rr_prefix from ifp\n");
 		}
+		ifnet_lock_done(ifp);
 	}
 	/* unlink rp_entry from rr_prefix list */
 	LIST_REMOVE(rpp, rp_entry);
-	splx(s);
+	lck_mtx_unlock(prefix6_mutex);
 	FREE(rpp, M_IP6RR);
 }
 
@@ -871,6 +903,7 @@ init_newprefix(struct in6_rrenumreq *irr, struct ifprefix *ifpr,
 			 irr->irr_u_uselen,
 			 min(ifpr->ifpr_plen - irr->irr_u_uselen,
 			     irr->irr_u_keeplen));
+	lck_mtx_lock(prefix6_mutex);
 	LIST_FOREACH(orap, &(ifpr2rp(ifpr)->rp_addrhead), ra_entry)
 	{
 		struct rp_addr *rap;
@@ -893,6 +926,7 @@ init_newprefix(struct in6_rrenumreq *irr, struct ifprefix *ifpr,
 	/* Is some FlagMasks for rrf necessary? */
 	rpp->rp_rrf = irr->irr_rrf;
 	rpp->rp_origin = irr->irr_origin;
+	lck_mtx_unlock(prefix6_mutex);
 
 	return 0;
 }
@@ -904,6 +938,7 @@ free_rp_entries(struct rr_prefix *rpp)
 	 * This func is only called with rpp on stack(not on list).
 	 * So no splnet() here
 	 */
+	lck_mtx_lock(prefix6_mutex);
 	while (!LIST_EMPTY(&rpp->rp_addrhead))
 	{
 		struct rp_addr *rap;
@@ -914,6 +949,7 @@ free_rp_entries(struct rr_prefix *rpp)
 			ifafree(&rap->ra_addr->ia_ifa);
 		FREE(rap, M_RR_ADDR);
 	}
+	lck_mtx_unlock(prefix6_mutex);
 }
 
 static int
@@ -925,6 +961,7 @@ add_useprefixes(struct socket *so, struct ifnet *ifp,
 	int error = 0;
 
 	/* add prefixes to each of marked prefix */
+	ifnet_lock_exclusive(ifp);
 	for (ifpr = TAILQ_FIRST(&ifp->if_prefixhead); ifpr; ifpr = nextifpr)
 	{
 		nextifpr = TAILQ_NEXT(ifpr, ifpr_list);
@@ -937,6 +974,7 @@ add_useprefixes(struct socket *so, struct ifnet *ifp,
 			error = add_each_prefix(so, &rp);
 		}
 	}
+	ifnet_lock_done(ifp);
 	/* free each rp_addr entry */
 	free_rp_entries(&rp);
 
@@ -947,14 +985,20 @@ static void
 unprefer_prefix(struct rr_prefix *rpp)
 {
 	struct rp_addr *rap;
+	struct timeval timenow;
 
+	getmicrotime(&timenow);
+
+	lck_mtx_lock(prefix6_mutex);
 	for (rap = rpp->rp_addrhead.lh_first; rap != NULL;
 	     rap = rap->ra_entry.le_next) {
 		if (rap->ra_addr == NULL)
 			continue;
-		rap->ra_addr->ia6_lifetime.ia6t_preferred = time_second;
+		rap->ra_addr->ia6_lifetime.ia6t_preferred = timenow.tv_sec;
 		rap->ra_addr->ia6_lifetime.ia6t_pltime = 0;
 	}
+	lck_mtx_unlock(prefix6_mutex);
+
 }
 
 int
@@ -965,29 +1009,28 @@ delete_each_prefix(struct rr_prefix *rpp, u_char origin)
 	if (rpp->rp_origin > origin)
 		return(EPERM);
 
+	lck_mtx_lock(prefix6_mutex);
 	while (rpp->rp_addrhead.lh_first != NULL) {
 		struct rp_addr *rap;
 		int s;
 
-		s = splnet();
 		rap = LIST_FIRST(&rpp->rp_addrhead);
 		if (rap == NULL) {
-			splx(s);
 			break;
 		}
 		LIST_REMOVE(rap, ra_entry);
-		splx(s);
 		if (rap->ra_addr == NULL) {
 			FREE(rap, M_RR_ADDR);
 			continue;
 		}
 		rap->ra_addr->ia6_ifpr = NULL;
 
-		in6_purgeaddr(&rap->ra_addr->ia_ifa);
+		in6_purgeaddr(&rap->ra_addr->ia_ifa, 0);
 		ifafree(&rap->ra_addr->ia_ifa);
 		FREE(rap, M_RR_ADDR);
 	}
 	rp_remove(rpp);
+	lck_mtx_unlock(prefix6_mutex);
 
 	return error;
 }
@@ -998,6 +1041,7 @@ delete_prefixes(struct ifnet *ifp, u_char origin)
 	struct ifprefix *ifpr, *nextifpr;
 
 	/* delete prefixes marked as tobe deleted */
+	ifnet_lock_exclusive(ifp);
 	for (ifpr = TAILQ_FIRST(&ifp->if_prefixhead); ifpr; ifpr = nextifpr)
 	{
 		nextifpr = TAILQ_NEXT(ifpr, ifpr_list);
@@ -1007,6 +1051,7 @@ delete_prefixes(struct ifnet *ifp, u_char origin)
 		if (ifpr2rp(ifpr)->rp_statef_delmark)
 			(void)delete_each_prefix(ifpr2rp(ifpr), origin);
 	}
+	ifnet_lock_done(ifp);
 }
 
 static int
@@ -1060,7 +1105,7 @@ in6_prefix_ioctl(struct socket *so, u_long cmd, caddr_t data,
 	int error = 0;
 
 	/*
-	 * Failsafe for errneous address config program.
+	 * Failsafe for erroneous address config program.
 	 * Let's hope rrenumd don't make a mistakes.
 	 */
 	if (ipr->ipr_origin <= PR_ORIG_RA)
@@ -1132,6 +1177,7 @@ in6_prefix_ioctl(struct socket *so, u_long cmd, caddr_t data,
 			free_rp_entries(&rp_tmp);
 			break;
 		}
+		ifnet_lock_exclusive(ifp);
 		for (ifa = ifp->if_addrlist.tqh_first;
 		     ifa;
 		     ifa = ifa->ifa_list.tqe_next)
@@ -1155,8 +1201,11 @@ in6_prefix_ioctl(struct socket *so, u_long cmd, caddr_t data,
 				 rp_tmp.rp_plen,
 				 (sizeof(rap->ra_ifid) << 3) - rp_tmp.rp_plen);
 			/* insert into list */
+			lck_mtx_lock(prefix6_mutex);
 			LIST_INSERT_HEAD(&rp_tmp.rp_addrhead, rap, ra_entry);
+			lck_mtx_unlock(prefix6_mutex);
 		}
+		ifnet_lock_done(ifp);
 
 		error = add_each_prefix(so, &rp_tmp);
 
@@ -1169,7 +1218,9 @@ in6_prefix_ioctl(struct socket *so, u_long cmd, caddr_t data,
 		if (rpp == NULL || ifp != rpp->rp_ifp)
 			return (EADDRNOTAVAIL);
 
+		ifnet_lock_exclusive(ifp);
 		error = delete_each_prefix(rpp, ipr->ipr_origin);
+		ifnet_lock_done(ifp);
 		break;
 	}
  bad:
@@ -1177,31 +1228,18 @@ in6_prefix_ioctl(struct socket *so, u_long cmd, caddr_t data,
 }
 
 void
-in6_rr_timer_funneled(void *ignored_arg)
-{
-#ifdef __APPLE__
-    	boolean_t   funnel_state;
-    	funnel_state = thread_funnel_set(network_flock, TRUE);
-#endif
-	in6_rr_timer(ignored_arg);
-#ifdef __APPLE__
-        (void) thread_funnel_set(network_flock, FALSE);
-#endif
-}
-
-void
 in6_rr_timer(void *ignored_arg)
 {
-	int s;
 	struct rr_prefix *rpp;
+	struct timeval timenow;
 
-	timeout(in6_rr_timer_funneled, (caddr_t)0, ip6_rr_prune * hz);
+	getmicrotime(&timenow);
 
-	s = splnet();
 	/* expire */
+	lck_mtx_lock(prefix6_mutex);
 	rpp = LIST_FIRST(&rr_prefix);
 	while (rpp) {
-		if (rpp->rp_expire && rpp->rp_expire < time_second) {
+		if (rpp->rp_expire && rpp->rp_expire < timenow.tv_sec) {
 			struct rr_prefix *next_rpp;
 
 			next_rpp = LIST_NEXT(rpp, rp_entry);
@@ -1209,9 +1247,10 @@ in6_rr_timer(void *ignored_arg)
 			rpp = next_rpp;
 			continue;
 		}
-		if (rpp->rp_preferred && rpp->rp_preferred < time_second)
+		if (rpp->rp_preferred && rpp->rp_preferred < timenow.tv_sec)
 			unprefer_prefix(rpp);
 		rpp = LIST_NEXT(rpp, rp_entry);
 	}
-	splx(s);
+	lck_mtx_unlock(prefix6_mutex);
+	timeout(in6_rr_timer, (caddr_t)0, ip6_rr_prune * hz);
 }

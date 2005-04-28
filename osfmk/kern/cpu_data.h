@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -23,38 +23,31 @@
  * @OSF_COPYRIGHT@
  */
 
-#ifndef	_CPU_DATA_H_
-#define	_CPU_DATA_H_
+#ifdef	XNU_KERNEL_PRIVATE
 
-#include <sys/appleapiopts.h>
+#ifndef	_KERN_CPU_DATA_H_
+#define	_KERN_CPU_DATA_H_
 
-#ifdef	__APPLE_API_PRIVATE
+#include <mach/mach_types.h>
+#include <sys/cdefs.h>
 
 #ifdef	MACH_KERNEL_PRIVATE
 
-#include <cpus.h>
-#include <mach/mach_types.h>
-
 #include <machine/cpu_data.h>
 
-#else	/* MACH_KERNEL_PRIVATE */
+#endif	/* MACH_KERNEL_PRIVATE */
+
+__BEGIN_DECLS
+
+extern void		_disable_preemption(void);
+extern void		_enable_preemption(void);
 
 #define disable_preemption()			_disable_preemption()
 #define enable_preemption()			_enable_preemption()
-#define enable_preemption_no_check()		_enable_preemption_no_check()
 
-#endif	/* MACH_KERNEL_PRIVATE */
 
-#endif	/* __APPLE_API_PRIVATE */
+__END_DECLS
 
-#ifdef	__APPLE_API_UNSTABLE
+#endif	/* _KERN_CPU_DATA_H_ */
 
-#if		!defined(MACH_KERNEL_PRIVATE)
-
-extern thread_t			current_thread(void);
-
-#endif	/* MACH_KERNEL_PRIVATE */
-
-#endif	/* __APPLE_API_UNSTABLE */
-
-#endif	/* _CPU_DATA_H_ */
+#endif	/* XNU_KERNEL_PRIVATE */

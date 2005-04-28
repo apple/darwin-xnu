@@ -54,11 +54,11 @@
 /*
  * Global descriptor table.
  */
-#include <i386/thread.h>
-#include <i386/seg.h>
+#include <mach/machine.h>
 #include <mach/i386/vm_param.h>
 #include <kern/thread.h>
-#include <mach_kdb.h>
+#include <i386/cpu_data.h>
+#include <i386/mp_desc.h>
 
 #ifdef	MACH_BSD
 extern int	trap_unix_syscall(void), trap_mach25_syscall(void),
@@ -67,22 +67,22 @@ extern int	trap_unix_syscall(void), trap_mach25_syscall(void),
 
 struct fake_descriptor gdt[GDTSZ] = {
 /* 0x000 */	{ 0, 0, 0, 0 },		/* always NULL */
-/* 0x008 */	{ LINEAR_KERNEL_ADDRESS + VM_MIN_ADDRESS,
-		  (VM_MAX_KERNEL_ADDRESS-1-VM_MIN_KERNEL_ADDRESS)>>12,
+/* 0x008 */	{ 0,
+		  0xfffff,
 		  SZ_32|SZ_G,
 		  ACC_P|ACC_PL_K|ACC_CODE_R
 		},			/* kernel code */
-/* 0x010 */	{ LINEAR_KERNEL_ADDRESS + VM_MIN_ADDRESS,
-		  (VM_MAX_KERNEL_ADDRESS-1-VM_MIN_KERNEL_ADDRESS)>>12,
+/* 0x010 */	{ 0,
+		  0xfffff,
 		  SZ_32|SZ_G,
 		  ACC_P|ACC_PL_K|ACC_DATA_W
 		},			/* kernel data */
-/* 0x018 */	{ LINEAR_KERNEL_ADDRESS + (unsigned int)ldt,
+/* 0x018 */	{ (unsigned int)ldt,
 		  LDTSZ*sizeof(struct fake_descriptor)-1,
 		  0,
 		  ACC_P|ACC_PL_K|ACC_LDT
 		},			/* local descriptor table */
-/* 0x020 */	{ LINEAR_KERNEL_ADDRESS + (unsigned int)&ktss,
+/* 0x020 */	{ (unsigned int)&ktss,
 		  sizeof(struct i386_tss)-1,
 		  0,
 		  ACC_P|ACC_PL_K|ACC_TSS
@@ -109,13 +109,13 @@ struct fake_descriptor gdt[GDTSZ] = {
 /* 0x038 */	{ 0, 0, 0, 0 },
 #endif
 /* 0x040 */	{ 0, 0, 0, 0 },
-/* 0x048 */	{ LINEAR_KERNEL_ADDRESS + (unsigned int)&cpu_data[0],
-		  sizeof(cpu_data)-1,
+/* 0x048 */	{ (unsigned int)&cpu_data_master,
+		  sizeof(cpu_data_t)-1,
 		  SZ_32,
 		  ACC_P|ACC_PL_K|ACC_DATA_W
 		},			/* per-CPU current thread address */
 #if	MACH_KDB
-/* 0x050 */	{ LINEAR_KERNEL_ADDRESS + (unsigned int)&dbtss,
+/* 0x050 */	{ (unsigned int)&dbtss,
 		  sizeof(struct i386_tss)-1,
 		  0,
 		  ACC_P|ACC_PL_K|ACC_TSS

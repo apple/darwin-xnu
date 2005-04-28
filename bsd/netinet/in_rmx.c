@@ -70,19 +70,21 @@
 #include <sys/socket.h>
 #include <sys/mbuf.h>
 #include <sys/syslog.h>
+#include <kern/lock.h>
 
 #include <net/if.h>
 #include <net/route.h>
 #include <netinet/in.h>
 #include <netinet/in_var.h>
 
-extern int	in_inithead __P((void **head, int off));
+extern int	in_inithead(void **head, int off);
 
 #ifdef __APPLE__
 static void in_rtqtimo(void *rock);
 #endif
 
 #define RTPRF_OURS		RTF_PROTO3	/* set on routes we manage */
+extern lck_mtx_t *rt_mtx;
 
 /*
  * Do what we need to do when inserting a route.
@@ -145,21 +147,21 @@ in_addroute(void *v_arg, void *n_arg, struct radix_node_head *head,
 		 * Find out if it is because of an
 		 * ARP entry and delete it if so.
 		 */
-		rt2 = rtalloc1((struct sockaddr *)sin, 0,
+		rt2 = rtalloc1_locked((struct sockaddr *)sin, 0,
 				RTF_CLONING | RTF_PRCLONING);
 		if (rt2) {
 			if (rt2->rt_flags & RTF_LLINFO &&
 				rt2->rt_flags & RTF_HOST &&
 				rt2->rt_gateway &&
 				rt2->rt_gateway->sa_family == AF_LINK) {
-				rtrequest(RTM_DELETE,
+				rtrequest_locked(RTM_DELETE,
 					  (struct sockaddr *)rt_key(rt2),
 					  rt2->rt_gateway,
 					  rt_mask(rt2), rt2->rt_flags, 0);
 				ret = rn_addroute(v_arg, n_arg, head,
 					treenodes);
 			}
-			rtfree(rt2);
+			rtfree_locked(rt2);
 		}
 	}
 	return ret;
@@ -232,6 +234,7 @@ static void
 in_clsroute(struct radix_node *rn, struct radix_node_head *head)
 {
 	struct rtentry *rt = (struct rtentry *)rn;
+	struct timeval timenow;
 
 	if(!(rt->rt_flags & RTF_UP))
 		return;		/* prophylactic measures */
@@ -249,10 +252,11 @@ in_clsroute(struct radix_node *rn, struct radix_node_head *head)
 	 * waiting for a timeout cycle to kill it.
 	 */
 	if(rtq_reallyold != 0) {
+		getmicrotime(&timenow);
 		rt->rt_flags |= RTPRF_OURS;
-		rt->rt_rmx.rmx_expire = time_second + rtq_reallyold;
+		rt->rt_rmx.rmx_expire = timenow.tv_sec + rtq_reallyold;
 	} else {
-		rtrequest(RTM_DELETE,
+		rtrequest_locked(RTM_DELETE,
 			  (struct sockaddr *)rt_key(rt),
 			  rt->rt_gateway, rt_mask(rt),
 			  rt->rt_flags, 0);
@@ -279,15 +283,18 @@ in_rtqkill(struct radix_node *rn, void *rock)
 	struct rtqk_arg *ap = rock;
 	struct rtentry *rt = (struct rtentry *)rn;
 	int err;
+	struct timeval timenow;
 
+	getmicrotime(&timenow);
+	lck_mtx_assert(rt_mtx, LCK_MTX_ASSERT_OWNED);
 	if(rt->rt_flags & RTPRF_OURS) {
 		ap->found++;
 
-		if(ap->draining || rt->rt_rmx.rmx_expire <= time_second) {
+		if(ap->draining || rt->rt_rmx.rmx_expire <= timenow.tv_sec) {
 			if(rt->rt_refcnt > 0)
 				panic("rtqkill route really not free");
 
-			err = rtrequest(RTM_DELETE,
+			err = rtrequest_locked(RTM_DELETE,
 					(struct sockaddr *)rt_key(rt),
 					rt->rt_gateway, rt_mask(rt),
 					rt->rt_flags, 0);
@@ -298,9 +305,9 @@ in_rtqkill(struct radix_node *rn, void *rock)
 			}
 		} else {
 			if(ap->updating
-			   && (rt->rt_rmx.rmx_expire - time_second
+			   && (rt->rt_rmx.rmx_expire - timenow.tv_sec
 			       > rtq_reallyold)) {
-				rt->rt_rmx.rmx_expire = time_second
+				rt->rt_rmx.rmx_expire = timenow.tv_sec
 					+ rtq_reallyold;
 			}
 			ap->nextstop = lmin(ap->nextstop,
@@ -314,11 +321,7 @@ in_rtqkill(struct radix_node *rn, void *rock)
 static void
 in_rtqtimo_funnel(void *rock)
 {
-	boolean_t 	funnel_state;
-
-	funnel_state = thread_funnel_set(network_flock, TRUE);
         in_rtqtimo(rock);
-	(void) thread_funnel_set(network_flock, FALSE);
 
 }
 #define RTQ_TIMEOUT	60*10	/* run no less than once every ten minutes */
@@ -331,15 +334,15 @@ in_rtqtimo(void *rock)
 	struct rtqk_arg arg;
 	struct timeval atv;
 	static time_t last_adjusted_timeout = 0;
-	int s;
+	struct timeval timenow;
 
+	getmicrotime(&timenow);
 	arg.found = arg.killed = 0;
 	arg.rnh = rnh;
-	arg.nextstop = time_second + rtq_timeout;
+	arg.nextstop = timenow.tv_sec + rtq_timeout;
 	arg.draining = arg.updating = 0;
-	s = splnet();
+	lck_mtx_lock(rt_mtx);
 	rnh->rnh_walktree(rnh, in_rtqkill, &arg);
-	splx(s);
 
 	/*
 	 * Attempt to be somewhat dynamic about this:
@@ -350,27 +353,26 @@ in_rtqtimo(void *rock)
 	 * hard.
 	 */
 	if((arg.found - arg.killed > rtq_toomany)
-	   && (time_second - last_adjusted_timeout >= rtq_timeout)
+	   && (timenow.tv_sec - last_adjusted_timeout >= rtq_timeout)
 	   && rtq_reallyold > rtq_minreallyold) {
 		rtq_reallyold = 2*rtq_reallyold / 3;
 		if(rtq_reallyold < rtq_minreallyold) {
 			rtq_reallyold = rtq_minreallyold;
 		}
 
-		last_adjusted_timeout = time_second;
+		last_adjusted_timeout = timenow.tv_sec;
 #if DIAGNOSTIC
 		log(LOG_DEBUG, "in_rtqtimo: adjusted rtq_reallyold to %d\n",
 		    rtq_reallyold);
 #endif
 		arg.found = arg.killed = 0;
 		arg.updating = 1;
-		s = splnet();
 		rnh->rnh_walktree(rnh, in_rtqkill, &arg);
-		splx(s);
 	}
 
 	atv.tv_usec = 0;
-	atv.tv_sec = arg.nextstop - time_second;
+	atv.tv_sec = arg.nextstop - timenow.tv_sec;
+	lck_mtx_unlock(rt_mtx);
 	timeout(in_rtqtimo_funnel, rock, tvtohz(&atv));
 }
 
@@ -379,15 +381,14 @@ in_rtqdrain(void)
 {
 	struct radix_node_head *rnh = rt_tables[AF_INET];
 	struct rtqk_arg arg;
-	int s;
 	arg.found = arg.killed = 0;
 	arg.rnh = rnh;
 	arg.nextstop = 0;
 	arg.draining = 1;
 	arg.updating = 0;
-	s = splnet();
+	lck_mtx_lock(rt_mtx);
 	rnh->rnh_walktree(rnh, in_rtqkill, &arg);
-	splx(s);
+	lck_mtx_unlock(rt_mtx);
 }
 
 /*
@@ -451,7 +452,7 @@ in_ifadownkill(struct radix_node *rn, void *xap)
 		 * so that behavior is not needed there.
 		 */
 		rt->rt_flags &= ~(RTF_CLONING | RTF_PRCLONING);
-		err = rtrequest(RTM_DELETE, (struct sockaddr *)rt_key(rt),
+		err = rtrequest_locked(RTM_DELETE, (struct sockaddr *)rt_key(rt),
 				rt->rt_gateway, rt_mask(rt), rt->rt_flags, 0);
 		if (err) {
 			log(LOG_WARNING, "in_ifadownkill: error %d\n", err);
@@ -465,6 +466,8 @@ in_ifadown(struct ifaddr *ifa, int delete)
 {
 	struct in_ifadown_arg arg;
 	struct radix_node_head *rnh;
+
+	lck_mtx_assert(rt_mtx, LCK_MTX_ASSERT_OWNED);
 
 	if (ifa->ifa_addr->sa_family != AF_INET)
 		return 1;

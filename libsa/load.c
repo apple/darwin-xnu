@@ -1,3 +1,25 @@
+/*
+ * Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
+ *
+ * @APPLE_LICENSE_HEADER_START@
+ * 
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
+ * 
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
+ * 
+ * @APPLE_LICENSE_HEADER_END@
+ */
+ 
 /***************
 * HEADERS
 ***************/
@@ -18,6 +40,7 @@
 #include <sys/types.h>
 #include <sys/mman.h>
 
+#include <mach/mach_types.h>
 #include <mach/mach.h>
 #include <mach/mach_init.h>
 #include <mach/mach_error.h>
@@ -28,6 +51,8 @@
 #include <mach-o/fat.h>
 #include <mach-o/loader.h>
 #include <mach-o/nlist.h>
+#include <kern/kern_types.h>
+#include <kern/kalloc.h>
 #include <libkern/OSByteOrder.h>
 
 #include "vers_rsrc.h"
@@ -92,8 +117,7 @@ kmod_start_or_stop(
 extern kern_return_t kmod_retain(kmod_t id);
 extern kern_return_t kmod_release(kmod_t id);
 
-extern void flush_dcache(vm_offset_t addr, unsigned cnt, int phys);
-extern void invalidate_icache(vm_offset_t addr, unsigned cnt, int phys);
+extern struct mach_header _mh_execute_header;
 #endif /* KERNEL */
 
 
@@ -486,7 +510,8 @@ finish:
 }
 #endif /* not KERNEL */
 /*******************************************************************************
-*
+* This function can only operate on 32 bit mach object file symbol table
+* entries.
 *******************************************************************************/
 static
 kload_error __kload_keep_symbols(dgraph_entry_t * entry)
@@ -545,7 +570,7 @@ kload_error __kload_keep_symbols(dgraph_entry_t * entry)
 
     hdr                 = (struct mach_header *) mem;
     cmd->hdr.ncmds      = 2;
-    cmd->hdr.sizeofcmds = sizeof(struct load_cmds);
+    cmd->hdr.sizeofcmds = sizeof(struct load_cmds) - sizeof(struct mach_header);
     cmd->hdr.flags     &= ~MH_INCRLINK;
 
     cmd->symcmd.stroff -= (symcmd->symoff - sizeof(struct load_cmds));
@@ -566,7 +591,16 @@ kload_error __kload_keep_symbols(dgraph_entry_t * entry)
     sym = (struct nlist *) (cmd + 1);
     for (idx = 0; idx < symcmd->nsyms; idx++, sym++)
     {
-	if ( (sym->n_type & N_TYPE) == N_SECT) {
+	if ( (sym->n_type & N_STAB) != 0)
+	{
+	    sym->n_type = N_ABS;
+	    sym->n_desc  = 0;
+	    sym->n_value = sym->n_un.n_strx;
+	    sym->n_un.n_strx = 0;
+	    sym->n_sect = NO_SECT;
+	}
+	else if ( (sym->n_type & N_TYPE) == N_SECT)
+	{
 	    sym->n_sect = NO_SECT;
 	    sym->n_type = (sym->n_type & ~N_TYPE) | N_ABS;
 	}
@@ -585,6 +619,9 @@ kload_error __kload_keep_symbols(dgraph_entry_t * entry)
 }
 
 
+/*******************************************************************************
+* This function can only operate on 32 bit mach object files
+*******************************************************************************/
 static
 kload_error __kload_make_opaque_basefile(dgraph_t * dgraph, struct mach_header * hdr)
 {
@@ -592,7 +629,7 @@ kload_error __kload_make_opaque_basefile(dgraph_t * dgraph, struct mach_header *
     struct segment_command * 	data_seg;
     struct segment_command * 	text_seg;
     struct section *         	sec;
-    int			     	j;
+    unsigned int	     	j;
     vm_offset_t		     	offset;
     unsigned long		idx, ncmds;
     vm_size_t	  		size;
@@ -777,7 +814,6 @@ kload_error __kload_load_modules(dgraph_t * dgraph
 #else /* KERNEL */
 
     const char * kernel_file = "(kernel)";
-    extern struct mach_header _mh_execute_header;
     kernel_base_addr = (char *) &_mh_execute_header;
 
 #endif /* not KERNEL */
@@ -808,14 +844,14 @@ kload_error __kload_load_modules(dgraph_t * dgraph
     }
 
     cleanup_kld_loader = true;
-    bool opaque_now = false;
+    char opaque_now = false;
 
     for (i = 0; i < dgraph->length; i++) {
         dgraph_entry_t * current_entry = dgraph->load_order[i];
 
 	opaque_now |= current_entry->opaque_link;
 
-	if (opaque_now)
+	if (kOpaqueLink & opaque_now)
 	{
 	    unsigned int k, j;
 
@@ -829,9 +865,17 @@ kload_error __kload_load_modules(dgraph_t * dgraph
 	    if (dgraph->have_loaded_symbols)
 	    {
 		kld_unload_all(1);
-		kld_result = kld_load_basefile_from_memory(kernel_file,
-						    (char *)  dgraph->opaque_base_image, 
-								dgraph->opaque_base_length);
+                if (kRawKernelLink & current_entry->opaque_link) {
+#ifndef KERNEL
+                    kld_result = kld_load_basefile_from_memory(kernel_file,
+                                                       (char *)  kernel_base_addr, kernel_size);
+#endif
+                } else {
+                    kld_result = kld_load_basefile_from_memory(kernel_file,
+                                                        (char *)  dgraph->opaque_base_image, 
+                                                                    dgraph->opaque_base_length);
+                    dgraph->have_loaded_symbols = false;
+                }
 		if (!kld_result) {
 		    kload_log_error("can't link base image %s" KNL, kernel_file);
 		    result = kload_error_link_load;
@@ -839,23 +883,37 @@ kload_error __kload_load_modules(dgraph_t * dgraph
 		}
 	    }
 
-	    dgraph->have_loaded_symbols = false;
-
-	    for (j = 0; j < dgraph->length; j++)
+	    for (j = 0; j < i; j++)
 	    {
-		for (k = 0;
-		    (k < current_entry->num_dependencies)
-		    && (current_entry->dependencies[k] != dgraph->load_order[j]);
-		    k++)	{}
 
-		if (k == current_entry->num_dependencies)
-		    continue;
+		dgraph_entry_t * image_dep = dgraph->load_order[j];
 
-		dgraph_entry_t * image_dep = current_entry->dependencies[k];
+                if (current_entry->opaque_link)
+                {
+                    for (k = 0;
+                        (k < current_entry->num_dependencies)
+                        && (current_entry->dependencies[k] != image_dep);
+                        k++)	{}
+    
+                    if (k == current_entry->num_dependencies)
+                        continue;
+                }
+
+                if (!current_entry->opaque_link && image_dep->opaques)
+                {
+                    // kpi not on direct dependency list
+                    continue;
+                }
+                if (kRawKernelLink & image_dep->opaques)
+                {
+                    // raw kernel already in base image
+                    continue;
+                }
+
 		if (!image_dep->symbols)
 		{
 		    kload_log_error("internal error; no dependent symbols" KNL);
-		    result = kload_error_link_load;
+                    result = kload_error_link_load;
 		    goto finish;
 		}
 		else
@@ -904,7 +962,9 @@ kload_error __kload_load_modules(dgraph_t * dgraph
 
 	if (dgraph->has_opaque_links && (current_entry != dgraph->root))
 	{
-	    result = __kload_keep_symbols(current_entry);
+            if (!(kRawKernelLink & current_entry->opaques)) {
+                result = __kload_keep_symbols(current_entry);
+            }
 	    if (result != kload_error_none) {
 		kload_log_error("__kload_keep_symbols() failed for module %s" KNL,
 		    current_entry->name);
@@ -1020,9 +1080,10 @@ finish:
 static
 kload_error __kload_load_module(dgraph_t * dgraph,
     dgraph_entry_t * entry,
-    int is_root
-#ifndef KERNEL
-    ,
+#ifdef KERNEL
+    __unused int is_root
+#else	/* not KERNEL */
+    int is_root,
     const char * symbol_file,
     const char * symbol_dir,
     int do_load,
@@ -1303,7 +1364,7 @@ kload_error __kload_load_module(dgraph_t * dgraph,
 
     if (do_load && entry->do_load) {
         mach_result = vm_allocate(mach_task_self(), &vm_buffer,
-            entry->kernel_alloc_size, TRUE);
+            entry->kernel_alloc_size, VM_FLAGS_ANYWHERE);
         if (mach_result != KERN_SUCCESS) {
             kload_log_error("unable to vm_allocate() copy buffer" KNL);
             entry->need_cleanup = 1;
@@ -1493,7 +1554,7 @@ kload_error kload_map_dgraph(
 #endif /* not KERNEL */
 {
     kload_error result = kload_error_none;
-    int i;
+    unsigned int i;
 
     if (log_level >= kload_log_level_load_details) {
 #ifndef KERNEL
@@ -2034,7 +2095,7 @@ finish:
 #ifdef KERNEL
     // Do this ONLY if in the kernel!
     if (current_kmod) {
-        kfree((unsigned int)current_kmod, sizeof(kmod_info_t));
+        kfree(current_kmod, sizeof(kmod_info_t));
     }
 #endif /* KERNEL */
     return result;
@@ -2366,7 +2427,8 @@ finish:
 *******************************************************************************/
 
 /*******************************************************************************
-*
+* This function can only operate on 32 bit mach object file symbol table
+* graphs represented by G_current_load_entry.
 *******************************************************************************/
 static
 unsigned long __kload_linkedit_address(
@@ -2443,11 +2505,11 @@ unsigned long __kload_linkedit_address(
 #ifndef KERNEL
 	mach_result = vm_allocate(G_kernel_port,
 		&G_current_load_entry->kernel_alloc_address,
-		G_current_load_entry->kernel_alloc_size, TRUE);
+		G_current_load_entry->kernel_alloc_size, VM_FLAGS_ANYWHERE);
 #else
 	mach_result = vm_allocate(kernel_map,
 	    &G_current_load_entry->kernel_alloc_address,
-	    G_current_load_entry->kernel_alloc_size, TRUE);
+	    G_current_load_entry->kernel_alloc_size, VM_FLAGS_ANYWHERE);
 #endif /* not KERNEL */
     }
 

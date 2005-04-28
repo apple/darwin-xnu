@@ -38,5 +38,8 @@ extern void clear_RGB16(int color);
 extern void adj_position(unsigned char C);
 extern void put_cursor(int color);
 extern void screen_put_char(unsigned char C);
-extern void initialize_screen(void *);
+extern void initialize_screen(
+		Boot_Video * boot_vinfo,
+		unsigned int op);
+
 #endif /* _NEW_SCREEN_H_ */

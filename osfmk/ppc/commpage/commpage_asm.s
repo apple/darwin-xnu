@@ -73,7 +73,7 @@ Ldata:
  *	* C O M M P A G E _ S E T _ T I M E S T A M P *
  *	***********************************************
  *
- *	Update the gettimeofday() shared data on the commpage, as follows:
+ *	Update the gettimeofday() shared data on the commpages, as follows:
  *		_COMM_PAGE_TIMESTAMP = a BSD-style pair of uint_32's for secs and usecs
  *		_COMM_PAGE_TIMEBASE = the timebase at which the timestamp was valid
  *		_COMM_PAGE_SEC_PER_TICK = multiply timebase ticks by this to get seconds (double)
@@ -99,7 +99,8 @@ Ldata:
  *		r7 = divisor (ie, timebase ticks per sec)
  *	We set up:
  *		r8 = ptr to our static data (kkBinary0, kkDouble1, kkTicksPerSec)
- *		r9 = ptr to comm page in kernel map
+ *		r9 = ptr to 32-bit commpage in kernel map
+ *     r10 = ptr to 64-bit commpage in kernel map
  *
  *	--> Interrupts must be disabled and rtclock locked when called.  <--
  */
@@ -113,16 +114,24 @@ LEXT(commpage_set_timestamp)				// void commpage_set_timestamp(tbr,secs,usecs,di
         
         or.		r0,r3,r4					// is timebase 0? (thus disabled)
         lis		r8,hi16(Ldata)				// point to our data
-        lis		r9,ha16(EXT(commPagePtr))	// get ptr to address of commpage in kernel map
+        lis		r9,ha16(EXT(commPagePtr32))	// get ptrs to address of commpages in kernel map
+		lis		r10,ha16(EXT(commPagePtr64))
         stfd	f1,rzSaveF1(r1)				// save a FPR in the red zone
         ori		r8,r8,lo16(Ldata)
-        lwz		r9,lo16(EXT(commPagePtr))(r9)	// r9 <- commPagePtr
+        lwz		r9,lo16(EXT(commPagePtr32))(r9)	// r9 <- 32-bit commpage ptr
+		lwz		r10,lo16(EXT(commPagePtr64))(r10) // r10 <- 64-bit commpage ptr
         lfd		f1,kkBinary0(r8)			// get fixed 0s
         li		r0,_COMM_PAGE_BASE_ADDRESS	// get va in user space of commpage
-        cmpwi	cr1,r9,0					// is commpage allocated yet?
-        sub		r9,r9,r0					// r9 <- commpage address, biased by user va
-        beq--	cr1,3f						// skip if not allocated
-        stfd	f1,_COMM_PAGE_TIMEBASE(r9)	// turn off the timestamp (atomically)
+        cmpwi	cr1,r9,0					// is 32-bit commpage allocated yet?
+		cmpwi   cr6,r10,0					// is 64-bit commpage allocated yet?
+        sub		r9,r9,r0					// r9 <- 32-bit commpage address, biased by user va
+		sub		r10,r10,r0					// r10<- 64-bit commpage address
+        beq--	cr1,3f						// skip if 32-bit commpage not allocated (64-bit won't be either)
+		bne++   cr6,1f						// skip if 64-bit commpage is allocated
+		mr		r10,r9						// if no 64-bit commpage, point to 32-bit version with r10 too
+1:
+        stfd	f1,_COMM_PAGE_TIMEBASE(r9)	// turn off the 32-bit-commpage timestamp (atomically)
+		stfd	f1,_COMM_PAGE_TIMEBASE(r10) // and the 64-bit one too
         eieio								// make sure all CPUs see it is off
         beq		3f							// all we had to do is turn off timestamp
         
@@ -130,8 +139,10 @@ LEXT(commpage_set_timestamp)				// void commpage_set_timestamp(tbr,secs,usecs,di
         stw		r3,rzNewTimeBase(r1)		// store new timebase so we can lfd
         stw		r4,rzNewTimeBase+4(r1)
         cmpw	r0,r7						// do we need to recompute _COMM_PAGE_SEC_PER_TICK?
-        stw		r5,_COMM_PAGE_TIMESTAMP(r9)	// store the new timestamp
+        stw		r5,_COMM_PAGE_TIMESTAMP(r9)	// store the new timestamp in the 32-bit page
         stw		r6,_COMM_PAGE_TIMESTAMP+4(r9)
+        stw		r5,_COMM_PAGE_TIMESTAMP(r10)// and the 64-bit commpage
+        stw		r6,_COMM_PAGE_TIMESTAMP+4(r10)
         lfd		f1,rzNewTimeBase(r1)		// get timebase in a FPR so we can store atomically
         beq++	2f							// same ticks_per_sec, no need to recompute
         
@@ -148,6 +159,7 @@ LEXT(commpage_set_timestamp)				// void commpage_set_timestamp(tbr,secs,usecs,di
         fsub	f3,f3,f2					// get ticks_per_sec
         fdiv	f3,f4,f3					// divide 1 by ticks_per_sec to get SEC_PER_TICK
         stfd	f3,_COMM_PAGE_SEC_PER_TICK(r9)
+        stfd	f3,_COMM_PAGE_SEC_PER_TICK(r10)
         mtfsf	0xFF,f5						// restore FPSCR
         lfd		f2,rzSaveF2(r1)				// restore FPRs
         lfd		f3,rzSaveF3(r1)
@@ -156,6 +168,7 @@ LEXT(commpage_set_timestamp)				// void commpage_set_timestamp(tbr,secs,usecs,di
 2:											// f1 == new timestamp
         eieio								// wait until the stores take
         stfd	f1,_COMM_PAGE_TIMEBASE(r9)	// then turn the timestamp back on (atomically)
+        stfd	f1,_COMM_PAGE_TIMEBASE(r10)	// both
 3:											// here once all fields updated
         lfd		f1,rzSaveF1(r1)				// restore last FPR
         mtmsr	r11							// turn FP back off

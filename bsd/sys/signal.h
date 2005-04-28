@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -63,9 +63,10 @@
 #ifndef	_SYS_SIGNAL_H_
 #define	_SYS_SIGNAL_H_
 
+#include <sys/cdefs.h>
 #include <sys/appleapiopts.h>
 
-#if !defined(_ANSI_SOURCE) && !defined(_POSIX_SOURCE)
+#if !defined(_ANSI_SOURCE) && !defined(_POSIX_C_SOURCE)
 #define NSIG	32		/* counting 0; could be 33 (mask is 1-32) */
 #endif
 
@@ -75,77 +76,122 @@
 #define	SIGINT	2	/* interrupt */
 #define	SIGQUIT	3	/* quit */
 #define	SIGILL	4	/* illegal instruction (not reset when caught) */
-#if  !defined(_POSIX_SOURCE)
 #define	SIGTRAP	5	/* trace trap (not reset when caught) */
-#endif
 #define	SIGABRT	6	/* abort() */
-#if  !defined(_POSIX_SOURCE)
+#if  defined(_POSIX_C_SOURCE)
+#define	SIGPOLL	7	/* pollable event ([XSR] generated, not supported) */
+#else	/* !_POSIX_C_SOURCE */
 #define	SIGIOT	SIGABRT	/* compatibility */
 #define	SIGEMT	7	/* EMT instruction */
-#endif
+#endif	/* !_POSIX_C_SOURCE */
 #define	SIGFPE	8	/* floating point exception */
 #define	SIGKILL	9	/* kill (cannot be caught or ignored) */
-#if  !defined(_POSIX_SOURCE)
 #define	SIGBUS	10	/* bus error */
-#endif
 #define	SIGSEGV	11	/* segmentation violation */
-#if  !defined(_POSIX_SOURCE)
 #define	SIGSYS	12	/* bad argument to system call */
-#endif
 #define	SIGPIPE	13	/* write on a pipe with no one to read it */
 #define	SIGALRM	14	/* alarm clock */
 #define	SIGTERM	15	/* software termination signal from kill */
-#if  !defined(_POSIX_SOURCE)
 #define	SIGURG	16	/* urgent condition on IO channel */
-#endif
 #define	SIGSTOP	17	/* sendable stop signal not from tty */
 #define	SIGTSTP	18	/* stop signal from tty */
 #define	SIGCONT	19	/* continue a stopped process */
 #define	SIGCHLD	20	/* to parent on child stop or exit */
 #define	SIGTTIN	21	/* to readers pgrp upon background tty read */
 #define	SIGTTOU	22	/* like TTIN for output if (tp->t_local&LTOSTOP) */
-#if  !defined(_POSIX_SOURCE)
+#if  !defined(_POSIX_C_SOURCE)
 #define	SIGIO	23	/* input/output possible signal */
+#endif
 #define	SIGXCPU	24	/* exceeded CPU time limit */
 #define	SIGXFSZ	25	/* exceeded file size limit */
 #define	SIGVTALRM 26	/* virtual time alarm */
 #define	SIGPROF	27	/* profiling time alarm */
+#if  !defined(_POSIX_C_SOURCE)
 #define SIGWINCH 28	/* window size changes */
 #define SIGINFO	29	/* information request */
 #endif
 #define SIGUSR1 30	/* user defined signal 1 */
 #define SIGUSR2 31	/* user defined signal 2 */
 
-#if defined(_ANSI_SOURCE) || defined(__cplusplus)
+#if defined(_ANSI_SOURCE) || defined(_POSIX_C_SOURCE) || defined(__cplusplus)
 /*
  * Language spec sez we must list exactly one parameter, even though we
  * actually supply three.  Ugh!
+ * SIG_HOLD is chosen to avoid KERN_SIG_* values in <sys/signalvar.h>
  */
 #define	SIG_DFL		(void (*)(int))0
 #define	SIG_IGN		(void (*)(int))1
-#define	SIG_ERR		(void (*)(int))-1
+#define	SIG_HOLD	(void (*)(int))5
+#define	SIG_ERR		((void (*)(int))-1)
 #else
-#define	SIG_DFL		(void (*)())0
-#define	SIG_IGN		(void (*)())1
-#define	SIG_ERR		(void (*)())-1
+/* DO NOT REMOVE THE COMMENTED OUT int: fixincludes needs to see them */
+#define	SIG_DFL		(void (*)(/*int*/))0
+#define	SIG_IGN		(void (*)(/*int*/))1
+#define	SIG_HOLD	(void (*)(/*int*/))5
+#define	SIG_ERR		((void (*)(/*int*/))-1)
 #endif
 
 #ifndef _ANSI_SOURCE
-#include <sys/types.h>
+#include <sys/_types.h>
 
-typedef unsigned int sigset_t;
+#ifndef _MCONTEXT_T
+#define _MCONTEXT_T
+typedef __darwin_mcontext_t		mcontext_t;
+#endif
+
+#ifndef _POSIX_C_SOURCE
+#ifndef _MCONTEXT64_T
+#define _MCONTEXT64_T
+typedef __darwin_mcontext64_t		mcontext64_t;
+#endif
+#endif /* _POSIX_C_SOURCE */
+
+#ifndef _PID_T
+#define _PID_T
+typedef __darwin_pid_t			pid_t;
+#endif
+
+#ifndef _PTHREAD_ATTR_T
+#define _PTHREAD_ATTR_T
+typedef __darwin_pthread_attr_t		pthread_attr_t;
+#endif
+
+#ifndef _SIGSET_T
+#define _SIGSET_T
+typedef __darwin_sigset_t		sigset_t;
+#endif
+
+#ifndef	_SIZE_T
+#define	_SIZE_T
+typedef	__darwin_size_t			size_t;
+#endif
+
+#ifndef _UCONTEXT_T
+#define _UCONTEXT_T
+typedef __darwin_ucontext_t		ucontext_t;
+#endif
+
+#ifndef _POSIX_C_SOURCE
+#ifndef _UCONTEXT64_T
+#define _UCONTEXT64_T
+typedef __darwin_ucontext64_t		ucontext64_t;
+#endif
+#endif /* _POSIX_C_SOURCE */
+
+#ifndef _UID_T
+#define _UID_T
+typedef __darwin_uid_t			uid_t;
+#endif
 
 union sigval {
 	/* Members as suggested by Annex C of POSIX 1003.1b. */
-	int	sigval_int;
-	void	*sigval_ptr;
+	int	sival_int;
+	void	*sival_ptr;
 };
 
-#define	SIGEV_NONE		0		/* No async notification */
+#define	SIGEV_NONE	0		/* No async notification */
 #define	SIGEV_SIGNAL	1		/* aio - completion notification */
-#ifdef __APPLE_API_PRIVATE
 #define SIGEV_THREAD	3		/* A notification function will be called to perform notification */
-#endif /*__APPLE_API_PRIVATE */
 
 struct sigevent {
 	int				sigev_notify;				/* Notification type */
@@ -155,18 +201,72 @@ struct sigevent {
 	pthread_attr_t	*sigev_notify_attributes;	/* Notification attributes */
 };
 
+// LP64todo - should this move?
+#ifdef BSD_KERNEL_PRIVATE
+
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=natural
+#endif
+
+union user_sigval {
+	struct {
+		int		pad;	/* assumes Motorolla byte order */
+		int		sival_int;
+	} size_equivalent;
+	user_addr_t	sival_ptr;
+};
+
+struct user_sigevent {
+	int		sigev_notify;			/* Notification type */
+	int		sigev_signo;			/* Signal number */
+	union user_sigval sigev_value;			/* Signal value */
+	user_addr_t	sigev_notify_function;	  	/* Notify function */
+	user_addr_t 	sigev_notify_attributes;	/* Notify attributes */
+};
+
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=reset
+#endif
+
+#endif	/* BSD_KERNEL_PRIVATE */
+
 typedef struct __siginfo {
 	int	si_signo;		/* signal number */
 	int	si_errno;		/* errno association */
 	int	si_code;		/* signal code */
-	int	si_pid;			/* sending process */
-	unsigned int si_uid;		/* sender's ruid */
+	pid_t	si_pid;			/* sending process */
+	uid_t	si_uid;			/* sender's ruid */
 	int	si_status;		/* exit value */
 	void	*si_addr;		/* faulting instruction */
 	union sigval si_value;		/* signal value */
 	long	si_band;		/* band event for SIGPOLL */
-	unsigned int	pad[7];		/* Reserved for Future Use */
+	unsigned long	pad[7];		/* Reserved for Future Use */
 } siginfo_t;
+
+#ifdef BSD_KERNEL_PRIVATE
+
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=natural
+#endif
+
+typedef struct __user_siginfo {
+	int		si_signo;	/* signal number */
+	int		si_errno;	/* errno association */
+	int		si_code;	/* signal code */
+	pid_t		si_pid;		/* sending process */
+	uid_t		si_uid;		/* sender's ruid */
+	int		si_status;	/* exit value */
+	user_addr_t	si_addr;	/* faulting instruction */
+	union user_sigval si_value;	/* signal value */
+	user_long_t	si_band;	/* band event for SIGPOLL */
+	user_ulong_t	pad[7];		/* Reserved for Future Use */
+} user_siginfo_t;
+
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=reset
+#endif
+
+#endif	/* BSD_KERNEL_PRIVATE */
 
 /* 
  * Incase of SIGILL and SIGFPE, si_addr contains the address of 
@@ -181,38 +281,68 @@ typedef struct __siginfo {
 /* Values for si_code */
 
 /* Codes for SIGILL */
+#ifndef _POSIX_C_SOURCE
 #define	ILL_NOOP	0	/* if only I knew... */
-#define	ILL_ILLOPC	1	/* illegal opcode */
-#define	ILL_ILLTRP	2	/* illegal trap */
-#define	ILL_PRVOPC	3	/* privileged opcode */
+#endif
+#define	ILL_ILLOPC	1	/* [XSI] illegal opcode */
+#define	ILL_ILLTRP	2	/* [XSI] illegal trap */
+#define	ILL_PRVOPC	3	/* [XSI] privileged opcode */
+#define	ILL_ILLOPN	4	/* [XSI] illegal operand -NOTIMP */
+#define	ILL_ILLADR	5	/* [XSI] illegal addressing mode -NOTIMP */
+#define	ILL_PRVREG	6	/* [XSI] privileged register -NOTIMP */
+#define	ILL_COPROC	7	/* [XSI] coprocessor error -NOTIMP */
+#define	ILL_BADSTK	8	/* [XSI] internal stack error -NOTIMP */
 
 /* Codes for SIGFPE */
+#ifndef _POSIX_C_SOURCE
 #define	FPE_NOOP	0	/* if only I knew... */
-#define FPE_FLTDIV	1	/* floating point divide by zero */
-#define FPE_FLTOVF	2	/* floating point overflow */
-#define FPE_FLTUND	3	/* floating point underflow */
-#define FPE_FLTRES	4	/* floating point inexact result */
-#define FPE_FLTINV	5	/* invalid floating point operation */
+#endif
+#define FPE_FLTDIV	1	/* [XSI] floating point divide by zero */
+#define FPE_FLTOVF	2	/* [XSI] floating point overflow */
+#define FPE_FLTUND	3	/* [XSI] floating point underflow */
+#define FPE_FLTRES	4	/* [XSI] floating point inexact result */
+#define FPE_FLTINV	5	/* [XSI] invalid floating point operation */
+#define	FPE_FLTSUB	6	/* [XSI] subscript out of range -NOTIMP */
+#define	FPE_INTDIV	7	/* [XSI] integer divide by zero -NOTIMP */
+#define	FPE_INTOVF	8	/* [XSI] integer overflow -NOTIMP */
 
 /* Codes for SIGSEGV */
+#ifndef _POSIX_C_SOURCE
 #define	SEGV_NOOP	0	/* if only I knew... */
-#define	SEGV_MAPERR	1	/* address not mapped to object */
-#define	SEGV_ACCERR	2	/* invalid permissions for mapped to object */
+#endif
+#define	SEGV_MAPERR	1	/* [XSI] address not mapped to object */
+#define	SEGV_ACCERR	2	/* [XSI] invalid permission for mapped object */
 
 /* Codes for SIGBUS */
+#ifndef _POSIX_C_SOURCE
 #define	BUS_NOOP	0	/* if only I knew... */
-#define	BUS_ADRALN	1	/* invalid address alignment */
+#endif
+#define	BUS_ADRALN	1	/* [XSI] Invalid address alignment */
+#define	BUS_ADRERR	2	/* [XSI] Nonexistent physical address -NOTIMP */
+#define	BUS_OBJERR	3	/* [XSI] Object-specific HW error - NOTIMP */
+
+/* Codes for SIGTRAP */
+#define	TRAP_BRKPT	1	/* [XSI] Process breakpoint -NOTIMP */
+#define	TRAP_TRACE	2	/* [XSI] Process trace trap -NOTIMP */
 
 /* Codes for SIGCHLD */
+#ifndef _POSIX_C_SOURCE
 #define	CLD_NOOP	0	/* if only I knew... */
-#define	CLD_EXITED	1	/* child has exited */
-#define	CLD_KILLED	2	
-	/* child has terminated abnormally and did not create a core file */
-#define	CLD_DUMPED	3	
-	/* child has terminated abnormally and create a core file */
-#define	CLD_TRAPPED	4	/* traced child has trapped */
-#define	CLD_STOPPED	5	/* child has stopped */
-#define	CLD_CONTINUED	6	/* stopped child has continued */
+#endif
+#define	CLD_EXITED	1	/* [XSI] child has exited */
+#define	CLD_KILLED	2	/* [XSI] terminated abnormally, no core file */
+#define	CLD_DUMPED	3	/* [XSI] terminated abnormally, core file */
+#define	CLD_TRAPPED	4	/* [XSI] traced child has trapped */
+#define	CLD_STOPPED	5	/* [XSI] child has stopped */
+#define	CLD_CONTINUED	6	/* [XSI] stopped child has continued */
+
+/* Codes for SIGPOLL */
+#define	POLL_IN		1	/* [XSR] Data input available */
+#define	POLL_OUT	2	/* [XSR] Output buffers available */
+#define	POLL_MSG	3	/* [XSR] Input message available */
+#define	POLL_ERR	4	/* [XSR] I/O error */
+#define	POLL_PRI	5	/* [XSR] High priority input available */
+#define	POLL_HUP	6	/* [XSR] Device disconnected */
 
 /* union for signal handlers */
 union __sigaction_u {
@@ -237,24 +367,63 @@ struct	sigaction {
 	sigset_t sa_mask;		/* signal mask to apply */
 	int	sa_flags;		/* see signal options below */
 };
+
+#ifdef	BSD_KERNEL_PRIVATE
+#include <machine/types.h>
+
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=natural
+#endif
+
+union __user_sigaction_u {
+	user_addr_t	__sa_handler;
+	user_addr_t	__sa_sigaction;
+};
+
+struct	user_sigaction {
+	union __user_sigaction_u __sigaction_u;  /* signal handler */
+	sigset_t sa_mask;		/* signal mask to apply */
+	int	sa_flags;		/* see signal options below */
+};
+
+struct	__user_sigaction {
+	union __user_sigaction_u __sigaction_u;  /* signal handler */
+	user_addr_t	sa_tramp;	/* signal mask to apply */
+	sigset_t sa_mask;		/* signal mask to apply */
+	int	sa_flags;		/* see signal options below */
+};
+
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=reset
+#endif
+
+#undef SIG_DFL
+#undef SIG_IGN
+#undef SIG_ERR
+#define  SIG_DFL	((user_addr_t)0LL)
+#define  SIG_IGN	((user_addr_t)1LL)
+#define  SIG_ERR	((user_addr_t)-1LL)
+
+#endif	/* BSD_KERNEL_PRIVATE */
+
+
 /* if SA_SIGINFO is set, sa_sigaction is to be used instead of sa_handler. */
 #define	sa_handler	__sigaction_u.__sa_handler
 #define	sa_sigaction	__sigaction_u.__sa_sigaction
 
-
-#if  !defined(_POSIX_SOURCE)
 #define SA_ONSTACK	0x0001	/* take signal on signal stack */
 #define SA_RESTART	0x0002	/* restart system on signal return */
 #define	SA_DISABLE	0x0004	/* disable taking signals on alternate stack */
 #define	SA_RESETHAND	0x0004	/* reset to SIG_DFL when taking signal */
+#define SA_NOCLDSTOP	0x0008	/* do not generate SIGCHLD on child stop */
 #define	SA_NODEFER	0x0010	/* don't mask the signal we're delivering */
 #define	SA_NOCLDWAIT	0x0020	/* don't keep zombies around */
 #define	SA_SIGINFO	0x0040	/* signal handler with SA_SIGINFO args */
+#ifndef _POSIX_C_SOURCE
 #define	SA_USERTRAMP	0x0100	/* do not bounce off kernel's sigtramp */
 /* This will provide 64bit register set in a 32bit user address space */
 #define	SA_64REGSET	0x0200	/* signal handler with SA_SIGINFO args with 64bit regs information */
-#endif
-#define SA_NOCLDSTOP	0x0008	/* do not generate SIGCHLD on child stop */
+#endif /* !_POSIX_C_SOURCE */
 
 /*
  * Flags for sigprocmask:
@@ -264,32 +433,48 @@ struct	sigaction {
 #define	SIG_SETMASK	3	/* set specified signal set */
 
 /* POSIX 1003.1b required values. */
-#define SI_USER		0x10001
-#define SI_QUEUE	0x10002
-#define SI_TIMER	0x10003
-#define SI_ASYNCIO	0x10004
-#define SI_MESGQ	0x10005
+#define SI_USER		0x10001	/* [CX] signal from kill() */
+#define SI_QUEUE	0x10002	/* [CX] signal from sigqueue() */
+#define SI_TIMER	0x10003	/* [CX] timer expiration */
+#define SI_ASYNCIO	0x10004	/* [CX] aio request completion */
+#define SI_MESGQ	0x10005	/* [CX]	from message arrival on empty queue */
 
-#if !defined(_POSIX_SOURCE)
-#include <sys/cdefs.h>
-typedef	void (*sig_t) __P((int));	/* type of signal function */
+#ifndef _POSIX_C_SOURCE
+typedef	void (*sig_t)(int);	/* type of signal function */
+#endif
 
 /*
  * Structure used in sigaltstack call.
  */
-struct	sigaltstack {
-	char	*ss_sp;		/* signal stack base */
-	int	ss_size;		/* signal stack length */
-	int	ss_flags;		/* SA_DISABLE and/or SA_ONSTACK */
+#ifdef	BSD_KERNEL_PRIVATE
+
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=natural
+#endif
+
+struct  user_sigaltstack {
+	user_addr_t	ss_sp;		/* signal stack base */
+	user_size_t	ss_size;	/* signal stack length */
+	int		ss_flags;	/* SA_DISABLE and/or SA_ONSTACK */
 };
 
-typedef struct  sigaltstack stack_t;
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=reset
+#endif
+
+#endif	/* BSD_KERNEL_PRIVATE */
+
+#ifndef _STACK_T
+#define _STACK_T
+typedef __darwin_stack_t stack_t;
+#endif
 
 #define SS_ONSTACK	0x0001	/* take signal on signal stack */
 #define	SS_DISABLE	0x0004	/* disable taking signals on alternate stack */
 #define	MINSIGSTKSZ	32768	/* (32K)minimum allowable stack */
 #define	SIGSTKSZ	131072	/* (128K)recommended stack size */
 
+#ifndef _POSIX_C_SOURCE
 /*
  * 4.3 compatibility:
  * Signal vector "template" used in sigvec call.
@@ -308,6 +493,7 @@ struct	sigvec {
 #define SV_SIGINFO	SA_SIGINFO
 
 #define sv_onstack sv_flags	/* isn't compatibility wonderful! */
+#endif /* !_POSIX_C_SOURCE */
 
 /*
  * Structure used in sigstack call.
@@ -317,14 +503,14 @@ struct	sigstack {
 	int	ss_onstack;		/* current status */
 };
 
+#ifndef _POSIX_C_SOURCE
 /*
  * Macro for converting signal number to a mask suitable for
  * sigblock().
  */
 #define sigmask(m)	(1 << ((m)-1))
 
-#ifdef	KERNEL
-#ifdef __APPLE_API_PRIVATE
+#ifdef	BSD_KERNEL_PRIVATE
 /*
  *	signals delivered on a per-thread basis.
  */
@@ -333,12 +519,11 @@ struct	sigstack {
 		    sigmask(SIGFPE)|sigmask(SIGBUS)|\
 		    sigmask(SIGSEGV)|sigmask(SIGSYS)|\
 		    sigmask(SIGPIPE))
-#endif /* __APPLE_API_PRIVATE */
-#endif	/* KERNEL */
+#endif	/* BSD_KERNEL_PRIVATE */
 
 #define	BADSIG		SIG_ERR
 
-#endif	/* !_POSIX_SOURCE */
+#endif	/* !_POSIX_C_SOURCE */
 #endif	/* !_ANSI_SOURCE */
 
 /*
@@ -346,6 +531,6 @@ struct	sigstack {
  * defined by <sys/signal.h>.
  */
 __BEGIN_DECLS
-void	(*signal __P((int, void (*) __P((int))))) __P((int));
+void	(*signal(int, void (*)(int)))(int);
 __END_DECLS
 #endif	/* !_SYS_SIGNAL_H_ */

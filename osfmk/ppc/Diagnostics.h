@@ -30,6 +30,7 @@
  * Here are the Diagnostic interface interfaces
  * Lovingly crafted by Bill Angell using traditional methods
 */
+#ifdef	KERNEL_PRIVATE
 
 #ifndef _DIAGNOSTICS_H_
 #define _DIAGNOSTICS_H_
@@ -61,7 +62,12 @@ int diagCall(struct savearea *save);
 #define dgPerfMon 15
 #define dgMapPage 16
 #define dgScom 17
-#define	dgWar 18
+#define dgBind 18
+#define dgPproc 19
+#define dgAcntg 20
+#define dgKlra 21
+#define dgKfree 22
+#define	dgWar 23
 
 
 typedef struct diagWork {			/* Diagnostic work area */
@@ -84,15 +90,6 @@ typedef struct diagWork {			/* Diagnostic work area */
 #define enaDiagTrapb  25
 #define enaNotifyEM  0x00000080
 #define enaNotifyEMb  24
-/* Suppress lock checks */
-#define disLkType 0x80000000
-#define disLktypeb 0
-#define disLkThread 0x40000000
-#define disLkThreadb 1
-#define disLkNmSimp	0x20000000
-#define disLkNmSimpb 2
-#define disLkMyLck 0x10000000
-#define disLkMyLckb 3
 	
 	unsigned int dgMisc0;
 	unsigned int dgMisc1;
@@ -116,3 +113,5 @@ extern int diagTrap(struct savearea *, unsigned int);
 
 
 #endif /* _DIAGNOSTICS_H_ */
+
+#endif /* KERNEL_PRIVATE */

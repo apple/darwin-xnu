@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -22,49 +22,24 @@
 /*
  * @OSF_COPYRIGHT@
  */
-/*
- * HISTORY
- * 
- * Revision 1.1.1.1  1998/09/22 21:05:32  wsanchez
- * Import of Mac OS X kernel (~semeria)
- *
- * Revision 1.1.1.1  1998/03/07 02:25:56  wsanchez
- * Import of OSF Mach kernel (~mburg)
- *
- * Revision 1.1.7.1  1994/09/23  02:26:54  ezf
- * 	change marker to not FREE
- * 	[1994/09/22  21:36:18  ezf]
- *
- * Revision 1.1.2.3  1993/08/16  18:08:47  bernard
- * 	Clean up MP configuration warnings - CR#9523
- * 	[1993/08/13  15:29:52  bernard]
- * 
- * Revision 1.1.2.2  1993/08/11  18:04:28  bernard
- * 	Fixed to use machine include file ANSI prototypes - CR#9523
- * 	[1993/08/11  16:28:27  bernard]
- * 
- * 	Second pass fixes for ANSI prototypes - CR#9523
- * 	[1993/08/11  14:20:54  bernard]
- * 
- * $EndLog$
- */
+
+#ifdef	XNU_KERNEL_PRIVATE
 
 #ifndef	_KERN_STARTUP_H_
 #define	_KERN_STARTUP_H_
 
-#include <cpus.h>
+#include <sys/cdefs.h>
+__BEGIN_DECLS
 
 /*
  * Kernel and machine startup declarations
  */
 
 /* Initialize kernel */
-extern void	setup_main(void);
+extern void		kernel_bootstrap(void);
 
 /* Initialize machine dependent stuff */
 extern void	machine_init(void);
-
-#if	NCPUS > 1
 
 extern void	slave_main(void);
 
@@ -75,8 +50,18 @@ extern void	slave_main(void);
 /* Slave cpu initialization */
 extern void	slave_machine_init(void);
 
-/* Start slave processors */
-extern void	start_other_cpus(void);
+/* Device subystem initialization */
+extern void	device_service_create(void);
 
-#endif	/* NCPUS > 1 */
+#ifdef	MACH_BSD
+
+/* BSD subsystem initialization */
+extern void	bsd_init(void);
+
+#endif	/* MACH_BSD */
+
+__END_DECLS
+
 #endif	/* _KERN_STARTUP_H_ */
+
+#endif	/* XNU_KERNEL_PRIVATE */

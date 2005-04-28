@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -20,20 +20,43 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 
-#include <ppc/chud/chud_xnu.h>
+#include <mach/mach_types.h>
+#include <mach/task.h>
+#include <mach/thread_act.h>
+
+#include <kern/kern_types.h>
 #include <kern/processor.h>
 #include <kern/thread.h>
-#include <kern/thread_act.h>
 #include <kern/ipc_tt.h>
+
+#include <vm/vm_map.h>
+#include <vm/pmap.h>
+
+#include <ppc/chud/chud_xnu.h>
+#include <ppc/chud/chud_xnu_private.h>
+
+#include <ppc/misc_protos.h>
 #include <ppc/proc_reg.h>
 #include <ppc/machine_routines.h>
+#include <ppc/fpu_protos.h>
+
+// forward declarations
+extern kern_return_t machine_thread_get_kern_state( thread_t                thread,
+													thread_flavor_t         flavor,
+													thread_state_t          tstate,
+													mach_msg_type_number_t  *count);
+
+
+#pragma mark **** thread binding ****
 
 __private_extern__
-kern_return_t chudxnu_bind_current_thread(int cpu)
+kern_return_t chudxnu_bind_thread(thread_t thread, int cpu)
 {
     if(cpu>=0 && cpu<chudxnu_avail_cpu_count()) { /* make sure cpu # is sane */
-        thread_bind(current_thread(), processor_ptr[cpu]);
-        thread_block((void (*)(void)) 0);
+        thread_bind(thread, cpu_to_processor(cpu));
+		if(thread==current_thread()) {
+			(void)thread_block(THREAD_CONTINUE_NULL);
+		}
         return KERN_SUCCESS;
     } else {
         return KERN_FAILURE;
@@ -41,43 +64,13 @@ kern_return_t chudxnu_bind_current_thread(int cpu)
 }
 
 __private_extern__
-kern_return_t chudxnu_unbind_current_thread(void)
+kern_return_t chudxnu_unbind_thread(thread_t thread)
 {
-    thread_bind(current_thread(), PROCESSOR_NULL);
+    thread_bind(thread, PROCESSOR_NULL);
     return KERN_SUCCESS;
 }
 
-static savearea *chudxnu_private_get_regs(void)
-{
-    return current_act()->mact.pcb; // take the top savearea (user or kernel)
-}
-
-static savearea *chudxnu_private_get_user_regs(void)
-{
-    return find_user_regs(current_act()); // take the top user savearea (skip any kernel saveareas)
-}
-
-static savearea_fpu *chudxnu_private_get_fp_regs(void)
-{
-    fpu_save(current_act()->mact.curctx); // just in case it's live, save it
-    return current_act()->mact.curctx->FPUsave; // take the top savearea (user or kernel)
-}
-
-static savearea_fpu *chudxnu_private_get_user_fp_regs(void)
-{
-    return find_user_fpu(current_act()); // take the top user savearea (skip any kernel saveareas)
-}
-
-static savearea_vec *chudxnu_private_get_vec_regs(void)
-{
-    vec_save(current_act()->mact.curctx); // just in case it's live, save it
-    return current_act()->mact.curctx->VMXsave; // take the top savearea (user or kernel)
-}
-
-static savearea_vec *chudxnu_private_get_user_vec_regs(void)
-{
-    return find_user_vec(current_act()); // take the top user savearea (skip any kernel saveareas)
-}
+#pragma mark **** thread state ****
 
 __private_extern__
 kern_return_t chudxnu_copy_savearea_to_threadstate(thread_flavor_t flavor, thread_state_t tstate, mach_msg_type_number_t *count, struct savearea *sv)
@@ -250,8 +243,6 @@ kern_return_t chudxnu_copy_threadstate_to_savearea(struct savearea *sv, thread_f
             sv->save_srr1	= (uint64_t)ts->srr1;
             sv->save_vrsave	= ts->vrsave;
             return KERN_SUCCESS;
-        } else {
-            return KERN_FAILURE;
         }
             break;
     case PPC_THREAD_STATE64:
@@ -300,104 +291,202 @@ kern_return_t chudxnu_copy_threadstate_to_savearea(struct savearea *sv, thread_f
             sv->save_srr1	= xts->srr1;
             sv->save_vrsave	= xts->vrsave;
             return KERN_SUCCESS;
-        } else {
-            return KERN_FAILURE;
         }
+    }
+    return KERN_FAILURE;
+}
+
+__private_extern__
+kern_return_t chudxnu_thread_user_state_available(thread_t thread)
+{
+    if(find_user_regs(thread)) {
+	return KERN_SUCCESS;
+    } else {
+	return KERN_FAILURE;
     }
 }
 
 __private_extern__
-kern_return_t chudxnu_thread_get_state(thread_act_t thr_act, 
-									thread_flavor_t flavor,
+kern_return_t chudxnu_thread_get_state(thread_t thread, 
+				    thread_flavor_t flavor,
                                     thread_state_t tstate,
                                     mach_msg_type_number_t *count,
                                     boolean_t user_only)
 {
-	if(thr_act==current_act()) {
-		if(flavor==PPC_THREAD_STATE || flavor==PPC_THREAD_STATE64) {
-			struct savearea *sv;
-			if(user_only) {
-				sv = chudxnu_private_get_user_regs();
-			} else {
-				sv = chudxnu_private_get_regs();
-			}
-			return chudxnu_copy_savearea_to_threadstate(flavor, tstate, count, sv);
-		} else if(flavor==PPC_FLOAT_STATE && user_only) {
-#warning chudxnu_thread_get_state() does not yet support supervisor FP
-			return machine_thread_get_state(current_act(), flavor, tstate, count);
-		} else if(flavor==PPC_VECTOR_STATE && user_only) {
-#warning chudxnu_thread_get_state() does not yet support supervisor VMX
-			return machine_thread_get_state(current_act(), flavor, tstate, count);
+    if(flavor==PPC_THREAD_STATE || flavor==PPC_THREAD_STATE64) { // machine_thread_get_state filters out some bits
+		struct savearea *sv;
+		if(user_only) {
+			sv = find_user_regs(thread);
 		} else {
-			*count = 0;
-			return KERN_INVALID_ARGUMENT;
+			sv = find_kern_regs(thread);
 		}
-	} else {
-		return machine_thread_get_state(thr_act, flavor, tstate, count);
-	}
-}
-
-__private_extern__
-kern_return_t chudxnu_thread_set_state(thread_act_t thr_act, 
-									thread_flavor_t flavor,
-                                    thread_state_t tstate,
-                                    mach_msg_type_number_t count,
-                                    boolean_t user_only)
-{
-	if(thr_act==current_act()) {
-		if(flavor==PPC_THREAD_STATE || flavor==PPC_THREAD_STATE64) {
-			struct savearea *sv;
-			if(user_only) {
-				sv = chudxnu_private_get_user_regs();
-			} else {
-				sv = chudxnu_private_get_regs();
-			}
-			return chudxnu_copy_threadstate_to_savearea(sv, flavor, tstate, &count);
-		} else if(flavor==PPC_FLOAT_STATE && user_only) {
-#warning chudxnu_thread_set_state() does not yet support supervisor FP
-			return machine_thread_set_state(current_act(), flavor, tstate, count);
-		} else if(flavor==PPC_VECTOR_STATE && user_only) {
-#warning chudxnu_thread_set_state() does not yet support supervisor VMX
-			return machine_thread_set_state(current_act(), flavor, tstate, count);
-		} else {
-			return KERN_INVALID_ARGUMENT;
-		}
-	} else {
-		return machine_thread_set_state(thr_act, flavor, tstate, count);
-	}
-}
-
-static inline kern_return_t chudxnu_private_task_read_bytes(task_t task, vm_offset_t addr, int size, void *data)
-{
-    
-    kern_return_t ret;
-    
-    if(task==kernel_task) {
-        if(size==sizeof(unsigned int)) {
-            addr64_t phys_addr;
-            ppnum_t pp;
-
-			pp = pmap_find_phys(kernel_pmap, addr);			/* Get the page number */
-			if(!pp) return KERN_FAILURE;					/* Not mapped... */
-			
-			phys_addr = ((addr64_t)pp << 12) | (addr & 0x0000000000000FFFULL);	/* Shove in the page offset */
-			
-            if(phys_addr < mem_actual) {					/* Sanity check: is it in memory? */
-                *((uint32_t *)data) = ml_phys_read_64(phys_addr);
-                return KERN_SUCCESS;
-            }
-        } else {
-            return KERN_FAILURE;
-        }
+		return chudxnu_copy_savearea_to_threadstate(flavor, tstate, count, sv);
     } else {
-        
-		ret = KERN_SUCCESS;									/* Assume everything worked */
-		if(copyin((void *)addr, data, size)) ret = KERN_FAILURE;	/* Get memory, if non-zero rc, it didn't work */
-		return ret;
+		if(user_only) {
+			return machine_thread_get_state(thread, flavor, tstate, count);
+		} else {
+			// doesn't do FP or VMX
+			return machine_thread_get_kern_state(thread, flavor, tstate, count);
+		}    
     }
 }
 
-// chudxnu_current_thread_get_callstack gathers a raw callstack along with any information needed to
+__private_extern__
+kern_return_t chudxnu_thread_set_state(thread_t thread, 
+					thread_flavor_t flavor,
+					thread_state_t tstate,
+					mach_msg_type_number_t count,
+					boolean_t user_only)
+{
+    if(flavor==PPC_THREAD_STATE || flavor==PPC_THREAD_STATE64) { // machine_thread_set_state filters out some bits
+		struct savearea *sv;
+		if(user_only) {
+			sv = find_user_regs(thread);
+		} else {
+			sv = find_kern_regs(thread);
+		}
+		return chudxnu_copy_threadstate_to_savearea(sv, flavor, tstate, &count);
+    } else {
+		return machine_thread_set_state(thread, flavor, tstate, count); // always user
+    }
+}
+
+#pragma mark **** task memory read/write ****
+    
+__private_extern__
+kern_return_t chudxnu_task_read(task_t task, void *kernaddr, uint64_t usraddr, vm_size_t size)
+{
+    kern_return_t ret = KERN_SUCCESS;
+    
+	if(!chudxnu_is_64bit_task(task)) { // clear any cruft out of upper 32-bits for 32-bit tasks
+		usraddr &= 0x00000000FFFFFFFFULL;
+	}
+
+    if(current_task()==task) {
+		thread_t      cur_thr = current_thread();
+		vm_offset_t   recover_handler = cur_thr->recover; 
+		
+		if(ml_at_interrupt_context()) {
+			return KERN_FAILURE; // can't do copyin on interrupt stack
+		}
+	
+		if(copyin(usraddr, kernaddr, size)) {
+			ret = KERN_FAILURE;
+		}
+		cur_thr->recover = recover_handler;
+    } else {
+		vm_map_t map = get_task_map(task);
+		ret = vm_map_read_user(map, usraddr, kernaddr, size);
+    }
+    
+    return ret;
+}
+			
+__private_extern__
+kern_return_t chudxnu_task_write(task_t task, uint64_t useraddr, void *kernaddr, vm_size_t size)
+{
+    kern_return_t ret = KERN_SUCCESS;
+    
+	if(!chudxnu_is_64bit_task(task)) { // clear any cruft out of upper 32-bits for 32-bit tasks
+		useraddr &= 0x00000000FFFFFFFFULL;
+	}
+
+    if(current_task()==task) {    
+		thread_t      cur_thr = current_thread();
+		vm_offset_t   recover_handler = cur_thr->recover; 
+					
+		if(ml_at_interrupt_context()) {
+			return KERN_FAILURE; // can't do copyout on interrupt stack
+		}
+	
+		if(copyout(kernaddr, useraddr, size)) {
+			ret = KERN_FAILURE;
+		}
+		cur_thr->recover = recover_handler;
+    } else {
+		vm_map_t map = get_task_map(task);
+		ret = vm_map_write_user(map, kernaddr, useraddr, size);
+    }		
+    
+    return ret;
+}
+
+__private_extern__
+kern_return_t chudxnu_kern_read(void *dstaddr, vm_offset_t srcaddr, vm_size_t size)
+{
+    while(size>0) {
+		ppnum_t pp;
+		addr64_t phys_addr;    
+		
+		pp = pmap_find_phys(kernel_pmap, srcaddr);			/* Get the page number */
+		if(!pp) {
+			return KERN_FAILURE;					/* Not mapped... */
+		}
+		
+		phys_addr = ((addr64_t)pp << 12) | (srcaddr & 0x0000000000000FFFULL);	/* Shove in the page offset */
+		if(phys_addr >= mem_actual) {
+			return KERN_FAILURE;					/* out of range */
+		}
+		
+		if((phys_addr&0x1) || size==1) {
+			*((uint8_t *)dstaddr) = ml_phys_read_byte_64(phys_addr);
+			((uint8_t *)dstaddr)++;
+			srcaddr += sizeof(uint8_t);
+			size -= sizeof(uint8_t);
+		} else if((phys_addr&0x3) || size<=2) {
+			*((uint16_t *)dstaddr) = ml_phys_read_half_64(phys_addr);
+			((uint16_t *)dstaddr)++;
+			srcaddr += sizeof(uint16_t);
+			size -= sizeof(uint16_t);
+		} else {
+			*((uint32_t *)dstaddr) = ml_phys_read_word_64(phys_addr);
+			((uint32_t *)dstaddr)++;
+			srcaddr += sizeof(uint32_t);
+			size -= sizeof(uint32_t);
+		}
+    }
+    return KERN_SUCCESS;
+}
+
+__private_extern__
+kern_return_t chudxnu_kern_write(vm_offset_t dstaddr, void *srcaddr, vm_size_t size)
+{
+    while(size>0) {
+		ppnum_t pp;
+		addr64_t phys_addr;    
+		
+		pp = pmap_find_phys(kernel_pmap, dstaddr);			/* Get the page number */
+		if(!pp) {
+			return KERN_FAILURE;					/* Not mapped... */
+		}
+		
+		phys_addr = ((addr64_t)pp << 12) | (dstaddr & 0x0000000000000FFFULL);	/* Shove in the page offset */
+		if(phys_addr >= mem_actual) {
+			return KERN_FAILURE;					/* out of range */
+		}
+		
+		if((phys_addr&0x1) || size==1) {
+			ml_phys_write_byte_64(phys_addr, *((uint8_t *)srcaddr));
+			((uint8_t *)srcaddr)++;
+			dstaddr += sizeof(uint8_t);
+			size -= sizeof(uint8_t);
+		} else if((phys_addr&0x3) || size<=2) {
+			ml_phys_write_half_64(phys_addr, *((uint16_t *)srcaddr));
+			((uint16_t *)srcaddr)++;
+			dstaddr += sizeof(uint16_t);
+			size -= sizeof(uint16_t);
+		} else {
+			ml_phys_write_word_64(phys_addr, *((uint32_t *)srcaddr));
+			((uint32_t *)srcaddr)++;
+			dstaddr += sizeof(uint32_t);
+			size -= sizeof(uint32_t);
+		}
+    }
+    
+    return KERN_SUCCESS;
+}
+
+// chudxnu_thread_get_callstack gathers a raw callstack along with any information needed to
 // fix it up later (in case we stopped program as it was saving values into prev stack frame, etc.)
 // after sampling has finished.
 //
@@ -421,30 +510,35 @@ static inline kern_return_t chudxnu_private_task_read_bytes(task_t task, vm_offs
 #define SUPERVISOR_MODE(msr) ((msr) & MASK(MSR_PR) ? FALSE : TRUE)
 #endif
 
-#define VALID_STACK_ADDRESS(addr)	(addr>=0x1000 && (addr&STACK_ALIGNMENT_MASK)==0x0 && (supervisor ? (addr>=kernStackMin && addr<=kernStackMax) : TRUE))
+#define VALID_STACK_ADDRESS(addr)   (addr>=0x1000ULL && (addr&STACK_ALIGNMENT_MASK)==0x0 && (supervisor ? (addr>=kernStackMin && addr<=kernStackMax) : TRUE))
+
 
 __private_extern__
-kern_return_t chudxnu_current_thread_get_callstack(uint32_t *callStack,
-                                                   mach_msg_type_number_t *count,
-                                                   boolean_t user_only)
+kern_return_t chudxnu_thread_get_callstack64(	thread_t thread,
+						uint64_t *callStack,
+						mach_msg_type_number_t *count,
+						boolean_t user_only)
 {
     kern_return_t kr;
-    vm_address_t nextFramePointer = 0;
-    vm_address_t currPC, currLR, currR0;
-    vm_address_t framePointer;
-    vm_address_t prevPC = 0;
-    vm_address_t kernStackMin = min_valid_stack_address();
-    vm_address_t kernStackMax = max_valid_stack_address();
-    unsigned int *buffer = callStack;
+    task_t task = get_threadtask(thread);
+    uint64_t nextFramePointer = 0;
+    uint64_t currPC, currLR, currR0;
+    uint64_t framePointer;
+    uint64_t prevPC = 0;
+    uint64_t kernStackMin = min_valid_stack_address();
+    uint64_t kernStackMax = max_valid_stack_address();
+    uint64_t *buffer = callStack;
+    uint32_t tmpWord;
     int bufferIndex = 0;
     int bufferMaxIndex = *count;
     boolean_t supervisor;
+    boolean_t is64Bit;
     struct savearea *sv;
 
     if(user_only) {
-        sv = chudxnu_private_get_user_regs();
+        sv = find_user_regs(thread);
     } else {
-        sv = chudxnu_private_get_regs();
+        sv = find_kern_regs(thread);
     }
 
     if(!sv) {
@@ -453,10 +547,11 @@ kern_return_t chudxnu_current_thread_get_callstack(uint32_t *callStack,
     }
 
     supervisor = SUPERVISOR_MODE(sv->save_srr1);
-
-    if(!supervisor && ml_at_interrupt_context()) { // can't do copyin() if on interrupt stack
-        *count = 0;
-        return KERN_FAILURE;
+    if(supervisor) {
+#warning assuming kernel task is always 32-bit
+		is64Bit = FALSE;
+    } else {
+		is64Bit = chudxnu_is_64bit_task(task);
     }
 
     bufferMaxIndex = bufferMaxIndex - 2; // allot space for saving the LR and R0 on the stack at the end.
@@ -475,14 +570,20 @@ kern_return_t chudxnu_current_thread_get_callstack(uint32_t *callStack,
 
     // Now, fill buffer with stack backtraces.
     while(bufferIndex<bufferMaxIndex && VALID_STACK_ADDRESS(framePointer)) {
-        vm_address_t pc = 0;
+        uint64_t pc = 0;
         // Above the stack pointer, the following values are saved:
         // saved LR
         // saved CR
         // saved SP
         //-> SP
         // Here, we'll get the lr from the stack.
-        volatile vm_address_t fp_link = (vm_address_t)(((unsigned *)framePointer)+FP_LINK_OFFSET);
+        uint64_t fp_link;
+
+		if(is64Bit) {
+			fp_link = framePointer + FP_LINK_OFFSET*sizeof(uint64_t);
+		} else {
+			fp_link = framePointer + FP_LINK_OFFSET*sizeof(uint32_t);
+		}
 
         // Note that we read the pc even for the first stack frame (which, in theory,
         // is always empty because the callee fills it in just before it lowers the
@@ -491,22 +592,183 @@ kern_return_t chudxnu_current_thread_get_callstack(uint32_t *callStack,
         // FixupStack correctly disregards this value if necessary.
 
         if(supervisor) {
-            kr = chudxnu_private_task_read_bytes(kernel_task, fp_link, sizeof(unsigned int), &pc);
+			if(is64Bit) {
+				kr = chudxnu_kern_read(&pc, fp_link, sizeof(uint64_t));
+			} else {
+				kr = chudxnu_kern_read(&tmpWord, fp_link, sizeof(uint32_t));
+				pc = tmpWord;
+			}    
         } else {
-            kr = chudxnu_private_task_read_bytes(current_task(), fp_link, sizeof(unsigned int), &pc);
-        }
+			if(is64Bit) {
+				kr = chudxnu_task_read(task, &pc, fp_link, sizeof(uint64_t));
+			} else {
+				kr = chudxnu_task_read(task, &tmpWord, fp_link, sizeof(uint32_t));
+				pc = tmpWord;
+	    	}
+		}
         if(kr!=KERN_SUCCESS) {
-            //        IOLog("task_read_callstack: unable to read framePointer: %08x\n",framePointer);
             pc = 0;
             break;
         }
 
         // retrieve the contents of the frame pointer and advance to the next stack frame if it's valid
+        if(supervisor) {
+			if(is64Bit) {
+				kr = chudxnu_kern_read(&nextFramePointer, framePointer, sizeof(uint64_t));
+			} else {
+				kr = chudxnu_kern_read(&tmpWord, framePointer, sizeof(uint32_t));
+				nextFramePointer = tmpWord;
+			}  
+        } else {
+			if(is64Bit) {
+				kr = chudxnu_task_read(task, &nextFramePointer, framePointer, sizeof(uint64_t));
+			} else {
+				kr = chudxnu_task_read(task, &tmpWord, framePointer, sizeof(uint32_t));
+				nextFramePointer = tmpWord;
+			}
+		}
+        if(kr!=KERN_SUCCESS) {
+            nextFramePointer = 0;
+        }
+
+        if(nextFramePointer) {
+            buffer[bufferIndex++] = pc;
+            prevPC = pc;
+        }
+    
+        if(nextFramePointer<framePointer) {
+            break;
+        } else {
+	    	framePointer = nextFramePointer;
+		}
+    }
+
+    if(bufferIndex>=bufferMaxIndex) {
+        *count = 0;
+        return KERN_RESOURCE_SHORTAGE;
+    }
+
+    // Save link register and R0 at bottom of stack (used for later fixup).
+    buffer[bufferIndex++] = currLR;
+    buffer[bufferIndex++] = currR0;
+
+    *count = bufferIndex;
+    return KERN_SUCCESS;
+}
+
+__private_extern__
+kern_return_t chudxnu_thread_get_callstack( thread_t thread, 
+					    uint32_t *callStack,
+					    mach_msg_type_number_t *count,
+					    boolean_t user_only)
+{
+    kern_return_t kr;
+    task_t task = get_threadtask(thread);
+    uint64_t nextFramePointer = 0;
+    uint64_t currPC, currLR, currR0;
+    uint64_t framePointer;
+    uint64_t prevPC = 0;
+    uint64_t kernStackMin = min_valid_stack_address();
+    uint64_t kernStackMax = max_valid_stack_address();
+    uint32_t *buffer = callStack;
+    uint32_t tmpWord;
+    int bufferIndex = 0;
+    int bufferMaxIndex = *count;
+    boolean_t supervisor;
+    boolean_t is64Bit;
+    struct savearea *sv;
+
+    if(user_only) {
+        sv = find_user_regs(thread);
+    } else {
+        sv = find_kern_regs(thread);
+    }
+
+    if(!sv) {
+        *count = 0;
+        return KERN_FAILURE;
+    }
+
+    supervisor = SUPERVISOR_MODE(sv->save_srr1);
+    if(supervisor) {
+#warning assuming kernel task is always 32-bit
+		is64Bit = FALSE;
+    } else {
+		is64Bit = chudxnu_is_64bit_task(task);
+    }
+
+    bufferMaxIndex = bufferMaxIndex - 2; // allot space for saving the LR and R0 on the stack at the end.
+    if(bufferMaxIndex<2) {
+        *count = 0;
+        return KERN_RESOURCE_SHORTAGE;
+    }
+
+    currPC = sv->save_srr0;
+    framePointer = sv->save_r1; /* r1 is the stack pointer (no FP on PPC)  */
+    currLR = sv->save_lr;
+    currR0 = sv->save_r0;
+
+    bufferIndex = 0;  // start with a stack of size zero
+    buffer[bufferIndex++] = currPC; // save PC in position 0.
+
+    // Now, fill buffer with stack backtraces.
+    while(bufferIndex<bufferMaxIndex && VALID_STACK_ADDRESS(framePointer)) {
+        uint64_t pc = 0;
+        // Above the stack pointer, the following values are saved:
+        // saved LR
+        // saved CR
+        // saved SP
+        //-> SP
+        // Here, we'll get the lr from the stack.
+        uint64_t fp_link;
+
+		if(is64Bit) {
+			fp_link = framePointer + FP_LINK_OFFSET*sizeof(uint64_t);
+		} else {
+			fp_link = framePointer + FP_LINK_OFFSET*sizeof(uint32_t);
+		}
+
+        // Note that we read the pc even for the first stack frame (which, in theory,
+        // is always empty because the callee fills it in just before it lowers the
+        // stack.  However, if we catch the program in between filling in the return
+        // address and lowering the stack, we want to still have a valid backtrace.
+        // FixupStack correctly disregards this value if necessary.
 
         if(supervisor) {
-            kr = chudxnu_private_task_read_bytes(kernel_task, framePointer, sizeof(unsigned int), &nextFramePointer);
+			if(is64Bit) {
+				kr = chudxnu_kern_read(&pc, fp_link, sizeof(uint64_t));
+			} else {
+				kr = chudxnu_kern_read(&tmpWord, fp_link, sizeof(uint32_t));
+				pc = tmpWord;
+			}    
         } else {
-            kr = chudxnu_private_task_read_bytes(current_task(), framePointer, sizeof(unsigned int), &nextFramePointer);
+			if(is64Bit) {
+				kr = chudxnu_task_read(task, &pc, fp_link, sizeof(uint64_t));
+			} else {
+				kr = chudxnu_task_read(task, &tmpWord, fp_link, sizeof(uint32_t));
+				pc = tmpWord;
+			}
+        }
+        if(kr!=KERN_SUCCESS) {
+            pc = 0;
+            break;
+        }
+
+        // retrieve the contents of the frame pointer and advance to the next stack frame if it's valid
+        if(supervisor) {
+			if(is64Bit) {
+				kr = chudxnu_kern_read(&nextFramePointer, framePointer, sizeof(uint64_t));
+			} else {
+				kr = chudxnu_kern_read(&tmpWord, framePointer, sizeof(uint32_t));
+				nextFramePointer = tmpWord;
+			}  
+        } else {
+			if(is64Bit) {
+				kr = chudxnu_task_read(task, &nextFramePointer, framePointer, sizeof(uint64_t));
+			} else {
+				kr = chudxnu_task_read(task, &tmpWord, framePointer, sizeof(uint32_t));
+				nextFramePointer = tmpWord;
+			}
         }
         if(kr!=KERN_SUCCESS) {
             nextFramePointer = 0;
@@ -520,8 +782,8 @@ kern_return_t chudxnu_current_thread_get_callstack(uint32_t *callStack,
         if(nextFramePointer<framePointer) {
             break;
         } else {
-	    framePointer = nextFramePointer;
-	}
+	    	framePointer = nextFramePointer;
+		}
     }
 
     if(bufferIndex>=bufferMaxIndex) {
@@ -529,9 +791,7 @@ kern_return_t chudxnu_current_thread_get_callstack(uint32_t *callStack,
         return KERN_RESOURCE_SHORTAGE;
     }
 
-    // Save link register and R0 at bottom of stack.  This means that we won't worry
-    // about these values messing up stack compression.  These end up being used
-    // by FixupStack.
+    // Save link register and R0 at bottom of stack (used for later fixup).
     buffer[bufferIndex++] = currLR;
     buffer[bufferIndex++] = currR0;
 
@@ -539,31 +799,326 @@ kern_return_t chudxnu_current_thread_get_callstack(uint32_t *callStack,
     return KERN_SUCCESS;
 }
 
-__private_extern__
-int chudxnu_task_threads(task_t task,
-			 			thread_act_array_t *thr_act_list,
-			 			mach_msg_type_number_t *count)
-{
-    mach_msg_type_number_t task_thread_count = 0;
-    kern_return_t kr;
+#pragma mark **** task and thread info ****
 
-    kr = task_threads(current_task(), thr_act_list, count);
-    if(kr==KERN_SUCCESS) {
-        thread_act_t thr_act;
-        int i, state_count;
-        for(i=0; i<(*count); i++) {
-            thr_act = convert_port_to_act(((ipc_port_t *)(*thr_act_list))[i]);
-	    	/* undo the mig conversion task_threads does */
-	   	 	thr_act_list[i] = thr_act;
+__private_extern__
+boolean_t chudxnu_is_64bit_task(task_t task)
+{
+	return (task_has_64BitAddr(task));
+}
+
+#define THING_TASK		0
+#define THING_THREAD	1
+
+// an exact copy of processor_set_things() except no mig conversion at the end!
+static kern_return_t chudxnu_private_processor_set_things(	processor_set_t	pset,
+															mach_port_t				**thing_list,
+															mach_msg_type_number_t	*count,
+															int						type)
+{
+	unsigned int actual;	/* this many things */
+	unsigned int maxthings;
+	unsigned int i;
+
+	vm_size_t size, size_needed;
+	void  *addr;
+
+	if (pset == PROCESSOR_SET_NULL)
+		return (KERN_INVALID_ARGUMENT);
+
+	size = 0; addr = 0;
+
+	for (;;) {
+		pset_lock(pset);
+		if (!pset->active) {
+			pset_unlock(pset);
+
+			return (KERN_FAILURE);
 		}
-    }
-    return kr;
+
+		if (type == THING_TASK)
+			maxthings = pset->task_count;
+		else
+			maxthings = pset->thread_count;
+
+		/* do we have the memory we need? */
+
+		size_needed = maxthings * sizeof (mach_port_t);
+		if (size_needed <= size)
+			break;
+
+		/* unlock the pset and allocate more memory */
+		pset_unlock(pset);
+
+		if (size != 0)
+			kfree(addr, size);
+
+		assert(size_needed > 0);
+		size = size_needed;
+
+		addr = kalloc(size);
+		if (addr == 0)
+			return (KERN_RESOURCE_SHORTAGE);
+	}
+
+	/* OK, have memory and the processor_set is locked & active */
+
+	actual = 0;
+	switch (type) {
+
+	case THING_TASK:
+	{
+		task_t		task, *tasks = (task_t *)addr;
+
+		for (task = (task_t)queue_first(&pset->tasks);
+				!queue_end(&pset->tasks, (queue_entry_t)task);
+					task = (task_t)queue_next(&task->pset_tasks)) {
+			task_reference_internal(task);
+			tasks[actual++] = task;
+		}
+
+		break;
+	}
+
+	case THING_THREAD:
+	{
+		thread_t	thread, *threads = (thread_t *)addr;
+
+		for (i = 0, thread = (thread_t)queue_first(&pset->threads);
+				!queue_end(&pset->threads, (queue_entry_t)thread);
+					thread = (thread_t)queue_next(&thread->pset_threads)) {
+			thread_reference_internal(thread);
+			threads[actual++] = thread;
+		}
+
+		break;
+	}
+	}
+		
+	pset_unlock(pset);
+
+	if (actual < maxthings)
+		size_needed = actual * sizeof (mach_port_t);
+
+	if (actual == 0) {
+		/* no things, so return null pointer and deallocate memory */
+		*thing_list = 0;
+		*count = 0;
+
+		if (size != 0)
+			kfree(addr, size);
+	}
+	else {
+		/* if we allocated too much, must copy */
+
+		if (size_needed < size) {
+			void *newaddr;
+
+			newaddr = kalloc(size_needed);
+			if (newaddr == 0) {
+				switch (type) {
+
+				case THING_TASK:
+				{
+					task_t		*tasks = (task_t *)addr;
+
+					for (i = 0; i < actual; i++)
+						task_deallocate(tasks[i]);
+					break;
+				}
+
+				case THING_THREAD:
+				{
+					thread_t	*threads = (thread_t *)addr;
+
+					for (i = 0; i < actual; i++)
+						thread_deallocate(threads[i]);
+					break;
+				}
+				}
+
+				kfree(addr, size);
+				return (KERN_RESOURCE_SHORTAGE);
+			}
+
+			bcopy((void *) addr, (void *) newaddr, size_needed);
+			kfree(addr, size);
+			addr = newaddr;
+		}
+
+		*thing_list = (mach_port_t *)addr;
+		*count = actual;
+	}
+
+	return (KERN_SUCCESS);
+}
+
+// an exact copy of task_threads() except no mig conversion at the end!
+static kern_return_t chudxnu_private_task_threads(task_t	task,
+								    thread_act_array_t      *threads_out,
+    								mach_msg_type_number_t  *count)
+{
+	mach_msg_type_number_t	actual;
+	thread_t				*threads;
+	thread_t				thread;
+	vm_size_t				size, size_needed;
+	void					*addr;
+	unsigned int			i, j;
+
+	if (task == TASK_NULL)
+		return (KERN_INVALID_ARGUMENT);
+
+	size = 0; addr = 0;
+
+	for (;;) {
+		task_lock(task);
+		if (!task->active) {
+			task_unlock(task);
+
+			if (size != 0)
+				kfree(addr, size);
+
+			return (KERN_FAILURE);
+		}
+
+		actual = task->thread_count;
+
+		/* do we have the memory we need? */
+		size_needed = actual * sizeof (mach_port_t);
+		if (size_needed <= size)
+			break;
+
+		/* unlock the task and allocate more memory */
+		task_unlock(task);
+
+		if (size != 0)
+			kfree(addr, size);
+
+		assert(size_needed > 0);
+		size = size_needed;
+
+		addr = kalloc(size);
+		if (addr == 0)
+			return (KERN_RESOURCE_SHORTAGE);
+	}
+
+	/* OK, have memory and the task is locked & active */
+	threads = (thread_t *)addr;
+
+	i = j = 0;
+
+	for (thread = (thread_t)queue_first(&task->threads); i < actual;
+				++i, thread = (thread_t)queue_next(&thread->task_threads)) {
+		thread_reference_internal(thread);
+		threads[j++] = thread;
+	}
+
+	assert(queue_end(&task->threads, (queue_entry_t)thread));
+
+	actual = j;
+	size_needed = actual * sizeof (mach_port_t);
+
+	/* can unlock task now that we've got the thread refs */
+	task_unlock(task);
+
+	if (actual == 0) {
+		/* no threads, so return null pointer and deallocate memory */
+
+		*threads_out = 0;
+		*count = 0;
+
+		if (size != 0)
+			kfree(addr, size);
+	}
+	else {
+		/* if we allocated too much, must copy */
+
+		if (size_needed < size) {
+			void *newaddr;
+
+			newaddr = kalloc(size_needed);
+			if (newaddr == 0) {
+				for (i = 0; i < actual; ++i)
+					thread_deallocate(threads[i]);
+				kfree(addr, size);
+				return (KERN_RESOURCE_SHORTAGE);
+			}
+
+			bcopy(addr, newaddr, size_needed);
+			kfree(addr, size);
+			threads = (thread_t *)newaddr;
+		}
+
+		*threads_out = threads;
+		*count = actual;
+	}
+
+	return (KERN_SUCCESS);
+}
+
+
+__private_extern__
+kern_return_t chudxnu_all_tasks(task_array_t		*task_list,
+								mach_msg_type_number_t	*count)
+{
+	return chudxnu_private_processor_set_things(&default_pset, (mach_port_t **)task_list, count, THING_TASK);	
 }
 
 __private_extern__
-thread_act_t chudxnu_current_act(void)
+kern_return_t chudxnu_free_task_list(task_array_t	*task_list,
+									 mach_msg_type_number_t	*count)
 {
-	return current_act();
+	vm_size_t size = (*count)*sizeof(mach_port_t);
+	void *addr = *task_list;
+
+	if(addr) {
+		int i, maxCount = *count;
+		for(i=0; i<maxCount; i++) {
+			task_deallocate((*task_list)[i]);
+		}		
+		kfree(addr, size);
+		*task_list = NULL;
+		*count = 0;
+		return KERN_SUCCESS;
+	} else {
+		return KERN_FAILURE;
+	}
+}
+
+__private_extern__
+kern_return_t chudxnu_all_threads(	thread_array_t		*thread_list,
+									mach_msg_type_number_t	*count)
+{
+	return chudxnu_private_processor_set_things(&default_pset, (mach_port_t **)thread_list, count, THING_THREAD);
+}
+
+__private_extern__
+kern_return_t chudxnu_task_threads(	task_t task,
+			 						thread_array_t *thread_list,
+			 						mach_msg_type_number_t *count)
+{
+	return chudxnu_private_task_threads(task, thread_list, count);
+}
+
+__private_extern__
+kern_return_t chudxnu_free_thread_list(thread_array_t	*thread_list,
+									 mach_msg_type_number_t	*count)
+{
+	vm_size_t size = (*count)*sizeof(mach_port_t);
+	void *addr = *thread_list;
+
+	if(addr) {
+		int i, maxCount = *count;
+		for(i=0; i<maxCount; i++) {
+			thread_deallocate((*thread_list)[i]);
+		}		
+		kfree(addr, size);
+		*thread_list = NULL;
+		*count = 0;
+		return KERN_SUCCESS;
+	} else {
+		return KERN_FAILURE;
+	}
 }
 
 __private_extern__
@@ -573,10 +1128,60 @@ task_t chudxnu_current_task(void)
 }
 
 __private_extern__
-kern_return_t chudxnu_thread_info(thread_act_t thr_act,
+thread_t chudxnu_current_thread(void)
+{
+	return current_thread();
+}
+
+__private_extern__
+task_t chudxnu_task_for_thread(thread_t thread)
+{
+    return get_threadtask(thread);
+}
+
+__private_extern__
+kern_return_t chudxnu_thread_info(thread_t thread,
         						thread_flavor_t flavor,
         						thread_info_t thread_info_out,
         						mach_msg_type_number_t *thread_info_count)
 {
-	return thread_info(thr_act, flavor, thread_info_out, thread_info_count);
+	return thread_info(thread, flavor, thread_info_out, thread_info_count);
+}
+
+__private_extern__
+kern_return_t chudxnu_thread_last_context_switch(thread_t thread, uint64_t *timestamp)
+{
+    *timestamp = thread->last_switch;
+    return KERN_SUCCESS;
+}
+
+#pragma mark **** DEPRECATED ****
+
+// DEPRECATED
+__private_extern__
+kern_return_t chudxnu_bind_current_thread(int cpu)
+{
+	return chudxnu_bind_thread(current_thread(), cpu);
+}
+
+// DEPRECATED
+kern_return_t chudxnu_unbind_current_thread(void)
+{
+	return chudxnu_unbind_thread(current_thread());
+}
+
+// DEPRECATED
+__private_extern__
+kern_return_t chudxnu_current_thread_get_callstack(	uint32_t *callStack,
+													mach_msg_type_number_t *count,
+													boolean_t user_only)
+{
+	return chudxnu_thread_get_callstack(current_thread(), callStack, count, user_only);
+}
+
+// DEPRECATED
+__private_extern__
+thread_t chudxnu_current_act(void)
+{
+	return chudxnu_current_thread();
 }

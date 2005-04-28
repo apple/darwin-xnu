@@ -50,6 +50,7 @@
 #ifndef _SYS_EVENTVAR_H_
 #define _SYS_EVENTVAR_H_
 
+#include <sys/event.h>
 #include <sys/select.h>
 #include <kern/kern_types.h>
 
@@ -57,19 +58,27 @@
 #define KQEXTENT	256		/* linear growth by this amount */
 
 struct kqueue {
-#if 0
-	/* threads, member notes, and notes for us in parent sets */
-	struct		wait_queue_set kq_wqs;
-#else
+	decl_lck_spin_data( ,kq_lock)		/* kqueue lock */
 	int		kq_state;
-	int		kq_lock;		/* space for a lock */
-	TAILQ_HEAD(kqlist, knote) kq_head;	/* list of pending events */
-	int		kq_count;		/* number of pending events */
-#endif
-	struct		selinfo kq_sel;		/* JMM - parent set at some point */
-	struct		filedesc *kq_fdp;
+	int		kq_count;		/* number of queued events */
+	struct kqtailq	kq_head;		/* list of queued events */
+	struct kqtailq	kq_inprocess;		/* list of in-process events */
+	struct selinfo	kq_sel;		/* parent select/kqueue info */
+	struct filedesc	*kq_fdp;
+
 #define KQ_SEL		0x01
 #define KQ_SLEEP	0x02
+#define KQ_PROCWAIT	0x04
 };
+
+extern struct kqueue *kqueue_alloc(struct proc *);
+extern void kqueue_dealloc(struct kqueue *, struct proc *);
+
+typedef int (*kevent_callback_t)(struct kqueue *, struct kevent *, void *);
+typedef void (*kevent_continue_t)(struct kqueue *, void *, int);
+
+extern int kevent_register(struct kqueue *, struct kevent *, struct proc *);
+extern int kevent_scan(struct kqueue *, kevent_callback_t, kevent_continue_t,
+		       void *, struct timeval *, struct proc *);
 
 #endif /* !_SYS_EVENTVAR_H_ */

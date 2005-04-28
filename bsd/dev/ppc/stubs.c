@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -27,14 +27,12 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/buf.h>
 #include <sys/ioctl.h>
 #include <sys/tty.h>
 #include <sys/conf.h>
 #include <sys/proc.h>
 #include <sys/user.h>
 #include <kern/thread.h>
-#include <kern/thread_act.h>
 #include <kern/task.h>
 #include <vm/vm_map.h>
 
@@ -51,13 +49,10 @@
  */
 /* from ppc/fault_copy.c -Titan1T4 VERSION  */
 int
-copystr(vfrom, vto, maxlen, lencopied)
-    register void * vfrom, *vto;
-    size_t maxlen, *lencopied;
+copystr(const void *vfrom, void *vto, size_t maxlen, size_t *lencopied)
 {
     register unsigned l;
-    int error;
-caddr_t from, to;
+	caddr_t from, to;
 
 	from = vfrom;
 	to = vto;
@@ -80,44 +75,6 @@ size_t count;
 	return 0;
 }
 
-struct unix_syscallargs {
-	int flavor;
-	int r3;
-	int arg1, arg2,arg3,arg4,arg5,arg6,arg7;
-};
-
-set_bsduthreadargs(thread_t th, void * pcb, struct unix_syscallargs * sarg)
-{
-struct uthread * ut;
-
-	ut = get_bsdthread_info(th);
-	ut->uu_ar0 = (int *)pcb;
-
-	if (sarg->flavor)
-	{
-	ut->uu_arg[0] = sarg->arg1;
-	ut->uu_arg[1] = sarg->arg2;
-	ut->uu_arg[2] = sarg->arg3;
-	ut->uu_arg[3] = sarg->arg4;
-	ut->uu_arg[4] = sarg->arg5;
-	ut->uu_arg[5] = sarg->arg6;
-	ut->uu_arg[7] = sarg->arg7;
-	}
-	else
-	{
-	ut->uu_arg[0] = sarg->r3; 
-	ut->uu_arg[1] = sarg->arg1;
-	ut->uu_arg[2] = sarg->arg2;
-	ut->uu_arg[3] = sarg->arg3;
-	ut->uu_arg[4] = sarg->arg4;
-	ut->uu_arg[5] = sarg->arg5;
-	ut->uu_arg[6] = sarg->arg6;
-	ut->uu_arg[7] = sarg->arg7;
-	}
-
-	return(1);
-}
-
 void *
 get_bsduthreadarg(thread_t th)
 {
@@ -127,7 +84,7 @@ struct uthread *ut;
 }
 
 int *
-get_bsduthreadrval(thread_act_t th)
+get_bsduthreadrval(thread_t th)
 {
 struct uthread *ut;
 	ut = get_bsdthread_info(th);

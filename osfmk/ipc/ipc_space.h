@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -120,7 +120,7 @@ struct ipc_space {
 extern zone_t ipc_space_zone;
 
 #define is_alloc()		((ipc_space_t) zalloc(ipc_space_zone))
-#define	is_free(is)		zfree(ipc_space_zone, (vm_offset_t) (is))
+#define	is_free(is)		zfree(ipc_space_zone, (is))
 
 extern ipc_space_t ipc_space_kernel;
 extern ipc_space_t ipc_space_reply;
@@ -133,8 +133,7 @@ extern ipc_space_t default_pager_space;
 
 #define is_fast_space(is)	((is)->is_fast)
 
-#define	is_ref_lock_init(is)	mutex_init(&(is)->is_ref_lock_data, \
-					   ETAP_IPC_IS_REF)
+#define	is_ref_lock_init(is)	mutex_init(&(is)->is_ref_lock_data, 0)
 
 #define	ipc_space_reference_macro(is)					\
 MACRO_BEGIN								\
@@ -157,7 +156,7 @@ MACRO_BEGIN								\
 		is_free(is);						\
 MACRO_END
 
-#define	is_lock_init(is)	mutex_init(&(is)->is_lock_data, ETAP_IPC_IS)
+#define	is_lock_init(is)	mutex_init(&(is)->is_lock_data, 0)
 
 #define	is_read_lock(is)	mutex_lock(&(is)->is_lock_data)
 #define is_read_unlock(is)	mutex_unlock(&(is)->is_lock_data)
@@ -191,6 +190,10 @@ extern kern_return_t ipc_space_create(
 
 /* Mark a space as dead and cleans up the entries*/
 extern void ipc_space_destroy(
+	ipc_space_t	space);
+
+/* Clean up the entries - but leave the space alive */
+extern void ipc_space_clean(
 	ipc_space_t	space);
 
 #endif /* MACH_KERNEL_PRIVATE */

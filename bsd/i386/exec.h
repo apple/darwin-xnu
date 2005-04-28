@@ -58,9 +58,7 @@
 #define _BSD_I386_EXEC_H_
 
 
-#include <sys/appleapiopts.h>
-
-#ifdef __APPLE_API_OBSOLETE
+#ifdef BSD_KERNEL_PRIVATE
 /* Size of a page in an object file. */
 #define	__LDPGSZ	4096
 
@@ -111,11 +109,6 @@ struct exec {
 	unsigned int	a_drsize;	/* data relocation size */
 };
 
-/*
- * Address of ps_strings structure (in user space).
- */
-#define	PS_STRINGS \
-	((struct ps_strings *)(USRSTACK - sizeof(struct ps_strings)))
-#endif /* __APPLE_API_OBSOLETE */
+#endif /* BSD_KERNEL_PRIVATE */
 
 #endif /* _BSD_I386_EXEC_H_ */

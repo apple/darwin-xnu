@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -63,6 +63,7 @@
 #define __ISOFS_CD9660_CD9660_MOUNT_H__
 
 #include <sys/appleapiopts.h>
+#include <sys/cdefs.h>
 
 #ifdef __APPLE_API_UNSTABLE
 /*
@@ -70,8 +71,9 @@
  */
 struct CDTOC;
 struct iso_args {
+#ifndef KERNEL
 	char	*fspec;			/* block special device to mount */
-	struct	export_args export;	/* network export info */
+#endif
 	int	flags;			/* mounting flags, see below */
 	int	ssector;		/* starting sector, 0 for 1st session */
 	int	toc_length;		/* Size of *toc, including the toc.length field */
@@ -82,6 +84,30 @@ struct iso_args {
 #define	ISOFSMNT_EXTATT   0x00000004	/* enable extended attributes */
 #define	ISOFSMNT_NOJOLIET 0x00000008	/* disable Joliet Ext.*/
 #define ISOFSMNT_TOC	  0x00000010	/* iso_args.toc is valid */
+
+#ifdef KERNEL
+/* LP64 version of iso_args.  all pointers 
+ * grow when we're dealing with a 64-bit process.
+ * WARNING - keep in sync with iso_args
+ */
+/* LP64todo - should this move? */
+
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=natural
+#endif
+
+struct user_iso_args {
+	int	flags;			/* mounting flags, see below */
+	int	ssector;		/* starting sector, 0 for 1st session */
+	int	toc_length;		/* Size of *toc, including the toc.length field */
+	user_addr_t toc;
+};
+
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=reset
+#endif
+
+#endif /* KERNEL */
 
 #endif /* __APPLE_API_UNSTABLE */
 #endif /* __ISOFS_CD9660_CD9660_MOUNT_H__ */

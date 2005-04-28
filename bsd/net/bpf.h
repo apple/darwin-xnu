@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -67,6 +67,11 @@
 #include <sys/appleapiopts.h>
 #include <sys/types.h>
 #include <sys/time.h>
+#include <sys/cdefs.h>
+
+#ifdef KERNEL
+#include <sys/kernel_types.h>
+#endif
 
 /* BSD style release date */
 #define	BPF_RELEASE 199606
@@ -82,7 +87,7 @@ typedef	u_int32_t bpf_u_int32;
 #define BPF_WORDALIGN(x) (((x)+(BPF_ALIGNMENT-1))&~(BPF_ALIGNMENT-1))
 
 #define BPF_MAXINSNS 512
-#define BPF_MAXBUFSIZE 0x8000
+#define BPF_MAXBUFSIZE 0x80000
 #define BPF_MINBUFSIZE 32
 
 /*
@@ -92,6 +97,26 @@ struct bpf_program {
 	u_int bf_len;
 	struct bpf_insn *bf_insns;
 };
+
+#ifdef KERNEL
+/* LP64 version of bpf_program.  all pointers 
+ * grow when we're dealing with a 64-bit process.
+ * WARNING - keep in sync with bpf_program
+ */
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=natural
+#endif
+
+struct user_bpf_program {
+	u_int		bf_len;
+	user_addr_t	bf_insns;
+};
+
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=reset
+#endif
+
+#endif // KERNEL
 
 /*
  * Struct returned by BIOCGSTATS.
@@ -332,26 +357,40 @@ struct bpf_insn {
 #define BPF_STMT(code, k) { (u_short)(code), 0, 0, k }
 #define BPF_JUMP(code, k, jt, jf) { (u_short)(code), jt, jf, k }
 
+#ifdef KERNEL_PRIVATE
 /* Forward declerations */
 struct ifnet;
 struct mbuf;
 
-#ifdef KERNEL
-#ifdef __APPLE_API_UNSTABLE
-int	 bpf_validate __P((const struct bpf_insn *, int));
-void	 bpf_tap __P((struct ifnet *, u_char *, u_int));
-void	 bpf_mtap __P((struct ifnet *, struct mbuf *));
-void	 bpfattach __P((struct ifnet *, u_int, u_int));
-void	 bpfdetach __P((struct ifnet *));
+int	 bpf_validate(const struct bpf_insn *, int);
+void	 bpf_tap(struct ifnet *, u_char *, u_int);
+void	 bpf_mtap(struct ifnet *, struct mbuf *);
 
-void	 bpfilterattach __P((int));
-u_int	 bpf_filter __P((const struct bpf_insn *, u_char *, u_int, u_int));
+void	 bpfdetach(struct ifnet *);
+
+void	 bpfilterattach(int);
+u_int	 bpf_filter(const struct bpf_insn *, u_char *, u_int, u_int);
 
 #ifdef __APPLE__
 #define BPF_TAP(x, y, z) bpf_tap(x,y,z) 
 #define BPF_MTAP(x, y) bpf_mtap(x, y)
 #endif /* __APPLE__ */
-#endif /* __APPLE_API_UNSTABLE */
+
+#endif /* KERNEL_PRIVATE */
+
+#ifdef KERNEL
+/*!
+	@function bpfattach
+	@discussion Registers an interface with BPF. This allows bpf devices
+		to attach to your interface to capture packets. Your interface
+		will be unregistered automatically when your interface is
+		detached.
+	@param interface The interface to register with BPF.
+	@param data_link_type The data link type of the interface. See the
+		DLT_* defines in bpf.h.
+	@param header_length The length, in bytes, of the data link header.
+ */
+void	 bpfattach(ifnet_t interface, u_int data_link_type, u_int header_length);
 #endif /* KERNEL */
 
 /*

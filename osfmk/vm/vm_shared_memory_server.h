@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002,2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -30,15 +30,25 @@
 #ifndef _VM_SHARED_MEMORY_SERVER_H_
 #define _VM_SHARED_MEMORY_SERVER_H_
 
-#include <sys/appleapiopts.h>
-
-#ifdef __APPLE_API_PRIVATE
+#ifdef	KERNEL_PRIVATE
 
 #include <mach/vm_prot.h>
 #include <mach/mach_types.h>
 #include <mach/shared_memory_server.h>
 
 #include <kern/kern_types.h>
+
+#if DEBUG
+extern int shared_region_debug;
+#define SHARED_REGION_DEBUG(args)		\
+	MACRO_BEGIN				\
+	if (shared_region_debug) {		\
+		kprintf args;			\
+	}					\
+	MACRO_END
+#else /* DEBUG */
+#define SHARED_REGION_DEBUG(args)
+#endif /* DEBUG */
 
 extern mach_port_t      shared_text_region_handle;
 extern mach_port_t      shared_data_region_handle;
@@ -61,6 +71,7 @@ struct shared_region_task_mappings {
 #define SHARED_REGION_SYSTEM	0x1 // Default env for system and fs_root
 #define SHARED_REGION_FULL	0x2 // Shared regions are full
 #define SHARED_REGION_STALE 	0x4 // Indicates no longer in default list
+#define SHARED_REGION_STANDALONE 0x10 // Shared region is not shared !
 
 
 /* defines for default environment, and co-resident systems */
@@ -69,7 +80,6 @@ struct shared_region_task_mappings {
 
 typedef	struct shared_region_task_mappings *shared_region_task_mappings_t;
 typedef struct shared_region_mapping *shared_region_mapping_t;
-
 
 #ifdef MACH_KERNEL_PRIVATE
 
@@ -150,7 +160,7 @@ struct shared_region_mapping {
 };
 
 #define shared_region_mapping_lock_init(object)   \
-			mutex_init(&(object)->Lock, ETAP_VM_OBJ)
+			mutex_init(&(object)->Lock, 0)
 #define shared_region_mapping_lock(object)        mutex_lock(&(object)->Lock)
 #define shared_region_mapping_unlock(object)      mutex_unlock(&(object)->Lock)
 
@@ -159,6 +169,9 @@ struct shared_region_mapping {
 struct shared_region_mapping ;
 
 #endif /* MACH_KERNEL_PRIVATE */
+
+#define load_file_hash(file_object, size) \
+		((((natural_t)file_object) & 0xffffff) % size)
 
 extern kern_return_t copyin_shared_file(
 				vm_offset_t     	mapped_file,
@@ -169,6 +182,20 @@ extern kern_return_t copyin_shared_file(
 				memory_object_control_t		file_control,
 				shared_region_task_mappings_t	shared_region,
 				int             	*flags);
+
+extern kern_return_t map_shared_file(
+	int 				map_cnt,
+	struct shared_file_mapping_np 	*mappings,
+	memory_object_control_t		file_control,
+	memory_object_size_t		file_size,
+	shared_region_task_mappings_t	sm_info,
+	mach_vm_offset_t		base_offset,
+	mach_vm_offset_t		*slide_p);
+
+extern kern_return_t shared_region_cleanup(
+	unsigned int			range_count,
+	struct shared_region_range_np	*ranges,
+	shared_region_task_mappings_t	sm_info);
 
 extern kern_return_t shared_region_mapping_info(
 				shared_region_mapping_t	shared_region,
@@ -202,13 +229,12 @@ extern kern_return_t shared_region_mapping_ref(
 extern kern_return_t shared_region_mapping_dealloc(
 				shared_region_mapping_t	shared_region);
 
-__private_extern__ kern_return_t shared_region_mapping_dealloc_lock(
-				shared_region_mapping_t	shared_region,
-				int need_lock);
-
 extern kern_return_t shared_region_object_chain_attach(
 				shared_region_mapping_t	target_region,
 				shared_region_mapping_t	object_chain);
+
+extern void shared_region_object_chain_detached(
+	shared_region_mapping_t	target_region);
 
 extern kern_return_t vm_get_shared_region(
 				task_t	task,
@@ -230,10 +256,41 @@ extern void remove_default_shared_region(
 
 __private_extern__ void remove_default_shared_region_lock(
 				shared_region_mapping_t system_region,
+				int need_sfh_lock,
+				int need_drl_lock);
+
+__private_extern__ struct load_struct *lsf_remove_regions_mappings_lock(
+				shared_region_mapping_t	region,
+				shared_region_task_mappings_t	sm_info,
 				int need_lock);
 
-extern unsigned int lsf_mapping_pool_gauge();
+extern unsigned int lsf_mapping_pool_gauge(void);
 
-#endif /* __APPLE_API_PRIVATE */
+extern kern_return_t shared_file_create_system_region(
+	shared_region_mapping_t	*shared_region);
 
-#endif /* _VM_SHARED_MEMORY_SERVER_H_ */
+extern void remove_all_shared_regions(void);
+
+extern void shared_file_boot_time_init(
+		unsigned int fs_base, 
+		unsigned int system);
+
+extern struct load_struct *lsf_remove_regions_mappings(
+	shared_region_mapping_t	region,
+	shared_region_task_mappings_t	sm_info);
+
+extern kern_return_t shared_region_mapping_set_alt_next(
+		shared_region_mapping_t	shared_region,
+		vm_offset_t		alt_next);
+
+extern void mach_memory_entry_port_release(ipc_port_t port);
+extern void mach_destroy_memory_entry(ipc_port_t port);
+
+extern kern_return_t mach_memory_entry_purgable_control(
+	ipc_port_t	entry_port,
+	vm_purgable_t	control,
+	int		*state);
+
+#endif /* KERNEL_PRIVATE */
+
+#endif	/* _VM_SHARED_MEMORY_SERVER_H_ */

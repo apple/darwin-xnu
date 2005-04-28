@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -60,14 +60,12 @@
 #ifndef	_IPC_IPC_KMSG_H_
 #define _IPC_IPC_KMSG_H_
 
-#include <cpus.h>
-
 #include <mach/vm_types.h>
 #include <mach/message.h>
+#include <kern/kern_types.h>
 #include <kern/assert.h>
-#include <kern/cpu_number.h>
 #include <kern/macro_help.h>
-#include <kern/kalloc.h>
+#include <ipc/ipc_types.h>
 #include <ipc/ipc_object.h>
 
 /*
@@ -83,18 +81,16 @@
  */
 
 
-typedef struct ipc_kmsg {
+struct ipc_kmsg {
 	struct ipc_kmsg *ikm_next;
 	struct ipc_kmsg *ikm_prev;
 	ipc_port_t ikm_prealloc;	/* port we were preallocated from */
 	mach_msg_size_t ikm_size;
-	mach_msg_header_t ikm_header;
-} *ipc_kmsg_t;
+	mach_msg_header_t *ikm_header;
+};
 
-#define	IKM_NULL		((ipc_kmsg_t) 0)
 
-#define	IKM_OVERHEAD							\
-		(sizeof(struct ipc_kmsg) - sizeof(mach_msg_header_t))
+#define	IKM_OVERHEAD		(sizeof(struct ipc_kmsg))
 
 #define	ikm_plus_overhead(size)	((mach_msg_size_t)((size) + IKM_OVERHEAD))
 #define	ikm_less_overhead(size)	((mach_msg_size_t)((size) - IKM_OVERHEAD))
@@ -108,8 +104,9 @@ typedef struct ipc_kmsg {
  *	The size of the kernel message buffers that will be cached.
  *	IKM_SAVED_KMSG_SIZE includes overhead; IKM_SAVED_MSG_SIZE doesn't.
  */
-
-#define	IKM_SAVED_MSG_SIZE	ikm_less_overhead(256)
+extern zone_t ipc_kmsg_zone;
+#define	IKM_SAVED_KMSG_SIZE	256
+#define	IKM_SAVED_MSG_SIZE	ikm_less_overhead(IKM_SAVED_KMSG_SIZE)
 
 #define	ikm_prealloc_inuse_port(kmsg)					\
 	((kmsg)->ikm_prealloc)
@@ -226,28 +223,6 @@ MACRO_BEGIN								\
 	}								\
 MACRO_END
 
-/* scatter list macros */
-
-#define SKIP_PORT_DESCRIPTORS(s, e)					\
-MACRO_BEGIN								\
-	if ((s) != MACH_MSG_DESCRIPTOR_NULL) {				\
-		while ((s) < (e)) {					\
-			if ((s)->type.type != MACH_MSG_PORT_DESCRIPTOR)	\
-				break;					\
-			(s)++;						\
-		}							\
-		if ((s) >= (e))						\
-			(s) = MACH_MSG_DESCRIPTOR_NULL;			\
-	}								\
-MACRO_END
-
-#define INCREMENT_SCATTER(s)						\
-MACRO_BEGIN								\
-	if ((s) != MACH_MSG_DESCRIPTOR_NULL) {				\
-		(s)++;							\
-	}								\
-MACRO_END
-
 /*
  *	extern void
  *	ipc_kmsg_send_always(ipc_kmsg_t);
@@ -259,9 +234,9 @@ MACRO_END
 
 #define	ipc_kmsg_send_always(kmsg)					\
 MACRO_BEGIN								\
-	mach_msg_return_t mr;						\
+	mach_msg_return_t mr2;						\
 									\
-	mr = ipc_kmsg_send((kmsg), MACH_SEND_ALWAYS,			\
+	mr2 = ipc_kmsg_send((kmsg), MACH_SEND_ALWAYS,			\
 			     MACH_MSG_TIMEOUT_NONE);			\
 	assert(mr == MACH_MSG_SUCCESS);					\
 MACRO_END
@@ -276,6 +251,7 @@ MACRO_END
 
 #endif	/* MACH_ASSERT */
 
+
 /* Allocate a kernel message */
 extern ipc_kmsg_t ipc_kmsg_alloc(
         mach_msg_size_t size);
@@ -287,6 +263,11 @@ extern void ipc_kmsg_free(
 /* Destroy kernel message */
 extern void ipc_kmsg_destroy(
 	ipc_kmsg_t	kmsg);
+
+/* destroy kernel message and a reference on the dest */
+extern void ipc_kmsg_destroy_dest(
+	ipc_kmsg_t	kmsg);
+
 
 /* Preallocate a kernel message buffer */
 extern void ipc_kmsg_set_prealloc(
@@ -300,7 +281,7 @@ extern void ipc_kmsg_clear_prealloc(
 
 /* Allocate a kernel message buffer and copy a user message to the buffer */
 extern mach_msg_return_t ipc_kmsg_get(
-	mach_msg_header_t	*msg,
+	mach_vm_address_t	msg_addr, 
 	mach_msg_size_t		size,
 	ipc_kmsg_t		*kmsgp);
 
@@ -314,11 +295,11 @@ extern mach_msg_return_t ipc_kmsg_get_from_kernel(
 extern mach_msg_return_t ipc_kmsg_send(
 	ipc_kmsg_t		kmsg,
 	mach_msg_option_t	option,
-	mach_msg_timeout_t	timeout);
+	mach_msg_timeout_t	timeout_val);
 
 /* Copy a kernel message buffer to a user message */
 extern mach_msg_return_t ipc_kmsg_put(
-	mach_msg_header_t	*msg,
+	mach_vm_address_t	msg_addr,
 	ipc_kmsg_t		kmsg,
 	mach_msg_size_t		size);
 
@@ -381,6 +362,11 @@ extern mach_msg_return_t ipc_kmsg_copyout_pseudo(
 	vm_map_t		map,
 	mach_msg_body_t		*slist);
 
+/* Compute size of message as copied out to the specified space/map */
+extern mach_msg_size_t ipc_kmsg_copyout_size(
+	ipc_kmsg_t		kmsg,
+	vm_map_t		map);
+
 /* Copyout the destination port in the message */
 extern void ipc_kmsg_copyout_dest( 
 	ipc_kmsg_t		kmsg,
@@ -391,9 +377,9 @@ extern void ipc_kmsg_copyout_to_kernel(
 	ipc_kmsg_t		kmsg,
 	ipc_space_t		space);
 
-/* copyin a scatter list and check consistency */
-extern mach_msg_body_t *ipc_kmsg_copyin_scatter(
-        mach_msg_header_t       *msg,
+/* get a scatter list and check consistency */
+extern mach_msg_body_t *ipc_kmsg_get_scatter(
+        mach_vm_address_t       msg_addr,
         mach_msg_size_t         slist_size,
         ipc_kmsg_t              kmsg);
 
@@ -401,18 +387,5 @@ extern mach_msg_body_t *ipc_kmsg_copyin_scatter(
 extern void ipc_kmsg_free_scatter(
         mach_msg_body_t 	*slist,
         mach_msg_size_t		slist_size);
-
-#include <mach_kdb.h>
-#if 	MACH_KDB
-
-/* Do a formatted dump of a kernel message */
-extern void ipc_kmsg_print(
-	ipc_kmsg_t	kmsg);
-
-/* Do a formatted dump of a user message */
-extern void ipc_msg_print(
-	mach_msg_header_t	*msgh);
-
-#endif	/* MACH_KDB */
 
 #endif	/* _IPC_IPC_KMSG_H_ */

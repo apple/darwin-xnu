@@ -57,8 +57,8 @@
  *
  */
 
-#ifndef	VM_INHERIT_H_
-#define	VM_INHERIT_H_
+#ifndef	_MACH_VM_INHERIT_H_
+#define	_MACH_VM_INHERIT_H_
 
 /*
  *	Types defined:
@@ -80,4 +80,4 @@ typedef unsigned int		vm_inherit_t;	/* might want to change this */
 #define VM_INHERIT_DEFAULT	VM_INHERIT_COPY
 #define VM_INHERIT_LAST_VALID VM_INHERIT_NONE
 
-#endif	/* VM_INHERIT_H_ */
+#endif	/* _MACH_VM_INHERIT_H_ */

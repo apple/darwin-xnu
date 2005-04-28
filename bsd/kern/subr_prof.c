@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -58,13 +58,20 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
-#include <sys/proc.h>
+#include <sys/proc_internal.h>
 #include <sys/user.h>
 #include <machine/spl.h>
+#include <machine/machine_routines.h>
 
-#include <sys/mount.h>
+#include <sys/mount_internal.h>
+#include <sys/sysproto.h>
 
+#include <mach/mach_types.h>
+#include <kern/kern_types.h>
 #include <kern/cpu_number.h>
+#include <kern/kalloc.h>
+
+extern boolean_t ml_set_interrupts_enabled(boolean_t enable);
 
 #ifdef GPROF
 #include <sys/malloc.h>
@@ -72,18 +79,25 @@
 #include <kern/mach_header.h>
 #include <machine/profile.h>
 
-decl_simple_lock_data(,mcount_lock);
+lck_spin_t * mcount_lock;
+lck_grp_t * mcount_lock_grp;
+lck_attr_t * mcount_lock_attr;
 
 /*
  * Froms is actually a bunch of unsigned shorts indexing tos
  */
 struct gmonparam _gmonparam = { GMON_PROF_OFF };
 
-kmstartup()
+/*
+ * This code uses 32 bit mach object segment information from the currently
+ * running kernel.
+ */
+void
+kmstartup(void)
 {
 	char *cp;
 	u_long	fromssize, tossize;
-	struct segment_command		*sgp;
+	struct segment_command	*sgp;	/* 32 bit mach object file segment */
 	struct gmonparam *p = &_gmonparam;
 	
 	sgp = getsegbyname("__TEXT");
@@ -120,20 +134,20 @@ kmstartup()
 	p->kcount = (u_short *)cp;
 	cp += p->kcountsize;
 	p->froms = (u_short *)cp;
-	simple_lock_init(&mcount_lock);
+	
+	mcount_lock_grp = lck_grp_alloc_init("MCOUNT", LCK_GRP_ATTR_NULL);
+	mcount_lock_attr = lck_attr_alloc_init();
+	//lck_attr_setdebug(mcount_lock_attr);
+	mcount_lock = lck_spin_alloc_init(mcount_lock_grp, mcount_lock_attr);
+
 }
 
 /*
  * Return kernel profiling information.
  */
 int
-sysctl_doprof(name, namelen, oldp, oldlenp, newp, newlen)
-	int *name;
-	u_int namelen;
-	void *oldp;
-	size_t *oldlenp;
-	void *newp;
-	size_t newlen;
+sysctl_doprof(int *name, u_int namelen, user_addr_t oldp, size_t *oldlenp, 
+              user_addr_t newp, size_t newlen)
 {
 	struct gmonparam *gp = &_gmonparam;
 	int error;
@@ -153,18 +167,18 @@ sysctl_doprof(name, namelen, oldp, oldlenp, newp, newlen)
 			startprofclock(kernproc);
 		return (0);
 	case GPROF_COUNT:
-		return (sysctl_struct(oldp, oldlenp, newp, newlen,
-		    gp->kcount, gp->kcountsize));
+		return (sysctl_struct(oldp, oldlenp, newp, newlen, 
+		                      gp->kcount, gp->kcountsize));
 	case GPROF_FROMS:
 		return (sysctl_struct(oldp, oldlenp, newp, newlen,
-		    gp->froms, gp->fromssize));
+		                      gp->froms, gp->fromssize));
 	case GPROF_TOS:
 		return (sysctl_struct(oldp, oldlenp, newp, newlen,
-		    gp->tos, gp->tossize));
+		                      gp->tos, gp->tossize));
 	case GPROF_GMONPARAM:
 		return (sysctl_rdstruct(oldp, oldlenp, newp, gp, sizeof *gp));
 	default:
-		return (EOPNOTSUPP);
+		return (ENOTSUP);
 	}
 	/* NOTREACHED */
 }
@@ -191,7 +205,7 @@ mcount(
     if (p->state != GMON_PROF_ON)
         return;
 
-	usimple_lock(&mcount_lock);
+	lck_spin_lock(mcount_lock);
 
 	/*
 	 *	check that frompcindex is a reasonable pc value.
@@ -274,36 +288,26 @@ mcount(
 
 	}
 done:
-	usimple_unlock(&mcount_lock);
+	lck_spin_unlock(mcount_lock);
 	return;
 
 overflow:
     p->state = GMON_PROF_ERROR;
-        usimple_unlock(&mcount_lock);
+        lck_spin_unlock(mcount_lock);
 	printf("mcount: tos overflow\n");
 	return;
 }
 
 #endif /* GPROF */
 
-#define PROFILE_LOCK(x)		simple_lock(x)
-#define PROFILE_UNLOCK(x)	simple_unlock(x)
+#define PROFILE_LOCK(x)
+#define PROFILE_UNLOCK(x)
 
-struct profil_args {
-	short	*bufbase;
-	u_int bufsize;
-	u_int pcoffset;
-	u_int pcscale;
-};
 int
-profil(p, uap, retval)
-	struct proc *p;
-	register struct profil_args *uap;
-	register_t *retval;
+profil(struct proc *p, register struct profil_args *uap, __unused register_t *retval)
 {
-	register struct uprof *upp = &p->p_stats->p_prof;
-	struct uprof *upc, *nupc;
-	int s;
+    struct uprof *upp = &p->p_stats->p_prof;
+    int s;
 
 	if (uap->pcscale > (1 << 16))
 		return (EINVAL);
@@ -313,53 +317,95 @@ profil(p, uap, retval)
 	}
 
 	/* Block profile interrupts while changing state. */
-        s = ml_set_interrupts_enabled(FALSE);	
-	PROFILE_LOCK(&upp->pr_lock);
-	upp->pr_base = (caddr_t)uap->bufbase;
-	upp->pr_size = uap->bufsize;
-	upp->pr_off = uap->pcoffset;
-	upp->pr_scale = uap->pcscale;
+    s = ml_set_interrupts_enabled(FALSE);	
 
-	/* remove buffers previously allocated with add_profil() */
-	for (upc = upp->pr_next; upc; upc = nupc) {
-		nupc = upc->pr_next;
-		kfree(upc, sizeof (struct uprof));
+	if (proc_is64bit(p)) {
+        struct user_uprof *user_upp = &p->p_stats->user_p_prof;
+    	struct user_uprof *upc, *nupc;
+	
+	    PROFILE_LOCK(&user_upp->pr_lock);
+        user_upp->pr_base = uap->bufbase;
+        user_upp->pr_size = uap->bufsize;
+        user_upp->pr_off = uap->pcoffset;
+	    user_upp->pr_scale = uap->pcscale;
+        upp->pr_base = NULL;
+        upp->pr_size = 0;
+        upp->pr_scale = 0;
+
+        /* remove buffers previously allocated with add_profil() */
+        for (upc = user_upp->pr_next; upc; upc = nupc) {
+            nupc = upc->pr_next;
+            kfree(upc, sizeof (*upc));
+        }
+        user_upp->pr_next = 0;
+	    PROFILE_UNLOCK(&user_upp->pr_lock);
+	}
+	else {
+    	struct uprof *upc, *nupc;
+	    
+	    PROFILE_LOCK(&upp->pr_lock);
+        upp->pr_base = CAST_DOWN(caddr_t, uap->bufbase);
+        upp->pr_size = uap->bufsize;
+        upp->pr_off = uap->pcoffset;
+	    upp->pr_scale = uap->pcscale;
+
+        /* remove buffers previously allocated with add_profil() */
+        for (upc = upp->pr_next; upc; upc = nupc) {
+            nupc = upc->pr_next;
+            kfree(upc, sizeof (struct uprof));
+        }
+        upp->pr_next = 0;
+	    PROFILE_UNLOCK(&upp->pr_lock);
 	}
 
-	upp->pr_next = 0;
-	PROFILE_UNLOCK(&upp->pr_lock);
 	startprofclock(p);
 	ml_set_interrupts_enabled(s);
 	return(0);
 }
 
-struct add_profile_args {
-	short	*bufbase;
-	u_int bufsize;
-	u_int pcoffset;
-	u_int pcscale;
-};
 int
-add_profil(p, uap, retval)
-	struct proc *p;
-	register struct add_profile_args *uap;
-	register_t *retval;
+add_profil(struct proc *p, register struct add_profil_args *uap, __unused register_t *retval)
 {
 	struct uprof *upp = &p->p_stats->p_prof, *upc;
+	struct user_uprof *user_upp = NULL, *user_upc;
 	int s;
+	boolean_t is64bit = proc_is64bit(p);
 
-	if (upp->pr_scale == 0)
-		return (0);
-        s = ml_set_interrupts_enabled(FALSE);		
-	upc = (struct uprof *) kalloc(sizeof (struct uprof));
-	upc->pr_base = (caddr_t)uap->bufbase;
-	upc->pr_size = uap->bufsize;
-	upc->pr_off = uap->pcoffset;
-	upc->pr_scale = uap->pcscale;
-	PROFILE_LOCK(&upp->pr_lock);
-	upc->pr_next = upp->pr_next;
-	upp->pr_next = upc;
-	PROFILE_UNLOCK(&upp->pr_lock);
+	if (is64bit) {
+       user_upp = &p->p_stats->user_p_prof;
+       if (user_upp->pr_scale == 0)
+            return (0);
+    }
+    else {
+        if (upp->pr_scale == 0)
+            return (0);
+    }
+
+    s = ml_set_interrupts_enabled(FALSE);	
+    
+	if (is64bit) {
+        user_upc = (struct user_uprof *) kalloc(sizeof (struct user_uprof));
+        user_upc->pr_base = uap->bufbase;
+        user_upc->pr_size = uap->bufsize;
+        user_upc->pr_off = uap->pcoffset;
+        user_upc->pr_scale = uap->pcscale;
+        PROFILE_LOCK(&user_upp->pr_lock);
+        user_upc->pr_next = user_upp->pr_next;
+        user_upp->pr_next = user_upc;
+        PROFILE_UNLOCK(&user_upp->pr_lock);
+    }
+    else {
+        upc = (struct uprof *) kalloc(sizeof (struct uprof));
+        upc->pr_base = CAST_DOWN(caddr_t, uap->bufbase);
+        upc->pr_size = uap->bufsize;
+        upc->pr_off = uap->pcoffset;
+        upc->pr_scale = uap->pcscale;
+        PROFILE_LOCK(&upp->pr_lock);
+        upc->pr_next = upp->pr_next;
+        upp->pr_next = upc;
+        PROFILE_UNLOCK(&upp->pr_lock);
+    }
+    
 	ml_set_interrupts_enabled(s);		
 	return(0);
 }
@@ -390,11 +436,9 @@ add_profil(p, uap, retval)
 void
 addupc_task(p, pc, ticks)
 	register struct proc *p;
-	register u_long pc;
+	user_addr_t pc;
 	u_int ticks;
 {
-	register struct uprof *prof;
-	register short *cell;
 	register u_int off;
 	u_short count;
 
@@ -402,19 +446,44 @@ addupc_task(p, pc, ticks)
 	if ((p->p_flag & P_PROFIL) == 0 || ticks == 0)
 		return;
 
-	for (prof = &p->p_stats->p_prof; prof; prof = prof->pr_next) {
-		off = PC_TO_INDEX(pc,prof);
-		cell = (short *)(prof->pr_base + off);
-		if (cell >= (short *)prof->pr_base &&
-			cell < (short*)(prof->pr_size + (int) prof->pr_base)) {
-			if (copyin((caddr_t)cell, (caddr_t) &count, sizeof(count)) == 0) {
-				count += ticks;
-				if(copyout((caddr_t) &count, (caddr_t)cell, sizeof(count)) == 0)
-					return;
-			}
-			p->p_stats->p_prof.pr_scale = 0;
-			stopprofclock(p);
-			break;
-		}
+	if (proc_is64bit(p)) {
+        struct user_uprof *prof;
+        user_addr_t cell;
+
+        for (prof = &p->p_stats->user_p_prof; prof; prof = prof->pr_next) {
+            off = PC_TO_INDEX(pc, prof);
+            cell = (prof->pr_base + off);
+            if (cell >= prof->pr_base &&
+                cell < (prof->pr_size + prof->pr_base)) {
+                if (copyin(cell, (caddr_t) &count, sizeof(count)) == 0) {
+                    count += ticks;
+                    if(copyout((caddr_t) &count, cell, sizeof(count)) == 0)
+                        return;
+                }
+                p->p_stats->user_p_prof.pr_scale = 0;
+                stopprofclock(p);
+                break;
+            }
+        }
+	}
+	else {
+        struct uprof *prof;
+        short *cell;
+
+        for (prof = &p->p_stats->p_prof; prof; prof = prof->pr_next) {
+            off = PC_TO_INDEX(CAST_DOWN(uint, pc),prof);
+            cell = (short *)(prof->pr_base + off);
+            if (cell >= (short *)prof->pr_base &&
+                cell < (short*)(prof->pr_size + (int) prof->pr_base)) {
+                if (copyin(CAST_USER_ADDR_T(cell), (caddr_t) &count, sizeof(count)) == 0) {
+                    count += ticks;
+                    if(copyout((caddr_t) &count, CAST_USER_ADDR_T(cell), sizeof(count)) == 0)
+                        return;
+                }
+                p->p_stats->p_prof.pr_scale = 0;
+                stopprofclock(p);
+                break;
+            }
+        }
 	}
 }

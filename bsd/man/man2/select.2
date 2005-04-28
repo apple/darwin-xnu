@@ -50,6 +50,7 @@
 .Fn FD_SET fd &fdset
 .Fn FD_CLR fd &fdset
 .Fn FD_ISSET fd &fdset
+.Fn FD_COPY &fdset_orig &fdset_copy
 .Fn FD_ZERO &fdset
 .Sh DESCRIPTION
 .Fn Select
@@ -66,7 +67,9 @@ The first
 descriptors are checked in each set;
 i.e., the descriptors from 0 through
 .Fa nfds Ns No -1
-in the descriptor sets are examined.
+in the descriptor sets are examined.  (Example: If you have set two file descriptors "4" and "17",
+.Fa nfds
+should  not be "2", but rather "17 + 1" or "18".)
 On return,
 .Fn select
 replaces the given descriptor sets
@@ -97,6 +100,11 @@ is non-zero if
 is a member of
 .Fa fdset ,
 zero otherwise.
+.Fn FD_COPY &fdset_orig &fdset_copy
+replaces an already allocated 
+.Fa &fdset_copy
+file descriptor set with a copy of
+.Fa &fdset_orig .
 The behavior of these macros is undefined if
 a descriptor value is less than zero or greater than or equal to
 .Dv FD_SETSIZE ,

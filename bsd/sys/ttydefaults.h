@@ -83,7 +83,7 @@
 #define	CEOL		0xff		/* XXX avoid _POSIX_VDISABLE */
 #define	CERASE		0177
 #define	CINTR		CTRL('c')
-#define	CSTATUS		0xff		/* XXX avoid _POSIX_VDISABLE */
+#define	CSTATUS		CTRL('t')
 #define	CKILL		CTRL('u')
 #define	CMIN		1
 #define	CQUIT		034		/* FS, ^\ */

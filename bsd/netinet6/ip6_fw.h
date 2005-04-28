@@ -207,8 +207,7 @@ struct ip6_fw_chain {
 /*
  * Main firewall chains definitions and global var's definitions.
  */
-#ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
+#ifdef KERNEL_PRIVATE
 
 #define M_IP6FW M_IPFW
 
@@ -221,14 +220,13 @@ void ip6_fw_init(void);
 /* Firewall hooks */
 struct ip6_hdr;
 struct sockopt;
-typedef	int ip6_fw_chk_t __P((struct ip6_hdr**, struct ifnet*,
-				u_short *, struct mbuf**));
-typedef	int ip6_fw_ctl_t __P((struct sockopt *));
+typedef	int ip6_fw_chk_t(struct ip6_hdr**, struct ifnet*,
+				u_short *, struct mbuf**);
+typedef	int ip6_fw_ctl_t(struct sockopt *);
 extern	ip6_fw_chk_t *ip6_fw_chk_ptr;
 extern	ip6_fw_ctl_t *ip6_fw_ctl_ptr;
 extern	int ip6_fw_enable;
 
-#endif /* __APPLE_API_PRIVATE */
-#endif /* KERNEL */
+#endif /* KERNEL_PRIVATE */
 
 #endif /* _IP6_FW_H */

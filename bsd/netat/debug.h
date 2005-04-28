@@ -28,7 +28,8 @@
 #ifndef _NETAT_DEBUG_H_
 #define _NETAT_DEBUG_H_
 #include <sys/appleapiopts.h>
-#ifdef __APPLE_API_PRIVATE
+#ifdef __APPLE_API_OBSOLETE
+#ifdef PRIVATE
 
 #define D_L_FATAL		0x00000001
 #define D_L_ERROR		0x00000002
@@ -260,6 +261,7 @@ static char *at_mid_strings[] = {
 
 #endif
 
-#endif /* __APPLE_API_PRIVATE */
+#endif /* PRIVATE */
+#endif /* __APPLE_API_OBSOLETE */
 #endif /* _NETAT_DEBUG_H_ */
 

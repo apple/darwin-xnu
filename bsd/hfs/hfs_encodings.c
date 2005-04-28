@@ -23,7 +23,6 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
-#include <sys/lock.h>
 #include <sys/malloc.h>
 #include <sys/queue.h>
 #include <sys/utfconv.h>
@@ -31,9 +30,16 @@
 #include "hfs.h"
 
 
+lck_grp_t * encodinglst_lck_grp;
+lck_grp_attr_t * encodinglst_lck_grp_attr;
+lck_attr_t * encodinglst_lck_attr;
+
+
 /* hfs encoding converter list */
 SLIST_HEAD(encodinglst, hfs_encoding) hfs_encoding_list = {0};
-decl_simple_lock_data(,hfs_encoding_list_slock);
+
+lck_mtx_t  encodinglst_mutex;
+
 
 
 /* hfs encoding converter entry */
@@ -61,7 +67,15 @@ void
 hfs_converterinit(void)
 {
 	SLIST_INIT(&hfs_encoding_list);
-	simple_lock_init(&hfs_encoding_list_slock);
+
+	encodinglst_lck_grp_attr= lck_grp_attr_alloc_init();
+	lck_grp_attr_setstat(encodinglst_lck_grp_attr);
+	encodinglst_lck_grp  = lck_grp_alloc_init("cnode_hash", encodinglst_lck_grp_attr);
+
+	encodinglst_lck_attr = lck_attr_alloc_init();
+	//lck_attr_setdebug(encodinglst_lck_attr);
+
+	lck_mtx_init(&encodinglst_mutex, encodinglst_lck_grp, encodinglst_lck_attr);
 
 	/*
 	 * add resident MacRoman converter and take a reference
@@ -87,7 +101,7 @@ hfs_addconverter(int id, UInt32 encoding, hfs_to_unicode_func_t get_unicode, uni
 	
 	MALLOC(encp, struct hfs_encoding *, sizeof(struct hfs_encoding), M_TEMP, M_WAITOK);
 
-	simple_lock(&hfs_encoding_list_slock);
+	lck_mtx_lock(&encodinglst_mutex);
 
 	encp->link.sle_next = NULL;
 	encp->refcount = 0;
@@ -97,7 +111,7 @@ hfs_addconverter(int id, UInt32 encoding, hfs_to_unicode_func_t get_unicode, uni
 	encp->kmod_id = id;
 	SLIST_INSERT_HEAD(&hfs_encoding_list, encp, link);
 
-	simple_unlock(&hfs_encoding_list_slock);
+	lck_mtx_unlock(&encodinglst_mutex);
 	return (0);
 }
 
@@ -117,9 +131,8 @@ int
 hfs_remconverter(int id, UInt32 encoding)
 {
 	struct hfs_encoding *encp;
-	int busy = 0;
 
-	simple_lock(&hfs_encoding_list_slock);
+	lck_mtx_lock(&encodinglst_mutex);
 	SLIST_FOREACH(encp, &hfs_encoding_list, link) {
 		if (encp->encoding == encoding && encp->kmod_id == id) {
 			encp->refcount--;
@@ -127,16 +140,19 @@ hfs_remconverter(int id, UInt32 encoding)
 			/* if converter is no longer in use, release it */
 			if (encp->refcount <= 0 && encp->kmod_id != 0) {
 				SLIST_REMOVE(&hfs_encoding_list, encp, hfs_encoding, link);
+				lck_mtx_unlock(&encodinglst_mutex);
     				FREE(encp, M_TEMP);
+    				return (0);
  			} else {
-				busy = 1;
+ 				lck_mtx_unlock(&encodinglst_mutex);
+				return (1);   /* busy */
 			}
 			break;
 		}
 	}
-	simple_unlock(&hfs_encoding_list_slock);
+	lck_mtx_unlock(&encodinglst_mutex);
 
-	return (busy);
+	return (0);
 }
 
 
@@ -151,7 +167,7 @@ hfs_getconverter(UInt32 encoding, hfs_to_unicode_func_t *get_unicode, unicode_to
 	struct hfs_encoding *encp;
 	int found = 0;
 
-	simple_lock(&hfs_encoding_list_slock);
+	lck_mtx_lock(&encodinglst_mutex);
 	SLIST_FOREACH(encp, &hfs_encoding_list, link) {
 		if (encp->encoding == encoding) {
 			found = 1;
@@ -161,7 +177,7 @@ hfs_getconverter(UInt32 encoding, hfs_to_unicode_func_t *get_unicode, unicode_to
 			break;
 		}
 	}
-	simple_unlock(&hfs_encoding_list_slock);
+	lck_mtx_unlock(&encodinglst_mutex);
 
 	if (!found) {
 		*get_unicode = NULL;
@@ -182,12 +198,10 @@ int
 hfs_relconverter(UInt32 encoding)
 {
 	struct hfs_encoding *encp;
-	int found = 0;
 
-	simple_lock(&hfs_encoding_list_slock);
+	lck_mtx_lock(&encodinglst_mutex);
 	SLIST_FOREACH(encp, &hfs_encoding_list, link) {
 		if (encp->encoding == encoding) {
-			found = 1;
 			encp->refcount--;
 			
 			/* if converter is no longer in use, release it */
@@ -195,19 +209,19 @@ hfs_relconverter(UInt32 encoding)
 				int id = encp->kmod_id;
 
 				SLIST_REMOVE(&hfs_encoding_list, encp, hfs_encoding, link);
-    				FREE(encp, M_TEMP);
-    				encp = NULL;
-
-				simple_unlock(&hfs_encoding_list_slock);
-				kmod_destroy((host_priv_t) host_priv_self(), id);
-				simple_lock(&hfs_encoding_list_slock);
+				lck_mtx_unlock(&encodinglst_mutex);
+ 
+ 				FREE(encp, M_TEMP);
+   				kmod_destroy((host_priv_t) host_priv_self(), id);
+				return (0);
 			}
-			break;
+			lck_mtx_unlock(&encodinglst_mutex);
+			return (0);
 		}
 	}
-	simple_unlock(&hfs_encoding_list_slock);
+	lck_mtx_unlock(&encodinglst_mutex);
 
-	return (found ? 0 : EINVAL);
+	return (EINVAL);
 }
 
 

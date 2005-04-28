@@ -166,7 +166,7 @@ extern void		db_task_name(
 
 /* macro for checking if a thread has used floating-point */
 
-#define db_act_fp_used(act)	(act && act->mact.pcb->ims.ifps)
+#define db_act_fp_used(act)	(act && act->machine.pcb->ims.ifps)
 
 extern void		db_tss_to_frame(
 				int			tss_sel,

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -81,6 +81,7 @@ typedef UInt32  	IOCacheMode;
 
 typedef UInt32	 	IOByteCount;
 
+  /* LP64todo - these will need to expand to mach_vm_address_t */
 typedef vm_address_t	 IOVirtualAddress;
 typedef IOVirtualAddress IOLogicalAddress;
 
@@ -151,11 +152,12 @@ typedef mach_port_t	io_object_t;
 #include <device/device_types.h>
 
 typedef io_object_t	io_connect_t;
+typedef io_object_t	io_enumerator_t;
 typedef io_object_t	io_iterator_t;
 typedef io_object_t	io_registry_entry_t;
 typedef io_object_t	io_service_t;
 
-typedef io_object_t	io_enumerator_t;
+#define	IO_OBJECT_NULL	((io_object_t) 0)
 
 #endif /* MACH_KERNEL */
 
@@ -189,7 +191,8 @@ enum {
     kIOMapReadOnly		= 0x00001000,
 
     kIOMapStatic		= 0x01000000,
-    kIOMapReference		= 0x02000000
+    kIOMapReference		= 0x02000000,
+    kIOMapUnique		= 0x04000000
 };
 
 /*! @enum Scale Factors
@@ -197,13 +200,15 @@ enum {
     @constant kNanosecondScale Scale factor for nanosecond based times.
     @constant kMicrosecondScale Scale factor for microsecond based times.
     @constant kMillisecondScale Scale factor for millisecond based times.
+    @constant kTickScale Scale factor for the standard (100Hz) tick.
     @constant kSecondScale Scale factor for second based times. */
 
 enum {
     kNanosecondScale  = 1,
     kMicrosecondScale = 1000,
     kMillisecondScale = 1000 * 1000,
-    kSecondScale      = 1000 * 1000 * 1000
+    kSecondScale      = 1000 * 1000 * 1000,
+    kTickScale        = (kSecondScale / 100)
 };
 
 /* compatibility types */

@@ -37,14 +37,16 @@ enum {
     kPCICantSleep			= 0x00000004
 };
 
-// Constants for use as arguments to registerPMSettingsController
+// Constants for use as arguments to the settings callback PMU/SMU defines
+// with registerPMSettingsController
 enum {
     kIOPMAutoWakeSetting = 1,
     kIOPMAutoPowerOnSetting,
     kIOPMWakeOnRingSetting,
     kIOPMAutoRestartOnPowerLossSetting,
     kIOPMWakeOnLidSetting,
-    kIOPMWakeOnACChangeSetting
+    kIOPMWakeOnACChangeSetting,
+    kIOPMTimeZoneSetting
 };
 typedef int IOPMSystemSettingType;
 
@@ -97,7 +99,6 @@ public:
     virtual IOReturn changePowerStateToPriv ( unsigned long ordinal );
 
     IOReturn registerPMSettingController(IOPMSettingControllerCallback, void *);
-    IOReturn registerPlatformPowerProfiles(OSArray *);
 
 private:
 
@@ -133,6 +134,7 @@ private:
     void adjustPowerState( void );
     void restoreUserSpinDownTimeout ( void );
 
+    IOLock                  *featuresDictLock;  // guards supportedFeatures
     IOPMPowerStateQueue     *pmPowerStateQueue;
     unsigned int user_spindown;       // User's selected disk spindown value
 

@@ -63,6 +63,8 @@
  * Interface types for benefit of parsing media address headers.
  * This list is derived from the SNMP list of ifTypes, currently
  * documented in RFC1573.
+ * The current list of assignments is maintained at:
+ * 	http://www.iana.org/assignments/smi-numbers
  */
 
 #define	IFT_OTHER	0x1		/* none of the following */
@@ -123,7 +125,14 @@
 #define	IFT_FAITH	0x38		/*0xf2*/
 #define	IFT_STF		0x39		/*0xf3*/
 #define	IFT_L2VLAN	0x87		/* Layer 2 Virtual LAN using 802.1Q */
-
+#define IFT_IEEE8023ADLAG 0x88		/* IEEE802.3ad Link Aggregate */
 #define	IFT_IEEE1394	0x90		/* IEEE1394 High Performance SerialBus*/
 
+/*
+ * These are not based on IANA assignments:
+ * Note: IFT_STF has a defined ifType: 0xd7 (215), but we use 0x39.
+ */
+#define	IFT_GIF		0x37		/*0xf0*/
+#define	IFT_FAITH	0x38		/*0xf2*/
+#define	IFT_STF		0x39		/*0xf3*/
 #endif

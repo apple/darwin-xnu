@@ -28,6 +28,8 @@
 
 #include <libsa/types.h>
 
+#include <string.h> /* bcopy */
+
 int kdp_vm_read( caddr_t, caddr_t, unsigned int);
 int kdp_vm_write( caddr_t, caddr_t, unsigned int);
 
@@ -41,7 +43,7 @@ int kdp_vm_write( caddr_t, caddr_t, unsigned int);
 #endif
 
 static kdp_dispatch_t
-    dispatch_table[KDP_REATTACH - KDP_CONNECT +1] =
+    dispatch_table[KDP_HOSTREBOOT - KDP_CONNECT +1] =
     {
 /* 0 */	kdp_connect,
 /* 1 */	kdp_disconnect,
@@ -61,7 +63,8 @@ static kdp_dispatch_t
 /* F */ kdp_breakpoint_set,
 /*10 */ kdp_breakpoint_remove,
 /*11 */	kdp_regions,
-/*12 */ kdp_reattach
+/*12 */ kdp_reattach,
+/*13 */ kdp_reboot
     };
     
 kdp_glob_t	kdp;
@@ -118,7 +121,7 @@ kdp_packet(
     }
     
     req = rd->hdr.request;
-    if ((req < KDP_CONNECT) || (req > KDP_REATTACH)) {
+    if ((req < KDP_CONNECT) || (req > KDP_HOSTREBOOT)) {
 	printf("kdp_packet bad request %x len %d seq %x key %x\n",
 	    rd->hdr.request, rd->hdr.len, rd->hdr.seq, rd->hdr.key);
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -61,26 +61,66 @@
 #define	_MACHTYPES_H_
 
 #ifndef __ASSEMBLER__
+#include <ppc/_types.h>
 #include <sys/cdefs.h>
 /*
  * Basic integral types.  Omit the typedef if
  * not possible for a machine/compiler combination.
  */
+#ifndef _INT8_T
+#define _INT8_T
 typedef	__signed char		int8_t;
+#endif
 typedef	unsigned char		u_int8_t;
+#ifndef _INT16_T
+#define _INT16_T
 typedef	short			int16_t;
+#endif
 typedef	unsigned short		u_int16_t;
+#ifndef _INT32_T
+#define _INT32_T
 typedef	int			int32_t;
+#endif
 typedef	unsigned int		u_int32_t;
+#ifndef _INT64_T
+#define _INT64_T
 typedef	long long		int64_t;
+#endif
 typedef	unsigned long long	u_int64_t;
 
+#if defined(__ppc64__)
+typedef int64_t			register_t;
+#else
 typedef int32_t			register_t;
+#endif
 
-typedef long int		intptr_t;
-typedef unsigned long int	uintptr_t;
+#ifndef _INTPTR_T
+#define _INTPTR_T
+typedef __darwin_intptr_t	intptr_t;
+#endif
+#ifndef _UINTPTR_T
+#define _UINTPTR_T
+typedef unsigned long		uintptr_t;
+#endif
 
+/* with LP64 support pointers and longs from user address space may vary */
+/* in size depending on the type of process (currently 32 or 64-bit, but */
+/* may change in the future).  These types are used for  reserving the largest */
+/* possible size. */
+// LP64todo - typedef mach_vm_address_t	user_addr_t;	/* varying length pointers from user space */ 
+// LP64todo - typedef mach_vm_size_t		user_size_t;	/* varying length values from user space (unsigned) */
+typedef u_int64_t	user_addr_t;	
+typedef u_int64_t	user_size_t;	
+typedef int64_t		user_ssize_t;	
+typedef int64_t		user_long_t;
+typedef u_int64_t	user_ulong_t;
+typedef int64_t		user_time_t;
+#define USER_ADDR_NULL	((user_addr_t) 0)
+#define CAST_USER_ADDR_T(a_ptr)   ((user_addr_t)((uintptr_t)(a_ptr)))
+
+#ifndef __offsetof
 #define __offsetof(type, field) ((size_t)(&((type *)0)->field))
+#endif
 
 #endif /* __ASSEMBLER__ */
 #endif	/* _MACHTYPES_H_ */

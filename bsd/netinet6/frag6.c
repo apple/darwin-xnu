@@ -42,6 +42,7 @@
 #include <sys/kernel.h>
 #include <sys/syslog.h>
 #include <kern/queue.h>
+#include <kern/locks.h>
 
 #include <net/if.h>
 #include <net/route.h>
@@ -61,21 +62,23 @@
  */
 #define IN6_IFSTAT_STRICT
 
-static void frag6_enq __P((struct ip6asfrag *, struct ip6asfrag *));
-static void frag6_deq __P((struct ip6asfrag *));
-static void frag6_insque __P((struct ip6q *, struct ip6q *));
-static void frag6_remque __P((struct ip6q *));
-static void frag6_freef __P((struct ip6q *));
+static void frag6_enq(struct ip6asfrag *, struct ip6asfrag *);
+static void frag6_deq(struct ip6asfrag *);
+static void frag6_insque(struct ip6q *, struct ip6q *);
+static void frag6_remque(struct ip6q *);
+static void frag6_freef(struct ip6q *);
 
 /* XXX we eventually need splreass6, or some real semaphore */
 int frag6_doing_reass;
 u_int frag6_nfragpackets;
+static u_int frag6_nfrags;
 struct	ip6q ip6q;	/* ip6 reassemble queue */
 
 #ifndef __APPLE__
 MALLOC_DEFINE(M_FTABLE, "fragment", "fragment reassembly header");
 #endif
 
+extern lck_mtx_t *inet6_domain_mutex;
 /*
  * Initialise reassembly queue and fragment identifier.
  */
@@ -85,6 +88,7 @@ frag6_init()
 	struct timeval tv;
 
 	ip6_maxfragpackets = nmbclusters / 32;
+	ip6_maxfrags = nmbclusters / 4;
 
 	/*
 	 * in many cases, random() here does NOT return random number
@@ -126,6 +130,8 @@ frag6_init()
  */
 /*
  * Fragment input
+ * NOTE: this function is called with the inet6_domain_mutex held from ip6_input.
+ * 	 inet6_domain_mutex is protecting he frag6 queue manipulation.
  */
 int
 frag6_input(mp, offp)
@@ -148,7 +154,7 @@ frag6_input(mp, offp)
 
 	ip6 = mtod(m, struct ip6_hdr *);
 #ifndef PULLDOWN_TEST
-	IP6_EXTHDR_CHECK(m, offset, sizeof(struct ip6_frag), IPPROTO_DONE);
+	IP6_EXTHDR_CHECK(m, offset, sizeof(struct ip6_frag), return IPPROTO_DONE);
 	ip6f = (struct ip6_frag *)((caddr_t)ip6 + offset);
 #else
 	IP6_EXTHDR_GET(ip6f, struct ip6_frag *, m, offset, sizeof(*ip6f));
@@ -211,6 +217,16 @@ frag6_input(mp, offp)
 
 	frag6_doing_reass = 1;
 
+	/*
+	 * Enforce upper bound on number of fragments.
+	 * If maxfrag is 0, never accept fragments.
+	 * If maxfrag is -1, accept all fragments without limitation.
+	 */
+	if (ip6_maxfrags < 0)
+		;
+	else if (frag6_nfrags >= (u_int)ip6_maxfrags)
+		goto dropfrag;
+
 	for (q6 = ip6q.ip6q_next; q6 != &ip6q; q6 = q6->ip6q_next)
 		if (ip6f->ip6f_ident == q6->ip6q_ident &&
 		    IN6_ARE_ADDR_EQUAL(&ip6->ip6_src, &q6->ip6q_src) &&
@@ -253,6 +269,8 @@ frag6_input(mp, offp)
 		q6->ip6q_src	= ip6->ip6_src;
 		q6->ip6q_dst	= ip6->ip6_dst;
 		q6->ip6q_unfrglen = -1;	/* The 1st fragment has not arrived. */
+
+		q6->ip6q_nfrag	= 0;
 	}
 
 	/*
@@ -431,6 +449,8 @@ insert:
 	 * the most recently active fragmented packet.
 	 */
 	frag6_enq(ip6af, af6->ip6af_up);
+	frag6_nfrags++;
+	q6->ip6q_nfrag++;
 #if 0 /* xxx */
 	if (q6 != ip6q.ip6q_next) {
 		frag6_remque(q6);
@@ -493,6 +513,7 @@ insert:
 		/* this comes with no copy if the boundary is on cluster */
 		if ((t = m_split(m, offset, M_DONTWAIT)) == NULL) {
 			frag6_remque(q6);
+			frag6_nfrags -= q6->ip6q_nfrag;
 			FREE(q6, M_FTABLE);
 			frag6_nfragpackets--;
 			goto dropfrag;
@@ -510,6 +531,7 @@ insert:
 	}
 
 	frag6_remque(q6);
+	frag6_nfrags -= q6->ip6q_nfrag;
 	FREE(q6, M_FTABLE);
 	frag6_nfragpackets--;
 
@@ -571,7 +593,6 @@ frag6_freef(q6)
 			/* restoure source and destination addresses */
 			ip6->ip6_src = q6->ip6q_src;
 			ip6->ip6_dst = q6->ip6q_dst;
-
 			icmp6_error(m, ICMP6_TIME_EXCEEDED,
 				    ICMP6_TIME_EXCEED_REASSEMBLY, 0);
 		} else
@@ -580,6 +601,7 @@ frag6_freef(q6)
 
 	}
 	frag6_remque(q6);
+	frag6_nfrags -= q6->ip6q_nfrag;
 	FREE(q6, M_FTABLE);
 	frag6_nfragpackets--;
 }
@@ -636,7 +658,7 @@ void
 frag6_slowtimo()
 {
 	struct ip6q *q6;
-	int s = splnet();
+	lck_mtx_lock(inet6_domain_mutex);
 
 	frag6_doing_reass = 1;
 	q6 = ip6q.ip6q_next;
@@ -679,7 +701,7 @@ frag6_slowtimo()
 	}
 #endif
 
-	splx(s);
+	lck_mtx_unlock(inet6_domain_mutex);
 }
 
 /*
@@ -690,9 +712,11 @@ frag6_drain()
 {
 	if (frag6_doing_reass)
 		return;
+	lck_mtx_lock(inet6_domain_mutex);
 	while (ip6q.ip6q_next != &ip6q) {
 		ip6stat.ip6s_fragdropped++;
 		/* XXX in6_ifstat_inc(ifp, ifs6_reass_fail) */
 		frag6_freef(ip6q.ip6q_next);
 	}
+	lck_mtx_unlock(inet6_domain_mutex);
 }

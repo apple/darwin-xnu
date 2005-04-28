@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2002-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -26,9 +26,7 @@
 
 #ifdef KERNEL
 #ifdef __APPLE_API_PRIVATE
-#include <sys/namei.h>
 #include <sys/vnode.h>
-#include <sys/lock.h>
 
 #include <hfs/hfs_format.h>
 
@@ -71,22 +69,24 @@ struct cat_desc {
 struct cat_attr {
 	cnid_t		ca_fileid;	/* inode number (for stat) normally == cnid */
 	mode_t		ca_mode;	/* file access mode and type (16 bits) */
-	nlink_t		ca_nlink;	/* file link count (16 bit integer) */
+	u_int16_t	ca_recflags;	/* catalog record flags (16 bit integer) */
+	u_int32_t	ca_nlink;	/* file link count */
 	uid_t		ca_uid;		/* file owner */
 	gid_t		ca_gid;		/* file group */
 	dev_t		ca_rdev;	/* device a special file represents */
 	time_t		ca_atime;	/* last access time */
+	time_t		ca_atimeondisk;	/* access time value on disk */
 	time_t		ca_mtime;	/* last data modification time */
-	int32_t		ca_mtime_nsec;	/* last data modification time nanosec */
 	time_t		ca_ctime;	/* last file status change */
 	time_t		ca_itime;	/* file initialization time */
 	time_t		ca_btime;	/* last backup time */
-	u_long		ca_flags;	/* status flags (chflags) */
+	u_int32_t	ca_flags;	/* status flags (chflags) */
 	union {
 		u_int32_t  cau_blocks;	/* total file blocks used (rsrc + data) */
 		u_int32_t  cau_entries;	/* total directory entries (valence) */
 	} ca_union;
 	u_int8_t 	ca_finderinfo[32]; /* Opaque Finder information */
+	u_int32_t	ca_attrblks;    /* cached count of attribute data blocks */
 };
 /* Aliases for common fields */
 #define	ca_blocks	ca_union.cau_blocks
@@ -110,6 +110,26 @@ struct cat_fork {
 
 #define cf_clump	cf_union.cfu_clump
 #define cf_bytesread	cf_union.cfu_bytesread
+
+
+/*
+ * Directory Hint
+ * Used to hold state across directory enumerations.
+ *
+ */
+struct directoryhint {
+	SLIST_ENTRY(directoryhint) dh_link; /* chain */
+	int     dh_index;                   /* index into directory (zero relative) */
+	u_int32_t  dh_time;
+	struct  cat_desc  dh_desc;          /* entry's descriptor */
+};
+typedef struct directoryhint directoryhint_t;
+
+#define HFS_MAXDIRHINTS 32
+#define HFS_DIRHINT_TTL 45
+
+#define HFS_INDEX_MASK  0x03ffffff
+#define HFS_INDEX_BITS  26
 
 
 /*
@@ -160,6 +180,26 @@ typedef	struct cat_cookie_t {
 	char	opaque[24];
 } cat_cookie_t;
 
+/* Universal catalog key */
+union CatalogKey {
+	HFSCatalogKey      hfs;
+	HFSPlusCatalogKey  hfsPlus;
+};
+typedef union CatalogKey  CatalogKey;
+
+/* Universal catalog data record */
+union CatalogRecord {
+	int16_t               recordType;
+	HFSCatalogFolder      hfsFolder;
+	HFSCatalogFile        hfsFile;
+	HFSCatalogThread      hfsThread;
+	HFSPlusCatalogFolder  hfsPlusFolder;
+	HFSPlusCatalogFile    hfsPlusFile;
+	HFSPlusCatalogThread  hfsPlusThread;
+};
+typedef union CatalogRecord  CatalogRecord;
+
+
 /*
  * Catalog Interface
  *
@@ -186,7 +226,8 @@ extern int cat_lookup (	struct hfsmount *hfsmp,
 			int wantrsrc,
 			struct cat_desc *outdescp,
 			struct cat_attr *attrp,
-			struct cat_fork *forkp);
+			struct cat_fork *forkp,
+    			cnid_t          *desc_cnid);
 
 extern int cat_idlookup (struct hfsmount *hfsmp,
 			cnid_t cnid,
@@ -194,10 +235,13 @@ extern int cat_idlookup (struct hfsmount *hfsmp,
 			struct cat_attr *attrp,
 			struct cat_fork *forkp);
 
+extern int cat_findname (struct hfsmount *hfsmp,
+                         cnid_t cnid,
+                         struct cat_desc *outdescp);
+
 extern int cat_getentriesattr(
 			struct hfsmount *hfsmp,
-			struct cat_desc *prevdesc,
-			int index,
+			directoryhint_t *dirhint,
 			struct cat_entrylist *ce_list);
 
 extern int cat_rename (	struct hfsmount * hfsmp,
@@ -214,12 +258,11 @@ extern int cat_update (	struct hfsmount *hfsmp,
 
 extern int cat_getdirentries(
 			struct hfsmount *hfsmp,
-			struct cat_desc *descp,
 			int entrycnt,
-			struct uio *uio,
-			int *eofflag,
-			u_long *cookies,
-			int ncookies);
+			directoryhint_t *dirhint,
+			uio_t uio,
+			int extended,
+			int * items);
 
 extern int cat_insertfilethread (
 			struct hfsmount *hfsmp,
@@ -239,6 +282,38 @@ extern void cat_postflight(
 extern int cat_binarykeycompare(
 			HFSPlusCatalogKey *searchKey,
 			HFSPlusCatalogKey *trialKey);
+
+extern int CompareCatalogKeys(
+			HFSCatalogKey *searchKey,
+			HFSCatalogKey *trialKey);
+
+extern int CompareExtendedCatalogKeys(
+			HFSPlusCatalogKey *searchKey,
+			HFSPlusCatalogKey *trialKey);
+
+extern void cat_convertattr(
+			struct hfsmount *hfsmp,
+			CatalogRecord * recp,
+			struct cat_attr *attrp,
+			struct cat_fork *datafp,
+			struct cat_fork *rsrcfp);
+
+extern int cat_convertkey(
+			struct hfsmount *hfsmp,
+			CatalogKey *key,
+			CatalogRecord * recp,
+			struct cat_desc *descp);
+
+extern int resolvelink(
+			struct hfsmount *hfsmp,
+			u_long linkref,
+			struct HFSPlusCatalogFile *recp);
+
+extern int cat_getkeyplusattr(
+			struct hfsmount *hfsmp, 
+			cnid_t cnid, 
+			CatalogKey *key, 
+			struct cat_attr *attrp);
 
 #endif /* __APPLE_API_PRIVATE */
 #endif /* KERNEL */

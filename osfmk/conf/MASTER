@@ -123,36 +123,8 @@ options		KDEBUG		# kernel tracing	# <kdebug>
 # MACH_COUNTERS enables code that handles various counters in the system.
 # 
 options		MACH_COUNTERS	#		# <debug>
-#
-# ETAP	The Event Trace Analysis Package enables user-level tasks to monitor
-#	and analyze kernel events.  ETAP supports three modes of tracing:
-#
-#		1. General event tracing:	ETAP_EVENT_MONITOR
-#		2. Monitored lock tracing:	ETAP_LOCK_MONITOR
-#		3. Cumulative lock tracing:	ETAP_LOCK_ACCUMULATE
-#
-#	Each of these trace modes are mutually exclusive.
-#
-#	CONFIGURING ETAP:  To enable the trace package, the ETAP switch
-#	along with *ONE* ETAP trace mode is selected.  The selected ETAP
-#	mode determines the level of instrumentation built into the kernel.
-#	Mode 1 configures event probes through-out the system.	Modes 2 & 3
-#	add instumentation to the kernel lock mechanisms.
-#
-#	ETAP (and all its trace modes) is mutually exclusive with the
-#	MACH_LDEBUG option.  It is assumed that general lock debugging is
-#	completed before gathering event information.
-#
-#	ETAP functionality is normally only enabled for event profiling and
-#	performance studies.  Event tracing should not be enabled for release
-#	configurations, as the code size and performance impact of these
-#	options are significant.
-#
-#
-#options	ETAP			# ETAP enable
-#options	ETAP_EVENT_MONITOR	# Monitor events
-#options	ETAP_LOCK_MONITOR	# Monitor lock behavior
-#options	ETAP_LOCK_ACCUMULATE	# Collect cumulative lock data
+
+options		UPL_DEBUG	# 		# <debug>
 
 ##########################################################
 #

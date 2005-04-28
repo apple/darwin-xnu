@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -39,12 +39,10 @@
 
 #include <kern/clock.h>
 #include <kern/spl.h>
-#include <kern/ast.h>
 #include <kern/counters.h>
 #include <kern/queue.h>
 #include <kern/zalloc.h>
 #include <kern/thread.h>
-#include <kern/thread_swap.h>
 #include <kern/task.h>
 #include <kern/sched_prim.h>
 #include <kern/misc_protos.h>
@@ -62,6 +60,9 @@
 #ifdef __ppc__
 #include <ppc/mappings.h>
 #endif
+#ifdef __i386
+#include <i386/pmap.h>
+#endif
 #include <IOKit/IOTypes.h>
 
 #define EXTERN
@@ -72,8 +73,6 @@
  */
 
 extern void iokit_add_reference( io_object_t obj );
-
-extern void iokit_remove_reference( io_object_t obj );
 
 extern ipc_port_t iokit_port_for_object( io_object_t obj,
 			ipc_kobject_type_t type );
@@ -319,6 +318,12 @@ iokit_make_send_right( task_t task, io_object_t obj, ipc_kobject_type_t type )
     return( name );
 }
 
+EXTERN kern_return_t
+iokit_mod_send_right( task_t task, mach_port_name_t name, mach_port_delta_t delta )
+{
+    return (mach_port_mod_refs( task->itk_space, name, MACH_PORT_RIGHT_SEND, delta ));
+}
+
 /*
  * Handle the No-More_Senders notification generated from a device port destroy.
  * Since there are no longer any tasks which hold a send right to this device
@@ -404,7 +409,7 @@ unsigned int IODefaultCacheBits(addr64_t pa)
 	// If no physical, just hard code attributes
         flags = VM_WIMG_IO;
 #else
-    extern vm_offset_t	avail_end;
+    extern pmap_paddr_t	avail_end;
 
     if (pa < avail_end)
 	flags = VM_WIMG_COPYBACK;

@@ -104,7 +104,8 @@ ENTRY(atomic_switch_trap, TAG_NO_FRAME_USED)
 
 .L_CallPseudoKernel:
 
-			mfsprg	r2,0								; Get the per_proc
+			mfsprg	r2,1								; Get the current activation
+			lwz		r2,ACT_PER_PROC(r2)					; Get the per_proc block
 			rlwinm	r6,r26,0,0,19						; Start of page is bttd
 			lwz		r7,ACT_MACT_SPF(r13)				; Get special flags 
 			lwz		r1,BTTD_INTERRUPT_VECTOR(r6)		; Get interrupt vector
@@ -213,7 +214,8 @@ ENTRY(atomic_switch_trap, TAG_NO_FRAME_USED)
 			stw		r1,savecr(r4)						; Update CR
 
 .L_ExitFromPreemptiveThread:
-			mfsprg	r3,0								; Get the per_proc
+			mfsprg	r3,1								; Get the current activation
+			lwz		r3,ACT_PER_PROC(r3)					; Get the per_proc block
 			lwz		r2,savesrr1+4(r4)					; Get current MSR	
 			lwz		r1,BEDA_SRR1(r26)					; Get new MSR
 			stw		r7,ACT_MACT_SPF(r13)				; Update special flags

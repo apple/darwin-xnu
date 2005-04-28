@@ -26,6 +26,8 @@ EXPORT_MI_LIST	= mach.h
 
 EXPORT_MI_DIR = libsa/mach
 
+INSTALL_KF_MI_LIST = 
+
 include $(MakeInc_rule)
 include $(MakeInc_dir)
 

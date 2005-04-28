@@ -28,8 +28,6 @@
 
         .text
         .align	2
-        .globl	EXT(mach_absolute_time_32)
-        .globl	EXT(mach_absolute_time_64)
 
 
 // *********************************************
@@ -45,21 +43,33 @@ mach_absolute_time_32:
         beqlr+
         b		1b
         
-        COMMPAGE_DESCRIPTOR(mach_absolute_time_32,_COMM_PAGE_ABSOLUTE_TIME,0,k64Bit,0)
+	COMMPAGE_DESCRIPTOR(mach_absolute_time_32,_COMM_PAGE_ABSOLUTE_TIME,0,k64Bit,kCommPage32)
         
         
 // *********************************************
 // * M A C H _ A B S O L U T E _ T I M E _ 6 4 *
 // *********************************************
 //
-// Why bother to special case for 64-bit?  Because the "mftb" variants
-// are 10 cycles each, and they are serialized. 
+// This is the version that is called in 32-bit mode, so we return the TBR in r3 and r4.
 
 mach_absolute_time_64:
         mftb	r4
         srdi	r3,r4,32
         blr
 
-        COMMPAGE_DESCRIPTOR(mach_absolute_time_64,_COMM_PAGE_ABSOLUTE_TIME,k64Bit,0,0)
+	COMMPAGE_DESCRIPTOR(mach_absolute_time_64,_COMM_PAGE_ABSOLUTE_TIME,k64Bit,0,kCommPage32)
+        
+        
+// *************************************************
+// * M A C H _ A B S O L U T E _ T I M E _ L P 6 4 *
+// *************************************************
+//
+// This is the version that is called in 64-bit mode, so we return the TBR in r3.
+
+mach_absolute_time_lp64:
+        mftb	r3
+        blr
+
+	COMMPAGE_DESCRIPTOR(mach_absolute_time_lp64,_COMM_PAGE_ABSOLUTE_TIME,k64Bit,0,kCommPage64)
 
         

@@ -57,7 +57,7 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/vnode.h>
+#include <sys/vnode_internal.h>
 #include <sys/malloc.h>
 #include <sys/proc.h>
 #include <sys/quota.h>
@@ -72,7 +72,6 @@
 LIST_HEAD(ihashhead, inode) *ihashtbl;
 u_long	ihash;		/* size of hash table - 1 */
 #define	INOHASH(device, inum)	(&ihashtbl[((device) + (inum)) & ihash])
-struct slock ufs_ihash_slock;
 
 /*
  * Initialize inode hash table.
@@ -82,7 +81,6 @@ ufs_ihashinit()
 {
 
 	ihashtbl = hashinit(desiredvnodes, M_UFSMNT, &ihash);
-	simple_lock_init(&ufs_ihash_slock);
 }
 
 /*
@@ -96,12 +94,9 @@ ufs_ihashlookup(dev, inum)
 {
 	struct inode *ip;
 
-	simple_lock(&ufs_ihash_slock);
 	for (ip = INOHASH(dev, inum)->lh_first; ip; ip = ip->i_hash.le_next)
 		if (inum == ip->i_number && dev == ip->i_dev)
 			break;
-	simple_unlock(&ufs_ihash_slock);
-
 	if (ip)
 		return (ITOV(ip));
 	return (NULLVP);
@@ -119,19 +114,18 @@ ufs_ihashget(dev, inum)
 	struct proc *p = current_proc();	/* XXX */
 	struct inode *ip;
 	struct vnode *vp;
+	uint32_t vid;
 
 loop:
-	simple_lock(&ufs_ihash_slock);
 	for (ip = INOHASH(dev, inum)->lh_first; ip; ip = ip->i_hash.le_next) {
 		if (inum == ip->i_number && dev == ip->i_dev) {
-			vp = ITOV(ip);
+
 			if (ISSET(ip->i_flag, IN_ALLOC)) {
 				/*
 				 * inode is being created. Wait for it
 				 * to finish creation
 				 */
 				SET(ip->i_flag, IN_WALLOC);
-				simple_unlock(&ufs_ihash_slock);
 				(void)tsleep((caddr_t)ip, PINOD, "ufs_ihashget", 0);
 				goto loop;
 			}
@@ -143,18 +137,32 @@ loop:
 				 * error
 				 */
 				SET(ip->i_flag, IN_WTRANSIT);
-				simple_unlock(&ufs_ihash_slock);
 				(void)tsleep((caddr_t)ip, PINOD, "ufs_ihashget1", 0);
 				goto loop;
 			}
-			simple_lock(&vp->v_interlock);
-			simple_unlock(&ufs_ihash_slock);
-			if (vget(vp, LK_EXCLUSIVE | LK_INTERLOCK, p))
-				goto loop;
+			vp = ITOV(ip);
+			/*
+			 * the vid needs to be grabbed before we drop
+			 * lock protecting the hash
+			 */
+			vid = vnode_vid(vp);
+
+			/*
+			 * we currently depend on running under the FS funnel
+			 * when we do proper locking and advertise ourselves
+			 * as thread safe, we'll need a lock to protect the
+			 * hash lookup... this is where we would drop it
+			 */
+			if (vnode_getwithvid(vp, vid)) {
+			        /*
+				 * If vnode is being reclaimed, or has
+				 * already changed identity, no need to wait
+				 */
+			        return (NULL);
+			}
 			return (vp);
 		}
 	}
-	simple_unlock(&ufs_ihash_slock);
 	return (NULL);
 }
 
@@ -166,13 +174,10 @@ void
 ufs_ihashins(ip)
 	struct inode *ip;
 {
-	struct proc *p = current_proc();
 	struct ihashhead *ipp;
 
-	simple_lock(&ufs_ihash_slock);
 	ipp = INOHASH(ip->i_dev, ip->i_number);
 	LIST_INSERT_HEAD(ipp, ip, i_hash);
-	simple_unlock(&ufs_ihash_slock);
 }
 
 /*
@@ -182,13 +187,9 @@ void
 ufs_ihashrem(ip)
 	struct inode *ip;
 {
-	struct inode *iq;
-
-	simple_lock(&ufs_ihash_slock);
 	LIST_REMOVE(ip, i_hash);
 #if DIAGNOSTIC
 	ip->i_hash.le_next = NULL;
 	ip->i_hash.le_prev = NULL;
 #endif
-	simple_unlock(&ufs_ihash_slock);
 }

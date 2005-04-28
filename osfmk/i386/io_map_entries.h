@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -22,17 +22,24 @@
 /*
  * @OSF_COPYRIGHT@
  */
+#ifdef	KERNEL_PRIVATE
 
 #ifndef _I386_IO_MAP_ENTRIES
 #define _I386_IO_MAP_ENTRIES
 
+#include <sys/cdefs.h>
 #include <sys/appleapiopts.h>
 
 #ifdef	__APPLE_API_PRIVATE
+__BEGIN_DECLS
 extern vm_offset_t	io_map(
 				vm_offset_t		phys_addr,
 				vm_size_t		size);
+extern vm_offset_t io_map_spec(vm_offset_t phys_addr, vm_size_t size);
+__END_DECLS
 #endif	/* __APPLE_API_PRIVATE */
 
 #endif  /* _I386_IO_MAP_ENTRIES */
+
+#endif	/* KERNEL_PRIVATE */
 

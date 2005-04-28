@@ -40,6 +40,7 @@
 #include <sys/mbuf.h>
 #include <sys/ioctl.h>
 #include <sys/malloc.h>
+#include <kern/locks.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
 
@@ -81,7 +82,7 @@ void asp_init();
 void asp_ack_reply();
 void asp_nak_reply();
 void asp_clock();
-void asp_clock_funnel(void *);
+void asp_clock_locked(void *);
 int  asp_open();
 int  asp_close();
 int  asp_wput();
@@ -97,13 +98,14 @@ StaticProc void asp_timout();
 StaticProc void asp_untimout();
 StaticProc void asp_hangup();
 StaticProc void asp_send_tickle();
-StaticProc void asp_send_tickle_funnel(void *);
+StaticProc void asp_send_tickle_locked(void *);
 StaticProc void asp_accept();
 StaticProc int  asp_send_req();
 
 extern at_ifaddr_t *ifID_home;
 extern int atp_pidM[];
 extern gref_t *atp_inputQ[];
+extern lck_mtx_t *atalk_mutex;
 gbuf_t *scb_resource_m = 0;
 unsigned char asp_inpC[256];
 asp_scb_t *asp_scbQ[256];
@@ -265,7 +267,7 @@ asp_close(gref)
 	 */
 	scb->tmo_cnt = 0;
 	asp_untimout(asp_hangup, scb);
-	untimeout(asp_send_tickle_funnel, (void *)scb); /* added for 2225395 */
+	untimeout(asp_send_tickle_locked, (void *)scb); /* added for 2225395 */
 
 	/*
 	 * free the asp session control block
@@ -493,7 +495,7 @@ int asp_wput(gref, m)
 
 	case ASPIOC_GetLocEntity:
 		if ((gbuf_cont(mioc) == 0) || (scb->atp_state == 0)) {
-			asp_iocnak(gref, mioc, EPROTO);
+			asp_iocnak(gref, mioc, EPROTOTYPE);
 			return 0;
 		}
 		*(at_inet_t *)gbuf_rptr(gbuf_cont(mioc)) = scb->loc_addr;
@@ -501,7 +503,7 @@ int asp_wput(gref, m)
 
 	case ASPIOC_GetRemEntity:
 		if ((gbuf_cont(mioc) == 0) || (scb->atp_state == 0)) {
-			asp_iocnak(gref, mioc, EPROTO);
+			asp_iocnak(gref, mioc, EPROTOTYPE);
 			return 0;
 		}
 		*(at_inet_t *)gbuf_rptr(gbuf_cont(mioc)) = scb->rem_addr;
@@ -509,7 +511,7 @@ int asp_wput(gref, m)
 
 	case ASPIOC_GetSession:
 		if ((mdata = gbuf_cont(mioc)) == 0) {
-			asp_iocnak(gref, mioc, EPROTO);
+			asp_iocnak(gref, mioc, EPROTOTYPE);
 			return 0;
 		}
 		addr = (at_inet_t *)gbuf_rptr(mdata);
@@ -518,11 +520,11 @@ int asp_wput(gref, m)
 		server_scb = asp_scbQ[addr->socket];
 /*### LD 10/28/97: changed to make sure we're not accessing a null server_scb */
 		if (server_scb == 0) {
-			asp_iocnak(gref, mioc, EPROTO);
+			asp_iocnak(gref, mioc, EPROTOTYPE);
 			return 0;
 		}
 		if (server_scb->sess_ioc == 0) {
-			asp_iocnak(gref, mioc, EPROTO);
+			asp_iocnak(gref, mioc, EPROTOTYPE);
 			return 0;
 		}
 
@@ -774,15 +776,15 @@ asp_send_req(gref, mioc, dest, retry, awp, xo, state, bitmap)
 }
 
 /*
- * send tickle routine - funnelled version
+ * send tickle routine - locked version
  */
 StaticProc void
-asp_send_tickle_funnel(scb)
+asp_send_tickle_locked(scb)
 	void *scb;
 {
-        thread_funnel_set(network_flock, TRUE);
+	atalk_lock();
 	asp_send_tickle((asp_scb_t *)scb);
-        thread_funnel_set(network_flock, FALSE);
+	atalk_unlock();
 }
 
 
@@ -810,7 +812,7 @@ asp_send_tickle(scb)
 		dPrintf(D_M_ASP, D_L_WARNING,
 		("asp_send_tickle: ENOBUFS 0, loc=%d, rem=%d\n",
 			scb->loc_addr.socket,scb->rem_addr.socket));
-		timeout(asp_send_tickle_funnel, (void *)scb, 10);
+		timeout(asp_send_tickle_locked, (void *)scb, 10);
 		return;
 	}
 	gbuf_wset(mioc,sizeof(ioc_t));
@@ -832,7 +834,7 @@ asp_send_tickle(scb)
 			("asp_send_tickle: ENOBUFS 1, loc=%d, rem=%d\n",
 			 scb->loc_addr.socket,scb->rem_addr.socket));
 
-		timeout(asp_send_tickle_funnel, (void *)scb, 10);
+		timeout(asp_send_tickle_locked, (void *)scb, 10);
 		return;
 	}
 }
@@ -893,14 +895,14 @@ asp_accept(scb, sess_scb, m)
 } /* asp_accept */
 
 /*
- * timer routine - funneled version
+ * timer routine - locked version
  */
-void asp_clock_funnel(arg)
+void asp_clock_locked(arg)
 	void *arg;
 {
-        thread_funnel_set(network_flock, TRUE);
+	atalk_lock();
 	asp_clock(arg);
-        thread_funnel_set(network_flock, FALSE);
+	atalk_unlock();
 }
 
 /*
@@ -929,7 +931,7 @@ void asp_clock(arg)
 	ATENABLE(s, asptmo_lock);
 
 	if (++scb_tmo_cnt == 0) scb_tmo_cnt++;
-	timeout(asp_clock_funnel, (void *)arg, (1<<SESS_TMO_RES)*TICKS_PER_SEC);
+	timeout(asp_clock_locked, (void *)arg, (1<<SESS_TMO_RES)*TICKS_PER_SEC);
         
 }
 
@@ -1520,7 +1522,7 @@ asp_nak_reply(gref, mioc)
 
 			/* last remaining use of MSG_ERROR */
 			gbuf_set_type(mioc, MSG_ERROR);
-			*gbuf_rptr(mioc) = (u_char)EPROTO;
+			*gbuf_rptr(mioc) = (u_char)EPROTOTYPE;
 			gbuf_wset(mioc, 1);
 			if (gbuf_cont(mioc)) {
 				gbuf_freem(gbuf_cont(mioc));
@@ -1953,9 +1955,9 @@ int ASPputmsg(gref_t *gref, strbuf_t *ctlptr, strbuf_t *datptr, gbuf_t *mreq, in
         bcopy (datptr, &datbuf, sizeof (strbuf_t));
      } else {
         /* being called from user space */
-        if ((err = copyin((caddr_t)ctlptr, (caddr_t)&ctlbuf, sizeof(ctlbuf))) != 0)
+        if ((err = copyin(CAST_USER_ADDR_T(ctlptr), (caddr_t)&ctlbuf, sizeof(ctlbuf))) != 0)
             goto l_err;
-        if ((err = copyin((caddr_t)datptr, (caddr_t)&datbuf, sizeof(datbuf))) != 0)
+        if ((err = copyin(CAST_USER_ADDR_T(datptr), (caddr_t)&datbuf, sizeof(datbuf))) != 0)
             goto l_err;
      }
 
@@ -1975,7 +1977,7 @@ int ASPputmsg(gref_t *gref, strbuf_t *ctlptr, strbuf_t *datptr, gbuf_t *mreq, in
         bcopy (ctlbuf.buf, gbuf_rptr(mioc), ctlbuf.len);
     } else {
         /* being called from user space */
-        if ((err = copyin((caddr_t)ctlbuf.buf, (caddr_t)gbuf_rptr(mioc), ctlbuf.len)) != 0) {
+        if ((err = copyin(CAST_USER_ADDR_T(ctlbuf.buf), (caddr_t)gbuf_rptr(mioc), ctlbuf.len)) != 0) {
             gbuf_freem(mioc);
             goto l_err;
         }
@@ -2028,7 +2030,7 @@ int ASPputmsg(gref_t *gref, strbuf_t *ctlptr, strbuf_t *datptr, gbuf_t *mreq, in
 		remain -= copy_len;
 		if (mreq != NULL)
 			bcopy (dataptr, (gbuf_rptr(mdata) + offset), copy_len);
-		else if ((err = copyin(dataptr, (caddr_t)(gbuf_rptr(mdata) + offset), copy_len)) != 0) {
+		else if ((err = copyin(CAST_USER_ADDR_T(dataptr), (caddr_t)(gbuf_rptr(mdata) + offset), copy_len)) != 0) {
 			gbuf_freem(mioc);
 			goto l_err;
 		}
@@ -2240,7 +2242,8 @@ int ASPgetmsg(gref_t *gref, strbuf_t *ctlptr, strbuf_t *datptr, gbuf_t **mreply,
      */
     while ((mproto = scb->sess_ioc) == 0) {
         scb->get_wait = 1;
-        err = tsleep(&scb->event, PSOCK | PCATCH, "aspgetmsg", 0);
+	   lck_mtx_assert(atalk_mutex, LCK_MTX_ASSERT_OWNED);
+        err = msleep(&scb->event, atalk_mutex, PSOCK | PCATCH, "aspgetmsg", 0);
         if (err != 0) {
             scb->get_wait = 0;
             ATENABLE(s, scb->lock);
@@ -2278,10 +2281,10 @@ int ASPgetmsg(gref_t *gref, strbuf_t *ctlptr, strbuf_t *datptr, gbuf_t **mreply,
         bcopy (datptr, &datbuf, sizeof(datbuf));
     } else {
         /* called from user space */
-        if ((err = copyin((caddr_t)ctlptr,
+        if ((err = copyin(CAST_USER_ADDR_T(ctlptr),
                 (caddr_t)&ctlbuf, sizeof(ctlbuf))) != 0)
             goto l_err;
-        if ((err = copyin((caddr_t)datptr,
+        if ((err = copyin(CAST_USER_ADDR_T(datptr),
                 (caddr_t)&datbuf, sizeof(datbuf))) != 0)
             goto l_err;
     }
@@ -2320,10 +2323,10 @@ int ASPgetmsg(gref_t *gref, strbuf_t *ctlptr, strbuf_t *datptr, gbuf_t **mreply,
     } else {
         /* called from user space */
         if ((err = copyout((caddr_t)gbuf_rptr(mproto),
-                (caddr_t)ctlbuf.buf, ctlbuf.len)) != 0)
+                CAST_USER_ADDR_T(ctlbuf.buf), ctlbuf.len)) != 0)
             goto l_err;
         if ((err = copyout((caddr_t)&ctlbuf,
-                (caddr_t)ctlptr, sizeof(ctlbuf))) != 0)
+                CAST_USER_ADDR_T(ctlptr), sizeof(ctlbuf))) != 0)
             goto l_err;
     }
 
@@ -2341,7 +2344,7 @@ int ASPgetmsg(gref_t *gref, strbuf_t *ctlptr, strbuf_t *datptr, gbuf_t **mreply,
             
             if (mreply == NULL) {
                 /* called from user space */
-                if ((err = copyout((caddr_t)gbuf_rptr(mdata), (caddr_t)&datbuf.buf[sum], len)) != 0)
+                if ((err = copyout((caddr_t)gbuf_rptr(mdata), CAST_USER_ADDR_T(&datbuf.buf[sum]), len)) != 0)
                     goto l_err;
             }
             sum += len;
@@ -2353,7 +2356,7 @@ int ASPgetmsg(gref_t *gref, strbuf_t *ctlptr, strbuf_t *datptr, gbuf_t **mreply,
         bcopy (&datbuf, datptr, sizeof(datbuf));
     } else {
         /* called from user space */
-        if ((err = copyout((caddr_t)&datbuf, (caddr_t)datptr, sizeof(datbuf))) != 0)
+        if ((err = copyout((caddr_t)&datbuf, CAST_USER_ADDR_T(datptr), sizeof(datbuf))) != 0)
             goto l_err;
     }
     

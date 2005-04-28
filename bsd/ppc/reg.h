@@ -26,16 +26,12 @@
 #ifndef _BSD_PPC_REG_H_
 #define _BSD_PPC_REG_H_
 
-#include <sys/appleapiopts.h>
 
-#ifdef	KERNEL_PRIVATE
-#ifdef __APPLE_API_PRIVATE
+#ifdef	BSD_KERNEL_PRIVATE
 
 /* Index into the thread_state */
 #define SP	3
 #define PC 	0
-
-#endif /* __APPLE_API_PRIVATE */
 
 #endif /* KERNEL_PRIVATE */
 

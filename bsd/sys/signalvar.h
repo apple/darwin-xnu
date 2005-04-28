@@ -60,7 +60,7 @@
 
 #include <sys/appleapiopts.h>
 
-#ifdef __APPLE_API_PRIVATE
+#ifdef BSD_KERNEL_PRIVATE
 /*
  * Kernel signal definitions and data structures,
  * not exported to user programs.
@@ -71,8 +71,8 @@
  * (not necessarily resident).
  */
 struct	sigacts {
-	sig_t	ps_sigact[NSIG];	/* disposition of signals */
-	sig_t 	ps_trampact[NSIG];	/* disposition of signals */
+	user_addr_t	ps_sigact[NSIG];	/* disposition of signals */
+	user_addr_t 	ps_trampact[NSIG];	/* disposition of signals */
 	sigset_t ps_catchmask[NSIG];	/* signals to be blocked */
 	sigset_t ps_sigonstack;		/* signals to take on sigstack */
 	sigset_t ps_sigintr;		/* signals that interrupt syscalls */
@@ -81,7 +81,7 @@ struct	sigacts {
 	sigset_t ps_siginfo;		/* signals that want SA_SIGINFO args */
 	sigset_t ps_oldmask;		/* saved mask from before sigpause */
 	int	ps_flags;		/* signal flags, below */
-	struct	sigaltstack ps_sigstk;	/* sp & on stack state variable */
+	struct user_sigaltstack ps_sigstk;	/* sp, length & flags */
 	int	ps_sig;			/* for core dump/debugger XXX */
 	int	ps_code;		/* for core dump/debugger XXX */
 	int	ps_addr;		/* for core dump/debugger XXX */
@@ -93,10 +93,14 @@ struct	sigacts {
 #define	SAS_OLDMASK	0x01		/* need to restore mask before pause */
 #define	SAS_ALTSTACK	0x02		/* have alternate signal stack */
 
-/* additional signal action values, used only temporarily/internally */
-#define	SIG_CATCH	(void (*)())2
-#define	SIG_HOLD	(void (*)())3
-#define	SIG_WAIT	(void (*)())4
+/*
+ * Additional signal action values, used only temporarily/internally; these
+ * values should be non-intersecting with values defined in signal.h, e.g.:
+ * SIG_IGN, SIG_DFL, SIG_ERR, SIG_IGN.
+ */
+#define	KERN_SIG_CATCH	(void (*)(int))2
+#define	KERN_SIG_HOLD	(void (*)(int))3
+#define	KERN_SIG_WAIT	(void (*)(int))4
 
 #define pgsigio(pgid, sig, notused) \
 	{ \
@@ -187,37 +191,47 @@ int sigprop[NSIG + 1] = {
 
 #define	sigcantmask	(sigmask(SIGKILL) | sigmask(SIGSTOP))
 
-#ifdef KERNEL
 /*
  * Machine-independent functions:
  */
-int	coredump __P((struct proc *p));
-void	execsigs __P((struct proc *p, thread_act_t thr_act));
-void	gsignal __P((int pgid, int sig));
-int	issignal __P((struct proc *p));
-int	CURSIG __P((struct proc *p));
-int clear_procsiglist __P((struct proc *p, int bit));
-int clear_procsigmask __P((struct proc *p, int bit));
-int set_procsigmask __P((struct proc *p, int bit));
-void	tty_pgsignal __P((struct pgrp *pgrp, int sig));
-void	postsig __P((int sig));
-void	siginit __P((struct proc *p));
-void	trapsignal __P((struct proc *p, int sig, unsigned code));
-void	pt_setrunnable __P((struct proc *p));
+int	signal_lock(struct proc *);
+int	signal_unlock(struct proc *);
+int	coredump(struct proc *p);
+void	execsigs(struct proc *p, thread_t thread);
+void	gsignal(int pgid, int sig);
+int	issignal(struct proc *p);
+int	CURSIG(struct proc *p);
+int clear_procsiglist(struct proc *p, int bit);
+int clear_procsigmask(struct proc *p, int bit);
+int set_procsigmask(struct proc *p, int bit);
+void	tty_pgsignal(struct pgrp *pgrp, int sig);
+void	postsig(int sig);
+void	siginit(struct proc *p);
+void	trapsignal(struct proc *p, int sig, unsigned code);
+void	pt_setrunnable(struct proc *p);
 
 /*
  * Machine-dependent functions:
  */
-void	sendsig __P((struct proc *, sig_t action, int sig,
-	int returnmask, u_long code));
+void	sendsig(struct proc *, /*sig_t*/ user_addr_t  action, int sig,
+	int returnmask, u_long code);
 
-#ifdef __APPLE_API_UNSTABLE
-void	psignal __P((struct proc *p, int sig));
-void	pgsignal __P((struct pgrp *pgrp, int sig, int checkctty));
-#endif /* __APPLE_API_UNSTABLE */
+void	psignal(struct proc *p, int sig);
+void	pgsignal(struct pgrp *pgrp, int sig, int checkctty);
+void	threadsignal(thread_t sig_actthread, int signum, u_long code);
+int	thread_issignal(proc_t p, thread_t th, sigset_t mask);
+void	psignal_vfork(struct proc *p, task_t new_task, thread_t thr_act,
+		int signum);
+void	psignal_vtalarm(struct proc *);
+void	psignal_xcpu(struct proc *);
+void	psignal_sigprof(struct proc *);
+void	psignal_lock(struct proc *, int, int);
+void	signal_setast(thread_t sig_actthread);
 
-#endif	/* KERNEL */
+/* XXX not really very "inline"... */
+__inline__ void sig_lock_to_exit(struct proc *p);
+__inline__ int sig_try_locked(struct proc *p);
 
-#endif /* __APPLE_API_PRIVATE */
+#endif	/* BSD_KERNEL_PRIVATE */
 
 #endif	/* !_SYS_SIGNALVAR_H_ */

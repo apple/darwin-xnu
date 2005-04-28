@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -18,17 +18,6 @@
  * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
- */
-/*
- * Copyright (c) 2000 Apple Computer, Inc.  All rights reserved.
- *
- * HISTORY
- *
- * 10 October 2000 (debo)
- *  Created.
- *
- * 30 November 2000 (debo)
- *	Final resolution of review feedback.
  */
 
 #ifndef _MACH_TASK_POLICY_H_
@@ -126,7 +115,7 @@ struct task_category_policy {
 typedef struct task_category_policy		task_category_policy_data_t;
 typedef struct task_category_policy		*task_category_policy_t;
 
-#define TASK_CATEGORY_POLICY_COUNT	\
-	(sizeof (task_category_policy_data_t) / sizeof (integer_t))
+#define TASK_CATEGORY_POLICY_COUNT	((mach_msg_type_number_t) \
+	(sizeof (task_category_policy_data_t) / sizeof (integer_t)))
 
 #endif	/* _MACH_TASK_POLICY_H_ */

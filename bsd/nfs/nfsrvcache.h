@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -77,7 +77,7 @@ struct nfsrvcache {
 	LIST_ENTRY(nfsrvcache) rc_hash;		/* Hash chain */
 	u_long	rc_xid;				/* rpc id number */
 	union {
-		struct mbuf *ru_repmb;		/* Reply mbuf list OR */
+		mbuf_t ru_repmb;		/* Reply mbuf list OR */
 		int ru_repstat;			/* Reply status */
 	} rc_un;
 	union nethostaddr rc_haddr;		/* Host address */
@@ -107,7 +107,6 @@ struct nfsrvcache {
 #define	RC_WANTED	0x02
 #define	RC_REPSTATUS	0x04
 #define	RC_REPMBUF	0x08
-#define	RC_NQNFS	0x10
 #define	RC_INETADDR	0x20
 #define	RC_NAM		0x40
 

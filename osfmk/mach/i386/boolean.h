@@ -22,54 +22,6 @@
 /*
  * @OSF_COPYRIGHT@
  */
-/*
- * HISTORY
- * 
- * Revision 1.1.1.1  1998/09/22 21:05:31  wsanchez
- * Import of Mac OS X kernel (~semeria)
- *
- * Revision 1.1.1.1  1998/03/07 02:25:47  wsanchez
- * Import of OSF Mach kernel (~mburg)
- *
- * Revision 1.2.6.1  1994/09/23  02:36:44  ezf
- * 	change marker to not FREE
- * 	[1994/09/22  21:39:49  ezf]
- *
- * Revision 1.2.2.2  1993/06/09  02:40:19  gm
- * 	Added to OSF/1 R1.3 from NMK15.0.
- * 	[1993/06/02  21:16:03  jeffc]
- * 
- * Revision 1.2  1993/04/19  16:33:37  devrcs
- * 	ansi C conformance changes
- * 	[1993/02/02  18:55:53  david]
- * 
- * Revision 1.1  1992/09/30  02:30:40  robert
- * 	Initial revision
- * 
- * $EndLog$
- */
-/* CMU_HIST */
-/*
- * Revision 2.4  91/05/14  16:51:56  mrt
- * 	Correcting copyright
- * 
- * Revision 2.3  91/02/05  17:32:04  mrt
- * 	Changed to new Mach copyright
- * 	[91/02/01  17:09:33  mrt]
- * 
- * Revision 2.2  90/05/03  15:47:26  dbg
- * 	First checkin.
- * 
- * Revision 1.3  89/03/09  20:19:36  rpd
- * 	More cleanup.
- * 
- * Revision 1.2  89/02/26  13:00:41  gm0w
- * 	Changes for cleanup.
- * 
- * 24-Sep-86  Michael Young (mwyoung) at Carnegie-Mellon University
- *	Created.
- */
-/* CMU_ENDHIST */
 /* 
  * Mach Operating System
  * Copyright (c) 1991,1990,1989 Carnegie Mellon University

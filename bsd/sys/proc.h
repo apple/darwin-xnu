@@ -70,168 +70,25 @@
 #include <sys/lock.h>
 #include <sys/param.h>
 #include <sys/event.h>
+#ifdef KERNEL
+#include <sys/kernel_types.h>
+#endif
+#include <mach/boolean.h>
 
-#ifdef __APPLE_API_PRIVATE
+#ifdef XNU_KERNEL_PRIVATE
+#define PROC_DEF_ENABLED
+#else
+#ifndef KERNEL
+#define PROC_DEF_ENABLED
+#endif
+#endif
 
-/*
- * One structure allocated per session.
- */
-struct	session {
-	int	s_count;		/* Ref cnt; pgrps in session. */
-	struct	proc *s_leader;		/* Session leader. */
-	struct	vnode *s_ttyvp;		/* Vnode of controlling terminal. */
-	struct	tty *s_ttyp;		/* Controlling terminal. */
-	pid_t	s_sid;		/* Session ID */
-	char	s_login[MAXLOGNAME];	/* Setlogin() name. */
-};
+#ifdef PROC_DEF_ENABLED
 
-/*
- * One structure allocated per process group.
- */
-struct	pgrp {
-	LIST_ENTRY(pgrp) pg_hash;	/* Hash chain. */
-	LIST_HEAD(, proc) pg_members;	/* Pointer to pgrp members. */
-	struct	session *pg_session;	/* Pointer to session. */
-	pid_t	pg_id;			/* Pgrp id. */
-	int	pg_jobc;	/* # procs qualifying pgrp for job control */
-};
-
-/*
- * Description of a process.
- *
- * This structure contains the information needed to manage a thread of
- * control, known in UN*X as a process; it has references to substructures
- * containing descriptions of things that the process uses, but may share
- * with related processes.  The process structure and the substructures
- * are always addressible except for those marked "(PROC ONLY)" below,
- * which might be addressible only on a processor on which the process
- * is running.
- */
-struct	proc {
-	LIST_ENTRY(proc) p_list;	/* List of all processes. */
-
-	/* substructures: */
-	struct	pcred *p_cred;		/* Process owner's identity. */
-	struct	filedesc *p_fd;		/* Ptr to open files structure. */
-	struct	pstats *p_stats;	/* Accounting/statistics (PROC ONLY). */
-	struct	plimit *p_limit;	/* Process limits. */
-	struct	sigacts *p_sigacts;	/* Signal actions, state (PROC ONLY). */
-
-#define	p_ucred		p_cred->pc_ucred
-#define	p_rlimit	p_limit->pl_rlimit
-
-	int	p_flag;			/* P_* flags. */
-	char	p_stat;			/* S* process status. */
-        char	p_shutdownstate;
-	char	p_pad1[2];
-
-	pid_t	p_pid;			/* Process identifier. */
-	LIST_ENTRY(proc) p_pglist;	/* List of processes in pgrp. */
-	struct	proc *p_pptr;	 	/* Pointer to parent process. */
-	LIST_ENTRY(proc) p_sibling;	/* List of sibling processes. */
-	LIST_HEAD(, proc) p_children;	/* Pointer to list of children. */
-
-/* The following fields are all zeroed upon creation in fork. */
-#define	p_startzero	p_oppid
-
-	pid_t	p_oppid;	 /* Save parent pid during ptrace. XXX */
-	int	p_dupfd;	 /* Sideways return value from fdopen. XXX */
-
-	/* scheduling */
-	u_int	p_estcpu;	 /* Time averaged value of p_cpticks. */
-	int	p_cpticks;	 /* Ticks of cpu time. */
-	fixpt_t	p_pctcpu;	 /* %cpu for this process during p_swtime */
-	void	*p_wchan;	 /* Sleep address. */
-	char	*p_wmesg;	 /* Reason for sleep. */
-	u_int	p_swtime;	 /* DEPRECATED (Time swapped in or out.) */
-#define	p_argslen p_swtime	 /* Length of process arguments. */
-	u_int	p_slptime;	 /* Time since last blocked. */
-
-	struct	itimerval p_realtimer;	/* Alarm timer. */
-	struct	timeval p_rtime;	/* Real time. */
-	u_quad_t p_uticks;		/* Statclock hits in user mode. */
-	u_quad_t p_sticks;		/* Statclock hits in system mode. */
-	u_quad_t p_iticks;		/* Statclock hits processing intr. */
-
-	int	p_traceflag;		/* Kernel trace points. */
-	struct	vnode *p_tracep;	/* Trace to vnode. */
-
-	sigset_t p_siglist;		/* DEPRECATED. */
-
-	struct	vnode *p_textvp;	/* Vnode of executable. */
-
-/* End area that is zeroed on creation. */
-#define	p_endzero	p_hash.le_next
-
-	/*
-	 * Not copied, not zero'ed.
-	 * Belongs after p_pid, but here to avoid shifting proc elements.
-	 */
-	LIST_ENTRY(proc) p_hash;	/* Hash chain. */
-	TAILQ_HEAD( ,eventqelt) p_evlist;
-
-/* The following fields are all copied upon creation in fork. */
-#define	p_startcopy	p_sigmask
-
-	sigset_t p_sigmask;		/* DEPRECATED */
-	sigset_t p_sigignore;	/* Signals being ignored. */
-	sigset_t p_sigcatch;	/* Signals being caught by user. */
-
-	u_char	p_priority;	/* Process priority. */
-	u_char	p_usrpri;	/* User-priority based on p_cpu and p_nice. */
-	char	p_nice;		/* Process "nice" value. */
-	char	p_comm[MAXCOMLEN+1];
-
-	struct 	pgrp *p_pgrp;	/* Pointer to process group. */
-
-/* End area that is copied on creation. */
-#define	p_endcopy	p_xstat
-	
-	u_short	p_xstat;	/* Exit status for wait; also stop signal. */
-	u_short	p_acflag;	/* Accounting flags. */
-	struct	rusage *p_ru;	/* Exit information. XXX */
-
-	int	p_debugger;	/* 1: can exec set-bit programs if suser */
-
-	void	*task;			/* corresponding task */
-	void	*sigwait_thread;	/* 'thread' holding sigwait */
-	struct lock__bsd__ signal_lock;	/* multilple thread prot for signals*/
-	boolean_t	 sigwait;	/* indication to suspend */
-	void	*exit_thread;		/* Which thread is exiting? */
-	caddr_t	user_stack;		/* where user stack was allocated */
-	void * exitarg;			/* exit arg for proc terminate */
-	void * vm_shm;			/* for sysV shared memory */
-	int  p_argc;			/* saved argc for sysctl_procargs() */
-	int		p_vforkcnt;		/* number of outstanding vforks */
-    void *  p_vforkact;     /* activation running this vfork proc */
-	TAILQ_HEAD( , uthread) p_uthlist; /* List of uthreads  */
-	/* Following fields are info from SIGCHLD */
-	pid_t	si_pid;
-	u_short si_status;
-	u_short	si_code;
-	uid_t	si_uid;
-	TAILQ_HEAD( , aio_workq_entry ) aio_activeq; /* active async IO requests */
-	int		aio_active_count;	/* entries on aio_activeq */
-	TAILQ_HEAD( , aio_workq_entry ) aio_doneq;	 /* completed async IO requests */
-	int		aio_done_count;		/* entries on aio_doneq */
-
-	struct klist p_klist;  /* knote list */
-	struct  auditinfo		*p_au;	/* User auditing data */
-#if DIAGNOSTIC
-#if SIGNAL_DEBUG
-	unsigned int lockpc[8];
-	unsigned int unlockpc[8];
-#endif /* SIGNAL_DEBUG */
-#endif /* DIAGNOSTIC */
-};
-
-#else /* !__APPLE_API_PRIVATE */
 struct session;
 struct pgrp;
 struct proc;
-#endif /* !__APPLE_API_PRIVATE */
 
-#ifdef __APPLE_API_UNSTABLE
 /* Exported fields for kern sysctls */
 struct extern_proc {
 	union {
@@ -288,8 +145,6 @@ struct extern_proc {
 	struct	rusage *p_ru;	/* Exit information. XXX */
 };
 
-#define	p_session	p_pgrp->pg_session
-#define	p_pgid		p_pgrp->pg_id
 
 /* Status values. */
 #define	SIDL	1		/* Process being created by fork. */
@@ -299,146 +154,129 @@ struct extern_proc {
 #define	SZOMB	5		/* Awaiting collection by parent. */
 
 /* These flags are kept in p_flags. */
-#define	P_ADVLOCK	0x00001	/* Process may hold a POSIX advisory lock. */
-#define	P_CONTROLT	0x00002	/* Has a controlling terminal. */
-#define	P_INMEM		0x00004	/* Loaded into memory. */
-#define	P_NOCLDSTOP	0x00008	/* No SIGCHLD when children stop. */
-#define	P_PPWAIT	0x00010	/* Parent is waiting for child to exec/exit. */
-#define	P_PROFIL	0x00020	/* Has started profiling. */
-#define	P_SELECT	0x00040	/* Selecting; wakeup/waiting danger. */
-#define	P_SINTR		0x00080	/* Sleep is interruptible. */
-#define	P_SUGID		0x00100	/* Had set id privileges since last exec. */
-#define	P_SYSTEM	0x00200	/* System proc: no sigs, stats or swapping. */
-#define	P_TIMEOUT	0x00400	/* Timing out during sleep. */
-#define	P_TRACED	0x00800	/* Debugged process being traced. */
-#define	P_WAITED	0x01000	/* Debugging process has waited for child. */
-#define	P_WEXIT		0x02000	/* Working on exiting. */
-#define	P_EXEC		0x04000	/* Process called exec. */
+#define	P_ADVLOCK	0x00000001	/* Process may hold POSIX adv. lock */
+#define	P_CONTROLT	0x00000002	/* Has a controlling terminal */
+#define	P_LP64		0x00000004	/* Process is LP64 */
+#define	P_NOCLDSTOP	0x00000008	/* No SIGCHLD when children stop */
+
+#define	P_PPWAIT	0x00000010	/* Parent waiting for chld exec/exit */
+#define	P_PROFIL	0x00000020	/* Has started profiling */
+#define	P_SELECT	0x00000040	/* Selecting; wakeup/waiting danger */
+#define	P_CONTINUED	0x00000080	/* Process was stopped and continued */
+
+#define	P_SUGID		0x00000100	/* Has set privileges since last exec */
+#define	P_SYSTEM	0x00000200	/* Sys proc: no sigs, stats or swap */
+#define	P_TIMEOUT	0x00000400	/* Timing out during sleep */
+#define	P_TRACED	0x00000800	/* Debugged process being traced */
+
+#define	P_WAITED	0x00001000	/* Debugging prc has waited for child */
+#define	P_WEXIT		0x00002000	/* Working on exiting. */
+#define	P_EXEC		0x00004000	/* Process called exec. */
 
 /* Should be moved to machine-dependent areas. */
-#define	P_OWEUPC	0x08000	/* Owe process an addupc() call at next ast. */
+#define	P_OWEUPC	0x00008000	/* Owe process an addupc() call at next ast. */
 
-#define	P_AFFINITY	0x0010000	/* xxx */
-#define	P_CLASSIC	0x0020000	/* xxx */
+#define	P_AFFINITY	0x00010000	/* xxx */
+#define	P_CLASSIC	0x00020000	/* xxx */
 /*
-#define	P_FSTRACE	  0x10000	/ * tracing via file system (elsewhere?) * /
-#define	P_SSTEP		  0x20000	/ * process needs single-step fixup ??? * /
+#define	P_FSTRACE	0x10000	/ * tracing via file system (elsewhere?) * /
+#define	P_SSTEP		0x20000	/ * process needs single-step fixup ??? * /
 */
 
-#define	P_WAITING	0x0040000	/* process has a wait() in progress */
-#define	P_KDEBUG	0x0080000	/* kdebug tracing is on for this process */
-#define	P_TTYSLEEP	0x0100000	/* blocked due to SIGTTOU or SIGTTIN */
-#define	P_REBOOT	0x0200000	/* Process called reboot() */
-#define	P_TBE		0x0400000	/* Process is TBE */
-#define	P_SIGEXC	0x0800000	/* signal exceptions */
-#define	P_BTRACE	0x1000000	/* process is being branch traced */
-#define	P_VFORK		0x2000000	/* process has vfork children */
-#define	P_NOATTACH	0x4000000
-#define	P_INVFORK	0x8000000	/* proc in vfork */
+#define	P_WAITING	0x00040000	/* process has a wait() in progress */
+#define	P_KDEBUG	0x00080000	/* kdebug tracing on for this process */
+
+#define	P_TTYSLEEP	0x00100000	/* blocked due to SIGTTOU or SIGTTIN */
+#define	P_REBOOT	0x00200000	/* Process called reboot() */
+#define	P_TBE		0x00400000	/* Process is TBE */
+#define	P_SIGEXC	0x00800000	/* signal exceptions */
+
+#define	P_BTRACE	0x01000000	/* process is being branch traced */
+#define	P_VFORK		0x02000000	/* process has vfork children */
+#define	P_NOATTACH	0x04000000
+#define	P_INVFORK	0x08000000	/* proc in vfork */
+
 #define	P_NOSHLIB	0x10000000	/* no shared libs are in use for proc */
 					/* flag set on exec */
 #define	P_FORCEQUOTA	0x20000000	/* Force quota for root */
 #define	P_NOCLDWAIT	0x40000000	/* No zombies when chil procs exit */
 #define	P_NOREMOTEHANG	0x80000000	/* Don't hang on remote FS ops */
 
-#define	P_NOSWAP	0		/* Obsolete: retained so that nothing breaks */
-#define	P_PHYSIO	0		/* Obsolete: retained so that nothing breaks */
-#define	P_FSTRACE	0		/* Obsolete: retained so that nothing breaks */
-#define	P_SSTEP		0		/* Obsolete: retained so that nothing breaks */
+#define	P_INMEM		0		/* Obsolete: retained for compilation */
+#define	P_NOSWAP	0		/* Obsolete: retained for compilation */
+#define	P_PHYSIO	0		/* Obsolete: retained for compilation */
+#define	P_FSTRACE	0		/* Obsolete: retained for compilation */
+#define	P_SSTEP		0		/* Obsolete: retained for compilation */
 
-/*
- * Shareable process credentials (always resident).  This includes a reference
- * to the current user credentials as well as real and saved ids that may be
- * used to change ids.
- */
-struct	pcred {
-	struct	lock__bsd__ pc_lock;
-	struct	ucred *pc_ucred;	/* Current credentials. */
-	uid_t	p_ruid;			/* Real user id. */
-	uid_t	p_svuid;		/* Saved effective user id. */
-	gid_t	p_rgid;			/* Real group id. */
-	gid_t	p_svgid;		/* Saved effective group id. */
-	int	p_refcnt;		/* Number of references. */
-};
-
-#define pcred_readlock(p)	lockmgr(&(p)->p_cred->pc_lock,		\
-						LK_SHARED, 0, (p))
-#define pcred_writelock(p)	lockmgr(&(p)->p_cred->pc_lock,		\
-						LK_EXCLUSIVE, 0, (p))
-#define pcred_unlock(p)		lockmgr(&(p)->p_cred->pc_lock,		\
-						LK_RELEASE, 0, (p))
-#endif /* __APPLE_API_UNSTABLE */
+#endif /* PROC_DEF_ENABLED */
 
 #ifdef KERNEL
-
 __BEGIN_DECLS
-#ifdef __APPLE_API_PRIVATE
-/*
- * We use process IDs <= PID_MAX; PID_MAX + 1 must also fit in a pid_t,
- * as it is used to represent "no process group".
- */
-extern int nprocs, maxproc;		/* Current and max number of procs. */
-__private_extern__ int hard_maxproc;	/* hard limit */
 
-#define	PID_MAX		30000
-#define	NO_PID		30001
+extern proc_t kernproc;
 
-#define SESS_LEADER(p)	((p)->p_session->s_leader == (p))
-#define	SESSHOLD(s)	((s)->s_count++)
-#define	SESSRELE(s)	sessrele(s)
-
-#define	PIDHASH(pid)	(&pidhashtbl[(pid) & pidhash])
-extern LIST_HEAD(pidhashhead, proc) *pidhashtbl;
-extern u_long pidhash;
-
-#define	PGRPHASH(pgid)	(&pgrphashtbl[(pgid) & pgrphash])
-extern LIST_HEAD(pgrphashhead, pgrp) *pgrphashtbl;
-extern u_long pgrphash;
-
-LIST_HEAD(proclist, proc);
-extern struct proclist allproc;		/* List of all processes. */
-extern struct proclist zombproc;	/* List of zombie processes. */
-extern struct proc *initproc, *kernproc;
-extern void	pgdelete __P((struct pgrp *pgrp));
-extern void	sessrele __P((struct session *sess));
-extern void	procinit __P((void));
-__private_extern__ char *proc_core_name(const char *name, uid_t uid, pid_t pid);
 extern int proc_is_classic(struct proc *p);
 struct proc *current_proc_EXTERNAL(void);
-#endif /* __APPLE_API_PRIVATE */
 
-#ifdef __APPLE_API_UNSTABLE
+extern int	msleep(void *chan, lck_mtx_t *mtx, int pri, const char *wmesg, struct timespec * ts );
+extern void	unsleep(struct proc *);
+extern void	wakeup(void *chan);
+extern void wakeup_one(caddr_t chan);
 
-extern int isinferior(struct proc *, struct proc *);
-extern struct	proc *pfind __P((pid_t));	/* Find process by id. */
-__private_extern__ struct proc *pzfind(pid_t);	/* Find zombie by id. */
-extern struct	pgrp *pgfind __P((pid_t));	/* Find process group by id. */
+/* proc kpis */
+/* this routine returns the pid of the current process */
+extern int proc_selfpid(void);
+/* this routine returns the pid of the parent of the current process */
+extern int proc_selfppid(void);
+/* this routine returns sends a signal signum to the process identified by the pid */
+extern void proc_signal(int pid, int signum);
+/* this routine checks whether any signal identified by the mask are pending in the  process identified by the pid. The check is  on all threads of the process. */
+extern int proc_issignal(int pid, sigset_t mask);
+/* this routine returns 1 if the pid1 is inferior of pid2 */
+extern int proc_isinferior(int pid1, int pid2);
+/* this routine copies the process's name of the executable to the passed in buffer. It 
+ * is always null terminated. The size of the buffer is to be passed in as well. This 
+ * routine is to be used typically for debugging 
+ */
+void proc_name(int pid, char * buf, int size);
+/* This routine is simillar to proc_name except it returns for current process */
+void proc_selfname(char * buf, int size);
 
-extern int	chgproccnt __P((uid_t uid, int diff));
-extern int	enterpgrp __P((struct proc *p, pid_t pgid, int mksess));
-extern void	fixjobc __P((struct proc *p, struct pgrp *pgrp, int entering));
-extern int	inferior __P((struct proc *p));
-extern int	leavepgrp __P((struct proc *p));
-#ifdef __APPLE_API_OBSOLETE
-extern void	mi_switch __P((void));
-#endif /* __APPLE_API_OBSOLETE */
-extern void	resetpriority __P((struct proc *));
-extern void	setrunnable __P((struct proc *));
-extern void	setrunqueue __P((struct proc *));
-extern int	sleep __P((void *chan, int pri));
-extern int	tsleep __P((void *chan, int pri, char *wmesg, int timo));
-extern int	tsleep0 __P((void *chan, int pri, char *wmesg, int timo, int (*continuation)(int)));
-extern int	tsleep1 __P((void *chan, int pri, char *wmesg, u_int64_t abstime, int (*continuation)(int)));
-extern void	unsleep __P((struct proc *));
-extern void	wakeup __P((void *chan));
-#endif /* __APPLE_API_UNSTABLE */
+/* find a process with a given pid. This comes with a reference which needs to be dropped by proc_rele */
+extern proc_t proc_find(int pid);
+/* returns a handle to current process which is referenced. The reference needs to be dropped with proc_rele */
+extern proc_t proc_self(void);
+/* releases the held reference on the process */
+extern int proc_rele(proc_t p);
+/* returns the pid of the given process */
+extern int proc_pid(proc_t);
+/* returns the pid of the parent of a given process */
+extern int proc_ppid(proc_t);
+/* returns 1 if the process is marked for no remote hangs */
+extern int proc_noremotehang(proc_t);
+/* returns 1 is the process is marked for force quota */
+extern int proc_forcequota(proc_t);
+
+/* this routine returns 1 if the process is running with 64bit address space, else 0 */
+extern int proc_is64bit(proc_t);
+/* is this process exiting? */
+extern int proc_exiting(proc_t);
+/* this routine returns error is the process is not one with super user privileges */
+int proc_suser(struct proc *p);
+/* returns the ucred assicaited with the process; temporary api */
+struct ucred * proc_ucred(struct proc *p);
+
+/* LP64todo - figure out how to identify 64-bit processes if NULL procp */
+extern int IS_64BIT_PROCESS(proc_t);
+extern int proc_pendingsignals(struct proc *, sigset_t);
+extern int proc_tbe(struct proc *);
+
+#ifdef KERNEL_PRIVATE
+extern int	tsleep(void *chan, int pri, const char *wmesg, int timo);
+extern int	msleep1(void *chan, lck_mtx_t *mtx, int pri, const char *wmesg, u_int64_t timo);
+#endif
 
 __END_DECLS
-
-#ifdef __APPLE_API_OBSOLETE
-/* FreeBSD source compatibility macro */ 
-#define PRISON_CHECK(p1, p2)	(1)
-#endif /* __APPLE_API_OBSOLETE */
 
 #endif	/* KERNEL */
 

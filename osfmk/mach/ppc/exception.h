@@ -48,9 +48,6 @@
 #ifndef	_MACH_PPC_EXCEPTION_H_
 #define _MACH_PPC_EXCEPTION_H_
 
-
-/* STATUS - TODO - this is just transcribed from hp stuff */
-
 #define	EXC_TYPES_COUNT	10	/* incl. illegal exception 0 */
 
 #define EXCEPTION_CODE_MAX 2    /* elements in vector (code+subcode) */

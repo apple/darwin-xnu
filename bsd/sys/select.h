@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -59,14 +59,90 @@
 
 #include <sys/appleapiopts.h>
 #include <sys/cdefs.h>
+#include <sys/_types.h>
 
-#ifdef __APPLE_API_UNSTABLE
+/*
+ * The time_t and suseconds_t types shall be defined as described in
+ * <sys/types.h>
+ * The sigset_t type shall be defined as described in <signal.h>
+ * The timespec structure shall be defined as described in <time.h>
+ */
+#ifndef	_TIME_T
+#define	_TIME_T
+typedef	__darwin_time_t		time_t;
+#endif
 
-__BEGIN_DECLS
+#ifndef _SUSECONDS_T
+#define _SUSECONDS_T
+typedef __darwin_suseconds_t	suseconds_t;
+#endif
+
+#ifndef _SIGSET_T
+#define _SIGSET_T
+typedef __darwin_sigset_t	sigset_t;
+#endif
+
+#ifndef _TIMESPEC
+#define _TIMESPEC
+struct timespec {
+	time_t	tv_sec;
+	long	tv_nsec;
+};
+#endif
+
+/*
+ * [XSI] The <sys/select.h> header shall define the fd_set type as a structure.
+ * [XSI] FD_CLR, FD_ISSET, FD_SET, FD_ZERO may be declared as a function, or
+ *	 defined as a macro, or both
+ * [XSI] FD_SETSIZE shall be defined as a macro
+ *
+ * Note:	We use _FD_SET to protect all select related
+ *		types and macros
+ */
+#ifndef _FD_SET
+#define	_FD_SET
+
+/*
+ * Select uses bit masks of file descriptors in longs.  These macros
+ * manipulate such bit fields (the filesystem macros use chars).  The
+ * extra protection here is to permit application redefinition above
+ * the default size.
+ */
+#ifndef	FD_SETSIZE
+#define	FD_SETSIZE	1024
+#endif
+
+#define	__DARWIN_NBBY	8				/* bits in a byte */
+#define __DARWIN_NFDBITS	(sizeof(__int32_t) * __DARWIN_NBBY) /* bits per mask */
+#define	__DARWIN_howmany(x, y) (((x) + ((y) - 1)) / (y))	/* # y's == x bits? */
+
+typedef	struct fd_set {
+	__int32_t	fds_bits[__DARWIN_howmany(FD_SETSIZE, __DARWIN_NFDBITS)];
+} fd_set;
+
+#define	FD_SET(n, p)	((p)->fds_bits[(n)/__DARWIN_NFDBITS] |= (1<<((n) % __DARWIN_NFDBITS)))
+#define	FD_CLR(n, p)	((p)->fds_bits[(n)/__DARWIN_NFDBITS] &= ~(1<<((n) % __DARWIN_NFDBITS)))
+#define	FD_ISSET(n, p)	((p)->fds_bits[(n)/__DARWIN_NFDBITS] & (1<<((n) % __DARWIN_NFDBITS)))
+#if __GNUC__ > 3 || __GNUC__ == 3 && __GNUC_MINOR__ >= 3
+/*
+ * Use the built-in bzero function instead of the library version so that
+ * we do not pollute the namespace or introduce prototype warnings.
+ */
+#define	FD_ZERO(p)	__builtin_bzero(p, sizeof(*(p)))
+#else
+#define	FD_ZERO(p)	bzero(p, sizeof(*(p)))
+#endif
+#ifndef _POSIX_C_SOURCE
+#define	FD_COPY(f, t)	bcopy(f, t, sizeof(*(f)))
+#endif	/* !_POSIX_C_SOURCE */
+
+#endif	/* !_FD_SET */
 
 #ifdef KERNEL
+#ifdef KERNEL_PRIVATE
 #include <kern/wait_queue.h>
 #endif
+#include <sys/kernel_types.h>
 
 #include <sys/event.h>
 
@@ -74,17 +150,10 @@ __BEGIN_DECLS
  * Used to maintain information about processes that wish to be
  * notified when I/O becomes possible.
  */
+#ifdef KERNEL_PRIVATE
 struct selinfo {
-#ifdef KERNEL
-	union {
-		struct  wait_queue wait_queue;	/* wait_queue for wait/wakeup */
-		struct klist note;		/* JMM - temporary separation */
-	} si_u;
-#define si_wait_queue si_u.wait_queue
-#define si_note si_u.note
-#else
-	char  si_wait_queue[16];
-#endif
+	struct  wait_queue si_wait_queue;	/* wait_queue for wait/wakeup */
+	struct klist si_note;		/* JMM - temporary separation */
 	u_int	si_flags;		/* see below */
 };
 
@@ -93,31 +162,38 @@ struct selinfo {
 #define	SI_INITED	0x0008		/* selinfo has been inited */ 
 #define	SI_CLEAR	0x0010		/* selinfo has been cleared */ 
 
-#ifdef KERNEL
-struct proc;
+#else
+struct selinfo;
+#endif
 
-void	selrecord __P((struct proc *selector, struct selinfo *, void *));
-void	selwakeup __P((struct selinfo *));
-void	selthreadclear __P((struct selinfo *));
-#endif /* KERNEL */
+__BEGIN_DECLS
+
+void	selrecord(proc_t selector, struct selinfo *, void *);
+void	selwakeup(struct selinfo *);
+void	selthreadclear(struct selinfo *);
 
 __END_DECLS
 
-#endif /* __APPLE_API_UNSTABLE */
+#endif /* KERNEL */
+
 
 #ifndef KERNEL
+#ifndef _POSIX_C_SOURCE
 #include <sys/types.h>
 #ifndef  __MWERKS__
 #include <signal.h>
 #endif /* __MWERKS__ */
 #include <sys/time.h>
+#endif	/* !_POSIX_C_SOURCE */
 
 __BEGIN_DECLS
 #ifndef  __MWERKS__
-int	 pselect(int, fd_set *, fd_set *, fd_set *,
-	    const struct timespec *, const sigset_t *);
+int	 pselect(int, fd_set * __restrict, fd_set * __restrict,
+		fd_set * __restrict, const struct timespec * __restrict,
+		const sigset_t * __restrict);
 #endif /* __MWERKS__ */
-int	 select(int, fd_set *, fd_set *, fd_set *, struct timeval *);
+int	 select(int, fd_set * __restrict, fd_set * __restrict,
+		fd_set * __restrict, struct timeval * __restrict);
 __END_DECLS
 #endif /* ! KERNEL */
 

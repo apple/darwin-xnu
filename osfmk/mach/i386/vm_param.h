@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -84,19 +84,23 @@
 #ifndef	_MACH_I386_VM_PARAM_H_
 #define _MACH_I386_VM_PARAM_H_
 
-#define BYTE_SIZE	8	/* byte size in bits */
+#define BYTE_SIZE		8		/* byte size in bits */
 
 #define I386_PGBYTES	4096	/* bytes per 80386 page */
-#define I386_PGSHIFT	12	/* number of bits to shift for pages */
+#define I386_PGSHIFT	12		/* number of bits to shift for pages */
+
+#define	PAGE_SIZE		I386_PGBYTES
+#define	PAGE_SHIFT		I386_PGSHIFT
+#define	PAGE_MASK		(PAGE_SIZE - 1)
 
 /*
  *	Convert bytes to pages and convert pages to bytes.
  *	No rounding is used.
  */
 
-#define i386_btop(x)		(((unsigned)(x)) >> I386_PGSHIFT)
+#define i386_btop(x)		(((pmap_paddr_t)(x)) >> I386_PGSHIFT)
 #define machine_btop(x)		i386_btop(x)
-#define i386_ptob(x)		(((unsigned)(x)) << I386_PGSHIFT)
+#define i386_ptob(x)		(((pmap_paddr_t)(x)) << I386_PGSHIFT)
 
 /*
  *	Round off or truncate to the nearest page.  These will work
@@ -104,26 +108,41 @@
  *	bytes.
  */
 
-#define i386_round_page(x)	((((unsigned)(x)) + I386_PGBYTES - 1) & \
+#define i386_round_page(x)	((((pmap_paddr_t)(x)) + I386_PGBYTES - 1) & \
 					~(I386_PGBYTES-1))
-#define i386_trunc_page(x)	(((unsigned)(x)) & ~(I386_PGBYTES-1))
+#define i386_trunc_page(x)	(((pmap_paddr_t)(x)) & ~(I386_PGBYTES-1))
 
 #define VM_MAX_PAGE_ADDRESS     0x00000000C0000000ULL
 
+/* system-wide values */
+#define MACH_VM_MIN_ADDRESS		((mach_vm_offset_t) 0)
+#define MACH_VM_MAX_ADDRESS		((mach_vm_offset_t) VM_MAX_PAGE_ADDRESS)
+
+/* process-relative values (all 32-bit legacy only for now) */
 #define VM_MIN_ADDRESS		((vm_offset_t) 0)
 #define VM_MAX_ADDRESS		((vm_offset_t) (VM_MAX_PAGE_ADDRESS & 0xFFFFFFFF))
 
-#define LINEAR_KERNEL_ADDRESS	((vm_offset_t) 0xc0000000)
+#ifdef	KERNEL_PRIVATE 
 
-#define VM_MIN_KERNEL_ADDRESS	((vm_offset_t) 0x00000000U)
-#define VM_MAX_KERNEL_ADDRESS	((vm_offset_t) 0x3fffffffU)
-
-#define VM_MIN_KERNEL_LOADED_ADDRESS	((vm_offset_t) 0x0c000000U)
-#define VM_MAX_KERNEL_LOADED_ADDRESS	((vm_offset_t) 0x1fffffffU)
+/* Kernel-wide values */
+#define VM_MIN_KERNEL_ADDRESS	((vm_offset_t) 0xC0000000U)
+#define VM_MAX_KERNEL_ADDRESS	((vm_offset_t) 0xFfffffffU)
+#define KERNEL_STACK_SIZE		(I386_PGBYTES*4)
 
 /* FIXME  - always leave like this? */
 #define	INTSTACK_SIZE	(I386_PGBYTES*4)
-#define	KERNEL_STACK_SIZE	(I386_PGBYTES*4)
+
+#ifdef	MACH_KERNEL_PRIVATE
+
+/* For implementing legacy 32-bit interfaces */
+#define VM32_SUPPORT
+#define VM32_MIN_ADDRESS		((vm32_offset_t) 0)
+#define VM32_MAX_ADDRESS		((vm32_offset_t) (VM_MAX_PAGE_ADDRESS & 0xFFFFFFFF))
+
+#define LINEAR_KERNEL_ADDRESS	((vm_offset_t) 0xc0000000)
+
+#define VM_MIN_KERNEL_LOADED_ADDRESS	((vm_offset_t) 0x0c000000U)
+#define VM_MAX_KERNEL_LOADED_ADDRESS	((vm_offset_t) 0x1fffffffU)
 
 /*
  *	Conversion between 80386 pages and VM pages
@@ -133,55 +152,31 @@
 #define round_i386_to_vm(p)	(atop(round_page(i386_ptob(p))))
 #define vm_to_i386(p)		(i386_btop(ptoa(p)))
 
-/*
- *	Physical memory is mapped 1-1 with virtual memory starting
- *	at VM_MIN_KERNEL_ADDRESS.
- */
-#define phystokv(a)	((vm_offset_t)(a) + VM_MIN_KERNEL_ADDRESS)
-
-/*
- *	For 386 only, ensure that pages are installed in the
- *	kernel_pmap with VM_PROT_WRITE enabled.  This avoids
- *	code in pmap_enter that disallows a read-only mapping
- *	in the kernel's pmap.  (See ri-osc CR1387.)
- *
- *	An entry in kernel_pmap is made only by the kernel or
- *	a collocated server -- by definition (;-)), the requester
- *	is trusted code.  If it asked for read-only access,
- *	it won't attempt a write.  We don't have to enforce the
- *	restriction.  (Naturally, this assumes that any collocated
- *	server will _not_ depend on trapping write accesses to pages
- *	mapped read-only; this cannot be made to work in the current
- *	i386-inspired pmap model.)
- */
-
-/*#if defined(AT386)
-
-#define PMAP_ENTER_386_CHECK \
-	if (cpuid_family == CPUID_FAMILY_386)
-
-#else -- FIXME? We're only running on Pentiums or better */
-
-#define PMAP_ENTER_386_CHECK
-
-/*#endif*/
-
 #define PMAP_ENTER(pmap, virtual_address, page, protection, flags, wired) \
 	MACRO_BEGIN					\
+	pmap_t __pmap = (pmap);				\
+	vm_page_t __page = (page);			\
 	vm_prot_t __prot__ =				\
 		(protection) & ~(page)->page_lock;	\
 							\
-    	PMAP_ENTER_386_CHECK				\
-	if ((pmap) == kernel_pmap)			\
+	if (__pmap == kernel_pmap) {			\
 		__prot__ |= VM_PROT_WRITE;		\
+	} else {					\
+		assert(!__page->encrypted);		\
+	}						\
+							\
 	pmap_enter(					\
-		(pmap),					\
+		__pmap,					\
 		(virtual_address),			\
-		(page)->phys_page,			\
+		__page->phys_page,			\
 		__prot__,				\
 		flags,					\
 		(wired)					\
 	 );						\
 	MACRO_END
+
+#endif	/* MACH_KERNEL_PRIVATE */
+
+#endif	/* KERNEL_PRIVATE */
 
 #endif	/* _MACH_I386_VM_PARAM_H_ */

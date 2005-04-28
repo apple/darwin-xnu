@@ -60,7 +60,7 @@
 #include <kern/kern_types.h>
 #include <mach/ppc/vm_types.h>
 #include <mach/ppc/vm_param.h>
-#include <ppc/thread.h>		/* for thread_status */
+#include <kern/thread.h>
 #include <ppc/trap.h>
 #include <ppc/proc_reg.h>
 #include <ppc/savearea.h>

@@ -506,7 +506,6 @@ struct icmp6_filter {
 };
 
 #ifdef KERNEL
-#ifdef __APPLE_API_UNSTABLE
 #define	ICMP6_FILTER_SETPASSALL(filterp) \
 do {								\
 	int i; u_char *p;					\
@@ -516,7 +515,6 @@ do {								\
 } while (0)
 #define	ICMP6_FILTER_SETBLOCKALL(filterp) \
 	bzero(filterp, sizeof(struct icmp6_filter))
-#endif /* __APPLE_API_UNSTABLE */
 #else /* KERNEL */
 #define	ICMP6_FILTER_SETPASSALL(filterp) \
 	memset(filterp, 0xff, sizeof(struct icmp6_filter))
@@ -533,7 +531,6 @@ do {								\
 #define	ICMP6_FILTER_WILLBLOCK(type, filterp) \
 	((((filterp)->icmp6_filt[(type) >> 5]) & (1 << ((type) & 31))) == 0)
 
-#ifdef __APPLE_API_UNSTABLE
 /*
  * Variables related to this implementation
  * of the internet control message protocol version 6.
@@ -618,6 +615,7 @@ struct icmp6stat {
 #define ICMPV6CTL_ND6_PRLIST	20
 #define ICMPV6CTL_MAXID		21
 
+#ifdef KERNEL_PRIVATE
 #define ICMPV6CTL_NAMES { \
 	{ 0, 0 }, \
 	{ 0, 0 }, \
@@ -641,29 +639,26 @@ struct icmp6stat {
 	{ 0, 0 }, \
 	{ 0, 0 }, \
 }
-#endif /* __APPLE_API_UNSTABLE */
 
 #define RTF_PROBEMTU	RTF_PROTO1
 
-#ifdef KERNEL
 # ifdef __STDC__
 struct	rtentry;
 struct	rttimer;
 struct	in6_multi;
 # endif
-#ifdef __APPLE_API_PRIVATE
-void	icmp6_init __P((void));
-void	icmp6_paramerror __P((struct mbuf *, int));
-void	icmp6_error __P((struct mbuf *, int, int, int));
-int	icmp6_input __P((struct mbuf **, int *));
-void	icmp6_fasttimo __P((void));
-void	icmp6_reflect __P((struct mbuf *, size_t));
-void	icmp6_prepare __P((struct mbuf *));
-void	icmp6_redirect_input __P((struct mbuf *, int));
-void	icmp6_redirect_output __P((struct mbuf *, struct rtentry *));
+void	icmp6_init(void);
+void	icmp6_paramerror(struct mbuf *, int);
+void	icmp6_error(struct mbuf *, int, int, int);
+int	icmp6_input(struct mbuf **, int *);
+void	icmp6_fasttimo(void);
+void	icmp6_reflect(struct mbuf *, size_t);
+void	icmp6_prepare(struct mbuf *);
+void	icmp6_redirect_input(struct mbuf *, int);
+void	icmp6_redirect_output(struct mbuf *, struct rtentry *);
 
 struct	ip6ctlparam;
-void	icmp6_mtudisc_update __P((struct ip6ctlparam *, int));
+void	icmp6_mtudisc_update(struct ip6ctlparam *, int);
 
 /* XXX: is this the right place for these macros? */
 #define icmp6_ifstat_inc(ifp, tag) \
@@ -730,7 +725,6 @@ do { \
 
 extern int	icmp6_rediraccept;	/* accept/process redirects */
 extern int	icmp6_redirtimeout;	/* cache time for redirect routes */
-#endif /* __APPLE_API_PRIVATE */
-#endif /* KERNEL */
+#endif KERNEL_PRIVATE
 
 #endif /* !_NETINET_ICMP6_H_ */

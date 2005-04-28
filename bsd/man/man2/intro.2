@@ -270,13 +270,8 @@ system or no implementation for it exists.
 .It Er 44 ESOCKTNOSUPPORT Em "Socket type not supported" .
 The support for the socket type has not been configured into the
 system or no implementation for it exists.
-.It Er 45 EOPNOTSUPP Em "Operation not supported" .
+.It Er 45 ENOTSUP Em "Not supported" .
 The attempted operation is not supported for the type of object referenced.
-Usually this occurs when a file descriptor refers to a file or socket
-that cannot support this operation,
-for example, trying to
-.Em accept
-a connection on a datagram socket.
 .It Er 46 EPFNOSUPPORT Em "Protocol family not supported" .
 The protocol family has not been configured into the
 system or no implementation for it exists.
@@ -444,6 +439,28 @@ along an invalid or an incomplete sequence of bytes or
 the given wide character is invalid.
 .It Er 93 ENOATTR Em "Attribute not found" .
 The specified extended attribute does not exist.
+.It Er 94 EBADMSG Em "Bad message" .
+The message to be received is inapprorpiate for the operation being attempted.
+.It Er 95 EMULTIHOP Em "Reserved" .
+This error is reserved for future use.
+.It Er 96 ENODATA Em "No message available" .
+No message was available to be received by the requested operation.
+.It Er 97 ENOLINK Em "Reserved" .
+This error is reserved for future use.
+.It Er 98 ENOSR Em "No STREAM resources" .
+This error is reserved for future use.
+.It Er 99 ENOSTR Em "Not a STREAM" .
+This error is reserved for future use.
+.It Er 100 EPROTO Em "Protocol error" .
+Some protocol error occurred. This error is device-specific, but is
+generally not related to a hardware failure.
+.It Er 101 ETIME Em "STREAM ioctl() timeout" .
+This error is reserved for future use.
+.It Er 102 EOPNOTSUPP Em "Operation not supported on socket" .
+The attempted operation is not supported for the type of socket referenced;
+for example, trying to
+.Em accept
+a connection on a datagram socket.
 .El
 .Sh DEFINITIONS
 .Bl -tag -width Ds

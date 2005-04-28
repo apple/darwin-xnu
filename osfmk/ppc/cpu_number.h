@@ -22,13 +22,13 @@
 /*
  * @OSF_COPYRIGHT@
  */
+#ifdef	KERNEL_PRIVATE
+
 #ifndef	_PPC_CPU_NUMBER_H_
 #define	_PPC_CPU_NUMBER_H_
 
-#include <sys/appleapiopts.h>
-
-#ifdef __APPLE_API_UNSTABLE
 extern int cpu_number(void);
-#endif
 
 #endif	/* _PPC_CPU_NUMBER_H_ */
+
+#endif	/* KERNEL_PRIVATE */

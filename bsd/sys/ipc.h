@@ -64,42 +64,116 @@
  *	@(#)ipc.h	8.4 (Berkeley) 2/19/95
  */
 
-#include <sys/appleapiopts.h>
-
 /*
  * SVID compatible ipc.h file
  */
 #ifndef _SYS_IPC_H_
 #define _SYS_IPC_H_
 
-struct ipc_perm {
-	ushort	cuid;	/* creator user id */
-	ushort	cgid;	/* creator group id */
-	ushort	uid;	/* user id */
-	ushort	gid;	/* group id */
-	ushort	mode;	/* r/w permission */
-	ushort	seq;	/* sequence # (to generate unique msg/sem/shm id) */
-	key_t	key;	/* user specified msg/sem/shm key */
+#include <sys/appleapiopts.h>
+#include <sys/cdefs.h>
+
+#include <sys/_types.h>
+
+/*
+ * [XSI] The uid_t, gid_t, mode_t, and key_t types SHALL be defined as
+ * described in <sys/types.h>.
+ */
+#ifndef _UID_T
+typedef __darwin_uid_t	uid_t;		/* user id */
+#define _UID_T
+#endif
+
+#ifndef _GID_T
+typedef __darwin_gid_t	gid_t;
+#define _GID_T
+#endif
+
+#ifndef	_MODE_T
+typedef	__darwin_mode_t	mode_t;
+#define _MODE_T
+#endif
+
+#ifndef _KEY_T
+#define _KEY_T
+typedef	__int32_t	key_t;
+#endif
+
+/*
+ * Technically, we should force all code references to the new structure
+ * definition, not in just the standards conformance case, and leave the
+ * legacy interface there for binary compatibility only.  Currently, we
+ * are only forcing this for programs requesting standards conformance.
+ */
+#if defined(__POSIX_C_SOURCE) || defined(kernel) || defined(__LP64__)
+/*
+ * [XSI] Information used in determining permission to perform an IPC
+ * operation
+ */
+struct __ipc_perm_new {
+	uid_t		uid;		/* [XSI] Owner's user ID */
+	gid_t		gid;		/* [XSI] Owner's group ID */
+	uid_t		cuid;		/* [XSI] Creator's user ID */
+	gid_t		cgid;		/* [XSI] Creator's group ID */
+	mode_t		mode;		/* [XSI] Read/write permission */
+	unsigned short	_seq;		/* Reserved for internal use */
+	key_t		_key;		/* Reserved for internal use */
 };
+#define	ipc_perm	__ipc_perm_new
+#else	/* !_POSIX_C_SOURCE */
+#define	ipc_perm	__ipc_perm_old
+#endif	/* !_POSIX_C_SOURCE */
+
+#if !defined(__POSIX_C_SOURCE) && !defined(__LP64__)
+/*
+ * Legacy structure; this structure is maintained for binary backward
+ * compatability with previous versions of the interface.  New code
+ * should not use this interface, since ID values may be truncated.
+ */
+struct __ipc_perm_old {
+	__uint16_t	cuid;		/* Creator's user ID */
+	__uint16_t	cgid;		/* Creator's group ID */
+	__uint16_t	uid;		/* Owner's user ID */
+	__uint16_t	gid;		/* Owner's group ID */
+	mode_t		mode;		/* Read/Write permission */
+	__uint16_t	seq;		/* Reserved for internal use */
+	key_t		key;		/* Reserved for internal use */
+};
+#endif	/* !_POSIX_C_SOURCE */
+
+/*
+ * [XSI] Definitions shall be provided for the following constants:
+ */
+
+/* Mode bits */
+#define	IPC_CREAT	001000		/* Create entry if key does not exist */
+#define	IPC_EXCL	002000		/* Fail if key exists */
+#define	IPC_NOWAIT	004000		/* Error if request must wait */
+
+/* Keys */
+#define	IPC_PRIVATE	((key_t)0)	/* Private key */
+
+/* Control commands */
+#define	IPC_RMID	0		/* Remove identifier */
+#define	IPC_SET		1		/* Set options */
+#define	IPC_STAT	2		/* Get options */
+
+
+#ifndef _POSIX_C_SOURCE
 
 /* common mode bits */
-#define	IPC_R		000400	/* read permission */
-#define	IPC_W		000200	/* write/alter permission */
-#define	IPC_M		010000	/* permission to change control info */
+#define	IPC_R		000400		/* Read permission */
+#define	IPC_W		000200		/* Write/alter permission */
+#define	IPC_M		010000		/* Modify control info permission */
 
-/* SVID required constants (same values as system 5) */
-#define	IPC_CREAT	001000	/* create entry if key does not exist */
-#define	IPC_EXCL	002000	/* fail if key exists */
-#define	IPC_NOWAIT	004000	/* error if request must wait */
+#endif	/* !_POSIX_C_SOURCE */
 
-#define	IPC_PRIVATE	(key_t)0 /* private key */
 
-#define	IPC_RMID	0	/* remove identifier */
-#define	IPC_SET		1	/* set options */
-#define	IPC_STAT	2	/* get options */
-
-#ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
+#ifdef BSD_KERNEL_PRIVATE
+/*
+ * Kernel implementation details which should not be utilized by user
+ * space programs.
+ */
 
 /* Macros to convert between ipc ids and array indices or sequence ids */
 #define	IPCID_TO_IX(id)		((id) & 0xffff)
@@ -108,18 +182,16 @@ struct ipc_perm {
 
 struct ucred;
 
-int	ipcperm __P((struct ucred *, struct ipc_perm *, int));
-#endif /* __APPLE_API_PRIVATE */
-#else /* ! KERNEL */
+int	ipcperm(struct ucred *, struct ipc_perm *, int);
+#endif /* BSD_KERNEL_PRIVATE */
 
-/* XXX doesn't really belong here, but has been historical practice in SysV. */
-
-#include <sys/cdefs.h>
+#ifndef KERNEL
 
 __BEGIN_DECLS
-key_t	ftok __P((const char *, int));
+/* [XSI] */
+key_t	ftok(const char *, int);
 __END_DECLS
 
-#endif /* KERNEL */
+#endif	/* !KERNEL */
 
 #endif /* !_SYS_IPC_H_ */

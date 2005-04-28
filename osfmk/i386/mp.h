@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -50,41 +50,72 @@
 
 /*
  */
+#ifdef	KERNEL_PRIVATE
 
 #ifndef _I386AT_MP_H_
 #define _I386AT_MP_H_
 
-#if     !defined(NCPUS)
-#include <cpus.h>
-#endif  /* !defined(NCPUS) */
-
-#if	NCPUS > 1
-
 #ifndef	DEBUG
 #include <debug.h>
 #endif
-#if	DEBUG
-#define	MP_DEBUG 1
-#endif
+//#define	MP_DEBUG 1
 
 #include <i386/apic.h>
 #include <i386/mp_events.h>
 
-#define SPURIOUS_INTERRUPT	0xDD	
-#define INTERPROCESS_INTERRUPT	0xDE
-#define APIC_ERROR_INTERRUPT	0xDF
+#define LAPIC_ID_MAX	(LAPIC_ID_MASK)
 
-#define LAPIC_ID_MAX		(LAPIC_ID_MASK)
+#define MAX_CPUS	(LAPIC_ID_MAX + 1)
 
 #ifndef	ASSEMBLER
+#include <sys/cdefs.h>
+#include <mach/boolean.h>
+#include <mach/kern_return.h>
+
+__BEGIN_DECLS
+
+extern kern_return_t intel_startCPU(int slot_num);
+extern void i386_init_slave(void);
+extern void smp_init(void);
+
+extern void cpu_interrupt(int cpu);
+
+extern void lapic_init(void);
+extern void lapic_shutdown(void);
+extern void lapic_smm_restore(void);
+extern boolean_t lapic_probe(void);
 extern void lapic_dump(void);
-extern void lapic_interrupt(int interrupt, void *state);
+extern int  lapic_interrupt(int interrupt, void *state);
+extern void lapic_end_of_interrupt(void);
 extern int  lapic_to_cpu[];
 extern int  cpu_to_lapic[];
+extern int  lapic_interrupt_base;
 extern void lapic_cpu_map(int lapic, int cpu_num);
+
+extern void lapic_set_timer(
+		boolean_t		interrupt,
+		lapic_timer_mode_t	mode,
+		lapic_timer_divide_t 	divisor,
+		lapic_timer_count_t	initial_count);
+
+extern void lapic_get_timer(
+		lapic_timer_mode_t	*mode,
+		lapic_timer_divide_t	*divisor,
+		lapic_timer_count_t	*initial_count,
+		lapic_timer_count_t	*current_count);
+
+typedef	void (*i386_intr_func_t)(void *);
+extern void lapic_set_timer_func(i386_intr_func_t func);
+extern void lapic_set_pmi_func(i386_intr_func_t func);
+
+__END_DECLS
+
 #endif	/* ASSEMBLER */
 
 #define CPU_NUMBER(r)				\
+	movl	%gs:CPU_NUMBER_GS,r
+
+#define CPU_NUMBER_FROM_LAPIC(r)		\
     	movl	EXT(lapic_id),r;		\
     	movl	0(r),r;				\
     	shrl	$(LAPIC_ID_SHIFT),r;		\
@@ -92,16 +123,20 @@ extern void lapic_cpu_map(int lapic, int cpu_num);
 	movl	EXT(lapic_to_cpu)(,r,4),r
 
 
-#define	MP_IPL		SPL6	/* software interrupt level */
-
 /* word describing the reason for the interrupt, one per cpu */
 
 #ifndef	ASSEMBLER
 #include <kern/lock.h>
-extern	int	real_ncpus;		/* real number of cpus */
-extern	int	wncpu;			/* wanted number of cpus */
+
+extern	unsigned int	real_ncpus;		/* real number of cpus */
+extern	unsigned int	max_ncpus;		/* max number of cpus */
 decl_simple_lock_data(extern,kdb_lock)	/* kdb lock		*/
-decl_simple_lock_data(extern,mp_putc_lock)
+
+__BEGIN_DECLS
+
+extern  void	console_init(void);
+extern	void	*console_cpu_alloc(boolean_t boot_cpu);
+extern	void	console_cpu_free(void *console_buf);
 
 extern	int	kdb_cpu;		/* current cpu running kdb	*/
 extern	int	kdb_debug;
@@ -109,8 +144,8 @@ extern	int	kdb_is_slave[];
 extern	int	kdb_active[];
 
 extern	volatile boolean_t mp_kdp_trap;
-extern	void	mp_trap_enter();
-extern	void	mp_trap_exit();
+extern	void	mp_kdp_enter(void);
+extern	void	mp_kdp_exit(void);
 
 /*
  * All cpu rendezvous:
@@ -119,6 +154,8 @@ extern void mp_rendezvous(void (*setup_func)(void *),
 			  void (*action_func)(void *),
 			  void (*teardown_func)(void *),
 			  void *arg);
+
+__END_DECLS
 
 #if MP_DEBUG
 typedef struct {
@@ -134,14 +171,14 @@ typedef struct {
 	cpu_signal_event_t	entry[LOG_NENTRIES];
 } cpu_signal_event_log_t;
 
-extern cpu_signal_event_log_t	cpu_signal[NCPUS];
-extern cpu_signal_event_log_t	cpu_handle[NCPUS];
+extern cpu_signal_event_log_t	*cpu_signal[];
+extern cpu_signal_event_log_t	*cpu_handle[];
 
 #define DBGLOG(log,_cpu,_event) {					\
-	cpu_signal_event_log_t	*logp = &log[cpu_number()];		\
+	boolean_t		spl = ml_set_interrupts_enabled(FALSE);	\
+	cpu_signal_event_log_t	*logp = log[cpu_number()];		\
 	int			next = logp->next_entry;		\
 	cpu_signal_event_t	*eventp = &logp->entry[next];		\
-	boolean_t		spl = ml_set_interrupts_enabled(FALSE);	\
 									\
 	logp->count[_event]++;						\
 									\
@@ -155,8 +192,27 @@ extern cpu_signal_event_log_t	cpu_handle[NCPUS];
 									\
 	(void) ml_set_interrupts_enabled(spl);				\
 }
+
+#define DBGLOG_CPU_INIT(cpu)	{					\
+	cpu_signal_event_log_t	**sig_logpp = &cpu_signal[cpu];		\
+	cpu_signal_event_log_t	**hdl_logpp = &cpu_handle[cpu];		\
+									\
+	if (*sig_logpp == NULL &&					\
+		kmem_alloc(kernel_map,					\
+			(vm_offset_t *) sig_logpp,			\
+			sizeof(cpu_signal_event_log_t)) != KERN_SUCCESS)\
+		panic("DBGLOG_CPU_INIT cpu_signal allocation failed\n");\
+	bzero(*sig_logpp, sizeof(cpu_signal_event_log_t));		\
+	if (*hdl_logpp == NULL &&					\
+		kmem_alloc(kernel_map,					\
+			(vm_offset_t *) hdl_logpp,			\
+			sizeof(cpu_signal_event_log_t)) != KERN_SUCCESS)\
+		panic("DBGLOG_CPU_INIT cpu_handle allocation failed\n");\
+	bzero(*sig_logpp, sizeof(cpu_signal_event_log_t));		\
+}
 #else	/* MP_DEBUG */
 #define DBGLOG(log,_cpu,_event)
+#define DBGLOG_CPU_INIT(cpu)
 #endif	/* MP_DEBUG */
 
 #endif	/* ASSEMBLER */
@@ -187,23 +243,12 @@ extern cpu_signal_event_log_t	cpu_handle[NCPUS];
 #define MP_DEV_OP_TIMEO	2	/* If lock busy, register a pending timeout */
 #define MP_DEV_OP_CALLB	3	/* If lock busy, register a pending callback */
 
-#else	/* NCPUS > 1 */
-#define at386_io_lock_state()
-#define at386_io_lock(op)	(TRUE)
-#define at386_io_unlock()
-#define mp_trap_enter()
-#define mp_trap_exit()
-#include	<i386/apic.h>
-#endif	/* NCPUS > 1 */
-
 #if	MACH_RT
-#define _DISABLE_PREEMPTION(r) 					\
-	movl	$ CPD_PREEMPTION_LEVEL,r			;	\
-	incl	%gs:(r)
+#define _DISABLE_PREEMPTION 					\
+	incl	%gs:CPU_PREEMPTION_LEVEL
 
-#define _ENABLE_PREEMPTION(r) 					\
-	movl	$ CPD_PREEMPTION_LEVEL,r			;	\
-	decl	%gs:(r)					;	\
+#define _ENABLE_PREEMPTION 					\
+	decl	%gs:CPU_PREEMPTION_LEVEL		;	\
 	jne	9f					;	\
 	pushl	%eax					;	\
 	pushl	%ecx					;	\
@@ -214,12 +259,11 @@ extern cpu_signal_event_log_t	cpu_handle[NCPUS];
 	popl	%eax					;	\
 9:	
 
-#define _ENABLE_PREEMPTION_NO_CHECK(r)				\
-	movl	$ CPD_PREEMPTION_LEVEL,r			;	\
-	decl	%gs:(r)
+#define _ENABLE_PREEMPTION_NO_CHECK				\
+	decl	%gs:CPU_PREEMPTION_LEVEL
 
 #if	MACH_ASSERT
-#define DISABLE_PREEMPTION(r)					\
+#define DISABLE_PREEMPTION					\
 	pushl	%eax;						\
 	pushl	%ecx;						\
 	pushl	%edx;						\
@@ -227,7 +271,7 @@ extern cpu_signal_event_log_t	cpu_handle[NCPUS];
 	popl	%edx;						\
 	popl	%ecx;						\
 	popl	%eax
-#define ENABLE_PREEMPTION(r)					\
+#define ENABLE_PREEMPTION					\
 	pushl	%eax;						\
 	pushl	%ecx;						\
 	pushl	%edx;						\
@@ -235,7 +279,7 @@ extern cpu_signal_event_log_t	cpu_handle[NCPUS];
 	popl	%edx;						\
 	popl	%ecx;						\
 	popl	%eax
-#define ENABLE_PREEMPTION_NO_CHECK(r)				\
+#define ENABLE_PREEMPTION_NO_CHECK				\
 	pushl	%eax;						\
 	pushl	%ecx;						\
 	pushl	%edx;						\
@@ -243,8 +287,7 @@ extern cpu_signal_event_log_t	cpu_handle[NCPUS];
 	popl	%edx;						\
 	popl	%ecx;						\
 	popl	%eax
-#if	NCPUS > 1
-#define MP_DISABLE_PREEMPTION(r)					\
+#define MP_DISABLE_PREEMPTION					\
 	pushl	%eax;						\
 	pushl	%ecx;						\
 	pushl	%edx;						\
@@ -252,7 +295,7 @@ extern cpu_signal_event_log_t	cpu_handle[NCPUS];
 	popl	%edx;						\
 	popl	%ecx;						\
 	popl	%eax
-#define MP_ENABLE_PREEMPTION(r)					\
+#define MP_ENABLE_PREEMPTION					\
 	pushl	%eax;						\
 	pushl	%ecx;						\
 	pushl	%edx;						\
@@ -260,7 +303,7 @@ extern cpu_signal_event_log_t	cpu_handle[NCPUS];
 	popl	%edx;						\
 	popl	%ecx;						\
 	popl	%eax
-#define MP_ENABLE_PREEMPTION_NO_CHECK(r)				\
+#define MP_ENABLE_PREEMPTION_NO_CHECK				\
 	pushl	%eax;						\
 	pushl	%ecx;						\
 	pushl	%edx;						\
@@ -268,33 +311,24 @@ extern cpu_signal_event_log_t	cpu_handle[NCPUS];
 	popl	%edx;						\
 	popl	%ecx;						\
 	popl	%eax
-#else	/* NCPUS > 1 */
-#define MP_DISABLE_PREEMPTION(r)
-#define MP_ENABLE_PREEMPTION(r)
-#define MP_ENABLE_PREEMPTION_NO_CHECK(r)
-#endif	/* NCPUS > 1 */
 #else	/* MACH_ASSERT */
-#define DISABLE_PREEMPTION(r)			_DISABLE_PREEMPTION(r)
-#define ENABLE_PREEMPTION(r)			_ENABLE_PREEMPTION(r)
-#define ENABLE_PREEMPTION_NO_CHECK(r)		_ENABLE_PREEMPTION_NO_CHECK(r)
-#if	NCPUS > 1
-#define MP_DISABLE_PREEMPTION(r)		_DISABLE_PREEMPTION(r)
-#define MP_ENABLE_PREEMPTION(r)			_ENABLE_PREEMPTION(r)
-#define MP_ENABLE_PREEMPTION_NO_CHECK(r) 	_ENABLE_PREEMPTION_NO_CHECK(r)
-#else	/* NCPUS > 1 */
-#define MP_DISABLE_PREEMPTION(r)
-#define MP_ENABLE_PREEMPTION(r)
-#define MP_ENABLE_PREEMPTION_NO_CHECK(r)
-#endif	/* NCPUS > 1 */
+#define DISABLE_PREEMPTION		_DISABLE_PREEMPTION
+#define ENABLE_PREEMPTION		_ENABLE_PREEMPTION
+#define ENABLE_PREEMPTION_NO_CHECK	_ENABLE_PREEMPTION_NO_CHECK
+#define MP_DISABLE_PREEMPTION		_DISABLE_PREEMPTION
+#define MP_ENABLE_PREEMPTION		_ENABLE_PREEMPTION
+#define MP_ENABLE_PREEMPTION_NO_CHECK 	_ENABLE_PREEMPTION_NO_CHECK
 #endif	/* MACH_ASSERT */
 
 #else	/* MACH_RT */
-#define DISABLE_PREEMPTION(r)
-#define ENABLE_PREEMPTION(r)
-#define ENABLE_PREEMPTION_NO_CHECK(r)
-#define MP_DISABLE_PREEMPTION(r)
-#define MP_ENABLE_PREEMPTION(r)
-#define MP_ENABLE_PREEMPTION_NO_CHECK(r)
+#define DISABLE_PREEMPTION
+#define ENABLE_PREEMPTION
+#define ENABLE_PREEMPTION_NO_CHECK
+#define MP_DISABLE_PREEMPTION
+#define MP_ENABLE_PREEMPTION
+#define MP_ENABLE_PREEMPTION_NO_CHECK
 #endif	/* MACH_RT */
 
 #endif /* _I386AT_MP_H_ */
+
+#endif /* KERNEL_PRIVATE */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -69,6 +69,18 @@
 
 #include <kern/wait_queue.h>
 
+/* forward declarations */
+static boolean_t wait_queue_member_locked(
+			wait_queue_t		wq,
+			wait_queue_set_t	wq_set);
+
+void wait_queue_unlink_one(
+			wait_queue_t		wq,
+			wait_queue_set_t	*wq_setp);
+
+kern_return_t wait_queue_set_unlink_all_nofree(
+			wait_queue_set_t	wq_set);
+
 /*
  *	Routine:        wait_queue_init
  *	Purpose:
@@ -114,7 +126,7 @@ wait_queue_alloc(
 	if (wq != WAIT_QUEUE_NULL) {
 		ret = wait_queue_init(wq, policy);
 		if (ret != KERN_SUCCESS) {
-			kfree((vm_offset_t)wq, sizeof(struct wait_queue));
+			kfree(wq, sizeof(struct wait_queue));
 			wq = WAIT_QUEUE_NULL;
 		}
 	}
@@ -136,7 +148,7 @@ wait_queue_free(
 		return KERN_INVALID_ARGUMENT;
 	if (!queue_empty(&wq->wq_queue))
 		return KERN_FAILURE;
-	kfree((vm_offset_t)wq, sizeof(struct wait_queue));
+	kfree(wq, sizeof(struct wait_queue));
 	return KERN_SUCCESS;
 }
 
@@ -169,13 +181,26 @@ wait_queue_set_init(
 	return KERN_SUCCESS;
 }
 
-/* legacy API */
+
 kern_return_t
 wait_queue_sub_init(
 	wait_queue_set_t wqset,
 	int policy)
 {
 	return wait_queue_set_init(wqset, policy);
+}
+
+kern_return_t
+wait_queue_sub_clearrefs(
+        wait_queue_set_t wq_set)
+{
+	if (!wait_queue_is_set(wq_set))
+		return KERN_INVALID_ARGUMENT;
+
+	wqs_lock(wq_set);
+	wq_set->wqs_refcount = 0;
+	wqs_unlock(wq_set);
+	return KERN_SUCCESS;
 }
 
 /*
@@ -201,7 +226,7 @@ wait_queue_set_alloc(
 
 		ret = wait_queue_set_init(wq_set, policy);
 		if (ret != KERN_SUCCESS) {
-			kfree((vm_offset_t)wq_set, sizeof(struct wait_queue_set));
+			kfree(wq_set, sizeof(struct wait_queue_set));
 			wq_set = WAIT_QUEUE_SET_NULL;
 		}
 	}
@@ -225,22 +250,10 @@ wait_queue_set_free(
 	if (!queue_empty(&wq_set->wqs_wait_queue.wq_queue))
 		return KERN_FAILURE;
 
-	kfree((vm_offset_t)wq_set, sizeof(struct wait_queue_set));
+	kfree(wq_set, sizeof(struct wait_queue_set));
 	return KERN_SUCCESS;
 }
 
-kern_return_t
-wait_queue_sub_clearrefs(
-        wait_queue_set_t wq_set)
-{
-	if (!wait_queue_is_set(wq_set))
-		return KERN_INVALID_ARGUMENT;
-
-	wqs_lock(wq_set);
-	wq_set->wqs_refcount = 0;
-	wqs_unlock(wq_set);
-	return KERN_SUCCESS;
-}
 
 /*
  *	
@@ -322,7 +335,7 @@ MACRO_END
  *		The wait queue is locked
  *		The set queue is just that, a set queue
  */
-__private_extern__ boolean_t
+static boolean_t
 wait_queue_member_locked(
 	wait_queue_t wq,
 	wait_queue_set_t wq_set)
@@ -465,7 +478,7 @@ wait_queue_link(
 
 	ret = wait_queue_link_noalloc(wq, wq_set, wql);
 	if (ret != KERN_SUCCESS)
-		kfree((vm_offset_t)wql, sizeof(struct wait_queue_link));
+		kfree(wql, sizeof(struct wait_queue_link));
 
 	return ret;
 }	
@@ -532,7 +545,7 @@ wait_queue_unlink(
 				wqs_unlock(wq_set);
 				wait_queue_unlock(wq);
 				splx(s);
-				kfree((vm_offset_t)wql, sizeof(struct wait_queue_link));
+				kfree(wql, sizeof(struct wait_queue_link));
 				return KERN_SUCCESS;
 			}
 		}
@@ -652,7 +665,7 @@ wait_queue_unlink_all(
 
 	while(!queue_empty(links)) {
 		wql = (wait_queue_link_t) dequeue(links);
-		kfree((vm_offset_t) wql, sizeof(struct wait_queue_link));
+		kfree(wql, sizeof(struct wait_queue_link));
 	}
 
 	return(KERN_SUCCESS);
@@ -675,7 +688,6 @@ wait_queue_set_unlink_all_nofree(
 	wait_queue_link_t wql;
 	wait_queue_t wq;
 	queue_t q;
-	kern_return_t kret;
 	spl_t s;
 
 	if (!wait_queue_is_set(wq_set)) {
@@ -735,7 +747,6 @@ wait_queue_set_unlink_all(
 	queue_t q;
 	queue_head_t links_queue_head;
 	queue_t links = &links_queue_head;
-	kern_return_t kret;
 	spl_t s;
 
 	if (!wait_queue_is_set(wq_set)) {
@@ -771,7 +782,7 @@ retry:
 
 	while (!queue_empty (links)) {
 		wql = (wait_queue_link_t) dequeue(links);
-		kfree((vm_offset_t)wql, sizeof(struct wait_queue_link));
+		kfree(wql, sizeof(struct wait_queue_link));
 	}
 	return(KERN_SUCCESS);
 }	
@@ -810,7 +821,7 @@ wait_queue_unlink_one(
 			wqs_unlock(wq_set);
 			wait_queue_unlock(wq);
 			splx(s);
-			kfree((vm_offset_t)wql,sizeof(struct wait_queue_link));
+			kfree(wql,sizeof(struct wait_queue_link));
 			*wq_setp = wq_set;
 			return;
 		}
@@ -840,6 +851,7 @@ wait_queue_assert_wait64_locked(
 	wait_queue_t wq,
 	event64_t event,
 	wait_interrupt_t interruptible,
+	uint64_t deadline,
 	thread_t thread)
 {
 	wait_result_t wait_result;
@@ -862,12 +874,19 @@ wait_queue_assert_wait64_locked(
 	 */
 	wait_result = thread_mark_wait_locked(thread, interruptible);
 	if (wait_result == THREAD_WAITING) {
-		if (thread->vm_privilege)
+		if (thread->options & TH_OPT_VMPRIV)
 			enqueue_head(&wq->wq_queue, (queue_entry_t) thread);
 		else
 			enqueue_tail(&wq->wq_queue, (queue_entry_t) thread);
+
 		thread->wait_event = event;
 		thread->wait_queue = wq;
+
+		if (deadline != 0) {
+			if (!timer_call_enter(&thread->wait_timer, deadline))
+				thread->wait_timer_active++;
+			thread->wait_timer_is_set = TRUE;
+		}
 	}
 	return(wait_result);
 }
@@ -885,25 +904,23 @@ wait_result_t
 wait_queue_assert_wait(
 	wait_queue_t wq,
 	event_t event,
-	wait_interrupt_t interruptible)
+	wait_interrupt_t interruptible,
+	uint64_t deadline)
 {
 	spl_t s;
 	wait_result_t ret;
-	thread_t cur_thread = current_thread();
+	thread_t thread = current_thread();
 
 	/* If it is an invalid wait queue, you can't wait on it */
-	if (!wait_queue_is_valid(wq)) {
-		thread_t thread = current_thread();
+	if (!wait_queue_is_valid(wq))
 		return (thread->wait_result = THREAD_RESTART);
-	}
 
 	s = splsched();
 	wait_queue_lock(wq);
-	thread_lock(cur_thread);
-	ret = wait_queue_assert_wait64_locked(
-				wq, (event64_t)((uint32_t)event),
-				interruptible, cur_thread);
-	thread_unlock(cur_thread);
+	thread_lock(thread);
+	ret = wait_queue_assert_wait64_locked(wq, (event64_t)((uint32_t)event),
+											interruptible, deadline, thread);
+	thread_unlock(thread);
 	wait_queue_unlock(wq);
 	splx(s);
 	return(ret);
@@ -921,28 +938,26 @@ wait_result_t
 wait_queue_assert_wait64(
 	wait_queue_t wq,
 	event64_t event,
-	wait_interrupt_t interruptible)
+	wait_interrupt_t interruptible,
+	uint64_t deadline)
 {
 	spl_t s;
 	wait_result_t ret;
-	thread_t cur_thread = current_thread();
+	thread_t thread = current_thread();
 
 	/* If it is an invalid wait queue, you cant wait on it */
-	if (!wait_queue_is_valid(wq)) {
-		thread_t thread = current_thread();
+	if (!wait_queue_is_valid(wq))
 		return (thread->wait_result = THREAD_RESTART);
-	}
 
 	s = splsched();
 	wait_queue_lock(wq);
-	thread_lock(cur_thread);
-	ret = wait_queue_assert_wait64_locked(wq, event, interruptible, cur_thread);
-	thread_unlock(cur_thread);
+	thread_lock(thread);
+	ret = wait_queue_assert_wait64_locked(wq, event, interruptible, deadline, thread);
+	thread_unlock(thread);
 	wait_queue_unlock(wq);
 	splx(s);
 	return(ret);
 }
-
 
 /*
  *	Routine:	_wait_queue_select64_all
@@ -1062,7 +1077,7 @@ wait_queue_wakeup64_all_locked(
 	res = KERN_NOT_WAITING;
 	while (!queue_empty (q)) {
 		thread_t thread = (thread_t) dequeue(q);
-		res = thread_go_locked(thread, result);
+		res = thread_go(thread, result);
 		assert(res == KERN_SUCCESS);
 		thread_unlock(thread);
 	}
@@ -1196,8 +1211,7 @@ _wait_queue_select64_one(
 			 * the event we are posting to this queue, pull
 			 * it off the queue and stick it in out wake_queue.
 			 */
-			thread_t t = (thread_t)wq_element;
-
+			t = (thread_t)wq_element;
 			if (t->wait_event == event) {
 				thread_lock(t);
 				remqueue(q, (queue_entry_t) t);
@@ -1206,6 +1220,8 @@ _wait_queue_select64_one(
 				t->at_safe_point = FALSE;
 				return t;	/* still locked */
 			}
+
+			t = THREAD_NULL;
 		}
 		wq_element = wqe_next;
 	}
@@ -1239,7 +1255,6 @@ wait_queue_peek64_locked(
 {
 	wait_queue_element_t wq_element;
 	wait_queue_element_t wqe_next;
-	thread_t t;
 	queue_t q;
 
 	assert(wq->wq_fifo);
@@ -1425,7 +1440,7 @@ wait_queue_wakeup64_identity_locked(
 		wait_queue_unlock(wq);
 
 	if (thread) {
-		res = thread_go_locked(thread, result);
+		res = thread_go(thread, result);
 		assert(res == KERN_SUCCESS);
 	}
 	return thread;  /* still locked if not NULL */
@@ -1464,7 +1479,7 @@ wait_queue_wakeup64_one_locked(
 	if (thread) {
 		kern_return_t res;
 		
-		res = thread_go_locked(thread, result);
+		res = thread_go(thread, result);
 		assert(res == KERN_SUCCESS);
 		thread_unlock(thread);
 		return res;
@@ -1505,7 +1520,7 @@ wait_queue_wakeup_one(
 	if (thread) {
 		kern_return_t res;
 
-		res = thread_go_locked(thread, result);
+		res = thread_go(thread, result);
 		assert(res == KERN_SUCCESS);
 		thread_unlock(thread);
 		splx(s);
@@ -1547,7 +1562,7 @@ wait_queue_wakeup64_one(
 	if (thread) {
 		kern_return_t res;
 
-		res = thread_go_locked(thread, result);
+		res = thread_go(thread, result);
 		assert(res == KERN_SUCCESS);
 		thread_unlock(thread);
 		splx(s);
@@ -1601,7 +1616,7 @@ wait_queue_wakeup64_thread_locked(
 	if (res != KERN_SUCCESS)
 		return KERN_NOT_WAITING;
 
-	res = thread_go_locked(thread, result);
+	res = thread_go(thread, result);
 	assert(res == KERN_SUCCESS);
 	thread_unlock(thread);
 	return res;
@@ -1646,7 +1661,7 @@ wait_queue_wakeup_thread(
 	wait_queue_unlock(wq);
 
 	if (res == KERN_SUCCESS) {
-		res = thread_go_locked(thread, result);
+		res = thread_go(thread, result);
 		assert(res == KERN_SUCCESS);
 		thread_unlock(thread);
 		splx(s);
@@ -1695,7 +1710,7 @@ wait_queue_wakeup64_thread(
 	wait_queue_unlock(wq);
 
 	if (res == KERN_SUCCESS) {
-		res = thread_go_locked(thread, result);
+		res = thread_go(thread, result);
 		assert(res == KERN_SUCCESS);
 		thread_unlock(thread);
 		splx(s);

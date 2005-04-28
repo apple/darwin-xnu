@@ -32,7 +32,8 @@
 
 // options for getExistingServices()
 enum {
-    kIONotifyOnce		= 0x00000001
+    kIONotifyOnce		= 0x00000001,
+    kIOServiceExistingSet	= 0x00000002
 };
 
 // masks for __state[1]
@@ -98,7 +99,7 @@ class _IOServiceInterestNotifier : public IONotifier
     OSDeclareDefaultStructors(_IOServiceInterestNotifier)
 
 public:
-    OSArray *			whence;
+    queue_chain_t		chain;
 
     IOServiceInterestHandler	handler;
     void *			target;
@@ -120,11 +121,9 @@ class _IOConfigThread : public OSObject
     OSDeclareDefaultStructors(_IOConfigThread)
 
 public:
-    IOThread		thread;
-
     virtual void free();
 
-    static _IOConfigThread * configThread( void );
+    static void configThread( void );
     static void main( _IOConfigThread * self );
 };
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -119,7 +119,7 @@ typedef unsigned long vmm_adsp_id_t;
 
 enum {
 	kVmmCurMajorVersion					= 0x0001,
-	kVmmCurMinorVersion					= 0x0006,
+	kVmmCurMinorVersion					= 0x0007,
 	kVmmMinMajorVersion					= 0x0001,
 };
 #define kVmmCurrentVersion ((kVmmCurMajorVersion << 16) | kVmmCurMinorVersion)
@@ -134,14 +134,24 @@ enum {
 	kVmmFeature_XA						= 0x00000020,
 	kVmmFeature_SixtyFourBit			= 0x00000040,
 	kVmmFeature_MultAddrSpace			= 0x00000080,
+	kVmmFeature_GuestShadowAssist		= 0x00000100,	/* Guest->physical shadow hash table */
+	kVmmFeature_GlobalMappingAssist		= 0x00000200,	/* Global shadow mapping support */
+	kVmmFeature_HostShadowAssist		= 0x00000400,	/* Linear shadow mapping of an area of
+	                                                       host virtual as guest physical */
+	kVmmFeature_MultAddrSpaceAssist		= 0x00000800,	/* Expanded pool of guest virtual
+	                                                       address spaces */
 };
 #define kVmmCurrentFeatures (kVmmFeature_LittleEndian | kVmmFeature_Stop | kVmmFeature_ExtendedMapping \
-	| kVmmFeature_ListMapping | kVmmFeature_FastAssist | kVmmFeature_XA | kVmmFeature_MultAddrSpace)
+	| kVmmFeature_ListMapping | kVmmFeature_FastAssist | kVmmFeature_XA \
+	| kVmmFeature_GuestShadowAssist)
 
 enum {
-	vmm64Bit							= 0x80000000,
+	vmm64Bit							= 0x80000000,	/* Make guest 64-bit */
+	vmmGSA								= 0x40000000,	/* Enable guest shadow assist (GSA) */
+	vmmGMA								= 0x20000000,	/* Enable global shadow mapping assist (GMA) */
 };
 
+#define kVmmSupportedSetXA (vmm64Bit | vmmGSA | vmmGMA)
 
 typedef unsigned long vmm_version_t;
 
@@ -268,12 +278,13 @@ enum {
 	kVmmProtectExecute,									/* Set prot attributes and launch */
 	kVmmMapList,										/* Map a list of pages into guest address spaces */
 	kVmmUnmapList,										/* Unmap a list of pages from guest address spaces */
-	kvmmExitToHost,
-	kvmmResumeGuest,
-	kvmmGetGuestRegister,
-	kvmmSetGuestRegister,
+	kvmmExitToHost,										/* Exit from FAM to host -- fast-path syscall */
+	kvmmResumeGuest,									/* Resume guest from FAM -- fast-path syscall */
+	kvmmGetGuestRegister,								/* Get guest register from FAM -- fast-path syscall */
+	kvmmSetGuestRegister,								/* Set guest register from FAM -- fast-path syscall */
 	
-	kVmmSetXA,											/* Set extended architecture features for a VM */
+	kVmmActivateXA,										/* Activate extended architecture features for a VM */
+	kVmmDeactivateXA,									/* Deactivate extended architecture features for a VM */
 	kVmmGetXA,											/* Get extended architecture features from a VM */
 
 	kVmmMapPage64,										/* Map a host to guest address space - supports 64-bit */
@@ -286,6 +297,9 @@ enum {
 	kVmmMapList64,										/* Map a list of pages into guest address spaces - supports 64-bit  */
 	kVmmUnmapList64,									/* Unmap a list of pages from guest address spaces - supports 64-bit  */
 	kVmmMaxAddr,										/* Returns the maximum virtual address that is mappable  */
+	
+	kVmmSetGuestMemory,									/* Sets base and extent of guest physical memory in host address space */
+	kVmmPurgeLocal,										/* Purges all non-global mappings for a given guest address space */
 };
 
 #define kVmmReturnNull					0
@@ -381,7 +395,8 @@ typedef struct vmmUMList64 {
 #define vmmlFlgs 0x00000FFF			/* Flags passed in in vmlava low order 12 bits */
 #define vmmlProt 0x00000007			/* Protection flags for the page */
 #define vmmlAdID 0x000003F0			/* Guest address space ID - used only if non-zero */
-#define vmmlRsvd 0x00000C08			/* Reserved for future */
+#define vmmlGlob 0x00000400			/* Mapping is global */
+#define vmmlRsvd 0x00000800			/* Reserved for future */
 
 /*************************************************************************************
 	Internal Emulation Types
@@ -410,7 +425,7 @@ typedef struct vmmCntrlEntry {						/* Virtual Machine Monitor control table ent
 #define vmmSpfSaveb		24
 	unsigned int	vmmXAFlgs;						/* Extended Architecture flags */
 	vmm_state_page_t *vmmContextKern;				/* Kernel address of context communications area */
-	ppnum_t			vmmContextPhys;				/* Physical address of context communications area */
+	ppnum_t			vmmContextPhys;					/* Physical address of context communications area */
 	vmm_state_page_t *vmmContextUser;				/* User address of context communications area */
 	facility_context vmmFacCtx;						/* Header for vector and floating point contexts */
 	pmap_t			vmmPmap;						/* Last dispatched pmap */
@@ -430,47 +445,48 @@ typedef struct vmmCntrlTable {						/* Virtual Machine Monitor Control table */
 #pragma pack()
 
 /* function decls for kernel level routines... */
-extern void vmm_execute_vm(thread_act_t act, vmm_thread_index_t index);
-extern vmmCntrlEntry *vmm_get_entry(thread_act_t act, vmm_thread_index_t index);
-extern kern_return_t vmm_tear_down_context(thread_act_t act, vmm_thread_index_t index);
-extern kern_return_t vmm_get_float_state(thread_act_t act, vmm_thread_index_t index);
-extern kern_return_t vmm_get_vector_state(thread_act_t act, vmm_thread_index_t index);
-extern kern_return_t vmm_set_timer(thread_act_t act, vmm_thread_index_t index, unsigned int timerhi, unsigned int timerlo);
-extern kern_return_t vmm_get_timer(thread_act_t act, vmm_thread_index_t index);
-extern void vmm_tear_down_all(thread_act_t act);
-extern kern_return_t vmm_map_page(thread_act_t act, vmm_thread_index_t hindex, addr64_t cva,
+extern void vmm_execute_vm(thread_t act, vmm_thread_index_t index);
+extern kern_return_t vmm_tear_down_context(thread_t act, vmm_thread_index_t index);
+extern kern_return_t vmm_get_float_state(thread_t act, vmm_thread_index_t index);
+extern kern_return_t vmm_get_vector_state(thread_t act, vmm_thread_index_t index);
+extern kern_return_t vmm_set_timer(thread_t act, vmm_thread_index_t index, unsigned int timerhi, unsigned int timerlo);
+extern kern_return_t vmm_get_timer(thread_t act, vmm_thread_index_t index);
+extern void vmm_tear_down_all(thread_t act);
+extern kern_return_t vmm_map_page(thread_t act, vmm_thread_index_t hindex, addr64_t cva,
 	addr64_t ava, vm_prot_t prot);
-extern vmm_return_code_t vmm_map_execute(thread_act_t act, vmm_thread_index_t hindex, addr64_t cva,
+extern vmm_return_code_t vmm_map_execute(thread_t act, vmm_thread_index_t hindex, addr64_t cva,
 	addr64_t ava, vm_prot_t prot);
-extern kern_return_t vmm_protect_page(thread_act_t act, vmm_thread_index_t hindex, addr64_t va,
+extern kern_return_t vmm_protect_page(thread_t act, vmm_thread_index_t hindex, addr64_t va,
 	vm_prot_t prot);
-extern vmm_return_code_t vmm_protect_execute(thread_act_t act, vmm_thread_index_t hindex, addr64_t va,
+extern vmm_return_code_t vmm_protect_execute(thread_t act, vmm_thread_index_t hindex, addr64_t va,
 	vm_prot_t prot);
-extern addr64_t vmm_get_page_mapping(thread_act_t act, vmm_thread_index_t index,
+extern addr64_t vmm_get_page_mapping(thread_t act, vmm_thread_index_t index,
 	addr64_t va);
-extern kern_return_t vmm_unmap_page(thread_act_t act, vmm_thread_index_t index, addr64_t va);
-extern void vmm_unmap_all_pages(thread_act_t act, vmm_thread_index_t index);
-extern boolean_t vmm_get_page_dirty_flag(thread_act_t act, vmm_thread_index_t index,
+extern kern_return_t vmm_unmap_page(thread_t act, vmm_thread_index_t index, addr64_t va);
+extern void vmm_unmap_all_pages(thread_t act, vmm_thread_index_t index);
+extern boolean_t vmm_get_page_dirty_flag(thread_t act, vmm_thread_index_t index,
 	addr64_t va, unsigned int reset);
-extern kern_return_t vmm_set_XA(thread_act_t act, vmm_thread_index_t index, unsigned int xaflags);
-extern unsigned int vmm_get_XA(thread_act_t act, vmm_thread_index_t index);
+extern kern_return_t vmm_activate_XA(thread_t act, vmm_thread_index_t index, unsigned int xaflags);
+extern kern_return_t vmm_deactivate_XA(thread_t act, vmm_thread_index_t index, unsigned int xaflags);
+extern unsigned int vmm_get_XA(thread_t act, vmm_thread_index_t index);
 extern int vmm_get_features(struct savearea *);
 extern int vmm_get_version(struct savearea *);
 extern int vmm_init_context(struct savearea *);
 extern int vmm_dispatch(struct savearea *);
-extern int vmm_exit(thread_act_t act, struct savearea *);
-extern void vmm_force_exit(thread_act_t act, struct savearea *);
+extern int vmm_exit(thread_t act, struct savearea *);
+extern void vmm_force_exit(thread_t act, struct savearea *);
 extern int vmm_stop_vm(struct savearea *save);
-extern void vmm_timer_pop(thread_act_t act);
-extern void vmm_interrupt(ReturnHandler *rh, thread_act_t act);
-extern kern_return_t vmm_map_list(thread_act_t act, vmm_thread_index_t index, unsigned int cnt, unsigned int flavor);
-extern kern_return_t vmm_unmap_list(thread_act_t act, vmm_thread_index_t index, unsigned int cnt, unsigned int flavor);
+extern void vmm_timer_pop(thread_t act);
+extern void vmm_interrupt(ReturnHandler *rh, thread_t act);
+extern kern_return_t vmm_map_list(thread_t act, vmm_thread_index_t index, unsigned int cnt, unsigned int flavor);
+extern kern_return_t vmm_unmap_list(thread_t act, vmm_thread_index_t index, unsigned int cnt, unsigned int flavor);
 extern vmm_return_code_t vmm_resume_guest(vmm_thread_index_t index, unsigned long pc, 
 	unsigned long vmmCntrl, unsigned long vmmCntrMaskl);
 extern vmm_return_code_t vmm_exit_to_host(vmm_thread_index_t index);
 extern unsigned long vmm_get_guest_register(vmm_thread_index_t index, unsigned long reg_index);
 extern vmm_return_code_t vmm_set_guest_register(vmm_thread_index_t index, unsigned long reg_index, unsigned long reg_value);
-extern addr64_t vmm_max_addr(thread_act_t act);
+extern addr64_t vmm_max_addr(thread_t act);
+extern kern_return_t vmm_set_guest_memory(thread_t act, vmm_thread_index_t index, addr64_t base, addr64_t extent);
+extern kern_return_t vmm_purge_local(thread_t act, vmm_thread_index_t index);
 
 #endif
-

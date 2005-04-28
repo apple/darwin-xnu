@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -62,6 +62,8 @@
 #include <mach/message.h>
 #include <mach/kern_return.h>
 
+#include <sys/cdefs.h>
+
 /*
  *	These error codes should be specified as system 4, subsytem 2.
  *	But alas backwards compatibility makes that impossible.
@@ -87,11 +89,16 @@
  *	mig_reply_error_t format message.  Clients must accept
  *	these in addition to the expected reply message format.
  */
+#pragma pack(4)
 typedef struct {
 	mach_msg_header_t	Head;
 	NDR_record_t		NDR;
 	kern_return_t		RetCode;
 } mig_reply_error_t;
+#pragma pack()
+
+
+__BEGIN_DECLS
 
 #define __NDR_convert__mig_reply_error_t__defined
 #if mig_internal
@@ -108,5 +115,6 @@ __NDR_convert__mig_reply_error_t(mig_reply_error_t *x)
 #endif /* __NDR_convert__int_rep__kern_return_t__defined */
 }
 
-#endif	/* _MACH_MIG_ERRORS_H_ */
+__END_DECLS
 
+#endif	/* _MACH_MIG_ERRORS_H_ */

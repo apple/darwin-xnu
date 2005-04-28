@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -322,20 +322,11 @@ routine task_set_ras_pc(
 		boundspc        : vm_address_t);
 
 
+skip; /* was kernel_task_create() */
+
 /* 
- * JMM - Want to eliminate kernel tasks and processor_set so
- * keep them at the end.
+ * JMM - Want to eliminate processor_set so keep them at the end.
  */
-/*
- *	Create a new task in the kernel's address space with
- *	an empty set of IPC rights, with a map allocated from
- * 	the kernel's map starting at map_base of length map_size.
- */
-routine kernel_task_create(
-		target_task	: task_t;
-		map_base	: vm_offset_t;
-		map_size	: vm_size_t;
-	out	child_task	: task_t);
 
 /*
  *	Assign task to processor set.

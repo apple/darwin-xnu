@@ -19,6 +19,8 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
+#ifdef	KERNEL_PRIVATE
+
 #ifndef _MACHINE_CPU_NUMBER_H
 #define _MACHINE_CPU_NUMBER_H
 
@@ -33,3 +35,5 @@
 
 
 #endif /* _MACHINE_CPU_NUMBER_H */
+
+#endif	/* KERNEL_PRIVATE */

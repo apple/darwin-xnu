@@ -87,9 +87,9 @@ static u_int16_t ru_msb = 0;
 static long ru_reseed;
 static u_int32_t tmp;		/* Storage for unused random */
 
-static u_int16_t pmod __P((u_int16_t, u_int16_t, u_int16_t));
-static void ip_initid __P((void));
-u_int16_t ip_randomid __P((void));
+static u_int16_t pmod(u_int16_t, u_int16_t, u_int16_t);
+static void ip_initid(void);
+u_int16_t ip_randomid(void);
 
 /*
  * Do a fast modular exponation, returned value will be in the range
@@ -135,7 +135,7 @@ ip_initid(void)
 	int noprime = 1;
 	struct timeval time;
 
-	getmicrotime(&time);
+	getmicrouptime(&time);
 	read_random((void *) &tmp, sizeof(tmp));
 	ru_x = (tmp & 0xFFFF) % RU_M;
 
@@ -186,7 +186,7 @@ ip_randomid(void)
 	int i, n;
 	struct timeval time;
 
-	getmicrotime(&time);
+	getmicrouptime(&time);
 	if (ru_counter >= RU_MAX || time.tv_sec > ru_reseed)
 		ip_initid();
 

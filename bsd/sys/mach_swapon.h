@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -23,11 +23,7 @@
  * Copyright (c) 1989,1995 NeXT, Inc.
  * All rights reserved.
  *
- * The NEXTSTEP Software License Agreement specifies the terms
- * and conditions for redistribution.
- *
  */
-
 #ifndef	_MACH_SWAPON_H
 #define	_MACH_SWAPON_H
 

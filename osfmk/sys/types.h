@@ -125,8 +125,9 @@ typedef	char *		caddr_t;	/* address of a (signed) char */
 
 typedef int		time_t;		/* a signed 32    */
 typedef unsigned int	daddr_t;	/* an unsigned 32 */
+#if 0 /* off_t should be 64-bit ! */
 typedef	unsigned int	off_t;		/* another unsigned 32 */
-
+#endif
 typedef	unsigned short	dev_t;		/* another unsigned short */
 #define	NODEV		((dev_t)-1)	/* and a null value for it */
 

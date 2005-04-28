@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -57,22 +57,32 @@
  *	Exported message traps.  See mach/message.h.
  */
 
-#include <cpus.h>
-
+#include <mach/mach_types.h>
 #include <mach/kern_return.h>
 #include <mach/port.h>
 #include <mach/message.h>
 #include <mach/mig_errors.h>
+#include <mach/mach_traps.h>
+
+#include <kern/kern_types.h>
 #include <kern/assert.h>
 #include <kern/counters.h>
 #include <kern/cpu_number.h>
+#include <kern/ipc_kobject.h>
+#include <kern/ipc_mig.h>
 #include <kern/task.h>
 #include <kern/thread.h>
 #include <kern/lock.h>
 #include <kern/sched_prim.h>
 #include <kern/exception.h>
 #include <kern/misc_protos.h>
+#include <kern/kalloc.h>
+#include <kern/processor.h>
+#include <kern/syscall_subr.h>
+
 #include <vm/vm_map.h>
+
+#include <ipc/ipc_types.h>
 #include <ipc/ipc_kmsg.h>
 #include <ipc/ipc_mqueue.h>
 #include <ipc/ipc_object.h>
@@ -81,24 +91,24 @@
 #include <ipc/ipc_pset.h>
 #include <ipc/ipc_space.h>
 #include <ipc/ipc_entry.h>
-#include <kern/kalloc.h>
-#include <kern/thread_swap.h>
-#include <kern/processor.h>
-
-#include <kern/mk_sp.h>
 
 #include <machine/machine_routines.h>
+
 #include <sys/kdebug.h>
 
+#ifndef offsetof
+#define offsetof(type, member)  ((size_t)(&((type *)0)->member))
+#endif /* offsetof */
+
 /*
- * Forward declarations
+ * Forward declarations - kernel internal routines
  */
 
 mach_msg_return_t mach_msg_send(
 	mach_msg_header_t	*msg,
 	mach_msg_option_t	option,
 	mach_msg_size_t		send_size,
-	mach_msg_timeout_t	timeout,
+	mach_msg_timeout_t	send_timeout,
 	mach_port_name_t	notify);
 
 mach_msg_return_t mach_msg_receive(
@@ -106,14 +116,16 @@ mach_msg_return_t mach_msg_receive(
 	mach_msg_option_t	option,
 	mach_msg_size_t		rcv_size,
 	mach_port_name_t	rcv_name,
-	mach_msg_timeout_t	timeout,
+	mach_msg_timeout_t	rcv_timeout,
 	void 			(*continuation)(mach_msg_return_t),
 	mach_msg_size_t		slist_size);
 
 
+mach_msg_return_t mach_msg_receive_results(void);
+
 mach_msg_return_t msg_receive_error(
 	ipc_kmsg_t		kmsg,
-	mach_msg_header_t	*msg,
+	mach_vm_address_t	msg_addr,
 	mach_msg_option_t	option,
 	mach_port_seqno_t	seqno,
 	ipc_space_t		space);
@@ -158,19 +170,42 @@ mach_msg_send(
 	mach_msg_header_t	*msg,
 	mach_msg_option_t	option,
 	mach_msg_size_t		send_size,
-	mach_msg_timeout_t	timeout,
+	mach_msg_timeout_t	send_timeout,
 	mach_port_name_t	notify)
 {
 	ipc_space_t space = current_space();
 	vm_map_t map = current_map();
 	ipc_kmsg_t kmsg;
 	mach_msg_return_t mr;
+	mach_msg_size_t	msg_and_trailer_size;
+	mach_msg_max_trailer_t	*trailer;
 
-	mr = ipc_kmsg_get(msg, send_size, &kmsg);
+	if ((send_size < sizeof(mach_msg_header_t)) || (send_size & 3))
+		return MACH_SEND_MSG_TOO_SMALL;
 
-	if (mr != MACH_MSG_SUCCESS)
-		return mr;
+	msg_and_trailer_size = send_size + MAX_TRAILER_SIZE;
 
+	kmsg = ipc_kmsg_alloc(msg_and_trailer_size);
+
+	if (kmsg == IKM_NULL)
+		return MACH_SEND_NO_BUFFER;
+
+	(void) memcpy((void *) kmsg->ikm_header, (const void *) msg, send_size);
+
+	kmsg->ikm_header->msgh_size = send_size;
+
+	/* 
+	 * reserve for the trailer the largest space (MAX_TRAILER_SIZE)
+	 * However, the internal size field of the trailer (msgh_trailer_size)
+	 * is initialized to the minimum (sizeof(mach_msg_trailer_t)), to optimize
+	 * the cases where no implicit data is requested.
+	 */
+	trailer = (mach_msg_max_trailer_t *) ((vm_offset_t)kmsg->ikm_header + send_size);
+	trailer->msgh_sender = current_thread()->task->sec_token;
+	trailer->msgh_audit = current_thread()->task->audit_token;
+	trailer->msgh_trailer_type = MACH_MSG_TRAILER_FORMAT_0;
+	trailer->msgh_trailer_size = MACH_MSG_TRAILER_MINIMUM_SIZE;
+	
 	if (option & MACH_SEND_CANCEL) {
 		if (notify == MACH_PORT_NULL)
 			mr = MACH_SEND_INVALID_NOTIFY;
@@ -183,11 +218,13 @@ mach_msg_send(
 		return mr;
 	}
 
-	mr = ipc_kmsg_send(kmsg, option & MACH_SEND_TIMEOUT, timeout);
+	mr = ipc_kmsg_send(kmsg, option & MACH_SEND_TIMEOUT, send_timeout);
 
 	if (mr != MACH_MSG_SUCCESS) {
 	    mr |= ipc_kmsg_copyout_pseudo(kmsg, space, map, MACH_MSG_BODY_NULL);
-	    (void) ipc_kmsg_put(msg, kmsg, kmsg->ikm_header.msgh_size);
+	    (void) memcpy((void *) msg, (const void *) kmsg->ikm_header, 
+			  kmsg->ikm_header->msgh_size);
+	    ipc_kmsg_free(kmsg);
 	}
 
 	return mr;
@@ -223,11 +260,10 @@ mach_msg_receive_results(void)
 
 	ipc_object_t      object = self->ith_object;
 	mach_msg_return_t mr = self->ith_state;
-	mach_msg_header_t *msg = self->ith_msg;
+	mach_vm_address_t msg_addr = self->ith_msg_addr;
 	mach_msg_option_t option = self->ith_option;
 	ipc_kmsg_t        kmsg = self->ith_kmsg;
 	mach_port_seqno_t seqno = self->ith_seqno;
-	mach_msg_size_t   slist_size = self->ith_scatter_list_size;
 
 	mach_msg_format_0_trailer_t *trailer;
 
@@ -244,13 +280,13 @@ mach_msg_receive_results(void)
 	       * the queue).
 	       */
 	      if (copyout((char *) &self->ith_msize,
-			  (char *) &msg->msgh_size,
+			  msg_addr + offsetof(mach_msg_header_t, msgh_size),
 			  sizeof(mach_msg_size_t)))
 		mr = MACH_RCV_INVALID_DATA;
 	      goto out;
 	    }
 		  
-	    if (msg_receive_error(kmsg, msg, option, seqno, space)
+	    if (msg_receive_error(kmsg, msg_addr, option, seqno, space)
 		== MACH_RCV_INVALID_DATA)
 	      mr = MACH_RCV_INVALID_DATA;
 	  }
@@ -258,8 +294,8 @@ mach_msg_receive_results(void)
 	}
 
 	trailer = (mach_msg_format_0_trailer_t *)
-			((vm_offset_t)&kmsg->ikm_header +
-			round_msg(kmsg->ikm_header.msgh_size));
+			((vm_offset_t)kmsg->ikm_header +
+			round_msg(kmsg->ikm_header->msgh_size));
 	if (option & MACH_RCV_TRAILER_MASK) {
 		trailer->msgh_seqno = seqno;
 		trailer->msgh_trailer_size = REQUESTED_TRAILER_SIZE(option);
@@ -275,7 +311,7 @@ mach_msg_receive_results(void)
 		mach_msg_size_t slist_size = self->ith_scatter_list_size;
 		mach_msg_body_t *slist;
 
-		slist = ipc_kmsg_copyin_scatter(msg, slist_size, kmsg);
+		slist = ipc_kmsg_get_scatter(msg_addr, slist_size, kmsg);
 		mr = ipc_kmsg_copyout(kmsg, space, map, MACH_PORT_NULL, slist);
 		ipc_kmsg_free_scatter(slist, slist_size);
 	} else {
@@ -285,20 +321,20 @@ mach_msg_receive_results(void)
 
 	if (mr != MACH_MSG_SUCCESS) {
 		if ((mr &~ MACH_MSG_MASK) == MACH_RCV_BODY_ERROR) {
-			if (ipc_kmsg_put(msg, kmsg, kmsg->ikm_header.msgh_size +
+			if (ipc_kmsg_put(msg_addr, kmsg, kmsg->ikm_header->msgh_size +
 			   trailer->msgh_trailer_size) == MACH_RCV_INVALID_DATA)
 				mr = MACH_RCV_INVALID_DATA;
 		} 
 		else {
-			if (msg_receive_error(kmsg, msg, option, seqno, space) 
+			if (msg_receive_error(kmsg, msg_addr, option, seqno, space) 
 						== MACH_RCV_INVALID_DATA)
 				mr = MACH_RCV_INVALID_DATA;
 		}
 		goto out;
 	}
-	mr = ipc_kmsg_put(msg,
+	mr = ipc_kmsg_put(msg_addr,
 			  kmsg,
-			  kmsg->ikm_header.msgh_size + 
+			  kmsg->ikm_header->msgh_size + 
 			  trailer->msgh_trailer_size);
  out:
 	return mr;
@@ -310,20 +346,15 @@ mach_msg_receive(
 	mach_msg_option_t	option,
 	mach_msg_size_t		rcv_size,
 	mach_port_name_t	rcv_name,
-	mach_msg_timeout_t	timeout,
+	mach_msg_timeout_t	rcv_timeout,
 	void			(*continuation)(mach_msg_return_t),
 	mach_msg_size_t		slist_size)
 {
 	thread_t self = current_thread();
 	ipc_space_t space = current_space();
-	vm_map_t map = current_map();
 	ipc_object_t object;
 	ipc_mqueue_t mqueue;
-	ipc_kmsg_t kmsg;
-	mach_port_seqno_t seqno;
 	mach_msg_return_t mr;
-	mach_msg_body_t *slist;
-	mach_msg_format_0_trailer_t *trailer;
 
 	mr = ipc_mqueue_copyin(space, rcv_name, &mqueue, &object);
  	if (mr != MACH_MSG_SUCCESS) {
@@ -331,16 +362,16 @@ mach_msg_receive(
 	}
 	/* hold ref for object */
 
-	self->ith_msg = msg;
+	self->ith_msg_addr = CAST_DOWN(mach_vm_address_t, msg);
 	self->ith_object = object;
 	self->ith_msize = rcv_size;
 	self->ith_option = option;
 	self->ith_scatter_list_size = slist_size;
 	self->ith_continuation = continuation;
 
-	ipc_mqueue_receive(mqueue, option, rcv_size, timeout, THREAD_ABORTSAFE);
-	if ((option & MACH_RCV_TIMEOUT) && timeout == 0)
-		_mk_sp_thread_perhaps_yield(self);
+	ipc_mqueue_receive(mqueue, option, rcv_size, rcv_timeout, THREAD_ABORTSAFE);
+	if ((option & MACH_RCV_TIMEOUT) && rcv_timeout == 0)
+		thread_poll_yield(self);
 	return mach_msg_receive_results();
 }
 
@@ -540,36 +571,35 @@ boolean_t enable_hotpath = TRUE;	/* Patchable, just in case ...	*/
 
 mach_msg_return_t
 mach_msg_overwrite_trap(
-	mach_msg_header_t	*msg,
-	mach_msg_option_t	option,
-	mach_msg_size_t		send_size,
-	mach_msg_size_t		rcv_size,
-	mach_port_name_t	rcv_name,
-	mach_msg_timeout_t	timeout,
-	mach_port_name_t	notify,
-	mach_msg_header_t	*rcv_msg,
-        mach_msg_size_t		scatter_list_size)
+	struct mach_msg_overwrite_trap_args *args)
 {
+  	mach_vm_address_t	msg_addr = args->msg;
+	mach_msg_option_t	option = args->option;
+	mach_msg_size_t		send_size = args->send_size;
+	mach_msg_size_t		rcv_size = args->rcv_size;
+	mach_port_name_t	rcv_name = args->rcv_name;
+	mach_msg_timeout_t	msg_timeout = args->timeout;
+	mach_port_name_t	notify = args->notify;
+	mach_vm_address_t	rcv_msg_addr = args->rcv_msg;
+        mach_msg_size_t		scatter_list_size = 0; /* NOT INITIALIZED - but not used in pactice */
+
 	register mach_msg_header_t *hdr;
 	mach_msg_return_t  mr = MACH_MSG_SUCCESS;
 	/* mask out some of the options before entering the hot path */
 	mach_msg_option_t  masked_option = 
 		option & ~(MACH_SEND_TRAILER|MACH_RCV_TRAILER_MASK|MACH_RCV_LARGE);
-	int i;
 
 #if	ENABLE_HOTPATH
 	/* BEGINNING OF HOT PATH */
 	if ((masked_option == (MACH_SEND_MSG|MACH_RCV_MSG)) && enable_hotpath) {
-		register thread_t self = current_thread();
-		register mach_msg_format_0_trailer_t *trailer;
-
-		ipc_space_t space = current_act()->task->itk_space;
+		thread_t self = current_thread();
+		mach_msg_format_0_trailer_t *trailer;
+		ipc_space_t space = self->task->itk_space;
 		ipc_kmsg_t kmsg;
 		register ipc_port_t dest_port;
 		ipc_object_t rcv_object;
-		register ipc_mqueue_t rcv_mqueue;
+		ipc_mqueue_t rcv_mqueue;
 		mach_msg_size_t reply_size;
-		ipc_kmsg_t rcv_kmsg;
 
 		c_mmot_combined_S_R++;
 
@@ -609,16 +639,17 @@ mach_msg_overwrite_trap(
 		 *		server finds waiting messages and can't block.
 		 */
 
-		mr = ipc_kmsg_get(msg, send_size, &kmsg);
+		mr = ipc_kmsg_get(msg_addr, send_size, &kmsg);
 		if (mr != KERN_SUCCESS) {
 			return mr;
 		}
-		hdr = &kmsg->ikm_header;
+		hdr = kmsg->ikm_header;
 		trailer = (mach_msg_format_0_trailer_t *) ((vm_offset_t) hdr +
 							   send_size);
 
-	    fast_copyin:
 		/*
+		 * fast_copyin:
+		 *
 		 *	optimized ipc_kmsg_copyin/ipc_mqueue_copyin
 		 *
 		 *	We have the request message data in kmsg.
@@ -676,6 +707,7 @@ mach_msg_overwrite_trap(
 				}
 			} else {
 				entry = IE_NULL;
+				bits = 0;
 			}
 			if (entry == IE_NULL) {
 				entry = ipc_entry_lookup(space, reply_name);
@@ -725,6 +757,7 @@ mach_msg_overwrite_trap(
 				}
 			} else {
 				entry = IE_NULL;
+				bits = 0;
 			}
 			if (entry == IE_NULL) {
 				entry = ipc_entry_lookup(space, dest_name);
@@ -855,7 +888,6 @@ mach_msg_overwrite_trap(
 			register ipc_entry_t entry;
 			register mach_port_gen_t gen;
 			register mach_port_index_t index;
-			ipc_table_index_t *requests;
 
 		    {
 			register mach_port_name_t dest_name =
@@ -945,6 +977,7 @@ mach_msg_overwrite_trap(
 				}
 			} else {
 				entry = IE_NULL;
+				bits = 0;
 			}
 			if (entry == IE_NULL) {
 				entry = ipc_entry_lookup(space, rcv_name);
@@ -1056,6 +1089,7 @@ mach_msg_overwrite_trap(
 		  wait_queue_t waitq;
 		  thread_t receiver;
 		  processor_t processor;
+		  boolean_t still_running;
 		  spl_t s;
 
 		  s = splsched();
@@ -1081,22 +1115,15 @@ mach_msg_overwrite_trap(
 			goto slow_send;
 		  }
 
+		  assert(receiver->state & TH_WAIT);
 		  assert(receiver->wait_queue == waitq);
 		  assert(receiver->wait_event == IPC_MQUEUE_RECEIVE);
 		
 		  /*
-		   * Make sure that the scheduling state of the receiver is such
-		   * that we can handoff to it here.  If not, fall off.
-		   *
-		   * JMM - We have an opportunity here.  If the thread is locked
-		   * and we find it runnable, it may still be trying to get into
-		   * thread_block on itself.  We could just "hand him the message"
-		   * and let him go (thread_go_locked()) and then fall down into a
-		   * slow receive for ourselves.  Only his RECEIVE_TOO_LARGE handling
-		   * runs afoul of that.  Clean this up!
+		   * Make sure that the scheduling restrictions of the receiver
+		   * are consistent with a handoff here (if it comes down to that).
 		   */
-		  if ((receiver->state & (TH_RUN|TH_WAIT)) != TH_WAIT ||
-				receiver->sched_pri >= BASEPRI_RTQUEUES ||
+		  if (	receiver->sched_pri >= BASEPRI_RTQUEUES ||
 			  	receiver->processor_set != processor->processor_set ||
 				(receiver->bound_processor != PROCESSOR_NULL &&
 				 receiver->bound_processor != processor)) {
@@ -1111,8 +1138,8 @@ mach_msg_overwrite_trap(
 		  /*
 		   * Check that the receiver can stay on the hot path.
 		   */
-		  if (send_size + REQUESTED_TRAILER_SIZE(receiver->ith_option) >
-			  receiver->ith_msize) {
+		  if (ipc_kmsg_copyout_size(kmsg, receiver->map) + 
+			  REQUESTED_TRAILER_SIZE(receiver->ith_option) > receiver->ith_msize) {
 			/*
 			 *	The receiver can't accept the message.
 			 */
@@ -1146,8 +1173,8 @@ mach_msg_overwrite_trap(
 		  c_mach_msg_trap_switch_fast++;
 		  
 		  /*
-		   * JMM - Go ahead and pull the receiver from the runq.  If the
-		   * runq wasn't the one for the mqueue, unlock it.
+		   * Go ahead and pull the receiver from the waitq.  If the
+		   * waitq wasn't the one for the mqueue, unlock it.
 		   */
 		  wait_queue_pull_thread_locked(waitq,
 								receiver,
@@ -1161,19 +1188,12 @@ mach_msg_overwrite_trap(
 		  receiver->ith_seqno = dest_mqueue->imq_seqno++;
 
 		  /*
-		   * Update the scheduling state for the handoff.
+		   * Unblock the receiver.  If it was still running on another
+		   * CPU, we'll give it a chance to run with the message where
+		   * it is (and just select someother thread to run here).
+		   * Otherwise, we'll invoke it here as part of the handoff.
 		   */
-		  receiver->state &= ~(TH_WAIT|TH_UNINT);
-		  receiver->state |= TH_RUN;
-
-		  pset_run_incr(receiver->processor_set);
-		  if (receiver->sched_mode & TH_MODE_TIMESHARE)
-			  pset_share_incr(receiver->processor_set);
-
-		  receiver->wait_result = THREAD_AWAKENED;
-
-		  receiver->computation_metered = 0;
-		  receiver->reason = AST_NONE;
+		  still_running = thread_unblock(receiver, THREAD_AWAKENED);
 
 		  thread_unlock(receiver);
 
@@ -1189,7 +1209,7 @@ mach_msg_overwrite_trap(
 		   *	can hand off directly back to us.
 		   */
 		  thread_lock(self);
-		  self->ith_msg = (rcv_msg) ? rcv_msg : msg;
+		  self->ith_msg_addr = (rcv_msg_addr) ? rcv_msg_addr : msg_addr;
 		  self->ith_object = rcv_object; /* still holds reference */
 		  self->ith_msize = rcv_size;
 		  self->ith_option = option;
@@ -1199,16 +1219,23 @@ mach_msg_overwrite_trap(
 		  waitq = &rcv_mqueue->imq_wait_queue;
 		  (void)wait_queue_assert_wait64_locked(waitq,
 										IPC_MQUEUE_RECEIVE,
-										THREAD_ABORTSAFE,
+										THREAD_ABORTSAFE, 0,
 										self);
 		  thread_unlock(self);
 		  imq_unlock(rcv_mqueue);
 
 		  /*
-		   * Switch directly to receiving thread, and block
-		   * this thread as though it had called ipc_mqueue_receive.
+		   * If the receiving thread wasn't still running, we switch directly
+		   * to it here.  Otherwise we let the scheduler pick something for
+		   * here.  In either case, block this thread as though it had called
+		   * ipc_mqueue_receive.
 		   */
-		  thread_run(self, ipc_mqueue_receive_continue, receiver);
+		  if (still_running) {
+			  splx(s);
+			  thread_block(ipc_mqueue_receive_continue);
+		  } else {
+			  thread_run(self, ipc_mqueue_receive_continue, NULL, receiver);
+		  }
 		  /* NOTREACHED */
 		}
 
@@ -1420,8 +1447,10 @@ mach_msg_overwrite_trap(
 			mr = ipc_kmsg_copyout_body(kmsg, space,
 						   current_map(), 
 						   MACH_MSG_BODY_NULL);
+			/* hdr and send_size may be invalid now - done use */
 			if (mr != MACH_MSG_SUCCESS) {
-				if (ipc_kmsg_put(msg, kmsg, hdr->msgh_size +
+				if (ipc_kmsg_put(msg_addr, kmsg, 
+					       kmsg->ikm_header->msgh_size +
 					       trailer->msgh_trailer_size) == 
 							MACH_RCV_INVALID_DATA)
 					return MACH_RCV_INVALID_DATA;
@@ -1439,9 +1468,10 @@ mach_msg_overwrite_trap(
 		/*NOTREACHED*/
 
 	    fast_put:
-		mr = ipc_kmsg_put(rcv_msg ? rcv_msg : msg,
+		mr = ipc_kmsg_put(rcv_msg_addr ? rcv_msg_addr : msg_addr,
 				  kmsg,
-				  hdr->msgh_size + trailer->msgh_trailer_size);
+				  kmsg->ikm_header->msgh_size + 
+				  trailer->msgh_trailer_size);
 		if (mr != MACH_MSG_SUCCESS) {
 			return MACH_RCV_INVALID_DATA;
 		}
@@ -1458,10 +1488,7 @@ mach_msg_overwrite_trap(
 
 	    slow_copyin:
 	    {
-		ipc_kmsg_t temp_kmsg;
-		mach_port_seqno_t temp_seqno;
-		ipc_object_t temp_rcv_object;
-		ipc_mqueue_t temp_rcv_mqueue;
+		mach_port_seqno_t temp_seqno = 0;
 		register mach_port_name_t reply_name =
 			        (mach_port_name_t)hdr->msgh_local_port;
 
@@ -1479,8 +1506,15 @@ mach_msg_overwrite_trap(
 			return(mr);
 		}
 
-		/* try to get back on optimized path */
+		/* 
+		 *	LP64support - We have to recompute the header pointer
+		 *	and send_size - as they could have changed during the
+		 *	complex copyin.
+		 */
+		hdr = kmsg->ikm_header;
+		send_size = hdr->msgh_size;
 
+		/* try to get back on optimized path */
 		if ((reply_name != rcv_name) ||
 			(hdr->msgh_bits & MACH_MSGH_BITS_CIRCULAR)) {
 			HOT(c_mmot_cold_048++);
@@ -1577,7 +1611,7 @@ mach_msg_overwrite_trap(
 		 * we cannot directly receive the reply
 		 * message.
 		 */
-		hdr = &kmsg->ikm_header;
+		hdr = kmsg->ikm_header;
 		send_size = hdr->msgh_size;
 		trailer = (mach_msg_format_0_trailer_t *) ((vm_offset_t) hdr +
 			round_msg(send_size));
@@ -1657,7 +1691,8 @@ mach_msg_overwrite_trap(
 						      current_map(),
 						      MACH_MSG_BODY_NULL);
 
-			(void) ipc_kmsg_put(msg, kmsg, hdr->msgh_size);
+			(void) ipc_kmsg_put(msg_addr, kmsg, 
+					    kmsg->ikm_header->msgh_size);
 			return(mr);
 		}
 
@@ -1666,16 +1701,15 @@ mach_msg_overwrite_trap(
 		 * We have sent the message.  Copy in the receive port.
 		 */
 		mr = ipc_mqueue_copyin(space, rcv_name,
-				       &temp_rcv_mqueue, &temp_rcv_object);
+				       &rcv_mqueue, &rcv_object);
 		if (mr != MACH_MSG_SUCCESS) {
 			return(mr);
 		}
-		rcv_mqueue = temp_rcv_mqueue;
-		rcv_object = temp_rcv_object;
 		/* hold ref for rcv_object */
 
-	    slow_receive:
 		/*
+		 * slow_receive:
+		 *
 		 *	Now we have sent the request and copied in rcv_name,
 		 *	and hold ref for rcv_object (to keep mqueue alive).
 		 *  Just receive a reply and try to get back to fast path.
@@ -1689,7 +1723,6 @@ mach_msg_overwrite_trap(
 				   THREAD_ABORTSAFE);
 
 		mr = self->ith_state;
-		temp_kmsg = self->ith_kmsg;
 		temp_seqno = self->ith_seqno;
 
 		ipc_object_release(rcv_object);
@@ -1698,8 +1731,8 @@ mach_msg_overwrite_trap(
 		    return(mr);
 		  }
 
-		  kmsg = temp_kmsg;
-		  hdr = &kmsg->ikm_header;
+		  kmsg = self->ith_kmsg;
+		  hdr = kmsg->ikm_header;
 		  send_size = hdr->msgh_size;
 		  trailer = (mach_msg_format_0_trailer_t *) ((vm_offset_t) hdr +
 							     round_msg(send_size));
@@ -1719,9 +1752,11 @@ mach_msg_overwrite_trap(
 		 *	ipc_kmsg_copyout/ipc_kmsg_put.
 		 */
 
-		reply_size = send_size + trailer->msgh_trailer_size;
+		/* LP64support - have to compute real size as it would be received */
+		reply_size = ipc_kmsg_copyout_size(kmsg, current_map()) +
+		             REQUESTED_TRAILER_SIZE(option);
 		if (rcv_size < reply_size) {
-			if (msg_receive_error(kmsg, msg, option, temp_seqno,
+			if (msg_receive_error(kmsg, msg_addr, option, temp_seqno,
 				        space) == MACH_RCV_INVALID_DATA) {
 				mr = MACH_RCV_INVALID_DATA;
 				return(mr);
@@ -1736,12 +1771,12 @@ mach_msg_overwrite_trap(
 				      MACH_PORT_NULL, MACH_MSG_BODY_NULL);
 		if (mr != MACH_MSG_SUCCESS) {
 			if ((mr &~ MACH_MSG_MASK) == MACH_RCV_BODY_ERROR) {
-				if (ipc_kmsg_put(msg, kmsg, reply_size) == 
+				if (ipc_kmsg_put(msg_addr, kmsg, reply_size) == 
 							MACH_RCV_INVALID_DATA)
 				    	mr = MACH_RCV_INVALID_DATA;
 			} 
 			else {
-				if (msg_receive_error(kmsg, msg, option,
+				if (msg_receive_error(kmsg, msg_addr, option,
 				    temp_seqno, space) == MACH_RCV_INVALID_DATA)
 					mr = MACH_RCV_INVALID_DATA;
 			}
@@ -1759,15 +1794,48 @@ mach_msg_overwrite_trap(
 #endif	/* ENABLE_HOTPATH */
 
 	if (option & MACH_SEND_MSG) {
-		mr = mach_msg_send(msg, option, send_size,
-				   timeout, notify);
+		ipc_space_t space = current_space();
+		vm_map_t map = current_map();
+		ipc_kmsg_t kmsg;
+
+		mr = ipc_kmsg_get(msg_addr, send_size, &kmsg);
+
+		if (mr != MACH_MSG_SUCCESS)
+			return mr;
+
+		if (option & MACH_SEND_CANCEL) {
+			if (notify == MACH_PORT_NULL)
+				mr = MACH_SEND_INVALID_NOTIFY;
+			else
+				mr = ipc_kmsg_copyin(kmsg, space, map, notify);
+		} else
+			mr = ipc_kmsg_copyin(kmsg, space, map, MACH_PORT_NULL);
 		if (mr != MACH_MSG_SUCCESS) {
+			ipc_kmsg_free(kmsg);
 			return mr;
 		}
+
+		mr = ipc_kmsg_send(kmsg, option & MACH_SEND_TIMEOUT, msg_timeout);
+
+		if (mr != MACH_MSG_SUCCESS) {
+			mr |= ipc_kmsg_copyout_pseudo(kmsg, space, map, MACH_MSG_BODY_NULL);
+			(void) ipc_kmsg_put(msg_addr, kmsg, kmsg->ikm_header->msgh_size);
+			return mr;
+		}
+
 	}
 
 	if (option & MACH_RCV_MSG) {
-		mach_msg_header_t *rcv;
+		thread_t self = current_thread();
+		ipc_space_t space = current_space();
+		ipc_object_t object;
+		ipc_mqueue_t mqueue;
+
+		mr = ipc_mqueue_copyin(space, rcv_name, &mqueue, &object);
+		if (mr != MACH_MSG_SUCCESS) {
+			return mr;
+		}
+		/* hold ref for object */
 
 		/*
 		 * 1. MACH_RCV_OVERWRITE is on, and rcv_msg is our scatter list
@@ -1776,14 +1844,21 @@ mach_msg_overwrite_trap(
 		 *    alternate receive buffer (separate send and receive buffers).
 		 */
 		if (option & MACH_RCV_OVERWRITE) 
-		    rcv = rcv_msg;
-		else if (rcv_msg != MACH_MSG_NULL)
-		    rcv = rcv_msg;
+			self->ith_msg_addr = rcv_msg_addr;
+		else if (rcv_msg_addr != (mach_vm_address_t)0)
+			self->ith_msg_addr = rcv_msg_addr;
 		else
-		    rcv = msg;
-		mr = mach_msg_receive(rcv, option, rcv_size, rcv_name, 
-				      timeout, thread_syscall_return, scatter_list_size);
-		thread_syscall_return(mr);
+			self->ith_msg_addr = msg_addr;
+		self->ith_object = object;
+		self->ith_msize = rcv_size;
+		self->ith_option = option;
+		self->ith_scatter_list_size = scatter_list_size;
+		self->ith_continuation = thread_syscall_return;
+
+		ipc_mqueue_receive(mqueue, option, rcv_size, msg_timeout, THREAD_ABORTSAFE);
+		if ((option & MACH_RCV_TIMEOUT) && msg_timeout == 0)
+			thread_poll_yield(self);
+		return mach_msg_receive_results();
 	}
 
 	return MACH_MSG_SUCCESS;
@@ -1801,23 +1876,13 @@ mach_msg_overwrite_trap(
 
 mach_msg_return_t
 mach_msg_trap(
-	mach_msg_header_t	*msg,
-	mach_msg_option_t	option,
-	mach_msg_size_t		send_size,
-	mach_msg_size_t		rcv_size,
-	mach_port_name_t	rcv_name,
-	mach_msg_timeout_t	timeout,
-	mach_port_name_t	notify)
+	struct mach_msg_overwrite_trap_args *args)
 {
-  return mach_msg_overwrite_trap(msg,
-				 option,
-				 send_size,
-				 rcv_size,
-				 rcv_name,
-				 timeout,
-				 notify,
-				 (mach_msg_header_t *)0,
-				 (mach_msg_size_t)0);
+	kern_return_t kr;
+	args->rcv_msg = (mach_vm_address_t)0;
+
+ 	kr = mach_msg_overwrite_trap(args);
+	return kr;
 }
  
 
@@ -1837,7 +1902,7 @@ mach_msg_trap(
 mach_msg_return_t
 msg_receive_error(
 	ipc_kmsg_t		kmsg,
-	mach_msg_header_t	*msg,
+	mach_vm_address_t	msg_addr,
 	mach_msg_option_t	option,
 	mach_port_seqno_t	seqno,
 	ipc_space_t		space)
@@ -1854,9 +1919,9 @@ msg_receive_error(
 	 * Build a minimal message with the requested trailer.
 	 */
 	trailer = (mach_msg_format_0_trailer_t *) 
-			((vm_offset_t)&kmsg->ikm_header +
+			((vm_offset_t)kmsg->ikm_header +
 			round_msg(sizeof(mach_msg_header_t)));
-	kmsg->ikm_header.msgh_size = sizeof(mach_msg_header_t);
+	kmsg->ikm_header->msgh_size = sizeof(mach_msg_header_t);
 	bcopy(  (char *)&trailer_template, 
 		(char *)trailer, 
 		sizeof(trailer_template));
@@ -1868,7 +1933,7 @@ msg_receive_error(
 	/*
 	 * Copy the message to user space
 	 */
-	if (ipc_kmsg_put(msg, kmsg, kmsg->ikm_header.msgh_size +
+	if (ipc_kmsg_put(msg_addr, kmsg, kmsg->ikm_header->msgh_size +
 			trailer->msgh_trailer_size) == MACH_RCV_INVALID_DATA)
 		return(MACH_RCV_INVALID_DATA);
 	else 

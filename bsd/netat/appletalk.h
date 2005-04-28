@@ -39,6 +39,8 @@
 #include <sys/types.h>
 #include <sys/uio.h>
 
+#ifdef __APPLE_API_OBSOLETE
+
 /* 
    Non-aligned types are used in packet headers. 
 */
@@ -281,19 +283,18 @@ typedef struct at_state {
 #define AT_ST_ZT_CHANGED 	0x0800  /* zone table changed (for SNMP) */
 #define AT_ST_NBP_CHANGED	0x1000  /* if nbp table changed (for SNMP)*/
 
-#ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
+#ifdef KERNEL_PRIVATE
 extern at_state_t at_state;		/* global state of AT network */
 
 #define ROUTING_MODE	(at_state.flags & AT_ST_ROUTER)
 #define MULTIHOME_MODE	(at_state.flags & AT_ST_MULTIHOME)
 #define MULTIPORT_MODE (ROUTING_MODE || MULTIHOME_MODE)
-#endif /* __APPLE_API_PRIVATE */
-#endif /* KERNEL */
+#endif /* KERNEL_PRIVATE */
 
 /* defines originally from h/at_elap.h */
 #define AT_ADDR			0
 #define ET_ADDR			1
 #define AT_ADDR_NO_LOOP		2	/* disables packets from looping back */
 
+#endif /* __APPLE_API_OBSOLETE */
 #endif /* _NETAT_APPLETALK_H_ */

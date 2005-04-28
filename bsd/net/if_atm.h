@@ -58,12 +58,13 @@
  * net/if_atm.h
  */
 
+#ifdef KERNEL_PRIVATE
 #if defined(__NetBSD__) || defined(__OpenBSD__) || defined(__bsdi__)
 #define RTALLOC1(A,B)		rtalloc1((A),(B))
 #elif defined(__FreeBSD__) || defined(__APPLE__)
 #define RTALLOC1(A,B)		rtalloc1((A),(B),0UL)
 #endif
-
+#endif /* KERNEL_PRIVATE */
 
 /*
  * pseudo header for packet transmission
@@ -119,13 +120,11 @@ struct atmllc {
 	(X)->type[0] = ((V) & 0xff); \
 }
 
-#ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
-void	atm_ifattach __P((struct ifnet *));
-void	atm_input __P((struct ifnet *, struct atm_pseudohdr *,
-		struct mbuf *, void *));
-int	atm_output __P((struct ifnet *, struct mbuf *, struct sockaddr *, 
-		struct rtentry *));
-#endif /* __APPLE_API_PRIVATE */
-#endif
+#ifdef KERNEL_PRIVATE
+void	atm_ifattach(struct ifnet *);
+void	atm_input(struct ifnet *, struct atm_pseudohdr *,
+		struct mbuf *, void *);
+int	atm_output(struct ifnet *, struct mbuf *, struct sockaddr *, 
+		struct rtentry *);
+#endif /* KERNEL_PRIVATE */
 

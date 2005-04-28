@@ -110,9 +110,6 @@ struct vmmeter {
 	u_int v_inactive_target; /* number of pages desired inactive */
 	u_int v_inactive_count;  /* number of pages inactive */
 };
-#ifdef KERNEL
-extern struct	vmmeter cnt;
-#endif
 
 /* systemwide totals computed every five seconds */
 struct vmtotal

@@ -11,12 +11,15 @@ makedis: $(SRCROOT)/osfmk/ddb/makedis.c
 
 ppc_disasm.o_CFLAGS_ADD = -Dperror=db_printf -Dexit=db_error -Dmalloc=db_disasm_malloc
 
-ppc_disasm : $(SRCROOT)/osfmk/ppc/ppc_disasm.i makedis
+ppc_disasm.c ppc_disasm.h : $(SRCROOT)/osfmk/ppc/ppc_disasm.i makedis
 	./makedis -w -h ./ppc_disasm.h $(SOURCE_DIR)/osfmk/ppc/ppc_disasm.i > ./ppc_disasm.c
 
-ppc_disasm.c ppc_disasm.h : ppc_disasm
 
 db_disasm.o : ppc_disasm.h
+
+# Files that must go in the __HIB segment:
+HIB_FILES=                              \
+
 
 ######################################################################
 #END	Machine dependent Makefile fragment for ppc

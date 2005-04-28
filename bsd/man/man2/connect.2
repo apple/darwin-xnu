@@ -43,7 +43,7 @@
 .Fd #include <sys/types.h>
 .Fd #include <sys/socket.h>
 .Ft int
-.Fn connect "int s" "const struct sockaddr *name" "int namelen"
+.Fn connect "int s" "const struct sockaddr *name" "socklen_t namelen"
 .Sh DESCRIPTION
 The parameter
 .Fa s
@@ -71,8 +71,11 @@ multiple times to change their association.
 Datagram sockets may dissolve the association
 by connecting to an invalid address, such as a null address 
 or an address with 
-the address family set to AF_UNPSEC (the error 
-EAFNOSUPPORT will be harmlessly returned).
+the address family set to 
+.Dv AF_UNSPEC 
+(the error 
+.Dv EAFNOSUPPORT 
+will be harmlessly returned).
 .Sh RETURN VALUES
 If the connection or binding succeeds, 0 is returned.
 Otherwise a -1 is returned, and a more specific error
@@ -119,6 +122,11 @@ for completion by selecting the socket for writing.
 The socket is non-blocking
 and a previous connection attempt
 has not yet been completed.
+.It Bq Er EACCES
+The destination address is a broadcast address and the 
+socket option 
+.Dv SO_BROADCAST 
+is not set.
 .El
 .Pp
 The following errors are specific to connecting names in the UNIX domain.

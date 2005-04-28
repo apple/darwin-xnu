@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -22,72 +22,6 @@
 /*
  * @OSF_COPYRIGHT@
  */
-/*
- * HISTORY
- * 
- * Revision 1.1.1.1  1998/09/22 21:05:28  wsanchez
- * Import of Mac OS X kernel (~semeria)
- *
- * Revision 1.2  1998/06/01 17:29:25  youngwor
- * Added infrastructure for shared port space support
- *
- * Revision 1.1.1.1  1998/03/07 02:26:16  wsanchez
- * Import of OSF Mach kernel (~mburg)
- *
- * Revision 1.2.10.1  1994/09/23  02:12:16  ezf
- * 	change marker to not FREE
- * 	[1994/09/22  21:30:49  ezf]
- *
- * Revision 1.2.2.3  1993/07/22  16:17:30  rod
- * 	Add ANSI prototypes.  CR #9523.
- * 	[1993/07/22  13:33:29  rod]
- * 
- * Revision 1.2.2.2  1993/06/02  23:33:55  jeffc
- * 	Added to OSF/1 R1.3 from NMK15.0.
- * 	[1993/06/02  21:11:14  jeffc]
- * 
- * Revision 1.2  1992/11/25  01:09:56  robert
- * 	integrate changes below for norma_14
- * 
- * 	Philippe Bernadat (bernadat) at gr.osf.org
- * 	Limit ipc table allocation chunks to 8 pages, otherwise
- * 	the kernel might dead lock because of VM_PAGE_FREE_RESERVED
- * 	limited to 15. [dlb@osf.org & barbou@gr.osf.org]
- * 	[1992/11/13  19:31:46  robert]
- * 
- * Revision 1.1  1992/09/30  02:08:13  robert
- * 	Initial revision
- * 
- * $EndLog$
- */
-/* CMU_HIST */
-/*
- * Revision 2.6  91/10/09  16:11:08  af
- * 	 Revision 2.5.2.1  91/09/16  10:16:06  rpd
- * 	 	Removed unused variables.
- * 	 	[91/09/02            rpd]
- * 
- * Revision 2.5.2.1  91/09/16  10:16:06  rpd
- * 	Removed unused variables.
- * 	[91/09/02            rpd]
- * 
- * Revision 2.5  91/05/14  16:37:35  mrt
- * 	Correcting copyright
- * 
- * Revision 2.4  91/03/16  14:48:52  rpd
- * 	Added ipc_table_realloc and ipc_table_reallocable.
- * 	[91/03/04            rpd]
- * 
- * Revision 2.3  91/02/05  17:24:15  mrt
- * 	Changed to new Mach copyright
- * 	[91/02/01  15:52:05  mrt]
- * 
- * Revision 2.2  90/06/02  14:51:58  rpd
- * 	Created for new IPC.
- * 	[90/03/26  21:04:20  rpd]
- * 
- */
-/* CMU_ENDHIST */
 /* 
  * Mach Operating System
  * Copyright (c) 1991,1990,1989 Carnegie Mellon University
@@ -232,19 +166,19 @@ ipc_table_init(void)
  *		May block.
  */
 
-vm_offset_t
+void *
 ipc_table_alloc(
 	vm_size_t	size)
 {
 	vm_offset_t table;
 
 	if (size < PAGE_SIZE)
-		table = kalloc(size);
-	else
-		if (kmem_alloc(kalloc_map, &table, size) != KERN_SUCCESS)
-			table = 0;
+		return kalloc(size);
 
-	return table;
+	if (kmem_alloc(kalloc_map, &table, size) != KERN_SUCCESS)
+		table = 0;
+
+	return (void *)table;
 }
 
 /*
@@ -259,19 +193,20 @@ ipc_table_alloc(
  *		May block.
  */
 
-vm_offset_t
+void *
 ipc_table_realloc(
 	vm_size_t	old_size,
-	vm_offset_t	old_table,
+	void *		old_table,
 	vm_size_t	new_size)
 {
 	vm_offset_t new_table;
 
-	if (kmem_realloc(kalloc_map, old_table, old_size,
+	if (kmem_realloc(kalloc_map,
+			 (vm_offset_t) old_table, old_size,
 			 &new_table, new_size) != KERN_SUCCESS)
 		new_table = 0;
 
-	return new_table;
+	return (void *)new_table;
 }
 
 /*
@@ -286,10 +221,10 @@ ipc_table_realloc(
 void
 ipc_table_free(
 	vm_size_t	size,
-	vm_offset_t	table)
+	void *		table)
 {
 	if (size < PAGE_SIZE)
 		kfree(table, size);
 	else
-		kmem_free(kalloc_map, table, size);
+		kmem_free(kalloc_map, (vm_offset_t)table, size);
 }

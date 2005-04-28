@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -41,7 +41,7 @@ extern int	vm_follow_object(
 			vm_object_t	object);
 
 extern void	vm_object_print(
-			vm_object_t	object,
+			db_addr_t	object,
 			boolean_t	have_addr,
 			int		arg_count,
 			char		*modif);
@@ -49,7 +49,7 @@ extern void	vm_object_print(
 #include <vm/vm_page.h>
 
 extern void	vm_page_print(
-			vm_page_t	p);
+			db_addr_t	p);
 
 #include <mach_pagemap.h>
 #if	MACH_PAGEMAP
@@ -61,7 +61,7 @@ extern void vm_external_print(
 
 extern void	db_vm(void);
 
-extern vm_size_t db_vm_map_total_size(
+extern vm_map_size_t db_vm_map_total_size(
 			db_addr_t	map);
 
 #endif	/* VM_PRINT_H */

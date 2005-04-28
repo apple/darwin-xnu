@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -19,15 +19,11 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
-/*
- * Copyright (c) 2000 Apple Computer, Inc.  All rights reserved.
- *
- * HISTORY
- *
- * 15 October 2000 (debo)
- *  Created.
- */
 
+#include <mach/mach_types.h>
+#include <mach/task_server.h>
+
+#include <kern/sched.h>
 #include <kern/task.h>
 
 static void
@@ -99,7 +95,7 @@ task_policy_set(
 					task->sec_token.val[0] != 0			)
 				result = KERN_INVALID_ARGUMENT;
 			else {
-				task_priority(task, MAXPRI_SYSTEM - 3, MAXPRI_SYSTEM);
+				task_priority(task, MAXPRI_RESERVED - 3, MAXPRI_RESERVED);
 				task->role = info->role;
 			}
 		}
@@ -125,7 +121,7 @@ task_priority(
 	integer_t		priority,
 	integer_t		max_priority)
 {
-	thread_act_t	act;
+	thread_t		thread;
 
 	task->max_priority = max_priority;
 
@@ -137,13 +133,13 @@ task_priority(
 
 	task->priority = priority;
 
-	queue_iterate(&task->threads, act, thread_act_t, task_threads) {
-		thread_t		thread = act_lock_thread(act);
+	queue_iterate(&task->threads, thread, thread_t, task_threads) {
+		thread_mtx_lock(thread);
 
-		if (act->active)
+		if (thread->active)
 			thread_task_priority(thread, priority, max_priority);
 
-		act_unlock_thread(act);
+		thread_mtx_unlock(thread);
 	}
 }
 

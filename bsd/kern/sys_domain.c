@@ -33,11 +33,10 @@
 
 
 /* domain init function */
-void systemdomain_init();
-
+void systemdomain_init(void);
 
 struct domain systemdomain =
-    { PF_SYSTEM, "system", systemdomain_init, 0, 0, 0};
+    { PF_SYSTEM, "system", systemdomain_init, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, { 0, 0} };
 
 
 void systemdomain_init()

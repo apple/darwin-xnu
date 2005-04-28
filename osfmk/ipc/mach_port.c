@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -69,7 +69,8 @@
 #include <mach/vm_map.h>
 #include <kern/task.h>
 #include <kern/counters.h>
-#include <kern/thread_act.h>
+#include <kern/thread.h>
+#include <kern/kalloc.h>
 #include <mach/mach_port_server.h>
 #include <vm/vm_map.h>
 #include <vm/vm_kern.h>
@@ -92,8 +93,7 @@ void mach_port_names_helper(
 	mach_port_name_t	name,
 	mach_port_name_t	*names,
 	mach_port_type_t	*types,
-	ipc_entry_num_t		*actualp,
-	ipc_space_t		space);
+	ipc_entry_num_t		*actualp);
 
 void mach_port_gst_helper(
 	ipc_pset_t		pset,
@@ -120,8 +120,7 @@ mach_port_names_helper(
 	mach_port_name_t	name,
 	mach_port_name_t	*names,
 	mach_port_type_t	*types,
-	ipc_entry_num_t		*actualp,
-	ipc_space_t		space)
+	ipc_entry_num_t		*actualp)
 {
 	ipc_entry_bits_t bits;
 	ipc_port_request_index_t request;
@@ -195,7 +194,6 @@ mach_port_names(
 	mach_port_type_t	**typesp,
 	mach_msg_type_number_t	*typesCnt)
 {
-	ipc_entry_bits_t *capability;
 	ipc_tree_entry_t tentry;
 	ipc_entry_t table;
 	ipc_entry_num_t tsize;
@@ -237,7 +235,7 @@ mach_port_names(
 		/* upper bound on number of names in the space */
 
 		bound = space->is_table_size + space->is_tree_total;
-		size_needed = round_page_32(bound * sizeof(mach_port_name_t));
+		size_needed = round_page(bound * sizeof(mach_port_name_t));
 
 		if (size_needed <= size)
 			break;
@@ -250,11 +248,11 @@ mach_port_names(
 		}
 		size = size_needed;
 
-		kr = vm_allocate(ipc_kernel_map, &addr1, size, TRUE);
+		kr = vm_allocate(ipc_kernel_map, &addr1, size, VM_FLAGS_ANYWHERE);
 		if (kr != KERN_SUCCESS)
 			return KERN_RESOURCE_SHORTAGE;
 
-		kr = vm_allocate(ipc_kernel_map, &addr2, size, TRUE);
+		kr = vm_allocate(ipc_kernel_map, &addr2, size, VM_FLAGS_ANYWHERE);
 		if (kr != KERN_SUCCESS) {
 			kmem_free(ipc_kernel_map, addr1, size);
 			return KERN_RESOURCE_SHORTAGE;
@@ -262,16 +260,18 @@ mach_port_names(
 
 		/* can't fault while we hold locks */
 
-		kr = vm_map_wire(ipc_kernel_map, addr1, addr1 + size,
-				     VM_PROT_READ|VM_PROT_WRITE, FALSE);
+		kr = vm_map_wire(ipc_kernel_map, vm_map_trunc_page(addr1),
+				 vm_map_round_page(addr1 + size),
+				 VM_PROT_READ|VM_PROT_WRITE, FALSE);
 		if (kr != KERN_SUCCESS) {
 			kmem_free(ipc_kernel_map, addr1, size);
 			kmem_free(ipc_kernel_map, addr2, size);
 			return KERN_RESOURCE_SHORTAGE;
 		}
 
-		kr = vm_map_wire(ipc_kernel_map, addr2, addr2 + size,
-				     VM_PROT_READ|VM_PROT_WRITE, FALSE);
+		kr = vm_map_wire(ipc_kernel_map, vm_map_trunc_page(addr2),
+				 vm_map_round_page(addr2 + size),
+				 VM_PROT_READ|VM_PROT_WRITE, FALSE);
 		if (kr != KERN_SUCCESS) {
 			kmem_free(ipc_kernel_map, addr1, size);
 			kmem_free(ipc_kernel_map, addr2, size);
@@ -299,7 +299,7 @@ mach_port_names(
 
 			name = MACH_PORT_MAKE(index, IE_BITS_GEN(bits));
 			mach_port_names_helper(timestamp, entry, name, names,
-					       types, &actual, space);
+					       types, &actual);
 		}
 	}
 
@@ -311,7 +311,7 @@ mach_port_names(
 
 		assert(IE_BITS_TYPE(tentry->ite_bits) != MACH_PORT_TYPE_NONE);
 		mach_port_names_helper(timestamp, entry, name, names,
-				       types, &actual, space);
+				       types, &actual);
 	}
 	ipc_splay_traverse_finish(&space->is_tree);
 	is_read_unlock(space);
@@ -329,27 +329,27 @@ mach_port_names(
 		vm_size_t vm_size_used;
 
 		size_used = actual * sizeof(mach_port_name_t);
-		vm_size_used = round_page_32(size_used);
+		vm_size_used = round_page(size_used);
 
 		/*
 		 *	Make used memory pageable and get it into
 		 *	copied-in form.  Free any unused memory.
 		 */
 
-		kr = vm_map_unwire(ipc_kernel_map,
-				     addr1, addr1 + vm_size_used, FALSE);
+		kr = vm_map_unwire(ipc_kernel_map, vm_map_trunc_page(addr1),
+				   vm_map_round_page(addr1 + vm_size_used), FALSE);
 		assert(kr == KERN_SUCCESS);
 
-		kr = vm_map_unwire(ipc_kernel_map,
-				     addr2, addr2 + vm_size_used, FALSE);
+		kr = vm_map_unwire(ipc_kernel_map, vm_map_trunc_page(addr2),
+				   vm_map_round_page(addr2 + vm_size_used), FALSE);
 		assert(kr == KERN_SUCCESS);
 
-		kr = vm_map_copyin(ipc_kernel_map, addr1, size_used,
-				   TRUE, &memory1);
+		kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)addr1,
+				   (vm_map_size_t)size_used, TRUE, &memory1);
 		assert(kr == KERN_SUCCESS);
 
-		kr = vm_map_copyin(ipc_kernel_map, addr2, size_used,
-				   TRUE, &memory2);
+		kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)addr2,
+				   (vm_map_size_t)size_used, TRUE, &memory2);
 		assert(kr == KERN_SUCCESS);
 
 		if (vm_size_used != size) {
@@ -606,7 +606,7 @@ mach_port_allocate_full(
 	mach_port_qos_t		*qosp,
 	mach_port_name_t	*namep)
 {
-	ipc_kmsg_t		kmsg;
+	ipc_kmsg_t		kmsg = IKM_NULL;
 	kern_return_t		kr;
 
 	if (space == IS_NULL)
@@ -626,10 +626,9 @@ mach_port_allocate_full(
 		mach_msg_size_t size = qosp->len + MAX_TRAILER_SIZE;
 		if (right != MACH_PORT_RIGHT_RECEIVE)
 			return (KERN_INVALID_VALUE);
-		kmsg = (ipc_kmsg_t)kalloc(ikm_plus_overhead(size));
+		kmsg = (ipc_kmsg_t)ipc_kmsg_alloc(size);
 		if (kmsg == IKM_NULL)
 			return (KERN_RESOURCE_SHORTAGE);
-		ikm_init(kmsg, size);
 	}
 
 	switch (right) {
@@ -642,12 +641,12 @@ mach_port_allocate_full(
 		else
 			kr = ipc_port_alloc(space, namep, &port);
 		if (kr == KERN_SUCCESS) {
-			if (qosp->prealloc) 
+			if (kmsg != IKM_NULL) 
 				ipc_kmsg_set_prealloc(kmsg, port);
 
 			ip_unlock(port);
 
-		} else if (qosp->prealloc)
+		} else if (kmsg != IKM_NULL)
 			ipc_kmsg_free(kmsg);
 		break;
 	    }
@@ -986,7 +985,6 @@ mach_port_gst_helper(
 	mach_port_name_t	*names,
 	ipc_entry_num_t		*actualp)
 {
-	ipc_pset_t ip_pset;
 	mach_port_name_t name;
 
 	assert(port != IP_NULL);
@@ -1056,7 +1054,7 @@ mach_port_get_set_status(
 		mach_port_name_t *names;
 		ipc_pset_t pset;
 
-		kr = vm_allocate(ipc_kernel_map, &addr, size, TRUE);
+		kr = vm_allocate(ipc_kernel_map, &addr, size, VM_FLAGS_ANYWHERE);
 		if (kr != KERN_SUCCESS)
 			return KERN_RESOURCE_SHORTAGE;
 
@@ -1125,7 +1123,7 @@ mach_port_get_set_status(
 		/* didn't have enough memory; allocate more */
 
 		kmem_free(ipc_kernel_map, addr, size);
-		size = round_page_32(actual * sizeof(mach_port_name_t)) + PAGE_SIZE;
+		size = round_page(actual * sizeof(mach_port_name_t)) + PAGE_SIZE;
 	}
 
 	if (actual == 0) {
@@ -1137,19 +1135,19 @@ mach_port_get_set_status(
 		vm_size_t vm_size_used;
 
 		size_used = actual * sizeof(mach_port_name_t);
-		vm_size_used = round_page_32(size_used);
+		vm_size_used = round_page(size_used);
 
 		/*
 		 *	Make used memory pageable and get it into
 		 *	copied-in form.  Free any unused memory.
 		 */
 
-		kr = vm_map_unwire(ipc_kernel_map,
-				     addr, addr + vm_size_used, FALSE);
+		kr = vm_map_unwire(ipc_kernel_map, vm_map_trunc_page(addr), 
+				   vm_map_round_page(addr + vm_size_used), FALSE);
 		assert(kr == KERN_SUCCESS);
 
-		kr = vm_map_copyin(ipc_kernel_map, addr, size_used,
-				   TRUE, &memory);
+		kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)addr,
+				   (vm_map_size_t)size_used, TRUE, &memory);
 		assert(kr == KERN_SUCCESS);
 
 		if (vm_size_used != size)
@@ -1300,9 +1298,6 @@ mach_port_request_notification(
 	ipc_port_t		*previousp)
 {
 	kern_return_t kr;
-	ipc_entry_t entry;	
-	ipc_port_t port;
-	
 
 	if (space == IS_NULL)
 		return KERN_INVALID_TASK;
@@ -1314,18 +1309,23 @@ mach_port_request_notification(
 	/*
 	 *	Requesting notifications on RPC ports is an error.
 	 */
-	kr = ipc_right_lookup_write(space, name, &entry);	
-	if (kr != KERN_SUCCESS)
-		return kr;
+	{
+		ipc_port_t port;
+		ipc_entry_t entry;	
 
-	port = (ipc_port_t) entry->ie_object;
+		kr = ipc_right_lookup_write(space, name, &entry);	
+		if (kr != KERN_SUCCESS)
+			return kr;
 
-	if (port->ip_subsystem != NULL) {
+		port = (ipc_port_t) entry->ie_object;
+
+		if (port->ip_subsystem != NULL) {
+			is_write_unlock(space);
+			panic("mach_port_request_notification: on RPC port!!"); 
+			return KERN_INVALID_CAPABILITY;
+		}
 		is_write_unlock(space);
-		panic("mach_port_request_notification: on RPC port!!"); 
-		return KERN_INVALID_CAPABILITY;
 	}
-	is_write_unlock(space);
 #endif 	/* NOTYET */
 
 
@@ -1726,7 +1726,6 @@ mach_port_extract_member(
 	mach_port_name_t	name,
 	mach_port_name_t	psname)
 {
-	mach_port_name_t oldname;
 	ipc_object_t psobj;
 	ipc_object_t obj;
 	kern_return_t kr;
@@ -1750,6 +1749,25 @@ mach_port_extract_member(
 	kr = ipc_pset_remove((ipc_pset_t)psobj, (ipc_port_t)obj);
 	io_unlock(psobj);
 	io_unlock(obj);
+	return kr;
+}
+
+/*
+ *	task_set_port_space:
+ *
+ *	Set port name space of task to specified size.
+ */
+kern_return_t
+task_set_port_space(
+ 	ipc_space_t	space,
+ 	int		table_entries)
+{
+	kern_return_t kr;
+	
+	is_write_lock(space);
+	kr = ipc_entry_grow_table(space, table_entries);
+	if (kr == KERN_SUCCESS)
+		is_write_unlock(space);
 	return kr;
 }
 

@@ -56,12 +56,11 @@ void AURPsndTickle(state)
 	int msize;
 	gbuf_t *m;
 	aurp_hdr_t *hdrp;
-	boolean_t 	funnel_state;
 
-	funnel_state = thread_funnel_set(network_flock, TRUE);
+	atalk_lock();
 
 	if (state->rcv_state == AURPSTATE_Unconnected) {
-                (void) thread_funnel_set(network_flock, FALSE);
+		atalk_unlock();
 		return;
         }
 	/* stop trying if the retry count exceeds the maximum retry value */
@@ -78,7 +77,7 @@ void AURPsndTickle(state)
 
 		/* purge all routes associated with the tunnel peer */
 		AURPpurgeri(state->rem_node);
-                (void) thread_funnel_set(network_flock, FALSE);
+		atalk_unlock();
 		return;
 	}
 
@@ -102,7 +101,7 @@ void AURPsndTickle(state)
 	/* start the retry timer */
 	timeout(AURPsndTickle, state, AURP_TickleRetryInterval*HZ);
 
-	(void) thread_funnel_set(network_flock, FALSE);
+	atalk_unlock();
 }
 
 /* */

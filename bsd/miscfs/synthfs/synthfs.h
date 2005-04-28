@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -97,7 +97,6 @@ struct synthfsnode
 	struct synthfsnode *s_parent;
 	struct vnode *s_vp;
 	char *s_name;
-	struct lock__bsd__	s_lock;
 	unsigned long s_nodeflags;				/* Internal synthfs flags: IN_CHANGED, IN_MODIFIED, etc. */
 	unsigned long s_pflags;					/* File system flags: IMMUTABLE, etc. */
 	unsigned long s_nodeid;
@@ -146,7 +145,10 @@ struct synthfsnode
 			(sp)->s_modificationtime = *(t2);			\
 		}											\
 		if ((sp)->s_nodeflags & IN_CHANGE) {			\
-			(sp)->s_changetime = time;			\
+			struct timeval  _tv;				\
+									\
+			microtime(&_tv);					\
+			(sp)->s_changetime = _tv;			\
 		};											\
 		(sp)->s_nodeflags &= ~(IN_ACCESS | IN_CHANGE | IN_UPDATE);	\
 	}								\
@@ -182,54 +184,49 @@ struct synthfsnode
 extern int (**synthfs_vnodeop_p)(void *);
 
 __BEGIN_DECLS
-int	synthfs_mount __P((struct mount *, char *, caddr_t, struct nameidata *, struct proc *));
-int	synthfs_start __P((struct mount *, int, struct proc *));
-int	synthfs_unmount __P((struct mount *, int, struct proc *));
-int	synthfs_root __P((struct mount *, struct vnode **));
-int	synthfs_quotactl __P((struct mount *, int, uid_t, caddr_t, struct proc *));
-int	synthfs_statfs __P((struct mount *, struct statfs *, struct proc *));
-int	synthfs_sync __P((struct mount *, int, struct ucred *, struct proc *));
-int	synthfs_vget __P((struct mount *, void *ino, struct vnode **));
-int	synthfs_fhtovp __P((struct mount *, struct fid *, struct mbuf *, struct vnode **, int *, struct ucred **));
-int	synthfs_vptofh __P((struct vnode *, struct fid *));
-int	synthfs_init __P((struct vfsconf *));
-int	synthfs_sysctl __P((int *, u_int, void *, size_t *, void *, size_t, struct proc *));
+int	synthfs_mount (struct mount *, vnode_t, user_addr_t, vfs_context_t context);
+int	synthfs_start (struct mount *, int, vfs_context_t context);
+int	synthfs_unmount (struct mount *, int, vfs_context_t context);
+int	synthfs_root (struct mount *, struct vnode **, vfs_context_t context);
+int	synthfs_vfs_getattr (mount_t mp, struct vfs_attr *fsap, vfs_context_t context);
+int	synthfs_sync (struct mount *, int, vfs_context_t context);
+int	synthfs_vget (struct mount *, ino64_t ino, struct vnode **, vfs_context_t context);
+int	synthfs_fhtovp (struct mount *, int, unsigned char *,  struct vnode **, vfs_context_t context);
+int	synthfs_vptofh (struct vnode *, int *, unsigned char *, vfs_context_t context);
+int	synthfs_init (struct vfsconf *);
+int	synthfs_sysctl (int *, u_int, user_addr_t, size_t *, user_addr_t, size_t, vfs_context_t context);
 
-int	synthfs_create __P((struct vop_create_args *));
-int	synthfs_open __P((struct vop_open_args *));
-int	synthfs_mmap __P((struct vop_mmap_args *));
-int	synthfs_access __P((struct vop_access_args *));
-int	synthfs_getattr __P((struct vop_getattr_args *));
-int synthfs_setattr __P((struct vop_setattr_args *));
-int synthfs_rename __P((struct vop_rename_args *));
-int	synthfs_select __P((struct vop_select_args *));
-int synthfs_remove __P((struct vop_remove_args *));
-int synthfs_mkdir __P((struct vop_mkdir_args *));
-int	synthfs_rmdir __P((struct vop_rmdir_args *));
-int synthfs_symlink __P((struct vop_symlink_args *));
-int synthfs_readlink __P((struct vop_readlink_args *));
-int	synthfs_readdir __P((struct vop_readdir_args *));
-int synthfs_cached_lookup __P((struct vop_cachedlookup_args *));
-int	synthfs_lookup __P((struct vop_cachedlookup_args *));
-int	synthfs_pathconf __P((struct vop_pathconf_args *));
-int synthfs_update __P((struct vop_update_args *));
+int	synthfs_create (struct vnop_create_args *);
+int	synthfs_open (struct vnop_open_args *);
+int	synthfs_mmap (struct vnop_mmap_args *);
+int	synthfs_getattr (struct vnop_getattr_args *);
+int	synthfs_setattr (struct vnop_setattr_args *);
+int	synthfs_rename (struct vnop_rename_args *);
+int	synthfs_select (struct vnop_select_args *);
+int	synthfs_remove (struct vnop_remove_args *);
+int	synthfs_mkdir (struct vnop_mkdir_args *);
+int	synthfs_rmdir (struct vnop_rmdir_args *);
+int	synthfs_symlink (struct vnop_symlink_args *);
+int	synthfs_readlink (struct vnop_readlink_args *);
+int	synthfs_readdir (struct vnop_readdir_args *);
+int	synthfs_cached_lookup (struct vnop_lookup_args *);
+int	synthfs_lookup (struct vnop_lookup_args *);
+int	synthfs_pathconf (struct vnop_pathconf_args *);
 	
-int	synthfs_lock __P((struct vop_lock_args *));
-int	synthfs_unlock __P((struct vop_unlock_args *));
-int	synthfs_islocked __P((struct vop_islocked_args *));
 
-int	synthfs_inactive __P((struct vop_inactive_args*));
-int	synthfs_reclaim __P((struct vop_reclaim_args*));
+int	synthfs_inactive (struct vnop_inactive_args*);
+int	synthfs_reclaim (struct vnop_reclaim_args*);
 
-void synthfs_setupuio __P((struct iovec *iov, struct uio *uio, void *buffer, size_t bufsize, enum uio_seg space, enum uio_rw direction, struct proc *p));
-int synthfs_new_directory __P((struct mount *mp, struct vnode *dp, const char *name, unsigned long nodeid, mode_t mode, struct proc *p, struct vnode **vpp));
-int synthfs_new_symlink __P((struct mount *mp, struct vnode *dp, const char *name, unsigned long nodeid, char *targetstring, struct proc *p, struct vnode **vpp));
-long synthfs_adddirentry __P((u_int32_t fileno, u_int8_t type, const char *name, struct uio *uio));
-int synthfs_remove_entry __P((struct vnode *vp));
-int synthfs_remove_directory __P((struct vnode *vp));
-int synthfs_remove_symlink __P((struct vnode *vp));
-int synthfs_move_rename_entry __P((struct vnode *source_vp, struct vnode *newparent_vp, char *newname));
-int synthfs_derive_vnode_path __P((struct vnode *vp, char *vnpath, size_t pathbuffersize));
+void synthfs_setupuio (struct iovec *iov, struct uio *uio, void *buffer, size_t bufsize, enum uio_seg space, enum uio_rw direction, proc_t p);
+int synthfs_new_directory (mount_t mp, vnode_t dp, const char *name, unsigned long nodeid, mode_t mode, proc_t p, vnode_t *vpp);
+int synthfs_new_symlink (mount_t mp, vnode_t dp, const char *name, unsigned long nodeid, char *targetstring, proc_t p, vnode_t *vpp);
+long synthfs_adddirentry (u_int32_t fileno, u_int8_t type, const char *name, struct uio *uio);
+int synthfs_remove_entry (struct vnode *vp);
+int synthfs_remove_directory (struct vnode *vp);
+int synthfs_remove_symlink (struct vnode *vp);
+int synthfs_move_rename_entry (struct vnode *source_vp, struct vnode *newparent_vp, char *newname);
+int synthfs_derive_vnode_path (struct vnode *vp, char *vnpath, size_t pathbuffersize);
+int synthfs_update(struct vnode *vp, struct timeval *access, struct timeval *modify, int waitfor);
 
 #endif /* __APPLE_API_PRIVATE */
 #endif /* __SYNTHFS_H__ */

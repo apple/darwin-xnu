@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -19,29 +19,122 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
-#include <ppc/machine_routines.h>
-#include <ppc/machine_cpu.h>
-#include <ppc/exception.h>
-#include <ppc/misc_protos.h>
-#include <ppc/Firmware.h>
-#include <vm/vm_page.h>
-#include <ppc/pmap.h>
-#include <ppc/proc_reg.h>
-#include <kern/processor.h>
 
-unsigned int max_cpus_initialized = 0;
-unsigned int LockTimeOut = 12500000;
-unsigned int MutexSpin = 0;
-extern int forcenap;
+#include <mach/mach_types.h>
+
+#include <ppc/machine_routines.h>
+#include <ppc/cpu_internal.h>
+#include <ppc/exception.h>
+#include <ppc/io_map_entries.h>
+#include <ppc/misc_protos.h>
+#include <ppc/savearea.h>
+#include <ppc/Firmware.h>
+#include <ppc/pmap.h>
+#include <ppc/mem.h>
+#include <ppc/new_screen.h>
+#include <ppc/proc_reg.h>
+#include <kern/kern_types.h>
+#include <kern/processor.h>
+#include <kern/machine.h>
+
+#include <vm/vm_page.h>
+
+unsigned int		LockTimeOut = 12500000;
+unsigned int		MutexSpin = 0;
+
+decl_mutex_data(static,mcpus_lock);
+unsigned int		mcpus_lock_initialized = 0;
+unsigned int		mcpus_state = 0;
+
+uint32_t warFlags = 0;
+#define warDisMBpoff	0x80000000
+#define	MAX_CPUS_SET	0x01
+#define	MAX_CPUS_WAIT	0x02
 
 decl_simple_lock_data(, spsLock);
 unsigned int spsLockInit = 0;
-uint32_t warFlags = 0;
-#define warDisMBpoff	0x80000000
-#define	MAX_CPUS_SET	0x1
-#define	MAX_CPUS_WAIT	0x2
 
-boolean_t get_interrupts_enabled(void);
+extern unsigned int hwllckPatch_isync;
+extern unsigned int hwulckPatch_isync;
+extern unsigned int hwulckbPatch_isync;
+extern unsigned int hwlmlckPatch_isync;
+extern unsigned int hwltlckPatch_isync;
+extern unsigned int hwcsatomicPatch_isync;
+extern unsigned int mlckePatch_isync;
+extern unsigned int mlckPatch_isync;
+extern unsigned int mltelckPatch_isync;
+extern unsigned int mltlckPatch_isync;
+extern unsigned int mulckePatch_isync;
+extern unsigned int mulckPatch_isync;
+extern unsigned int slckPatch_isync;
+extern unsigned int stlckPatch_isync;
+extern unsigned int sulckPatch_isync;
+extern unsigned int rwlePatch_isync;
+extern unsigned int rwlsPatch_isync;
+extern unsigned int rwlsePatch_isync;
+extern unsigned int rwlesPatch_isync;
+extern unsigned int rwtlePatch_isync;
+extern unsigned int rwtlsPatch_isync;
+extern unsigned int rwldPatch_isync;
+extern unsigned int hwulckPatch_eieio;
+extern unsigned int mulckPatch_eieio;
+extern unsigned int mulckePatch_eieio;
+extern unsigned int sulckPatch_eieio;
+extern unsigned int rwlesPatch_eieio;
+extern unsigned int rwldPatch_eieio;
+#if     !MACH_LDEBUG
+extern unsigned int entfsectPatch_isync;
+extern unsigned int retfsectPatch_isync;
+extern unsigned int retfsectPatch_eieio;
+#endif
+
+struct patch_up {
+        unsigned int    *addr;
+        unsigned int    data;
+};
+
+typedef struct patch_up patch_up_t;
+
+patch_up_t patch_up_table[] = {
+	{&hwllckPatch_isync,		0x60000000},
+	{&hwulckPatch_isync,		0x60000000},
+	{&hwulckbPatch_isync,		0x60000000},
+	{&hwlmlckPatch_isync,		0x60000000},
+	{&hwltlckPatch_isync,		0x60000000},
+	{&hwcsatomicPatch_isync,	0x60000000},
+	{&mlckePatch_isync,		0x60000000},
+	{&mlckPatch_isync,		0x60000000},
+	{&mltelckPatch_isync,		0x60000000},
+	{&mltlckPatch_isync,		0x60000000},
+	{&mulckePatch_isync,		0x60000000},
+	{&mulckPatch_isync,		0x60000000},
+	{&slckPatch_isync,		0x60000000},
+	{&stlckPatch_isync,		0x60000000},
+	{&sulckPatch_isync,		0x60000000},
+	{&rwlePatch_isync,		0x60000000},
+	{&rwlsPatch_isync,		0x60000000},
+	{&rwlsePatch_isync,		0x60000000},
+	{&rwlesPatch_isync,		0x60000000},
+	{&rwtlePatch_isync,		0x60000000},
+	{&rwtlsPatch_isync,		0x60000000},
+	{&rwldPatch_isync,		0x60000000},
+	{&hwulckPatch_eieio,		0x60000000},
+	{&hwulckPatch_eieio,		0x60000000},
+	{&mulckPatch_eieio,		0x60000000},
+	{&mulckePatch_eieio,		0x60000000},
+	{&sulckPatch_eieio,		0x60000000},
+	{&rwlesPatch_eieio,		0x60000000},
+	{&rwldPatch_eieio,		0x60000000},
+#if     !MACH_LDEBUG
+	{&entfsectPatch_isync,		0x60000000},
+	{&retfsectPatch_isync,		0x60000000},
+	{&retfsectPatch_eieio,		0x60000000},
+#endif
+	{NULL,				0x00000000}
+};
+
+extern int			forcenap;
+extern boolean_t	pmap_initialized;
 
 /* Map memory map IO space */
 vm_offset_t 
@@ -52,29 +145,33 @@ ml_io_map(
 	return(io_map(phys_addr,size));
 }
 
-/* static memory allocation */
+/*
+ *	Routine:        ml_static_malloc
+ *	Function: 	static memory allocation
+ */
 vm_offset_t 
 ml_static_malloc(
 	vm_size_t size)
 {
-	extern vm_offset_t static_memory_end;
-	extern boolean_t pmap_initialized;
 	vm_offset_t vaddr;
 
 	if (pmap_initialized)
 		return((vm_offset_t)NULL);
 	else {
 		vaddr = static_memory_end;
-		static_memory_end = round_page_32(vaddr+size);
+		static_memory_end = round_page(vaddr+size);
 		return(vaddr);
 	}
 }
 
+/*
+ *	Routine:        ml_static_ptovirt
+ *	Function:
+ */
 vm_offset_t
 ml_static_ptovirt(
 	vm_offset_t paddr)
 {
-	extern vm_offset_t static_memory_end;
 	vm_offset_t vaddr;
 
 	/* Static memory is map V=R */
@@ -85,6 +182,10 @@ ml_static_ptovirt(
 		return((vm_offset_t)NULL);
 }
 
+/*
+ *	Routine:        ml_static_mfree
+ *	Function:
+ */
 void
 ml_static_mfree(
 	vm_offset_t vaddr,
@@ -104,14 +205,20 @@ ml_static_mfree(
 	}
 }
 
-/* virtual to physical on wired pages */
+/*
+ *	Routine:        ml_vtophys
+ *	Function:	virtual to physical on static pages
+ */
 vm_offset_t ml_vtophys(
 	vm_offset_t vaddr)
 {
 	return(pmap_extract(kernel_pmap, vaddr));
 }
 
-/* Initialize Interrupt Handler */
+/*
+ *	Routine:        ml_install_interrupt_handler
+ *	Function:	Initialize Interrupt Handler
+ */
 void ml_install_interrupt_handler(
 	void *nub,
 	int source,
@@ -119,70 +226,83 @@ void ml_install_interrupt_handler(
 	IOInterruptHandler handler,
 	void *refCon)
 {
-	int	current_cpu;
-	boolean_t current_state;
+	struct per_proc_info	*proc_info;
+	boolean_t		current_state;
 
-	current_cpu = cpu_number();
 	current_state = ml_get_interrupts_enabled();
+	proc_info = getPerProc();
 
-	per_proc_info[current_cpu].interrupt_nub     = nub;
-	per_proc_info[current_cpu].interrupt_source  = source;
-	per_proc_info[current_cpu].interrupt_target  = target;
-	per_proc_info[current_cpu].interrupt_handler = handler;
-	per_proc_info[current_cpu].interrupt_refCon  = refCon;
+	proc_info->interrupt_nub     = nub;
+	proc_info->interrupt_source  = source;
+	proc_info->interrupt_target  = target;
+	proc_info->interrupt_handler = handler;
+	proc_info->interrupt_refCon  = refCon;
 
-	per_proc_info[current_cpu].interrupts_enabled = TRUE;  
+	proc_info->interrupts_enabled = TRUE;  
 	(void) ml_set_interrupts_enabled(current_state);
 
 	initialize_screen(0, kPEAcquireScreen);
 }
 
-/* Initialize Interrupts */
+/*
+ *	Routine:        ml_init_interrupt
+ *	Function:	Initialize Interrupts
+ */
 void ml_init_interrupt(void)
 {
-	int	current_cpu;
 	boolean_t current_state;
 
 	current_state = ml_get_interrupts_enabled();
 
-	current_cpu = cpu_number();
-	per_proc_info[current_cpu].interrupts_enabled = TRUE;  
+	getPerProc()->interrupts_enabled = TRUE;  
 	(void) ml_set_interrupts_enabled(current_state);
 }
 
-/* Get Interrupts Enabled */
+/*
+ *	Routine:        ml_get_interrupts_enabled
+ *	Function:	Get Interrupts Enabled
+ */
 boolean_t ml_get_interrupts_enabled(void)
 {
 	return((mfmsr() & MASK(MSR_EE)) != 0);
 }
 
-/* Check if running at interrupt context */
+/*
+ *	Routine:        ml_at_interrupt_context
+ *	Function:	Check if running at interrupt context
+ */
 boolean_t ml_at_interrupt_context(void)
 {
 	boolean_t	ret;
 	boolean_t	current_state;
 
 	current_state = ml_set_interrupts_enabled(FALSE);
- 	ret = (per_proc_info[cpu_number()].istackptr == 0);	
+ 	ret = (getPerProc()->istackptr == 0);	
 	ml_set_interrupts_enabled(current_state);
 	return(ret);
 }
 
-/* Generate a fake interrupt */
+/*
+ *	Routine:        ml_cause_interrupt
+ *	Function:	Generate a fake interrupt
+ */
 void ml_cause_interrupt(void)
 {
 	CreateFakeIO();
 }
 
+/*
+ *	Routine:        ml_thread_policy
+ *	Function:
+ */
 void ml_thread_policy(
 	thread_t thread,
 	unsigned policy_id,
 	unsigned policy_info)
 {
-        extern int srv;
 
 	if ((policy_id == MACHINE_GROUP) &&
-		((per_proc_info[0].pf.Available) & pfSMPcap))
+		((PerProcTable[master_cpu].ppe_vaddr->pf.Available) & pfSMPcap))
 			thread_bind(thread, master_processor);
 
 	if (policy_info & MACHINE_NETWORK_WORKLOOP) {
@@ -190,8 +310,6 @@ void ml_thread_policy(
 
 		thread_lock(thread);
 
-		if (srv == 0)
-		        thread->sched_mode |= TH_MODE_FORCEDPREEMPT;
 		set_priority(thread, thread->priority + 1);
 
 		thread_unlock(thread);
@@ -199,192 +317,282 @@ void ml_thread_policy(
 	}
 }
 
-void machine_idle(void)
-{
-	struct per_proc_info	*ppinfo;
-
-	ppinfo = getPerProc();
-
-	if ((ppinfo->interrupts_enabled == TRUE) &&
-	    (ppinfo->cpu_flags & SignalReady)) {	/* Check to see if we are allowed to nap */
-		int cur_decr;
-
-		machine_idle_ppc();
-		/*
- 		 * protect against a lost decrementer trap
- 		 * if the current decrementer value is negative
- 		 * by more than 10 ticks, re-arm it since it's 
- 		 * unlikely to fire at this point... a hardware
- 		 * interrupt got us out of machine_idle and may
- 		 * also be contributing to this state
- 		 */
-		cur_decr = isync_mfdec();
-
-		if (cur_decr < -10) {
-		        mtdec(1);
-		}
-	}
-	else {
-		(void) ml_set_interrupts_enabled(TRUE);		/* Enable for interruptions even if nap is not allowed */
-	}
-}
-
+/*
+ *	Routine:        machine_signal_idle
+ *	Function:
+ */
 void
 machine_signal_idle(
 	processor_t processor)
 {
-	if (per_proc_info[processor->slot_num].pf.Available & (pfCanDoze|pfWillNap))
-		(void)cpu_signal(processor->slot_num, SIGPwake, 0, 0);
+	struct per_proc_info	*proc_info;
+
+	proc_info = PROCESSOR_TO_PER_PROC(processor);
+
+	if (proc_info->pf.Available & (pfCanDoze|pfWillNap))
+		(void)cpu_signal(proc_info->cpu_number, SIGPwake, 0, 0);
 }
 
+/*
+ *	Routine:        ml_processor_register
+ *	Function:
+ */
 kern_return_t
 ml_processor_register(
-	ml_processor_info_t *processor_info,
-	processor_t	    *processor,
-	ipi_handler_t       *ipi_handler)
+	ml_processor_info_t 	*in_processor_info,
+	processor_t				*processor_out,
+	ipi_handler_t			*ipi_handler)
 {
-	kern_return_t ret;
-	int target_cpu, cpu;
-	int donap;
+	struct per_proc_info	*proc_info;
+	int						donap;
+	boolean_t				current_state;
+	boolean_t				boot_processor;
 
-	if (processor_info->boot_cpu == FALSE) {
+	if (in_processor_info->boot_cpu == FALSE) {
 		if (spsLockInit == 0) {
 			spsLockInit = 1;
 			simple_lock_init(&spsLock, 0);
-		}
-		if (cpu_register(&target_cpu) != KERN_SUCCESS)
+                }
+		boot_processor = FALSE;
+		proc_info = cpu_per_proc_alloc();
+		if (proc_info == (struct per_proc_info *)NULL)
 			return KERN_FAILURE;
+		proc_info->pp_cbfr = console_per_proc_alloc(FALSE);
+		if (proc_info->pp_cbfr == (void *)NULL)
+			goto	processor_register_error;
 	} else {
-		/* boot_cpu is always 0 */
-		target_cpu = 0;
+		boot_processor = TRUE;
+		proc_info =  PerProcTable[master_cpu].ppe_vaddr;
 	}
 
-	per_proc_info[target_cpu].cpu_id = processor_info->cpu_id;
-	per_proc_info[target_cpu].start_paddr = processor_info->start_paddr;
+	proc_info->pp_chud = chudxnu_per_proc_alloc(boot_processor);
+	if (proc_info->pp_chud == (void *)NULL)
+		goto	processor_register_error;
 
-	if (per_proc_info[target_cpu].pf.pfPowerModes & pmPowerTune) {
-	  per_proc_info[target_cpu].pf.pfPowerTune0 = processor_info->power_mode_0;
-	  per_proc_info[target_cpu].pf.pfPowerTune1 = processor_info->power_mode_1;
-	}
+	if (!boot_processor)
+		if (cpu_per_proc_register(proc_info) != KERN_SUCCESS)
+			goto	processor_register_error;
 
-	donap = processor_info->supports_nap;		/* Assume we use requested nap */
-	if(forcenap) donap = forcenap - 1;			/* If there was an override, use that */
-	
-	if(per_proc_info[target_cpu].pf.Available & pfCanNap)
-	  if(donap) 
-		per_proc_info[target_cpu].pf.Available |= pfWillNap;
-
-	if(processor_info->time_base_enable !=  (void(*)(cpu_id_t, boolean_t ))NULL)
-		per_proc_info[target_cpu].time_base_enable = processor_info->time_base_enable;
+	proc_info->cpu_id = in_processor_info->cpu_id;
+	proc_info->start_paddr = in_processor_info->start_paddr;
+	if(in_processor_info->time_base_enable !=  (void(*)(cpu_id_t, boolean_t ))NULL)
+		proc_info->time_base_enable = in_processor_info->time_base_enable;
 	else
-		per_proc_info[target_cpu].time_base_enable = (void(*)(cpu_id_t, boolean_t ))NULL;
-	
-	if(target_cpu == cpu_number()) 
-		__asm__ volatile("mtsprg 2,%0" : : "r" (per_proc_info[target_cpu].pf.Available));	/* Set live value */
+		proc_info->time_base_enable = (void(*)(cpu_id_t, boolean_t ))NULL;
 
-	*processor = cpu_to_processor(target_cpu);
+	if (proc_info->pf.pfPowerModes & pmPowerTune) {
+	  proc_info->pf.pfPowerTune0 = in_processor_info->power_mode_0;
+	  proc_info->pf.pfPowerTune1 = in_processor_info->power_mode_1;
+	}
+
+	donap = in_processor_info->supports_nap;	/* Assume we use requested nap */
+	if(forcenap) donap = forcenap - 1;		/* If there was an override, use that */
+
+	if((proc_info->pf.Available & pfCanNap)
+	   && (donap)) {
+		proc_info->pf.Available |= pfWillNap;
+		current_state = ml_set_interrupts_enabled(FALSE);
+		if(proc_info == getPerProc()) 
+			__asm__ volatile("mtsprg 2,%0" : : "r" (proc_info->pf.Available));	/* Set live value */
+		(void) ml_set_interrupts_enabled(current_state);
+	}
+
+	if (!boot_processor) {
+		(void)hw_atomic_add((uint32_t *)&saveanchor.savetarget, FreeListMin);   /* saveareas for this processor */
+		processor_init((struct processor *)proc_info->processor, proc_info->cpu_number);
+	}
+
+	*processor_out = (struct processor *)proc_info->processor;
 	*ipi_handler = cpu_signal_handler;
 
 	return KERN_SUCCESS;
+
+processor_register_error:
+	if (proc_info->pp_cbfr != (void *)NULL)
+		console_per_proc_free(proc_info->pp_cbfr);
+	if (proc_info->pp_chud != (void *)NULL)
+		chudxnu_per_proc_free(proc_info->pp_chud);
+	if (!boot_processor)
+		cpu_per_proc_free(proc_info);
+	return KERN_FAILURE;
 }
 
+/*
+ *	Routine:        ml_enable_nap
+ *	Function:
+ */
 boolean_t
 ml_enable_nap(int target_cpu, boolean_t nap_enabled)
 {
-    boolean_t prev_value = (per_proc_info[target_cpu].pf.Available & pfCanNap) && (per_proc_info[target_cpu].pf.Available & pfWillNap);
+	struct per_proc_info	*proc_info;
+	boolean_t				prev_value;
+	boolean_t				current_state;
+
+	proc_info = PerProcTable[target_cpu].ppe_vaddr;
+
+    prev_value = (proc_info->pf.Available & pfCanNap) && (proc_info->pf.Available & pfWillNap);
     
- 	if(forcenap) nap_enabled = forcenap - 1;		/* If we are to force nap on or off, do it */
+ 	if(forcenap) nap_enabled = forcenap - 1;				/* If we are to force nap on or off, do it */
  
- 	if(per_proc_info[target_cpu].pf.Available & pfCanNap) {				/* Can the processor nap? */
-		if (nap_enabled) per_proc_info[target_cpu].pf.Available |= pfWillNap;	/* Is nap supported on this machine? */
-		else per_proc_info[target_cpu].pf.Available &= ~pfWillNap;		/* Clear if not */
+ 	if(proc_info->pf.Available & pfCanNap) {				/* Can the processor nap? */
+		if (nap_enabled) proc_info->pf.Available |= pfWillNap;	/* Is nap supported on this machine? */
+		else proc_info->pf.Available &= ~pfWillNap;			/* Clear if not */
 	}
 
-	if(target_cpu == cpu_number()) 
-		__asm__ volatile("mtsprg 2,%0" : : "r" (per_proc_info[target_cpu].pf.Available));	/* Set live value */
+	current_state = ml_set_interrupts_enabled(FALSE);
+	if(proc_info == getPerProc()) 
+		__asm__ volatile("mtsprg 2,%0" : : "r" (proc_info->pf.Available));	/* Set live value */
+	(void) ml_set_interrupts_enabled(current_state);
  
     return (prev_value);
 }
 
+/*
+ *	Routine:        ml_init_max_cpus
+ *	Function:
+ */
 void
-ml_init_max_cpus(unsigned long max_cpus)
+ml_init_max_cpus(unsigned int mcpus)
 {
-	boolean_t current_state;
 
-	current_state = ml_set_interrupts_enabled(FALSE);
-	if (max_cpus_initialized != MAX_CPUS_SET) {
-		if (max_cpus > 0 && max_cpus < NCPUS)
-			machine_info.max_cpus = max_cpus;
-		if (max_cpus_initialized == MAX_CPUS_WAIT)
-			wakeup((event_t)&max_cpus_initialized);
-		max_cpus_initialized = MAX_CPUS_SET;
+	if (hw_compare_and_store(0,1,&mcpus_lock_initialized))
+		mutex_init(&mcpus_lock,0);
+	mutex_lock(&mcpus_lock);
+	if ((mcpus_state & MAX_CPUS_SET)
+	    || (mcpus == 0)
+	    || (mcpus > MAX_CPUS))
+		panic("ml_init_max_cpus(): Invalid call, max_cpus: %d\n", mcpus);
+
+	machine_info.max_cpus = mcpus;
+	machine_info.physical_cpu_max = mcpus;
+	machine_info.logical_cpu_max = mcpus;
+	mcpus_state |= MAX_CPUS_SET;
+
+	if (mcpus_state & MAX_CPUS_WAIT) {
+		mcpus_state |= ~MAX_CPUS_WAIT;
+		thread_wakeup((event_t)&mcpus_state);
 	}
-	(void) ml_set_interrupts_enabled(current_state);
+	mutex_unlock(&mcpus_lock);
+
+	if (machine_info.logical_cpu_max == 1) {
+		struct patch_up *patch_up_ptr;
+		boolean_t current_state;
+
+		patch_up_ptr = &patch_up_table[0];
+
+		current_state = ml_set_interrupts_enabled(FALSE);
+		while (patch_up_ptr->addr != NULL) {
+			/*
+			 * Patch for V=R kernel text section
+			 */
+			bcopy_phys((addr64_t)((unsigned int)(&patch_up_ptr->data)), 
+				   (addr64_t)((unsigned int)(patch_up_ptr->addr)), 4);
+			sync_cache64((addr64_t)((unsigned int)(patch_up_ptr->addr)),4);
+			patch_up_ptr++;
+		}
+		(void) ml_set_interrupts_enabled(current_state);
+	}
 }
 
-int
+/*
+ *	Routine:        ml_get_max_cpus
+ *	Function:
+ */
+unsigned int
 ml_get_max_cpus(void)
 {
-	boolean_t current_state;
-
-	current_state = ml_set_interrupts_enabled(FALSE);
-	if (max_cpus_initialized != MAX_CPUS_SET) {
-		max_cpus_initialized = MAX_CPUS_WAIT;
-		assert_wait((event_t)&max_cpus_initialized, THREAD_UNINT);
-		(void)thread_block(THREAD_CONTINUE_NULL);
-	}
-	(void) ml_set_interrupts_enabled(current_state);
+	if (hw_compare_and_store(0,1,&mcpus_lock_initialized))
+		mutex_init(&mcpus_lock,0);
+	mutex_lock(&mcpus_lock);
+	if (!(mcpus_state & MAX_CPUS_SET)) {
+		mcpus_state |= MAX_CPUS_WAIT;
+		thread_sleep_mutex((event_t)&mcpus_state,
+					 &mcpus_lock, THREAD_UNINT);
+	} else
+		mutex_unlock(&mcpus_lock);
 	return(machine_info.max_cpus);
 }
 
+/*
+ * This is called from the machine-independent routine cpu_up()
+ * to perform machine-dependent info updates.
+ */
 void
-ml_cpu_get_info(ml_cpu_info_t *cpu_info)
+ml_cpu_up(void)
 {
-  if (cpu_info == 0) return;
+	hw_atomic_add(&machine_info.physical_cpu, 1);
+	hw_atomic_add(&machine_info.logical_cpu, 1);
+}
+
+/*
+ * This is called from the machine-independent routine cpu_down()
+ * to perform machine-dependent info updates.
+ */
+void
+ml_cpu_down(void)
+{
+	hw_atomic_sub(&machine_info.physical_cpu, 1);
+	hw_atomic_sub(&machine_info.logical_cpu, 1);
+}
+
+/*
+ *	Routine:        ml_cpu_get_info
+ *	Function:
+ */
+void
+ml_cpu_get_info(ml_cpu_info_t *ml_cpu_info)
+{
+  struct per_proc_info	*proc_info;
+
+  if (ml_cpu_info == 0) return;
   
-  cpu_info->vector_unit = (per_proc_info[0].pf.Available & pfAltivec) != 0;
-  cpu_info->cache_line_size = per_proc_info[0].pf.lineSize;
-  cpu_info->l1_icache_size = per_proc_info[0].pf.l1iSize;
-  cpu_info->l1_dcache_size = per_proc_info[0].pf.l1dSize;
+  proc_info = PerProcTable[master_cpu].ppe_vaddr;
+  ml_cpu_info->vector_unit = (proc_info->pf.Available & pfAltivec) != 0;
+  ml_cpu_info->cache_line_size = proc_info->pf.lineSize;
+  ml_cpu_info->l1_icache_size = proc_info->pf.l1iSize;
+  ml_cpu_info->l1_dcache_size = proc_info->pf.l1dSize;
   
-  if (per_proc_info[0].pf.Available & pfL2) {
-    cpu_info->l2_settings = per_proc_info[0].pf.l2cr;
-    cpu_info->l2_cache_size = per_proc_info[0].pf.l2Size;
+  if (proc_info->pf.Available & pfL2) {
+    ml_cpu_info->l2_settings = proc_info->pf.l2cr;
+    ml_cpu_info->l2_cache_size = proc_info->pf.l2Size;
   } else {
-    cpu_info->l2_settings = 0;
-    cpu_info->l2_cache_size = 0xFFFFFFFF;
+    ml_cpu_info->l2_settings = 0;
+    ml_cpu_info->l2_cache_size = 0xFFFFFFFF;
   }
-  if (per_proc_info[0].pf.Available & pfL3) {
-    cpu_info->l3_settings = per_proc_info[0].pf.l3cr;
-    cpu_info->l3_cache_size = per_proc_info[0].pf.l3Size;
+  if (proc_info->pf.Available & pfL3) {
+    ml_cpu_info->l3_settings = proc_info->pf.l3cr;
+    ml_cpu_info->l3_cache_size = proc_info->pf.l3Size;
   } else {
-    cpu_info->l3_settings = 0;
-    cpu_info->l3_cache_size = 0xFFFFFFFF;
+    ml_cpu_info->l3_settings = 0;
+    ml_cpu_info->l3_cache_size = 0xFFFFFFFF;
   }
 }
 
+/*
+ *	Routine:        ml_enable_cache_level
+ *	Function:
+ */
 #define l2em 0x80000000
 #define l3em 0x80000000
-
-extern int real_ncpus;
-
 int
 ml_enable_cache_level(int cache_level, int enable)
 {
   int old_mode;
   unsigned long available, ccr;
+  struct per_proc_info	*proc_info;
   
-  if (real_ncpus != 1) return -1;
+  if (real_ncpus != 1) return -1;	/* XXX: This test is not safe */
   
-  available = per_proc_info[0].pf.Available;
+  proc_info = PerProcTable[master_cpu].ppe_vaddr;
+  available = proc_info->pf.Available;
   
   if ((cache_level == 2) && (available & pfL2)) {
-    ccr = per_proc_info[0].pf.l2cr;
+    ccr = proc_info->pf.l2cr;
     old_mode = (ccr & l2em) ? TRUE : FALSE;
     if (old_mode != enable) {
-      if (enable) ccr = per_proc_info[0].pf.l2crOriginal;
+      if (enable) ccr = proc_info->pf.l2crOriginal;
       else ccr = 0;
-      per_proc_info[0].pf.l2cr = ccr;
+      proc_info->pf.l2cr = ccr;
       cacheInit();
     }
     
@@ -392,12 +600,12 @@ ml_enable_cache_level(int cache_level, int enable)
   }
   
   if ((cache_level == 3) && (available & pfL3)) {
-    ccr = per_proc_info[0].pf.l3cr;
+    ccr = proc_info->pf.l3cr;
     old_mode = (ccr & l3em) ? TRUE : FALSE;
     if (old_mode != enable) {
-      if (enable) ccr = per_proc_info[0].pf.l3crOriginal;
+      if (enable) ccr = proc_info->pf.l3crOriginal;
       else ccr = 0;
-      per_proc_info[0].pf.l3cr = ccr;
+      proc_info->pf.l3cr = ccr;
       cacheInit();
     }
     
@@ -407,6 +615,9 @@ ml_enable_cache_level(int cache_level, int enable)
   return -1;
 }
 
+
+decl_simple_lock_data(, spsLock);
+
 /*
  *      Routine:        ml_set_processor_speed
  *      Function:
@@ -414,19 +625,15 @@ ml_enable_cache_level(int cache_level, int enable)
 void
 ml_set_processor_speed(unsigned long speed)
 {
-	struct per_proc_info	*proc_info;
-	uint32_t				powerModes, cpu;
-	kern_return_t			result;
-	boolean_t				current_state;
-	unsigned int			i;
+	struct per_proc_info    *proc_info;
+	uint32_t                powerModes, cpu;
+	kern_return_t           result;
+ 	boolean_t		current_state;
+	 unsigned int		i;
   
-	extern void ml_set_processor_speed_slave(unsigned long speed);
-	extern void ml_set_processor_speed_dpll(unsigned long speed);
-	extern void ml_set_processor_speed_dfs(unsigned long speed);
-	extern void ml_set_processor_speed_powertune(unsigned long speed);
-  
-	powerModes = per_proc_info[0].pf.pfPowerModes;
-  
+	proc_info = PerProcTable[master_cpu].ppe_vaddr;
+	powerModes = proc_info->pf.pfPowerModes;
+
 	if (powerModes & pmDualPLL) {
 
 		ml_set_processor_speed_dpll(speed);
@@ -441,8 +648,7 @@ ml_set_processor_speed(unsigned long speed)
 			for (i=200; i>0; i--) {
 				current_state = ml_set_interrupts_enabled(FALSE);
 				if (cpu != cpu_number()) {
-					if(!((machine_slot[cpu].running) &&
-				         (per_proc_info[cpu].cpu_flags & SignalReady)))
+				        if (PerProcTable[cpu].ppe_vaddr->cpu_flags & SignalReady)
 						/*
 						 * Target cpu is off-line, skip
 						 */
@@ -480,11 +686,9 @@ ml_set_processor_speed(unsigned long speed)
 void
 ml_set_processor_speed_slave(unsigned long speed)
 {
-  extern void ml_set_processor_speed_dfs(unsigned long speed);
-  
   ml_set_processor_speed_dfs(speed);
   
-  simple_lock(&spsLock);  
+  simple_lock(&spsLock);
   thread_wakeup(&spsLock);
   simple_unlock(&spsLock);
 }
@@ -507,66 +711,92 @@ ml_init_lock_timeout(void)
 			mtxspin =  USEC_PER_SEC>>4;
 		nanoseconds_to_absolutetime(mtxspin*NSEC_PER_USEC, &abstime);
 	} else {
-		nanoseconds_to_absolutetime(20*NSEC_PER_USEC, &abstime);
+		nanoseconds_to_absolutetime(10*NSEC_PER_USEC, &abstime);
 	}
 	MutexSpin = (unsigned int)abstime;
 }
 
+/*
+ *	Routine:        init_ast_check
+ *	Function:
+ */
 void
-init_ast_check(processor_t processor)
+init_ast_check(
+	__unused processor_t	processor)
 {}
-                
+
+/*
+ *	Routine:        cause_ast_check
+ *	Function:
+ */
 void
 cause_ast_check(
 	processor_t		processor)
 {
-	if (	processor != current_processor()								&&
-	    	per_proc_info[processor->slot_num].interrupts_enabled == TRUE	)
-		cpu_signal(processor->slot_num, SIGPast, NULL, NULL);
+	struct per_proc_info	*proc_info;
+
+	proc_info = PROCESSOR_TO_PER_PROC(processor);
+
+	if (proc_info != getPerProc()
+	    && proc_info->interrupts_enabled == TRUE)
+		cpu_signal(proc_info->cpu_number, SIGPast, (unsigned int)NULL, (unsigned int)NULL);
 }
               
+/*
+ *	Routine:        machine_processor_shutdown
+ *	Function:
+ */
 thread_t        
-switch_to_shutdown_context(
-	thread_t	thread,
-	void		(*doshutdown)(processor_t),
-	processor_t	processor)
+machine_processor_shutdown(
+	__unused thread_t		thread,
+	__unused void			(*doshutdown)(processor_t),
+	__unused processor_t	processor)
 {
 	CreateShutdownCTX();   
-	return((thread_t)(per_proc_info[cpu_number()].old_thread));
+	return((thread_t)(getPerProc()->old_thread));
 }
 
+/*
+ *	Routine:        set_be_bit
+ *	Function:
+ */
 int
-set_be_bit()
+set_be_bit(
+	void)
 {
-	
-	int mycpu;
 	boolean_t current_state;
 
-	current_state = ml_set_interrupts_enabled(FALSE);	/* Can't allow interruptions when mucking with per_proc flags */
-	mycpu = cpu_number();
-	per_proc_info[mycpu].cpu_flags |= traceBE;
+	current_state = ml_set_interrupts_enabled(FALSE);
+	getPerProc()->cpu_flags |= traceBE;
 	(void) ml_set_interrupts_enabled(current_state);
 	return(1);
 }
 
+/*
+ *	Routine:        clr_be_bit
+ *	Function:
+ */
 int
-clr_be_bit()
+clr_be_bit(
+	void)
 {
-	int mycpu;
 	boolean_t current_state;
 
-	current_state = ml_set_interrupts_enabled(FALSE);	/* Can't allow interruptions when mucking with per_proc flags */
-	mycpu = cpu_number();
-	per_proc_info[mycpu].cpu_flags &= ~traceBE;
+	current_state = ml_set_interrupts_enabled(FALSE);
+	getPerProc()->cpu_flags &= ~traceBE;
 	(void) ml_set_interrupts_enabled(current_state);
 	return(1);
 }
 
+/*
+ *	Routine:        be_tracing
+ *	Function:
+ */
 int
-be_tracing()
+be_tracing(
+	void)
 {
-  int mycpu = cpu_number();
-  return(per_proc_info[mycpu].cpu_flags & traceBE);
+  return(getPerProc()->cpu_flags & traceBE);
 }
 
 

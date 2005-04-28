@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -54,33 +54,13 @@
 #ifndef	_MACH_MACHINE_H_
 #define _MACH_MACHINE_H_
 
-#include <sys/appleapiopts.h>
-
+#include <stdint.h>
 #include <mach/machine/vm_types.h>
 #include <mach/boolean.h>
 
-/*
- *	For each host, there is a maximum possible number of
- *	cpus that may be available in the system.  This is the
- *	compile-time constant NCPUS, which is defined in cpus.h.
- *
- *	In addition, there is a machine_slot specifier for each
- *	possible cpu in the system.
- */
-
-struct machine_info {
-	integer_t	major_version;	/* kernel major version id */
-	integer_t	minor_version;	/* kernel minor version id */
-	integer_t	max_cpus;	/* max number of cpus compiled */
-	integer_t	avail_cpus;	/* number actually available */
-	vm_size_t	memory_size;	/* size of memory in bytes */
-};
-
-typedef struct machine_info	*machine_info_t;
-typedef struct machine_info	machine_info_data_t;	/* bogus */
-
 typedef integer_t	cpu_type_t;
 typedef integer_t	cpu_subtype_t;
+typedef integer_t	cpu_threadtype_t;
 
 #define CPU_STATE_MAX		4
 
@@ -90,25 +70,57 @@ typedef integer_t	cpu_subtype_t;
 #define CPU_STATE_NICE		3
 
 #ifdef	KERNEL_PRIVATE
-#ifdef   __APPLE_API_UNSTABLE
 
-struct machine_slot {
-/*boolean_t*/integer_t	is_cpu;		/* is there a cpu in this slot? */
-	cpu_type_t	cpu_type;	/* type of cpu */
-	cpu_subtype_t	cpu_subtype;	/* subtype of cpu */
-/*boolean_t*/integer_t	running;	/* is cpu running */
-	integer_t	cpu_ticks[CPU_STATE_MAX];
-	integer_t	clock_freq;	/* clock interrupt frequency */
+#include <sys/cdefs.h>
+
+__BEGIN_DECLS
+cpu_type_t			cpu_type(void);
+
+cpu_subtype_t		cpu_subtype(void);
+
+cpu_threadtype_t	cpu_threadtype(void);
+__END_DECLS
+
+#ifdef	MACH_KERNEL_PRIVATE
+
+struct machine_info {
+	integer_t	major_version;		/* kernel major version id */
+	integer_t	minor_version;		/* kernel minor version id */
+	integer_t	max_cpus;			/* max number of CPUs possible */
+	integer_t	avail_cpus;			/* number of CPUs now available */
+	uint32_t	memory_size;		/* size of memory in bytes, capped at 2 GB */
+	uint64_t	max_mem;			/* actual size of physical memory */
+	integer_t	physical_cpu;		/* number of physical CPUs now available */
+	integer_t	physical_cpu_max;	/* max number of physical CPUs possible */
+	integer_t	logical_cpu;		/* number of logical cpu now available */
+	integer_t	logical_cpu_max;	/* max number of physical CPUs possible */
 };
 
-typedef struct machine_slot	*machine_slot_t;
-typedef struct machine_slot	machine_slot_data_t;	/* bogus */
+typedef struct machine_info	*machine_info_t;
+typedef struct machine_info	machine_info_data_t;
 
 extern struct machine_info	machine_info;
-extern struct machine_slot	machine_slot[];
 
-#endif /* __APPLE_API_UNSTABLE */
-#endif /* KERNEL_PRIVATE */
+__BEGIN_DECLS
+cpu_type_t			slot_type(
+						int		slot_num);
+
+cpu_subtype_t		slot_subtype(
+						int		slot_num);
+
+cpu_threadtype_t	slot_threadtype(
+						int		slot_num);
+__END_DECLS
+
+#endif	/* MACH_KERNEL_PRIVATE */
+#endif	/* KERNEL_PRIVATE */
+
+
+/*
+ * Capability bits used in the definition of cpu_type.
+ */
+#define	CPU_ARCH_MASK	0xff000000		/* mask for architecture bits */
+#define CPU_ARCH_ABI64	0x01000000		/* 64 bit ABI */
 
 /*
  *	Machine types known by all.
@@ -134,7 +146,7 @@ extern struct machine_slot	machine_slot[];
 /* skip	CPU_TYPE_ALPHA		((cpu_type_t) 16)	*/
 /* skip				((cpu_type_t) 17)	*/
 #define CPU_TYPE_POWERPC		((cpu_type_t) 18)
-
+#define CPU_TYPE_POWERPC64		(CPU_TYPE_POWERPC | CPU_ARCH_ABI64)
 
 /*
  *	Machine subtypes (these are defined here, instead of in a machine
@@ -156,6 +168,12 @@ extern struct machine_slot	machine_slot[];
 #define	CPU_SUBTYPE_MULTIPLE		((cpu_subtype_t) -1)
 #define CPU_SUBTYPE_LITTLE_ENDIAN	((cpu_subtype_t) 0)
 #define CPU_SUBTYPE_BIG_ENDIAN		((cpu_subtype_t) 1)
+
+/*
+ *     Machine threadtypes.
+ *     This is none - not defined - for most machine types/subtypes.
+ */
+#define CPU_THREADTYPE_NONE		((cpu_threadtype_t) 0)
 
 /*
  *	VAX subtypes (these do *not* necessary conform to the actual cpu
@@ -218,6 +236,9 @@ extern struct machine_slot	machine_slot[];
 
 #define CPU_SUBTYPE_INTEL_MODEL(x)	((x) >> 4)
 #define CPU_SUBTYPE_INTEL_MODEL_ALL	0
+
+
+#define CPU_THREADTYPE_INTEL_HTT	((cpu_threadtype_t) 1)
 
 /*
  *	Mips subtypes.

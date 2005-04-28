@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -111,7 +111,7 @@ Returns nil.
 void IOCommandQueue::free()
 {
     if (queue)
-        kfree((vm_offset_t)queue, size * sizeof(commandEntryT));
+        kfree(queue, size * sizeof(commandEntryT));
     if (producerSema)
         semaphore_destroy(kernel_task, producerSema);
     if (producerLock)

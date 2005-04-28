@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -61,14 +61,16 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/proc.h>
+#include <sys/proc_internal.h>
 #include <sys/vnode.h>
 #include <sys/ioctl.h>
 #include <sys/msgbuf.h>
-#include <sys/file.h>
+#include <sys/file_internal.h>
 #include <sys/errno.h>
 #include <sys/select.h>
+#include <sys/kernel.h>
 #include <kern/thread.h>
+#include <sys/lock.h>
 
 #define LOG_RDPRI	(PZERO + 1)
 
@@ -86,16 +88,21 @@ int	log_open;			/* also used in log() */
 struct msgbuf temp_msgbuf;
 struct msgbuf *msgbufp;
 static int _logentrypend = 0;
+static int log_inited = 0;
+void bsd_log_lock(void);
+/* the following two are implemented in osfmk/kern/printf.c  */
+extern void bsd_log_unlock(void);
+extern void bsd_log_init(void);
 
 /*
  * Serialize log access.  Note that the log can be written at interrupt level,
  * so any log manipulations that can be done from, or affect, another processor
  * at interrupt level must be guarded with a spin lock.
  */
-decl_simple_lock_data(,log_lock);	/* stop races dead in their tracks */
-#define	LOG_LOCK()	simple_lock(&log_lock)
-#define	LOG_UNLOCK()	simple_unlock(&log_lock)
-#define	LOG_LOCK_INIT()	simple_lock_init(&log_lock)
+
+#define	LOG_LOCK() bsd_log_lock()
+#define	LOG_UNLOCK() bsd_log_unlock()
+
 
 /*ARGSUSED*/
 logopen(dev, flags, mode, p)
@@ -137,9 +144,7 @@ logclose(dev, flag)
 	LOG_LOCK();
 	log_open = 0;
 	selwakeup(&logsoftc.sc_selp);
-	oldpri = splhigh();
 	selthreadclear(&logsoftc.sc_selp);
-	splx(oldpri);
 	LOG_UNLOCK();
 	return (0);
 }
@@ -154,42 +159,57 @@ logread(dev, uio, flag)
 	register long l;
 	register int s;
 	int error = 0;
+	char localbuff[MSG_BSIZE];
+	int copybytes;
 
-	s = splhigh();
+	LOG_LOCK();
 	while (msgbufp->msg_bufr == msgbufp->msg_bufx) {
 		if (flag & IO_NDELAY) {
-			splx(s);
-			return (EWOULDBLOCK);
+			error = EWOULDBLOCK;
+			goto out;
 		}
 		if (logsoftc.sc_state & LOG_NBIO) {
-			splx(s);
-			return (EWOULDBLOCK);
+			error = EWOULDBLOCK;
+			goto out;
 		}
 		logsoftc.sc_state |= LOG_RDWAIT;
+		LOG_UNLOCK();
+		/*
+		 * If the wakeup is missed the ligtening bolt will wake this up 
+		 * if there are any new characters. If that doesn't do it
+		 * then wait for 5 sec and reevaluate 
+		 */
 		if (error = tsleep((caddr_t)msgbufp, LOG_RDPRI | PCATCH,
-				"klog", 0)) {
-			splx(s);
-			return (error);
+				"klog", 5 * hz)) {
+			/* if it times out; ignore */
+			if (error != EWOULDBLOCK)
+				return (error);
 		}
+		LOG_LOCK();
 	}
-	splx(s);
 	logsoftc.sc_state &= ~LOG_RDWAIT;
 
-	while (uio->uio_resid > 0) {
+
+	while (uio_resid(uio) > 0) {
 		l = msgbufp->msg_bufx - msgbufp->msg_bufr;
 		if (l < 0)
 			l = MSG_BSIZE - msgbufp->msg_bufr;
-		l = min(l, uio->uio_resid);
+		l = min(l, uio_resid(uio));
 		if (l == 0)
 			break;
-		error = uiomove((caddr_t)&msgbufp->msg_bufc[msgbufp->msg_bufr],
+		bcopy(&msgbufp->msg_bufc[msgbufp->msg_bufr], &localbuff[0], l);
+		LOG_UNLOCK();
+		error = uiomove((caddr_t)&localbuff[0],
 			(int)l, uio);
+		LOG_LOCK();
 		if (error)
 			break;
 		msgbufp->msg_bufr += l;
 		if (msgbufp->msg_bufr < 0 || msgbufp->msg_bufr >= MSG_BSIZE)
 			msgbufp->msg_bufr = 0;
 	}
+out:
+	LOG_UNLOCK();
 	return (error);
 }
 
@@ -201,19 +221,19 @@ logselect(dev, rw, wql, p)
 	void * wql;
 	struct proc *p;
 {
-	int s = splhigh();
 
 	switch (rw) {
 
 	case FREAD:
+		LOG_LOCK();	
 		if (msgbufp->msg_bufr != msgbufp->msg_bufx) {
-			splx(s);
+			LOG_UNLOCK();
 			return (1);
 		}
 		selrecord(p, &logsoftc.sc_selp, wql);
+		LOG_UNLOCK();
 		break;
 	}
-	splx(s);
 	return (0);
 }
 
@@ -224,24 +244,26 @@ logwakeup()
 	int pgid;
 	boolean_t funnel_state;
 
-	if (!log_open)
+	LOG_LOCK();	
+	if (!log_open) {
+		LOG_UNLOCK();
 		return;
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
+	}
 	selwakeup(&logsoftc.sc_selp);
 	if (logsoftc.sc_state & LOG_ASYNC) {
-		LOG_LOCK();
 		pgid = logsoftc.sc_pgid;
 		LOG_UNLOCK();
 		if (pgid < 0)
 			gsignal(-pgid, SIGIO); 
 		else if (p = pfind(pgid))
 			psignal(p, SIGIO);
+		LOG_LOCK();
 	}
 	if (logsoftc.sc_state & LOG_RDWAIT) {
 		wakeup((caddr_t)msgbufp);
 		logsoftc.sc_state &= ~LOG_RDWAIT;
 	}
-	(void) thread_funnel_set(kernel_flock, funnel_state);
+	LOG_UNLOCK();
 }
 
 void
@@ -262,13 +284,12 @@ logioctl(dev, com, data, flag)
 	long l;
 	int s;
 
+	LOG_LOCK();	
 	switch (com) {
 
 	/* return number of characters immediately available */
 	case FIONREAD:
-		s = splhigh();
 		l = msgbufp->msg_bufx - msgbufp->msg_bufr;
-		splx(s);
 		if (l < 0)
 			l += MSG_BSIZE;
 		*(off_t *)data = l;
@@ -289,28 +310,28 @@ logioctl(dev, com, data, flag)
 		break;
 
 	case TIOCSPGRP:
-		LOG_LOCK();
 		logsoftc.sc_pgid = *(int *)data;
-		LOG_UNLOCK();
 		break;
 
 	case TIOCGPGRP:
-		LOG_LOCK();
 		*(int *)data = logsoftc.sc_pgid;
-		LOG_UNLOCK();
 		break;
 
 	default:
+		LOG_UNLOCK();
 		return (-1);
 	}
+	LOG_UNLOCK();
 	return (0);
 }
 
 void
-log_init()
+bsd_log_init()
 {
-	msgbufp = &temp_msgbuf;
-	LOG_LOCK_INIT();
+	if (!log_inited) { 
+		msgbufp = &temp_msgbuf;
+		log_inited = 1;
+	}
 }
 
 void
@@ -318,8 +339,10 @@ log_putc(char c)
 {
 	register struct msgbuf *mbp;
 
-	if (msgbufp == NULL)
-		msgbufp =&temp_msgbuf;
+	if (!log_inited) {
+		panic("bsd log is not inited");
+	}
+	LOG_LOCK();
 
 	mbp = msgbufp; 
 	if (mbp-> msg_magic != MSG_MAGIC) { 
@@ -334,4 +357,6 @@ log_putc(char c)
 	_logentrypend = 1;
 	if (mbp->msg_bufx < 0 || mbp->msg_bufx >= MSG_BSIZE)
 		mbp->msg_bufx = 0;
+	LOG_UNLOCK();
 }
+

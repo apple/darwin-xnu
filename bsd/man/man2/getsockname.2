@@ -42,7 +42,7 @@
 .Sh SYNOPSIS
 .Fd #include <sys/socket.h>
 .Ft int
-.Fn getsockname "int s" "struct sockaddr *name" "int *namelen"
+.Fn getsockname "int s" "struct sockaddr *name" "socklen_t *namelen"
 .Sh DESCRIPTION
 .Fn Getsockname
 returns the current 

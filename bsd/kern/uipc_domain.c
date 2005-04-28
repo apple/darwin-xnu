@@ -64,13 +64,13 @@
 #include <sys/time.h>
 #include <sys/kernel.h>
 #include <sys/systm.h>
-#include <sys/proc.h>
+#include <sys/proc_internal.h>
 #include <sys/sysctl.h>
 #include <sys/syslog.h>
 #include <sys/queue.h>
 
-void	pffasttimo __P((void *));
-void	pfslowtimo __P((void *));
+void	pffasttimo(void *);
+void	pfslowtimo(void *);
 
 /*
  * Add/delete 'domain': Link structure into system list,
@@ -78,11 +78,21 @@ void	pfslowtimo __P((void *));
  * To delete, just remove from the list (dom_refs must be zero)
  */
 
+lck_grp_t		*domain_proto_mtx_grp;
+lck_attr_t	*domain_proto_mtx_attr;
+static lck_grp_attr_t	*domain_proto_mtx_grp_attr;
+lck_mtx_t		*domain_proto_mtx;
+extern int		do_reclaim;
 
 void init_domain(register struct domain *dp)
 {
 	struct protosw  *pr;
 	
+	if ((dp->dom_mtx = lck_mtx_alloc_init(domain_proto_mtx_grp, domain_proto_mtx_attr)) == NULL) {
+		printf("init_domain: can't init domain mtx for domain=%s\n", dp->dom_name);
+		return;	/* we have a problem... */
+	}
+
 	if (dp->dom_init)
 		(*dp->dom_init)();
 
@@ -109,6 +119,7 @@ void init_domain(register struct domain *dp)
 
 void	concat_domain(struct domain *dp) 
 {
+	lck_mtx_assert(domain_proto_mtx, LCK_MTX_ASSERT_OWNED);
 	dp->dom_next = domains; 
 	domains = dp; 
 }
@@ -116,33 +127,30 @@ void	concat_domain(struct domain *dp)
 void
 net_add_domain(register struct domain *dp)
 {	register struct protosw *pr;
-	register int s;
-	extern int splhigh(void);
-	extern int splx(int);
 
 	kprintf("Adding domain %s (family %d)\n", dp->dom_name,
 		dp->dom_family);
 	/* First, link in the domain */
-	s = splhigh();
 
+	lck_mtx_lock(domain_proto_mtx);
 	concat_domain(dp);
 
 	init_domain(dp);
+	lck_mtx_unlock(domain_proto_mtx);
 
-	splx(s);
 }
 
 int
 net_del_domain(register struct domain *dp)
 {	register struct domain *dp1, *dp2;
-	register int s, retval = 0;
-	extern int splhigh(void);
-	extern int splx(int);
- 
-	if (dp->dom_refs)
-		return(EBUSY);
+	register int retval = 0;
 
-	s = splhigh();
+	lck_mtx_lock(domain_proto_mtx);
+ 
+	if (dp->dom_refs) {
+		lck_mtx_unlock(domain_proto_mtx);
+		return(EBUSY);
+     }
 
 	for (dp2 = NULL, dp1 = domains; dp1; dp2 = dp1, dp1 = dp1->dom_next)
 	{	if (dp == dp1)
@@ -155,27 +163,24 @@ net_del_domain(register struct domain *dp)
 			domains = dp1->dom_next;
 	} else
 		retval = EPFNOSUPPORT;
-	splx(s);
+	lck_mtx_unlock(domain_proto_mtx);
 
 	return(retval);
 }
 
 /*
  * net_add_proto - link a protosw into a domain's protosw chain
+ * 
+ * note: protocols must use their own domain lock before calling net_add_proto
  */
 int
 net_add_proto(register struct protosw *pp,
 	      register struct domain *dp)
 {	register struct protosw *pp1, *pp2;
-	register int s;
-	extern int splhigh(void);
-	extern int splx(int);
 
-	s = splhigh();
 	for (pp2 = NULL, pp1 = dp->dom_protosw; pp1; pp1 = pp1->pr_next)
 	{	if (pp1->pr_type == pp->pr_type &&
 		    pp1->pr_protocol == pp->pr_protocol) {
-			splx(s);
 			return(EEXIST);
 		}
 		pp2 = pp1;
@@ -185,13 +190,12 @@ net_add_proto(register struct protosw *pp,
 	else
 		pp2->pr_next = pp;
 	pp->pr_next = NULL;
-	TAILQ_INIT(&pp->pr_sfilter);
+	TAILQ_INIT(&pp->pr_filter_head);
 	if (pp->pr_init)
 		(*pp->pr_init)();
 
 	/* Make sure pr_init isn't called again!! */
 	pp->pr_init = 0;
-	splx(s);
 	return(0);
 }
 
@@ -199,17 +203,15 @@ net_add_proto(register struct protosw *pp,
  * net_del_proto - remove a protosw from a domain's protosw chain.
  * Search the protosw chain for the element with matching data.
  * Then unlink and return.
+ *
+ * note: protocols must use their own domain lock before calling net_del_proto
  */
 int
 net_del_proto(register int type,
 	      register int protocol,
 	      register struct domain *dp)
 {	register struct protosw *pp1, *pp2;
-	int s;
-	extern int splhigh(void);
-	extern int splx(int);
 
-	s = splhigh();
 	for (pp2 = NULL, pp1 = dp->dom_protosw; pp1; pp1 = pp1->pr_next)
 	{	if (pp1->pr_type == type &&
 		    pp1->pr_protocol == protocol)
@@ -217,14 +219,12 @@ net_del_proto(register int type,
 		pp2 = pp1;
 	}
         if (pp1 == NULL) {
-			splx(s);
 			return(ENXIO);
 		}
 	if (pp2)
 		pp2->pr_next = pp1->pr_next;
 	else
 		dp->dom_protosw = pp1->pr_next;
-	splx(s);
 	return(0);
 }
 
@@ -256,10 +256,29 @@ domaininit()
 #endif
 
 	/*
+	 * allocate lock group attribute and group for domain mutexes
+	 */
+	domain_proto_mtx_grp_attr = lck_grp_attr_alloc_init();
+	lck_grp_attr_setdefault(domain_proto_mtx_grp_attr);
+
+	domain_proto_mtx_grp = lck_grp_alloc_init("domain", domain_proto_mtx_grp_attr);
+		
+	/*
+	 * allocate the lock attribute for per domain mutexes
+	 */
+	domain_proto_mtx_attr = lck_attr_alloc_init();
+	lck_attr_setdefault(domain_proto_mtx_attr);
+
+	if ((domain_proto_mtx = lck_mtx_alloc_init(domain_proto_mtx_grp, domain_proto_mtx_attr)) == NULL) {
+		printf("domaininit: can't init domain mtx for domain list\n");
+		return;	/* we have a problem... */
+	}
+	/*
 	 * Add all the static domains to the domains list
 	 */
 
-	thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
+	lck_mtx_lock(domain_proto_mtx);
+
 	concat_domain(&localdomain);
 	concat_domain(&routedomain);
 	concat_domain(&inetdomain);
@@ -293,9 +312,9 @@ domaininit()
 	for (dp = domains; dp; dp = dp->dom_next)
 		init_domain(dp);
 
+	lck_mtx_unlock(domain_proto_mtx);
 	timeout(pffasttimo, NULL, 1);
 	timeout(pfslowtimo, NULL, 1);
-	thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
 }
 
 struct protosw *
@@ -305,14 +324,20 @@ pffindtype(family, type)
 	register struct domain *dp;
 	register struct protosw *pr;
 
+	lck_mtx_assert(domain_proto_mtx, LCK_MTX_ASSERT_NOTOWNED);
+	lck_mtx_lock(domain_proto_mtx);
 	for (dp = domains; dp; dp = dp->dom_next)
 		if (dp->dom_family == family)
 			goto found;
+	lck_mtx_unlock(domain_proto_mtx);
 	return (0);
 found:
 	for (pr = dp->dom_protosw; pr; pr = pr->pr_next)
-		if (pr->pr_type && pr->pr_type == type)
+		if (pr->pr_type && pr->pr_type == type) {
+			lck_mtx_unlock(domain_proto_mtx);
 			return (pr);
+		}
+	lck_mtx_unlock(domain_proto_mtx);
 	return (0);
 }
 
@@ -320,17 +345,34 @@ struct domain *
 pffinddomain(int pf)
 {	struct domain *dp;
 
+	lck_mtx_assert(domain_proto_mtx, LCK_MTX_ASSERT_NOTOWNED);
+	lck_mtx_lock(domain_proto_mtx);
 	dp = domains;
 	while (dp)
-	{	if (dp->dom_family == pf)
+	{	if (dp->dom_family == pf) {
+			lck_mtx_unlock(domain_proto_mtx);
 			return(dp);
+		}
 		dp = dp->dom_next;
 	}
+	lck_mtx_unlock(domain_proto_mtx);
 	return(NULL);
 }
 
 struct protosw *
 pffindproto(family, protocol, type)
+	int family, protocol, type;
+{
+	register struct protosw *pr;
+	lck_mtx_assert(domain_proto_mtx, LCK_MTX_ASSERT_NOTOWNED);
+	lck_mtx_lock(domain_proto_mtx);
+	pr = pffindproto_locked(family, protocol, type);
+	lck_mtx_unlock(domain_proto_mtx);
+	return (pr);
+}
+
+struct protosw *
+pffindproto_locked(family, protocol, type)
 	int family, protocol, type;
 {
 	register struct domain *dp;
@@ -356,18 +398,12 @@ found:
 }
 
 int
-net_sysctl(name, namelen, oldp, oldlenp, newp, newlen, p)
-	int *name;
-	u_int namelen;
-	void *oldp;
-	size_t *oldlenp;
-	void *newp;
-	size_t newlen;
-	struct proc *p;
+net_sysctl(int *name, u_int namelen, user_addr_t oldp, size_t *oldlenp, 
+           user_addr_t newp, size_t newlen, struct proc *p)
 {
 	register struct domain *dp;
 	register struct protosw *pr;
-	int family, protocol;
+	int family, protocol, error;
 
 	/*
 	 * All sysctl names at this level are nonterminal;
@@ -381,15 +417,21 @@ net_sysctl(name, namelen, oldp, oldlenp, newp, newlen, p)
 
 	if (family == 0)
 		return (0);
+	lck_mtx_lock(domain_proto_mtx);
 	for (dp = domains; dp; dp = dp->dom_next)
 		if (dp->dom_family == family)
 			goto found;
+	lck_mtx_unlock(domain_proto_mtx);
 	return (ENOPROTOOPT);
 found:
 	for (pr = dp->dom_protosw; pr; pr = pr->pr_next)
-		if (pr->pr_protocol == protocol && pr->pr_sysctl)
-			return ((*pr->pr_sysctl)(name + 2, namelen - 2,
-			    oldp, oldlenp, newp, newlen));
+		if (pr->pr_protocol == protocol && pr->pr_sysctl) {
+			error = (*pr->pr_sysctl)(name + 2, namelen - 2,
+			    oldp, oldlenp, newp, newlen);
+			lck_mtx_unlock(domain_proto_mtx);
+			return (error);
+		}
+	lck_mtx_unlock(domain_proto_mtx);
 	return (ENOPROTOOPT);
 }
 
@@ -412,10 +454,13 @@ pfctlinput2(cmd, sa, ctlparam)
 
 	if (!sa)
 		return;
+
+	lck_mtx_lock(domain_proto_mtx);
 	for (dp = domains; dp; dp = dp->dom_next)
 		for (pr = dp->dom_protosw; pr; pr = pr->pr_next)
 			if (pr->pr_ctlinput)
 				(*pr->pr_ctlinput)(cmd, sa, ctlparam);
+	lck_mtx_unlock(domain_proto_mtx);
 }
 
 void
@@ -424,17 +469,19 @@ pfslowtimo(arg)
 {
 	register struct domain *dp;
 	register struct protosw *pr;
-	boolean_t 	funnel_state;
 
-	funnel_state = thread_funnel_set(network_flock, TRUE);
-
-	for (dp = domains; dp; dp = dp->dom_next)
-		for (pr = dp->dom_protosw; pr; pr = pr->pr_next)
+	lck_mtx_lock(domain_proto_mtx);
+	for (dp = domains; dp; dp = dp->dom_next) 
+		for (pr = dp->dom_protosw; pr; pr = pr->pr_next) {
 			if (pr->pr_slowtimo)
 				(*pr->pr_slowtimo)();
+			if (do_reclaim && pr->pr_drain)
+				(*pr->pr_drain)();
+		}
+	do_reclaim = 0;
+	lck_mtx_unlock(domain_proto_mtx);
 	timeout(pfslowtimo, NULL, hz/2);
         
-	(void) thread_funnel_set(network_flock, FALSE);
 }
 
 void
@@ -443,15 +490,12 @@ pffasttimo(arg)
 {
 	register struct domain *dp;
 	register struct protosw *pr;
-	boolean_t 	funnel_state;
 
-	funnel_state = thread_funnel_set(network_flock, TRUE);
-
+	lck_mtx_lock(domain_proto_mtx);
 	for (dp = domains; dp; dp = dp->dom_next)
 		for (pr = dp->dom_protosw; pr; pr = pr->pr_next)
 			if (pr->pr_fasttimo)
 				(*pr->pr_fasttimo)();
+	lck_mtx_unlock(domain_proto_mtx);
 	timeout(pffasttimo, NULL, hz/5);
-
-	(void) thread_funnel_set(network_flock, FALSE);
 }

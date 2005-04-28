@@ -27,6 +27,7 @@
  */
 
 #include <libkern/c++/OSUnserialize.h>
+#include <libkern/version.h>
 #include <IOKit/IORegistryEntry.h>
 #include <IOKit/IODeviceTreeSupport.h>
 #include <IOKit/IOCatalogue.h>
@@ -39,10 +40,11 @@
 
 #include <IOKit/assert.h>
 
+#include "IOKitKernelInternal.h"
+
 extern "C" {
 
 extern void OSlibkernInit (void);
-extern void IOLibInit(void);
 
 #include <kern/clock.h>
 
@@ -76,8 +78,6 @@ void StartIOKit( void * p1, void * p2, void * p3, void * p4 )
     OSDictionary *              fakeKmods;  // must release
     OSCollectionIterator *      kmodIter;   // must release
     OSString *                  kmodName;   // don't release
-
-    IOLog( iokit_version );
 
     if( PE_parse_boot_arg( "io", &debugFlags ))
 	gIOKitDebug = debugFlags;
@@ -126,8 +126,13 @@ void StartIOKit( void * p1, void * p2, void * p3, void * p4 )
                 "an invalid version.\n",
                 kmodName->getCStringNoCopy());
         }
-        if (KERN_SUCCESS != kmod_create_fake(kmodName->getCStringNoCopy(),
-                kmodVersion->getCStringNoCopy())) {
+
+	// empty version strings get replaced with current kernel version
+	const char *vers = (strlen(kmodVersion->getCStringNoCopy())
+				 ? kmodVersion->getCStringNoCopy()
+				 : osrelease);
+
+        if (KERN_SUCCESS != kmod_create_fake(kmodName->getCStringNoCopy(), vers)) {
             panic("Failure declaring in-kernel kmod \"%s\".\n",
                 kmodName->getCStringNoCopy());
         }
@@ -145,7 +150,7 @@ void StartIOKit( void * p1, void * p2, void * p3, void * p4 )
     IOUserClient::initialize();
     IOMemoryDescriptor::initialize();
 
-    obj = OSString::withCString( iokit_version );
+    obj = OSString::withCString( version );
     assert( obj );
     if( obj ) {
         root->setProperty( kIOKitBuildVersionKey, obj );

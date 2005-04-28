@@ -24,6 +24,7 @@
 
 
 #include <libkern/c++/OSArray.h>
+#include <libkern/c++/OSDictionary.h>
 #include <libkern/c++/OSSerialize.h>
 #include <libkern/c++/OSLib.h>
 
@@ -48,6 +49,9 @@ extern "C" {
 #define ACCUMSIZE(s)
 #endif
 
+#define EXT_CAST(obj) \
+    reinterpret_cast<OSObject *>(const_cast<OSMetaClassBase *>(obj))
+
 bool OSArray::initWithCapacity(unsigned int inCapacity)
 {
     int size;
@@ -67,23 +71,23 @@ bool OSArray::initWithCapacity(unsigned int inCapacity)
     bzero(array, size);
     ACCUMSIZE(size);
 
-    return this;	
+    return true;
 }
 
 bool OSArray::initWithObjects(const OSObject *objects[],
                               unsigned int theCount,
                               unsigned int theCapacity)
 {
-    unsigned int capacity;
+    unsigned int initCapacity;
 
     if (!theCapacity)
-        capacity = theCount;
+        initCapacity = theCount;
     else if (theCount > theCapacity)
         return false;
     else
-        capacity = theCapacity;
+        initCapacity = theCapacity;
 
-    if (!objects || !initWithCapacity(capacity))
+    if (!objects || !initWithCapacity(initCapacity))
         return false;
 
     for ( unsigned int i = 0; i < theCount; i++ ) {
@@ -150,10 +154,13 @@ OSArray *OSArray::withArray(const OSArray *array,
 
 void OSArray::free()
 {
+    // Clear immutability - assumes the container is doing the right thing
+    (void) super::setOptions(0, kImmutable);
+
     flushCollection();
 
     if (array) {
-        kfree((vm_offset_t)array, sizeof(const OSMetaClassBase *) * capacity);
+        kfree(array, sizeof(const OSMetaClassBase *) * capacity);
         ACCUMSIZE( -(sizeof(const OSMetaClassBase *) * capacity) );
     }
 
@@ -192,7 +199,7 @@ unsigned int OSArray::ensureCapacity(unsigned int newCapacity)
 
         bcopy(array, newArray, oldSize);
         bzero(&newArray[capacity], newSize - oldSize);
-        kfree((vm_offset_t)array, oldSize);
+        kfree(array, oldSize);
         array = newArray;
         capacity = newCapacity;
     }
@@ -330,7 +337,7 @@ OSObject *OSArray::getObject(unsigned int index) const
     if (index >= count)
         return 0;
     else
-        return (OSObject *) array[index];
+        return (OSObject *) (const_cast<OSMetaClassBase *>(array[index]));
 }
 
 OSObject *OSArray::getLastObject() const
@@ -338,7 +345,7 @@ OSObject *OSArray::getLastObject() const
     if (count == 0)
         return 0;
     else
-        return (OSObject *) array[count - 1];
+        return ( OSObject *) (const_cast<OSMetaClassBase *>(array[count - 1]));
 }
 
 unsigned int OSArray::getNextIndexOfObject(const OSMetaClassBase * anObject,
@@ -370,7 +377,7 @@ bool OSArray::getNextObjectForIterator(void *inIterator, OSObject **ret) const
     unsigned int index = (*iteratorP)++;
 
     if (index < count) {
-        *ret = (OSObject *) array[index];
+        *ret = (OSObject *)(const_cast<OSMetaClassBase *> (array[index]));
         return true;
     }
     else {
@@ -391,3 +398,74 @@ bool OSArray::serialize(OSSerialize *s) const
 
     return s->addXMLEndTag("array");
 }
+
+unsigned OSArray::setOptions(unsigned options, unsigned mask, void *)
+{
+    unsigned old = super::setOptions(options, mask);
+    if ((old ^ options) & mask) {
+
+	// Value changed need to recurse over all of the child collections
+	for ( unsigned i = 0; i < count; i++ ) {
+	    OSCollection *coll = OSDynamicCast(OSCollection, array[i]);
+	    if (coll)
+		coll->setOptions(options, mask);
+	}
+    }
+
+    return old;
+}
+
+OSCollection * OSArray::copyCollection(OSDictionary *cycleDict)
+{
+    bool allocDict = !cycleDict;
+    OSCollection *ret = 0;
+    OSArray *newArray = 0;
+
+    if (allocDict) {
+	cycleDict = OSDictionary::withCapacity(16);
+	if (!cycleDict)
+	    return 0;
+    }
+
+    do {
+	// Check for a cycle
+	ret = super::copyCollection(cycleDict);
+	if (ret)
+	    continue;
+	
+	newArray = OSArray::withArray(this);
+	if (!newArray)
+	    continue;
+
+	// Insert object into cycle Dictionary
+	cycleDict->setObject((const OSSymbol *) this, newArray);
+
+	for (unsigned int i = 0; i < count; i++) {
+	    OSCollection *coll =
+		OSDynamicCast(OSCollection, EXT_CAST(newArray->array[i]));
+
+	    if (coll) {
+		OSCollection *newColl = coll->copyCollection(cycleDict);
+		if (!newColl)
+		    goto abortCopy;
+
+		newArray->replaceObject(i, newColl);
+		newColl->release();
+	    };
+	};
+
+	ret = newArray;
+	newArray = 0;
+
+    } while (false);
+
+abortCopy:
+    if (newArray)
+	newArray->release();
+
+    if (allocDict)
+	cycleDict->release();
+
+    return ret;
+}
+

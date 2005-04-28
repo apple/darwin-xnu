@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -98,8 +98,9 @@
 #include <sys/systm.h>
 #undef	TTYDEFCHARS
 #include <sys/ioctl.h>
-#include <sys/proc.h>
-#include <sys/file.h>
+#include <sys/proc_internal.h>
+#include <sys/kauth.h>
+#include <sys/file_internal.h>
 #include <sys/conf.h>
 #include <sys/dkstat.h>
 #include <sys/uio.h>
@@ -132,20 +133,22 @@
 #include <machdep/machine/pmap.h>
 #endif  /* 0 ] */
 #endif /* !NeXT */
+#include <sys/resource.h>	/* averunnable */
 
 #ifndef NeXT
-static int	proc_compare __P((struct proc *p1, struct proc *p2));
+static int	proc_compare(struct proc *p1, struct proc *p2);
 #endif /* NeXT */
-static int	ttnread __P((struct tty *tp));
-static void	ttyecho __P((int c, struct tty *tp));
-static int	ttyoutput __P((int c, register struct tty *tp));
-static void	ttypend __P((struct tty *tp));
-static void	ttyretype __P((struct tty *tp));
-static void	ttyrub __P((int c, struct tty *tp));
-static void	ttyrubo __P((struct tty *tp, int cnt));
-static void	ttystop __P((struct tty *tp, int rw));
-static void	ttyunblock __P((struct tty *tp));
-static int	ttywflush __P((struct tty *tp));
+static int	ttnread(struct tty *tp);
+static void	ttyecho(int c, struct tty *tp);
+static int	ttyoutput(int c, register struct tty *tp);
+static void	ttypend(struct tty *tp);
+static void	ttyretype(struct tty *tp);
+static void	ttyrub(int c, struct tty *tp);
+static void	ttyrubo(struct tty *tp, int count);
+static void	ttystop(struct tty *tp, int rw);
+static void	ttyunblock(struct tty *tp);
+static int	ttywflush(struct tty *tp);
+static int	proc_compare(struct proc *p1, struct proc *p2);
 
 /*
  * Table with character classes and parity. The 8th bit indicates parity,
@@ -235,6 +238,37 @@ static u_char const char_type[] = {
 
 #undef MAX_INPUT		/* XXX wrong in <sys/syslimits.h> */
 #define	MAX_INPUT	TTYHOG
+
+static void
+termios32to64(struct termios *in, struct user_termios *out)
+{
+	out->c_iflag = (user_tcflag_t)in->c_iflag;
+	out->c_oflag = (user_tcflag_t)in->c_oflag;
+	out->c_cflag = (user_tcflag_t)in->c_cflag;
+	out->c_lflag = (user_tcflag_t)in->c_lflag;
+
+	/* bcopy is OK, since this type is ILP32/LP64 size invariant */
+	bcopy(in->c_cc, out->c_cc, sizeof(in->c_cc));
+
+	out->c_ispeed = (user_speed_t)in->c_ispeed;
+	out->c_ospeed = (user_speed_t)in->c_ospeed;
+}
+
+static void
+termios64to32(struct user_termios *in, struct termios *out)
+{
+	out->c_iflag = (tcflag_t)in->c_iflag;
+	out->c_oflag = (tcflag_t)in->c_oflag;
+	out->c_cflag = (tcflag_t)in->c_cflag;
+	out->c_lflag = (tcflag_t)in->c_lflag;
+
+	/* bcopy is OK, since this type is ILP32/LP64 size invariant */
+	bcopy(in->c_cc, out->c_cc, sizeof(in->c_cc));
+
+	out->c_ispeed = (speed_t)in->c_ispeed;
+	out->c_ospeed = (speed_t)in->c_ospeed;
+}
+
 
 /*
  * Initial open of tty, or (re)entry to standard tty line discipline.
@@ -778,41 +812,31 @@ ttyoutput(c, tp)
  */
 /* ARGSUSED */
 int
-#ifndef NeXT
-ttioctl(tp, cmd, data, flag)
-	register struct tty *tp;
-	int cmd, flag;
-	void *data;
-#else
-ttioctl(tp, cmd, data, flag, p)
-	register struct tty *tp;
-	u_long cmd;
-	caddr_t data;
-	int flag;
-	struct proc *p;
-#endif
+ttioctl(register struct tty *tp,
+	u_long cmd, caddr_t data, int flag,
+	struct proc *p)
 {
-#ifndef NeXT
-	register struct proc *p = curproc;	/* XXX */
-#endif
 	int s, error;
 	struct uthread *ut;
 
-	ut = (struct uthread *)get_bsdthread_info(current_act());
+	ut = (struct uthread *)get_bsdthread_info(current_thread());
 	/* If the ioctl involves modification, hang if in the background. */
 	switch (cmd) {
 	case  TIOCFLUSH:
 	case  TIOCSETA:
+	case  TIOCSETA_64:
 	case  TIOCSETD:
 	case  TIOCSETAF:
+	case  TIOCSETAF_64:
 	case  TIOCSETAW:
+	case  TIOCSETAW_64:
 #ifdef notdef
 	case  TIOCSPGRP:
 #endif
 	case  TIOCSTAT:
 	case  TIOCSTI:
 	case  TIOCSWINSZ:
-#if defined(COMPAT_43) || defined(COMPAT_SUNOS)
+#if COMPAT_43_TTY || defined(COMPAT_SUNOS)
 	case  TIOCLBIC:
 	case  TIOCLBIS:
 	case  TIOCLSET:
@@ -884,7 +908,7 @@ ttioctl(tp, cmd, data, flag, p)
 				return (EBUSY);
 			}
 #if defined(NeXT) || !defined(UCONSOLE)
-			if ( (error = suser(p->p_ucred, &p->p_acflag)) )
+			if ( (error = suser(kauth_cred_get(), &p->p_acflag)) )
 				return (error);
 #endif
 			constty = tp;
@@ -907,10 +931,13 @@ ttioctl(tp, cmd, data, flag, p)
 		if (error)
 			return (error);
 		break;
-	case TIOCGETA: {		/* get termios struct */
-		struct termios *t = (struct termios *)data;
-
-		bcopy(&tp->t_termios, t, sizeof(struct termios));
+	case TIOCGETA:		/* get termios struct */
+	case TIOCGETA_64: {		/* get termios struct */
+		if (IS_64BIT_PROCESS(p)) {
+			termios32to64(&tp->t_termios, (struct user_termios *)data);
+		} else {
+			bcopy(&tp->t_termios, data, sizeof(struct termios));
+		}
 		break;
 	}
 	case TIOCGETD:			/* get line discipline */
@@ -940,20 +967,29 @@ ttioctl(tp, cmd, data, flag, p)
 		*(int *)data = tp->t_outq.c_cc;
 		break;
 	case TIOCSETA:			/* set termios struct */
+	case TIOCSETA_64:
 	case TIOCSETAW:			/* drain output, set */
-	case TIOCSETAF: {		/* drn out, fls in, set */
+	case TIOCSETAW_64:
+	case TIOCSETAF:		/* drn out, fls in, set */
+	case TIOCSETAF_64: {		/* drn out, fls in, set */
 		register struct termios *t = (struct termios *)data;
+		struct termios lcl_termios;
 
+		if (IS_64BIT_PROCESS(p)) {
+			termios64to32((struct user_termios *)data, &lcl_termios);
+			t = &lcl_termios;
+		}
 		if (t->c_ispeed < 0 || t->c_ospeed < 0)
 			return (EINVAL);
 		s = spltty();
-		if (cmd == TIOCSETAW || cmd == TIOCSETAF) {
+		if (cmd == TIOCSETAW || cmd == TIOCSETAF ||
+		    cmd == TIOCSETAW_64 || cmd == TIOCSETAF_64) {
 			error = ttywait(tp);
 			if (error) {
 				splx(s);
 				return (error);
 			}
-			if (cmd == TIOCSETAF)
+			if (cmd == TIOCSETAF || cmd == TIOCSETAF_64)
 				ttyflush(tp, FREAD);
 		}
 		if (!ISSET(t->c_cflag, CIGNORE)) {
@@ -990,7 +1026,7 @@ ttioctl(tp, cmd, data, flag, p)
 			ttsetwater(tp);
 		}
 		if (ISSET(t->c_lflag, ICANON) != ISSET(tp->t_lflag, ICANON) &&
-		    cmd != TIOCSETAF) {
+		    cmd != TIOCSETAF && cmd != TIOCSETAF_64) {
 			if (ISSET(t->c_lflag, ICANON))
 				SET(tp->t_lflag, PENDIN);
 			else {
@@ -1045,9 +1081,8 @@ ttioctl(tp, cmd, data, flag, p)
 	case TIOCSETD: {		/* set line discipline */
 		register int t = *(int *)data;
 		dev_t device = tp->t_dev;
-		extern int nlinesw;
 
-		if ((u_int)t >= nlinesw)
+		if (t >= nlinesw)
 			return (ENXIO);
 		if (t != tp->t_line) {
 			s = spltty();
@@ -1074,9 +1109,9 @@ ttioctl(tp, cmd, data, flag, p)
 		splx(s);
 		break;
 	case TIOCSTI:			/* simulate terminal input */
-		if (p->p_ucred->cr_uid && (flag & FREAD) == 0)
+		if (suser(kauth_cred_get(), NULL) && (flag & FREAD) == 0)
 			return (EPERM);
-		if (p->p_ucred->cr_uid && !isctty(p, tp))
+		if (suser(kauth_cred_get(), NULL) && !isctty(p, tp))
 			return (EACCES);
 		s = spltty();
 		(*linesw[tp->t_line].l_rint)(*(u_char *)data, tp);
@@ -1132,7 +1167,7 @@ ttioctl(tp, cmd, data, flag, p)
 		}
 		break;
 	case TIOCSDRAINWAIT:
-		error = suser(p->p_ucred, &p->p_acflag);
+		error = suser(kauth_cred_get(), &p->p_acflag);
 		if (error)
 			return (error);
 		tp->t_timeout = *(int *)data * hz;
@@ -1143,14 +1178,14 @@ ttioctl(tp, cmd, data, flag, p)
 		*(int *)data = tp->t_timeout / hz;
 		break;
 	default:
-#if defined(COMPAT_43) || defined(COMPAT_SUNOS)
+#if COMPAT_43_TTY || defined(COMPAT_SUNOS)
 #ifdef NeXT
 		return (ttcompat(tp, cmd, data, flag, p));
 #else
 		return (ttcompat(tp, cmd, data, flag));
 #endif /* NeXT */
 #else
-		return (-1);
+		return (ENOTTY);
 #endif
 	}
 
@@ -1589,7 +1624,7 @@ ttread(tp, uio, flag)
 
 	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 
-	ut = (struct uthread *)get_bsdthread_info(current_act());
+	ut = (struct uthread *)get_bsdthread_info(current_thread());
 
 loop:
 	s = spltty();
@@ -1654,7 +1689,6 @@ loop:
 		int m = cc[VMIN];
 		long t = cc[VTIME];
 		struct timeval etime, timecopy;
-		int x;
 
 		/*
 		 * Check each of the four combinations.
@@ -1683,9 +1717,7 @@ loop:
 				goto sleep;
 			if (qp->c_cc >= m)
 				goto read;
-			x = splclock();
-			timecopy = time;
-			splx(x);
+			microuptime(&timecopy);
 			if (!has_etime) {
 				/* first character, start timer */
 				has_etime = 1;
@@ -1714,9 +1746,7 @@ loop:
 		} else {	/* m == 0 */
 			if (qp->c_cc > 0)
 				goto read;
-			x = splclock();
-			timecopy = time;
-			splx(x);
+			microuptime(&timecopy);
 			if (!has_etime) {
 				has_etime = 1;
 
@@ -1789,7 +1819,7 @@ read:
 		char ibuf[IBUFSIZ];
 		int icc;
 
-		icc = min(uio->uio_resid, IBUFSIZ);
+		icc = min(uio_resid(uio), IBUFSIZ);
 		icc = q_to_b(qp, ibuf, icc);
 		if (icc <= 0) {
 			if (first)
@@ -1808,7 +1838,7 @@ read:
 #endif
 		if (error)
 			break;
- 		if (uio->uio_resid == 0)
+ 		if (uio_resid(uio) == 0)
 			break;
 		first = 0;
 	}
@@ -1857,7 +1887,7 @@ slowcase:
 		    ISSET(tp->t_state, TS_SNOOP) && tp->t_sc != NULL)
 			snpinc((struct snoop *)tp->t_sc, (char)c);
 #endif
- 		if (uio->uio_resid == 0)
+ 		if (uio_resid(uio) == 0)
 			break;
 		/*
 		 * In canonical mode check for a "break character"
@@ -1895,10 +1925,11 @@ ttycheckoutq(tp, wait)
 	register struct tty *tp;
 	int wait;
 {
-	int hiwat, s, oldsig;
+	int hiwat, s;
+	sigset_t oldsig;
 	struct uthread *ut;
 
-	ut = (struct uthread *)get_bsdthread_info(current_act());
+	ut = (struct uthread *)get_bsdthread_info(current_thread());
 
 	hiwat = tp->t_hiwat;
 	s = spltty();
@@ -1931,23 +1962,24 @@ ttwrite(tp, uio, flag)
 	register char *cp = NULL;
 	register int cc, ce;
 	register struct proc *p;
-	int i, hiwat, cnt, error, s;
+	int i, hiwat, count, error, s;
 	char obuf[OBUFSIZ];
 	boolean_t funnel_state;
 	struct uthread *ut;
 
 	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 
-	ut = (struct uthread *)get_bsdthread_info(current_act());
+	ut = (struct uthread *)get_bsdthread_info(current_thread());
 	hiwat = tp->t_hiwat;
-	cnt = uio->uio_resid;
+	// LP64todo - fix this!
+	count = uio_resid(uio);
 	error = 0;
 	cc = 0;
 loop:
 	s = spltty();
 	if (ISSET(tp->t_state, TS_ZOMBIE)) {
 		splx(s);
-		if (uio->uio_resid == cnt)
+		if (uio_resid(uio) == count)
 			error = EIO;
 		goto out;
 	}
@@ -1988,9 +2020,9 @@ loop:
 	 * output translation.  Keep track of high water mark, sleep on
 	 * overflow awaiting device aid in acquiring new space.
 	 */
-	while (uio->uio_resid > 0 || cc > 0) {
+	while (uio_resid(uio) > 0 || cc > 0) {
 		if (ISSET(tp->t_lflag, FLUSHO)) {
-			uio->uio_resid = 0;
+			uio_setresid(uio, 0);
 			thread_funnel_set(kernel_flock, funnel_state);
 			return (0);
 		}
@@ -2001,7 +2033,7 @@ loop:
 		 * leftover from last time.
 		 */
 		if (cc == 0) {
-			cc = min(uio->uio_resid, OBUFSIZ);
+			cc = min(uio_resid(uio), OBUFSIZ);
 			cp = obuf;
 			error = uiomove(cp, cc, uio);
 			if (error) {
@@ -2027,7 +2059,7 @@ loop:
 				ce = cc;
 			else {
 				ce = cc - scanc((u_int)cc, (u_char *)cp,
-						(u_char *)char_type, CCLASSMASK);
+						char_type, CCLASSMASK);
 				/*
 				 * If ce is zero, then we're processing
 				 * a special character through ttyoutput.
@@ -2105,7 +2137,7 @@ out:
 	 * offset and iov pointers have moved forward, but it doesn't matter
 	 * (the call will either return short or restart with a new uio).
 	 */
-	uio->uio_resid += cc;
+	uio_setresid(uio, (uio_resid(uio) + cc));
 	thread_funnel_set(kernel_flock, funnel_state);
 	return (error);
 
@@ -2134,9 +2166,9 @@ ovhiwat:
 	}
 	if (flag & IO_NDELAY) {
 		splx(s);
-		uio->uio_resid += cc;
+		uio_setresid(uio, (uio_resid(uio) + cc));
 		thread_funnel_set(kernel_flock, funnel_state);
-		return (uio->uio_resid == cnt ? EWOULDBLOCK : 0);
+		return (uio_resid(uio) == count ? EWOULDBLOCK : 0);
 	}
 	SET(tp->t_state, TS_SO_OLOWAT);
 	error = ttysleep(tp, TSA_OLOWAT(tp), TTOPRI | PCATCH, "ttywri",
@@ -2242,15 +2274,13 @@ ttyrub(c, tp)
 }
 
 /*
- * Back over cnt characters, erasing them.
+ * Back over count characters, erasing them.
  */
 static void
-ttyrubo(tp, cnt)
-	register struct tty *tp;
-	int cnt;
+ttyrubo(struct tty *tp, int count)
 {
 
-	while (cnt-- > 0) {
+	while (count-- > 0) {
 		(void)ttyoutput('\b', tp);
 		(void)ttyoutput(' ', tp);
 		(void)ttyoutput('\b', tp);
@@ -2395,10 +2425,10 @@ ttspeedtab(speed, table)
  *
  */
 void
-ttsetwater(tp)
-	struct tty *tp;
+ttsetwater(struct tty *tp)
 {
-	register int cps, x;
+	int cps;
+	unsigned int x;
 
 #define CLAMP(x, h, l)	((x) > h ? h : ((x) < l) ? l : (x))
 
@@ -2413,17 +2443,107 @@ ttsetwater(tp)
 /* NeXT ttyinfo has been converted to the MACH kernel */
 #include <mach/thread_info.h>
 
+/* XXX Should be in Mach header <kern/thread.h>, but doesn't work */
+extern kern_return_t	thread_info_internal(thread_t thread,
+				thread_flavor_t flavor,
+				thread_info_t thread_info_out,
+				mach_msg_type_number_t *thread_info_count);
+
 /*
  * Report on state of foreground process group.
  */
 void
-ttyinfo(tp)
-	register struct tty *tp;
+ttyinfo(struct tty *tp)
 {
-  /* NOT IMPLEMENTED FOR MACH */
+	int		load;
+	thread_t	thread;
+	uthread_t	uthread;
+	struct proc	*p;
+	struct proc	*pick;
+	const char	*state;
+	struct timeval	utime;
+	struct timeval	stime;
+	thread_basic_info_data_t	basic_info;
+	mach_msg_type_number_t		mmtn = THREAD_BASIC_INFO_COUNT;
+
+	if (ttycheckoutq(tp,0) == 0)
+		return;
+
+	/* Print load average. */
+	load = (averunnable.ldavg[0] * 100 + FSCALE / 2) >> FSHIFT;
+	ttyprintf(tp, "load: %d.%02d ", load / 100, load % 100);
+
+	/*
+	 * On return following a ttyprintf(), we set tp->t_rocount to 0 so
+	 * that pending input will be retyped on BS.
+	 */
+	if (tp->t_session == NULL) {
+		ttyprintf(tp, "not a controlling terminal\n");
+		tp->t_rocount = 0;
+		return;
+}
+	if (tp->t_pgrp == NULL) {
+		ttyprintf(tp, "no foreground process group\n");
+		tp->t_rocount = 0;
+		return;
+	}
+	/* first process in process group */
+	if ((p = tp->t_pgrp->pg_members.lh_first) == NULL) {
+		ttyprintf(tp, "empty foreground process group\n");
+		tp->t_rocount = 0;
+		return;
+	}
+
+	/*
+	 * Pick the most interesting process and copy some of its
+	 * state for printing later.
+	 */
+	for (pick = NULL; p != NULL; p = p->p_pglist.le_next) {
+		if (proc_compare(pick, p))
+			pick = p;
+	}
+
+	if (TAILQ_EMPTY(&pick->p_uthlist) ||
+	    (uthread = TAILQ_FIRST(&pick->p_uthlist)) == NULL ||
+	    (thread = uthread->uu_act) == NULL ||
+	    (thread_info_internal(thread, THREAD_BASIC_INFO, (thread_info_t)&basic_info, &mmtn) != KERN_SUCCESS)) {
+		ttyprintf(tp, "foreground process without thread\n");
+		tp->t_rocount = 0;
+		return;
+	}
+
+	switch(basic_info.run_state) {
+	case TH_STATE_RUNNING:
+		state = "running";
+		break;
+	case TH_STATE_STOPPED:
+		state = "stopped";
+		break;
+	case TH_STATE_WAITING:
+		state = "waiting";
+		break;
+	case TH_STATE_UNINTERRUPTIBLE:
+		state = "uninterruptible";
+		break;
+	case TH_STATE_HALTED:
+		state = "halted";
+		break;
+	default:
+		state = "unknown";
+		break;
+	}
+	calcru(pick, &utime, &stime, NULL);
+
+	/* Print command, pid, state, utime, and stime */
+	ttyprintf(tp, " cmd: %s %d %s %ld.%02ldu %ld.%02lds\n",
+		pick->p_comm,
+		pick->p_pid,
+		state,
+		(long)utime.tv_sec, utime.tv_usec / 10000,
+		(long)stime.tv_sec, stime.tv_usec / 10000);
+	tp->t_rocount = 0;
 }
 
-#ifndef NeXT
 /*
  * Returns 1 if p2 is "better" than p1
  *
@@ -2433,8 +2553,7 @@ ttyinfo(tp)
  *	2) Runnable processes are favored over anything else.  The runner
  *	   with the highest cpu utilization is picked (p_estcpu).  Ties are
  *	   broken by picking the highest pid.
- *	3) The sleeper with the shortest sleep time is next.  With ties,
- *	   we pick out just "short-term" sleepers (P_SINTR == 0).
+ *	3) The sleeper with the shortest sleep time is next.
  *	4) Further ties are broken by picking the highest pid.
  */
 #define ISRUN(p)	(((p)->p_stat == SRUN) || ((p)->p_stat == SIDL))
@@ -2486,16 +2605,8 @@ proc_compare(p1, p2)
 		return (0);
 	if (p1->p_slptime > p2->p_slptime)
 		return (1);
-	/*
-	 * favor one sleeping in a non-interruptible sleep
-	 */
-	if (p1->p_flag & P_SINTR && (p2->p_flag & P_SINTR) == 0)
-		return (1);
-	if (p2->p_flag & P_SINTR && (p1->p_flag & P_SINTR) == 0)
-		return (0);
 	return (p2->p_pid > p1->p_pid);		/* tie - return highest pid */
 }
-#endif /* NeXT */
 
 /*
  * Output char to tty; console putchar style.
@@ -2527,11 +2638,7 @@ tputchar(c, tp)
  * at the start of the call.
  */
 int
-ttysleep(tp, chan, pri, wmesg, timo)
-	struct tty *tp;
-	void *chan;
-	int pri, timo;
-	char *wmesg;
+ttysleep(struct tty *tp, void *chan, int pri, const char *wmesg, int timo)
 {
 	int error;
 	int gen;
@@ -2548,17 +2655,18 @@ ttysleep(tp, chan, pri, wmesg, timo)
  * Allocate a tty structure and its associated buffers.
  */
 struct tty *
-ttymalloc()
+ttymalloc(void)
 {
 	struct tty *tp;
 
-	MALLOC(tp, struct tty *, sizeof(struct tty), M_TTYS, M_WAITOK);
-	bzero(tp, sizeof *tp);
-	/* XXX: default to TTYCLSIZE(1024) chars for now */
-	clalloc(&tp->t_rawq, TTYCLSIZE, 1);
-	clalloc(&tp->t_canq, TTYCLSIZE, 1);
-	/* output queue doesn't need quoting */
-	clalloc(&tp->t_outq, TTYCLSIZE, 0);
+	MALLOC(tp, struct tty *, sizeof(struct tty), M_TTYS, M_WAITOK|M_ZERO);
+	if (tp != NULL) {
+		/* XXX: default to TTYCLSIZE(1024) chars for now */
+		clalloc(&tp->t_rawq, TTYCLSIZE, 1);
+		clalloc(&tp->t_canq, TTYCLSIZE, 1);
+		/* output queue doesn't need quoting */
+		clalloc(&tp->t_outq, TTYCLSIZE, 0);
+	}
 	return(tp);
 }
 
@@ -2591,8 +2699,7 @@ ttymalloc()
 {
         struct tty *tp;
 
-        tp = _MALLOC(sizeof *tp, M_TTYS, M_WAITOK);
-        bzero(tp, sizeof *tp);
+        MALLOC(tp, struct tty *, sizeof *tp, M_TTYS, M_WAITOK|M_ZERO);
         return (tp);
 }
 #endif

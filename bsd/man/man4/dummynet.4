@@ -1,0 +1,64 @@
+.\"
+.\" $FreeBSD: /repoman/r/ncvs/src/share/man/man4/dummynet.4,v 1.4.2.12 2002/11/18 21:51:16 luigi Exp $
+.\"
+.Dd October 28, 2002
+.Dt DUMMYNET 4
+.Os Darwin
+.Sh NAME
+.Nm dummynet
+.Nd traffic shaper, bandwidth manager and delay emulator
+.Sh DESCRIPTION
+.Em dummynet
+is a system facility that permits the control of traffic
+going through the various network interfaces, by applying bandwidth
+and queue size limitations, implementing different scheduling and queue
+management policies, and emulating delays and losses.
+.Pp
+The user interface for
+.Em dummynet
+is implemented by the
+.Nm ipfw
+program, so the reader is referred to the
+.Xr ipfw 8
+manpage for a complete description of the capabilities of
+.Nm
+and on how to use it.
+.Sh KERNEL OPTIONS
+The following options in the kernel configuration file are related to
+.Nm
+operation:
+.Bd -literal
+  IPFIREWALL               - enable ipfirewall (required for dummynet).
+  IPFIREWALL_VERBOSE       - enable firewall output.
+  IPFIREWALL_VERBOSE_LIMIT - limit firewall output.
+  DUMMYNET                 - enable dummynet operation.
+  NMBCLUSTERS              - set the amount of network packet buffers
+  HZ                       - sets the timer granularity
+.Ed
+.Pp
+Generally, the following options are required:
+.Bd -literal
+  options IPFIREWALL
+  options DUMMYNET
+  options HZ=1000	# strongly recommended
+.Ed
+.Pp
+additionally, one may want to increase the number
+of mbuf clusters (used to store network packets) according to the
+sum of the bandwidth-delay products and queue sizes of all configured
+pipes.
+.Sh SEE ALSO
+.Xr setsockopt 2 ,
+.Xr bridge 4 ,
+.Xr ip 4 ,
+.Xr ipfw 8 ,
+.Xr sysctl 8
+.Sh HISTORY
+.Nm
+was initially implemented as a testing tool for TCP congestion control
+by
+.An Luigi Rizzo Aq luigi@iet.unipi.it ,
+as described on ACM Computer Communication Review, Jan.97 issue.
+Later it has been then modified to work at the ip and bridging
+level, integrated with the IPFW packet filter, and extended to
+support multiple queueing and scheduling policies.

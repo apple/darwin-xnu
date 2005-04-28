@@ -79,13 +79,13 @@
 #include <sys/kernel.h>
 #include <sys/syslog.h>
 #include <sys/proc.h>
+#include <sys/kauth.h>
 
 #include <net/if.h>
 #include <net/if_var.h>
 #include <net/if_types.h>
 #include <net/if_dl.h>
 #include <net/route.h>
-#include <net/netisr.h>
 
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
@@ -108,9 +108,12 @@
 #include <netinet6/ipsec6.h>
 #endif
 extern int ipsec_bypass;
+extern lck_mtx_t *sadb_mutex;
 #endif
 
 #include <netinet6/ip6_fw.h>
+
+#include <netinet/kpi_ipfilter_var.h>
 
 #include <netinet6/ip6protosw.h>
 
@@ -125,11 +128,7 @@ extern struct ip6protosw inet6sw[];
 
 struct ip6protosw *  ip6_protox[IPPROTO_MAX];
 static int ip6qmaxlen = IFQ_MAXLEN;
-struct in6_ifaddr *in6_ifaddr;
-
-extern void in6_tmpaddrtimer_funneled(void *);
-extern void nd6_timer_funneled(void *);
-extern void in6_rr_timer_funneled(void *);
+struct in6_ifaddr *in6_ifaddrs;
 
 int ip6_forward_srcrt;			/* XXX */
 int ip6_sourcecheck;			/* XXX */
@@ -149,21 +148,38 @@ struct ip6stat ip6stat;
 
 #ifdef __APPLE__
 struct ifqueue ip6intrq;
+lck_mtx_t 		*ip6_mutex;
+lck_mtx_t 		*dad6_mutex;
+lck_mtx_t 		*nd6_mutex;
+lck_mtx_t			*prefix6_mutex;
+lck_attr_t		*ip6_mutex_attr;
+lck_grp_t			*ip6_mutex_grp;
+lck_grp_attr_t	*ip6_mutex_grp_attr;
+extern lck_mtx_t	*inet6_domain_mutex;
 #endif
+extern int loopattach_done;
 
-static void ip6_init2 __P((void *));
-static struct mbuf *ip6_setdstifaddr __P((struct mbuf *, struct in6_ifaddr *));
+static void ip6_init2(void *);
+static struct mbuf *ip6_setdstifaddr(struct mbuf *, struct in6_ifaddr *);
 
-static int ip6_hopopts_input __P((u_int32_t *, u_int32_t *, struct mbuf **, int *));
+static int ip6_hopopts_input(u_int32_t *, u_int32_t *, struct mbuf **, int *);
 #if PULLDOWN_TEST
-static struct mbuf *ip6_pullexthdr __P((struct mbuf *, size_t, int));
+static struct mbuf *ip6_pullexthdr(struct mbuf *, size_t, int);
 #endif
 
 #ifdef __APPLE__
-void gifattach __P((void));
-void faithattach __P((void));
-void stfattach __P((void));
+void gifattach(void);
+void faithattach(void);
+void stfattach(void);
 #endif
+
+static void
+ip6_proto_input(
+	protocol_family_t	protocol,
+	mbuf_t				packet)
+{
+	ip6_input(packet);
+}
 
 /*
  * IP6 initialization: fill in IP6 protocol switch table.
@@ -175,12 +191,13 @@ ip6_init()
 	struct ip6protosw *pr;
 	int i;
 	struct timeval tv;
+	extern lck_mtx_t *domain_proto_mtx;
 
 #if DIAGNOSTIC
 	if (sizeof(struct protosw) != sizeof(struct ip6protosw))
 		panic("sizeof(protosw) != sizeof(ip6protosw)");
 #endif
-	pr = (struct ip6protosw *)pffindproto(PF_INET6, IPPROTO_RAW, SOCK_RAW);
+	pr = (struct ip6protosw *)pffindproto_locked(PF_INET6, IPPROTO_RAW, SOCK_RAW);
 	if (pr == 0)
 		panic("ip6_init");
 	for (i = 0; i < IPPROTO_MAX; i++)
@@ -193,10 +210,34 @@ ip6_init()
 		}
 	}
 
+	ip6_mutex_grp_attr  = lck_grp_attr_alloc_init();
+	lck_grp_attr_setdefault(ip6_mutex_grp_attr);
+
+	ip6_mutex_grp = lck_grp_alloc_init("ip6", ip6_mutex_grp_attr);
+	ip6_mutex_attr = lck_attr_alloc_init();
+	lck_attr_setdefault(ip6_mutex_attr);
+
+	if ((ip6_mutex = lck_mtx_alloc_init(ip6_mutex_grp, ip6_mutex_attr)) == NULL) {
+		printf("ip6_init: can't alloc ip6_mutex\n");
+		return;
+	}
+	if ((dad6_mutex = lck_mtx_alloc_init(ip6_mutex_grp, ip6_mutex_attr)) == NULL) {
+		printf("ip6_init: can't alloc dad6_mutex\n");
+		return;
+	}
+	if ((nd6_mutex = lck_mtx_alloc_init(ip6_mutex_grp, ip6_mutex_attr)) == NULL) {
+		printf("ip6_init: can't alloc nd6_mutex\n");
+		return;
+	}
+
+	if ((prefix6_mutex = lck_mtx_alloc_init(ip6_mutex_grp, ip6_mutex_attr)) == NULL) {
+		printf("ip6_init: can't alloc prefix6_mutex\n");
+		return;
+	}
+
+	inet6domain.dom_flags = DOM_REENTRANT;	
+
 	ip6intrq.ifq_maxlen = ip6qmaxlen;
-#ifndef __APPLE__
-	register_netisr(NETISR_IPV6, ip6intr);
-#endif
 	nd6_init();
 	frag6_init();
 	icmp6_init();
@@ -208,32 +249,36 @@ ip6_init()
 	ip6_flow_seq = random() ^ tv.tv_usec;
 	microtime(&tv);
 	ip6_desync_factor = (random() ^ tv.tv_usec) % MAX_TEMP_DESYNC_FACTOR;
-	timeout(ip6_init2, (caddr_t)0, 2 * hz);
+	timeout(ip6_init2, (caddr_t)0, 1 * hz);
+
+	lck_mtx_unlock(domain_proto_mtx);	
+	proto_register_input(PF_INET6, ip6_proto_input, NULL);
+	lck_mtx_lock(domain_proto_mtx);	
 }
 
 static void
 ip6_init2(dummy)
 	void *dummy;
 {
-#ifdef __APPLE__
-    	boolean_t   funnel_state;
-    	funnel_state = thread_funnel_set(network_flock, TRUE);
-#endif
 	/*
 	 * to route local address of p2p link to loopback,
 	 * assign loopback address first.
 	 */
+	if (loopattach_done == 0) {
+		timeout(ip6_init2, (caddr_t)0, 1 * hz);
+		return;
+	}
 	in6_ifattach(&loif[0], NULL, NULL);
 
 #ifdef __APPLE__
 	/* nd6_timer_init */
-	timeout(nd6_timer_funneled, (caddr_t)0, hz);
+	timeout(nd6_timer, (caddr_t)0, hz);
 
 	/* router renumbering prefix list maintenance */
-	timeout(in6_rr_timer_funneled, (caddr_t)0, hz);
+	timeout(in6_rr_timer, (caddr_t)0, hz);
 
 	/* timer for regeneranation of temporary addresses randomize ID */
-	timeout(in6_tmpaddrtimer_funneled, (caddr_t)0,
+	timeout(in6_tmpaddrtimer, (caddr_t)0,
 		(ip6_temp_preferred_lifetime - ip6_desync_factor -
 		       ip6_temp_regen_advance) * hz);
 
@@ -264,9 +309,6 @@ ip6_init2(dummy)
 #endif
 
 	in6_init2done = 1;
-#ifdef __APPLE__
-        (void) thread_funnel_set(network_flock, FALSE);
-#endif
 }
 
 #if __FreeBSD__
@@ -274,25 +316,6 @@ ip6_init2(dummy)
 /* This must be after route_init(), which is now SI_ORDER_THIRD */
 SYSINIT(netinet6init2, SI_SUB_PROTO_DOMAIN, SI_ORDER_MIDDLE, ip6_init2, NULL);
 #endif
-
-/*
- * IP6 input interrupt handling. Just pass the packet to ip6_input.
- */
-void
-ip6intr(void)
-{
-	int s;
-	struct mbuf *m;
-
-	for (;;) {
-		s = splimp();
-		IF_DEQUEUE(&ip6intrq, m);
-		splx(s);
-		if (m == 0)
-			return;
-		ip6_input(m);
-	}
-}
 
 extern struct	route_in6 ip6_forward_rt;
 
@@ -306,7 +329,22 @@ ip6_input(m)
 	u_int32_t rtalert = ~0;
 	int nxt = 0, ours = 0;
 	struct ifnet *deliverifp = NULL;
+	ipfilter_t inject_ipfref = 0;
+	int seen;
 
+	/*
+	 * No need to proccess packet twice if we've 
+	 * already seen it
+	 */
+	inject_ipfref = ipf_get_inject_filter(m);
+	if (inject_ipfref != 0) {
+		ip6 = mtod(m, struct ip6_hdr *);
+		nxt = ip6->ip6_nxt;
+		seen = 0;
+		goto injectit;
+	} else
+		seen = 1;
+	
 #if IPSEC
 	/*
 	 * should the inner packet be considered authentic?
@@ -323,6 +361,7 @@ ip6_input(m)
 	 */
 	ip6_delaux(m);
 
+	lck_mtx_lock(ip6_mutex);
 	/*
 	 * mbuf statistics
 	 */
@@ -369,6 +408,7 @@ ip6_input(m)
 		}
 		if (n == NULL) {
 			m_freem(m);
+			lck_mtx_unlock(ip6_mutex);
 			return;	/*ENOBUFS*/
 		}
 
@@ -377,7 +417,8 @@ ip6_input(m)
 		m_freem(m);
 		m = n;
 	}
-	IP6_EXTHDR_CHECK(m, 0, sizeof(struct ip6_hdr), /*nothing*/);
+	IP6_EXTHDR_CHECK(m, 0, sizeof(struct ip6_hdr),
+		{lck_mtx_unlock(ip6_mutex); return;}); 
 #endif
 
 	if (m->m_len < sizeof(struct ip6_hdr)) {
@@ -386,6 +427,7 @@ ip6_input(m)
 		if ((m = m_pullup(m, sizeof(struct ip6_hdr))) == 0) {
 			ip6stat.ip6s_toosmall++;
 			in6_ifstat_inc(inifp, ifs6_in_hdrerr);
+			lck_mtx_unlock(ip6_mutex);
 			return;
 		}
 	}
@@ -411,8 +453,10 @@ ip6_input(m)
 			m_freem(m);
 			m = NULL;
 		}
-		if (!m)
+		if (!m) {
+			lck_mtx_unlock(ip6_mutex);
 			return;
+		}
 	}
 
 	/*
@@ -502,12 +546,15 @@ ip6_input(m)
 	 */
 	if ((m->m_pkthdr.rcvif->if_flags & IFF_LOOPBACK) != 0 &&
 	    IN6_IS_ADDR_LINKLOCAL(&ip6->ip6_dst)) {
-		if (!in6ifa_ifpwithaddr(m->m_pkthdr.rcvif, &ip6->ip6_dst)) {
+	    struct in6_ifaddr *ia6;
+		if (!(ia6 = in6ifa_ifpwithaddr(m->m_pkthdr.rcvif, &ip6->ip6_dst))) {
+			lck_mtx_unlock(ip6_mutex);
 			icmp6_error(m, ICMP6_DST_UNREACH,
 			    ICMP6_DST_UNREACH_ADDR, 0);
 			/* m is already freed */
 			return;
 		}
+		ifafree(&ia6->ia_ifa);
 
 		ours = 1;
 		deliverifp = m->m_pkthdr.rcvif;
@@ -647,7 +694,6 @@ ip6_input(m)
 			    "ip6_input: packet to an unready address %s->%s\n",
 			    ip6_sprintf(&ip6->ip6_src),
 			    ip6_sprintf(&ip6->ip6_dst)));
-
 			goto bad;
 		}
 	}
@@ -713,6 +759,7 @@ ip6_input(m)
 #if 0	/*touches NULL pointer*/
 			in6_ifstat_inc(m->m_pkthdr.rcvif, ifs6_in_discard);
 #endif
+			lck_mtx_unlock(ip6_mutex);
 			return;	/* m have already been freed */
 		}
 
@@ -733,6 +780,7 @@ ip6_input(m)
 			ip6stat.ip6s_badoptions++;
 			in6_ifstat_inc(m->m_pkthdr.rcvif, ifs6_in_discard);
 			in6_ifstat_inc(m->m_pkthdr.rcvif, ifs6_in_hdrerr);
+			lck_mtx_unlock(ip6_mutex);
 			icmp6_error(m, ICMP6_PARAM_PROB,
 				    ICMP6_PARAMPROB_HEADER,
 				    (caddr_t)&ip6->ip6_plen - (caddr_t)ip6);
@@ -746,6 +794,7 @@ ip6_input(m)
 			sizeof(struct ip6_hbh));
 		if (hbh == NULL) {
 			ip6stat.ip6s_tooshort++;
+			lck_mtx_unlock(ip6_mutex);
 			return;
 		}
 #endif
@@ -794,14 +843,17 @@ ip6_input(m)
 		if (ip6_mrouter && ip6_mforward(ip6, m->m_pkthdr.rcvif, m)) {
 			ip6stat.ip6s_cantforward++;
 			m_freem(m);
+			lck_mtx_unlock(ip6_mutex);
 			return;
 		}
 		if (!ours) {
 			m_freem(m);
+			lck_mtx_unlock(ip6_mutex);
 			return;
 		}
 	} else if (!ours) {
-		ip6_forward(m, 0);
+		ip6_forward(m, 0, 1);
+		lck_mtx_unlock(ip6_mutex);
 		return;
 	}	
 
@@ -828,12 +880,17 @@ ip6_input(m)
 	 */
 	ip6stat.ip6s_delivered++;
 	in6_ifstat_inc(deliverifp, ifs6_in_deliver);
+
+	lck_mtx_unlock(ip6_mutex);
+injectit:
 	nest = 0;
 
 	while (nxt != IPPROTO_DONE) {
+		struct ipfilter *filter;
+		
 		if (ip6_hdrnestlimit && (++nest > ip6_hdrnestlimit)) {
 			ip6stat.ip6s_toomanyhdr++;
-			goto bad;
+			goto badunlocked;
 		}
 
 		/*
@@ -843,7 +900,7 @@ ip6_input(m)
 		if (m->m_pkthdr.len < off) {
 			ip6stat.ip6s_tooshort++;
 			in6_ifstat_inc(m->m_pkthdr.rcvif, ifs6_in_truncated);
-			goto bad;
+			goto badunlocked;
 		}
 
 #if 0
@@ -868,18 +925,58 @@ ip6_input(m)
 		 * note that we do not visit this with protocols with pcb layer
 		 * code - like udp/tcp/raw ip.
 		 */
-		if ((ipsec_bypass == 0) && (ip6_protox[nxt]->pr_flags & PR_LASTHDR) != 0 &&
-		    ipsec6_in_reject(m, NULL)) {
-			ipsec6stat.in_polvio++;
-			goto bad;
+		if ((ipsec_bypass == 0) && (ip6_protox[nxt]->pr_flags & PR_LASTHDR) != 0) {
+			lck_mtx_lock(sadb_mutex);
+			if (ipsec6_in_reject(m, NULL)) {
+				ipsec6stat.in_polvio++;
+				lck_mtx_unlock(sadb_mutex);
+				goto badunlocked;
+		        }
+			lck_mtx_unlock(sadb_mutex);
 		}
 #endif
 
-		nxt = (*ip6_protox[nxt]->pr_input)(&m, &off);
+		/*
+		 * Call IP filter on last header only
+		 */
+		if ((ip6_protox[nxt]->pr_flags & PR_LASTHDR) != 0 && !TAILQ_EMPTY(&ipv6_filters)) {
+			ipf_ref();
+			TAILQ_FOREACH(filter, &ipv6_filters, ipf_link) {
+				if (seen == 0) {
+					if ((struct ipfilter *)inject_ipfref == filter)
+						seen = 1;
+				} else if (filter->ipf_filter.ipf_input) {
+					errno_t result;
+					
+					result = filter->ipf_filter.ipf_input(
+						filter->ipf_filter.cookie, (mbuf_t*)&m, off, nxt);
+					if (result == EJUSTRETURN) {
+						ipf_unref();
+						return;
+					}
+					if (result != 0) {
+						ipf_unref();
+						m_freem(m);
+						return;
+					}
+				}
+			}
+			ipf_unref();
+		}
+		if (!(ip6_protox[nxt]->pr_flags & PR_PROTOLOCK)) {
+			lck_mtx_lock(inet6_domain_mutex);
+			nxt = (*ip6_protox[nxt]->pr_input)(&m, &off);
+			lck_mtx_unlock(inet6_domain_mutex);
+		}
+		else
+			nxt = (*ip6_protox[nxt]->pr_input)(&m, &off);
 	}
 	return;
  bad:
+	lck_mtx_unlock(ip6_mutex);
+ badunlocked:
 	m_freem(m);
+	return;
 }
 
 /*
@@ -930,11 +1027,11 @@ ip6_hopopts_input(plenp, rtalertp, mp, offp)
 
 	/* validation of the length of the header */
 #ifndef PULLDOWN_TEST
-	IP6_EXTHDR_CHECK(m, off, sizeof(*hbh), -1);
+	IP6_EXTHDR_CHECK(m, off, sizeof(*hbh), return -1);
 	hbh = (struct ip6_hbh *)(mtod(m, caddr_t) + off);
 	hbhlen = (hbh->ip6h_len + 1) << 3;
 
-	IP6_EXTHDR_CHECK(m, off, hbhlen, -1);
+	IP6_EXTHDR_CHECK(m, off, hbhlen, return -1);
 	hbh = (struct ip6_hbh *)(mtod(m, caddr_t) + off);
 #else
 	IP6_EXTHDR_GET(hbh, struct ip6_hbh *, m,
@@ -1009,9 +1106,11 @@ ip6_process_hopopts(m, opthead, hbhlen, rtalertp, plenp)
 			}
 			if (*(opt + 1) != IP6OPT_RTALERT_LEN - 2) {
 				/* XXX stat */
+				lck_mtx_unlock(ip6_mutex);
 				icmp6_error(m, ICMP6_PARAM_PROB,
 					    ICMP6_PARAMPROB_HEADER,
 					    erroff + opt + 1 - opthead);
+				lck_mtx_lock(ip6_mutex);
 				return(-1);
 			}
 			optlen = IP6OPT_RTALERT_LEN;
@@ -1026,9 +1125,11 @@ ip6_process_hopopts(m, opthead, hbhlen, rtalertp, plenp)
 			}
 			if (*(opt + 1) != IP6OPT_JUMBO_LEN - 2) {
 				/* XXX stat */
+				lck_mtx_unlock(ip6_mutex);
 				icmp6_error(m, ICMP6_PARAM_PROB,
 					    ICMP6_PARAMPROB_HEADER,
 					    erroff + opt + 1 - opthead);
+				lck_mtx_lock(ip6_mutex);
 				return(-1);
 			}
 			optlen = IP6OPT_JUMBO_LEN;
@@ -1040,9 +1141,11 @@ ip6_process_hopopts(m, opthead, hbhlen, rtalertp, plenp)
 			ip6 = mtod(m, struct ip6_hdr *);
 			if (ip6->ip6_plen) {
 				ip6stat.ip6s_badoptions++;
+				lck_mtx_unlock(ip6_mutex);
 				icmp6_error(m, ICMP6_PARAM_PROB,
 					    ICMP6_PARAMPROB_HEADER,
 					    erroff + opt - opthead);
+				lck_mtx_lock(ip6_mutex);
 				return(-1);
 			}
 
@@ -1064,9 +1167,11 @@ ip6_process_hopopts(m, opthead, hbhlen, rtalertp, plenp)
 			 */
 			if (*plenp != 0) {
 				ip6stat.ip6s_badoptions++;
+				lck_mtx_unlock(ip6_mutex);
 				icmp6_error(m, ICMP6_PARAM_PROB,
 					    ICMP6_PARAMPROB_HEADER,
 					    erroff + opt + 2 - opthead);
+				lck_mtx_lock(ip6_mutex);
 				return(-1);
 			}
 #endif
@@ -1076,9 +1181,11 @@ ip6_process_hopopts(m, opthead, hbhlen, rtalertp, plenp)
 			 */
 			if (jumboplen <= IPV6_MAXPACKET) {
 				ip6stat.ip6s_badoptions++;
+				lck_mtx_unlock(ip6_mutex);
 				icmp6_error(m, ICMP6_PARAM_PROB,
 					    ICMP6_PARAMPROB_HEADER,
 					    erroff + opt + 2 - opthead);
+				lck_mtx_lock(ip6_mutex);
 				return(-1);
 			}
 			*plenp = jumboplen;
@@ -1090,9 +1197,11 @@ ip6_process_hopopts(m, opthead, hbhlen, rtalertp, plenp)
 				goto bad;
 			}
 			optlen = ip6_unknown_opt(opt, m,
-			    erroff + opt - opthead);
-			if (optlen == -1)
+			    erroff + opt - opthead, 1);
+			if (optlen == -1) {
+				/* ip6_unknown opt unlocked ip6_mutex */
 				return(-1);
+			}
 			optlen += 2;
 			break;
 		}
@@ -1100,7 +1209,7 @@ ip6_process_hopopts(m, opthead, hbhlen, rtalertp, plenp)
 
 	return(0);
 
-  bad:
+  bad:	
 	m_freem(m);
 	return(-1);
 }
@@ -1112,10 +1221,11 @@ ip6_process_hopopts(m, opthead, hbhlen, rtalertp, plenp)
  * is not continuous in order to return an ICMPv6 error.
  */
 int
-ip6_unknown_opt(optp, m, off)
+ip6_unknown_opt(optp, m, off, locked)
 	u_int8_t *optp;
 	struct mbuf *m;
 	int off;
+	int locked;
 {
 	struct ip6_hdr *ip6;
 
@@ -1127,7 +1237,11 @@ ip6_unknown_opt(optp, m, off)
 		return(-1);
 	case IP6OPT_TYPE_FORCEICMP: /* send ICMP even if multicasted */
 		ip6stat.ip6s_badoptions++;
+		if (locked)
+			lck_mtx_unlock(ip6_mutex);
 		icmp6_error(m, ICMP6_PARAM_PROB, ICMP6_PARAMPROB_OPTION, off);
+		if (locked)
+			lck_mtx_lock(ip6_mutex);
 		return(-1);
 	case IP6OPT_TYPE_ICMP: /* send ICMP if not multicasted */
 		ip6stat.ip6s_badoptions++;
@@ -1135,9 +1249,14 @@ ip6_unknown_opt(optp, m, off)
 		if (IN6_IS_ADDR_MULTICAST(&ip6->ip6_dst) ||
 		    (m->m_flags & (M_BCAST|M_MCAST)))
 			m_freem(m);
-		else
+		else {
+			if (locked)
+				lck_mtx_unlock(ip6_mutex);
 			icmp6_error(m, ICMP6_PARAM_PROB,
 				    ICMP6_PARAMPROB_OPTION, off);
+			if (locked)
+				lck_mtx_lock(ip6_mutex);
+		}
 		return(-1);
 	}
 
@@ -1162,16 +1281,7 @@ ip6_savecontrol(in6p, mp, ip6, m)
 	struct ip6_hdr *ip6;
 	struct mbuf *m;
 {
-	struct proc *p = current_proc();	/* XXX */
-	int privileged = 0;
 	int rthdr_exist = 0;
-
-#ifdef __APPLE__
-        if (p && !suser(p->p_ucred, &p->p_acflag))
-#else
-	if (p && !suser(p))
-#endif
- 		privileged++;
 
 #if SO_TIMESTAMP
 	if ((in6p->in6p_socket->so_options & SO_TIMESTAMP) != 0) {
@@ -1211,12 +1321,13 @@ ip6_savecontrol(in6p, mp, ip6, m)
 	}
 
 	/*
-	 * IPV6_HOPOPTS socket option. We require super-user privilege
-	 * for the option, but it might be too strict, since there might
-	 * be some hop-by-hop options which can be returned to normal user.
+	 * IPV6_HOPOPTS socket option.  Recall that we required super-user
+	 * privilege for the option (see ip6_ctloutput), but it might be too
+	 * strict, since there might be some hop-by-hop options which can be
+	 * returned to normal user.
 	 * See RFC 2292 section 6.
 	 */
-	if ((in6p->in6p_flags & IN6P_HOPOPTS) != 0 && privileged) {
+	if ((in6p->in6p_flags & IN6P_HOPOPTS) != 0) {
 		/*
 		 * Check if a hop-by-hop options header is contatined in the
 		 * received packet, and if so, store the options as ancillary
@@ -1224,7 +1335,7 @@ ip6_savecontrol(in6p, mp, ip6, m)
 		 * just after the IPv6 header, which fact is assured through
 		 * the IPv6 input processing.
 		 */
-		struct ip6_hdr *ip6 = mtod(m, struct ip6_hdr *);
+		ip6 = mtod(m, struct ip6_hdr *);
 		if (ip6->ip6_nxt == IPPROTO_HOPOPTS) {
 			struct ip6_hbh *hbh;
 			int hbhlen = 0;
@@ -1300,7 +1411,7 @@ ip6_savecontrol(in6p, mp, ip6, m)
 
 	if ((in6p->in6p_flags &
 	     (IN6P_RTHDR | IN6P_DSTOPTS | IN6P_RTHDRDSTOPTS)) != 0) {
-		struct ip6_hdr *ip6 = mtod(m, struct ip6_hdr *);
+		ip6 = mtod(m, struct ip6_hdr *);
 		int nxt = ip6->ip6_nxt, off = sizeof(struct ip6_hdr);
 
 		/*
@@ -1362,14 +1473,6 @@ ip6_savecontrol(in6p, mp, ip6, m)
 			switch (nxt) {
 			case IPPROTO_DSTOPTS:
 				if ((in6p->in6p_flags & IN6P_DSTOPTS) == 0)
-					break;
-
-				/*
-				 * We also require super-user privilege for
-				 * the option.
-				 * See the comments on IN6_HOPOPTS.
-				 */
-				if (!privileged)
 					break;
 
 				*mp = sbcreatecontrol((caddr_t)ip6e, elen,
@@ -1565,7 +1668,8 @@ ip6_nexthdr(m, off, proto, nxtp)
 		if (m->m_pkthdr.len < off + sizeof(fh))
 			return -1;
 		m_copydata(m, off, sizeof(fh), (caddr_t)&fh);
-		if ((ntohs(fh.ip6f_offlg) & IP6F_OFF_MASK) != 0)
+		/* IP6F_OFF_MASK = 0xfff8(BigEndian), 0xf8ff(LittleEndian) */
+		if (fh.ip6f_offlg & IP6F_OFF_MASK)
 			return -1;
 		if (nxtp)
 			*nxtp = fh.ip6f_nxt;

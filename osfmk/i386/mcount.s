@@ -27,23 +27,15 @@
 Entry(mcount)
         pushl   %ebp            	// setup mcount's frame
         movl    %esp,%ebp
+        pushl	%eax			// save %eax
         pushf				// save interrupt state
         cli				// disable interrupts
-
-	//
-	// Check that %gs, with segment pointing at the per-cpu data area,
-	// has been set up. C routines (mp_desc_init() in particular) may
-	// be called very early before this happens.
-	//
-	mov	%gs,%ax
-	test	%ax,%ax
-	jz	1f
 
 	//
 	// Check that this cpu is ready.
 	// This delays the start of mcounting until a cpu is really prepared.
 	//
-        movl	%gs:CPD_CPU_STATUS,%eax
+        movl	%gs:CPU_RUNNING,%eax
         testl	%eax,%eax
 	jz	1f
 
@@ -51,10 +43,11 @@ Entry(mcount)
 	// Test for recursion as indicated by a per-cpu flag.
 	// Skip if nested, otherwise set the flag and call the C mount().
 	//
-        movl	%gs:CPD_MCOUNT_OFF,%eax
+        movl	%gs:CPU_MCOUNT_OFF,%eax
         testl	%eax,%eax		// test for recursion
         jnz	1f
-        incl	%gs:CPD_MCOUNT_OFF	// set recursion flag
+
+        incl	%gs:CPU_MCOUNT_OFF	// set recursion flag
 
         movl    (%ebp),%eax     	// frame pointer of mcount's caller
         movl    4(%eax),%eax    	// mcount's caller's return address
@@ -63,9 +56,10 @@ Entry(mcount)
         call	_mcount			// call the C mcount
 	addl	$8,%esp			// pop args
 
-        decl	%gs:CPD_MCOUNT_OFF	// turn off recursion flag
+        decl	%gs:CPU_MCOUNT_OFF	// turn off recursion flag
 1:
         popf				// restore interrupt state
+        popl	%eax
         movl    %ebp,%esp       	// tear down mcount's frame
         popl    %ebp
         ret

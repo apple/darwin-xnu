@@ -48,12 +48,10 @@
  * the rights to redistribute these changes.
  */
 
+#ifdef	XNU_KERNEL_PRIVATE
+
 #ifndef	_KERN_CPU_NUMBER_H_
 #define	_KERN_CPU_NUMBER_H_
-
-#include <sys/appleapiopts.h>
-
-#ifdef	__APPLE_API_PRIVATE
 
 #ifdef	MACH_KERNEL_PRIVATE
 
@@ -61,8 +59,8 @@ extern int		master_cpu;
 
 #endif	/* MACH_KERNEL_PRIVATE */
 
-#endif	/* __APPLE_API_PRIVATE */
-
 #include <machine/cpu_number.h>
 
 #endif	/* _KERN_CPU_NUMBER_H_ */
+
+#endif	/* XNU_KERNEL_PRIVATE */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -76,10 +76,6 @@ extern int		db_inst_count;
 extern int		db_load_count;
 extern int		db_store_count;
 
-#if	PARAGON860 && NCPUS > 1
-extern int	db_first_cpu;
-#endif
-
 void
 db_task_trap(
 	int		type,
@@ -94,7 +90,7 @@ db_task_trap(
 	task_t		task_space;
 
 	task = db_current_task();
-	task_space = db_target_space(current_act(), user_space);
+	task_space = db_target_space(current_thread(), user_space);
 	bkpt = IS_BREAKPOINT_TRAP(type, code);
 	watchpt = IS_WATCHPOINT_TRAP(type, code);
 
@@ -132,7 +128,7 @@ db_task_trap(
 #endif	/* __ppc__ */
 #endif /* defined(__alpha) */
 	    } else
-		db_printf("Trouble printing location %#X.\n", db_dot);
+		db_printf("Trouble printing location %#llX.\n", (unsigned long long)db_dot);
 	    db_recover = prev;
 
 	    db_command_loop();

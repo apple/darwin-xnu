@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -58,22 +58,13 @@
 #ifndef	_MACH_MESSAGE_H_
 #define _MACH_MESSAGE_H_
 
-#ifdef	MACH_KERNEL
-/* Have to have MIG parameter check for kernel */
-#define TypeCheck 1
-#define _MIG_KERNEL_SPECIFIC_CODE_ 1
-#endif	/* MACH_KERNEL */
-
-/* static templates are slower and bigger */
-/* #define UseStaticTemplates 0 */
-
-#include <sys/appleapiopts.h>
-
 #include <stdint.h>
 #include <mach/port.h>
 #include <mach/boolean.h>
 #include <mach/kern_return.h>
 #include <mach/machine/vm_types.h>
+
+#include <sys/cdefs.h>
 
 /*
  *  The timeout mechanism uses mach_msg_timeout_t values,
@@ -199,10 +190,11 @@ typedef unsigned int mach_msg_descriptor_type_t;
 #define MACH_MSG_OOL_PORTS_DESCRIPTOR 		2
 #define MACH_MSG_OOL_VOLATILE_DESCRIPTOR  	3
 
+#pragma pack(4)
 
 typedef struct
 {
-  void*				pad1;
+  natural_t			pad1;
   mach_msg_size_t		pad2;
   unsigned int			pad3 : 24;
   mach_msg_descriptor_type_t	type : 8;
@@ -219,24 +211,79 @@ typedef struct
 
 typedef struct
 {
-  void* address;
+  uint32_t			address;
   mach_msg_size_t       	size;
   boolean_t     		deallocate: 8;
   mach_msg_copy_options_t       copy: 8;
   unsigned int     		pad1: 8;
   mach_msg_descriptor_type_t    type: 8;
-} mach_msg_ool_descriptor_t;
+} mach_msg_ool_descriptor32_t;
+
+typedef struct
+{
+  uint64_t			address;
+  boolean_t     		deallocate: 8;
+  mach_msg_copy_options_t       copy: 8;
+  unsigned int     		pad1: 8;
+  mach_msg_descriptor_type_t    type: 8;
+  mach_msg_size_t       	size;
+} mach_msg_ool_descriptor64_t;
 
 typedef struct
 {
   void*				address;
+#if !defined(__LP64__)
+  mach_msg_size_t       	size;
+#endif
+  boolean_t     		deallocate: 8;
+  mach_msg_copy_options_t       copy: 8;
+  unsigned int     		pad1: 8;
+  mach_msg_descriptor_type_t    type: 8;
+#if defined(__LP64__)
+  mach_msg_size_t       	size;
+#endif
+} mach_msg_ool_descriptor_t;
+
+typedef struct
+{
+  uint32_t			address;
   mach_msg_size_t		count;
   boolean_t     		deallocate: 8;
   mach_msg_copy_options_t       copy: 8;
   mach_msg_type_name_t		disposition : 8;
   mach_msg_descriptor_type_t	type : 8;
+} mach_msg_ool_ports_descriptor32_t;
+
+typedef struct
+{
+  uint64_t			address;
+  boolean_t     		deallocate: 8;
+  mach_msg_copy_options_t       copy: 8;
+  mach_msg_type_name_t		disposition : 8;
+  mach_msg_descriptor_type_t	type : 8;
+  mach_msg_size_t		count;
+} mach_msg_ool_ports_descriptor64_t;
+
+typedef struct
+{
+  void*				address;
+#if !defined(__LP64__)
+  mach_msg_size_t		count;
+#endif
+  boolean_t     		deallocate: 8;
+  mach_msg_copy_options_t       copy: 8;
+  mach_msg_type_name_t		disposition : 8;
+  mach_msg_descriptor_type_t	type : 8;
+#if defined(__LP64__)
+  mach_msg_size_t		count;
+#endif
 } mach_msg_ool_ports_descriptor_t;
 
+/*
+ * LP64support - This union definition is not really
+ * appropriate in LP64 mode because not all descriptors
+ * are of the same size in that environment.
+ */
 typedef union
 {
   mach_msg_port_descriptor_t		port;
@@ -375,6 +422,8 @@ typedef union
   mach_msg_empty_rcv_t	rcv;
 } mach_msg_empty_t;
 
+#pragma pack()
+
 /* utility to round the message size - will become machine dependent */
 #define round_msg(x)	(((mach_msg_size_t)(x) + sizeof (natural_t) - 1) & \
 				~(sizeof (natural_t) - 1))
@@ -385,7 +434,6 @@ typedef union
 
 #define	MACH_MSG_SIZE_MAX	((mach_msg_size_t) ~0)
 
-#ifdef __APPLE_API_OBSOLETE
 /*
  *  Compatibility definitions, for code written
  *  when there was a msgh_kind instead of msgh_seqno.
@@ -394,7 +442,6 @@ typedef union
 #define MACH_MSGH_KIND_NOTIFICATION	0x00000001
 #define	msgh_kind			msgh_seqno
 #define mach_msg_kind_t			mach_port_seqno_t
-#endif  /* __APPLE_API_OBSOLETE */
 
 /*
  *  The msgt_number field specifies the number of data elements.
@@ -601,6 +648,9 @@ typedef kern_return_t mach_msg_return_t;
 #define MACH_RCV_IN_PROGRESS_TIMED      0x10004011
                 /* Waiting for receive with timeout. (Internal use only.) */
 
+
+__BEGIN_DECLS
+
 /*
  *	Routine:	mach_msg_overwrite
  *	Purpose:
@@ -617,18 +667,6 @@ typedef kern_return_t mach_msg_return_t;
  *		already contain scatter control information to direct the
  *		receiving of the message.
  */
-#ifdef __APPLE_API_PRIVATE
-extern mach_msg_return_t	mach_msg_overwrite_trap(
-					mach_msg_header_t *msg,
-					mach_msg_option_t option,
-					mach_msg_size_t send_size,
-					mach_msg_size_t rcv_size,
-					mach_port_name_t rcv_name,
-					mach_msg_timeout_t timeout,
-					mach_port_name_t notify,
-					mach_msg_header_t *rcv_msg,
-					mach_msg_size_t rcv_limit);
-#endif /* __APPLE_API_PRIVATE */
 
 extern mach_msg_return_t	mach_msg_overwrite(
 					mach_msg_header_t *msg,
@@ -641,6 +679,8 @@ extern mach_msg_return_t	mach_msg_overwrite(
 					mach_msg_header_t *rcv_msg,
 					mach_msg_size_t rcv_limit);
 
+#ifndef	KERNEL
+
 /*
  *	Routine:	mach_msg
  *	Purpose:
@@ -649,17 +689,6 @@ extern mach_msg_return_t	mach_msg_overwrite(
  *		of that fact, then restart the appropriate parts of the
  *		operation silently (trap version does not restart).
  */
-#ifdef __APPLE_API_PRIVATE 
-extern mach_msg_return_t	mach_msg_trap(
-					mach_msg_header_t *msg,
-					mach_msg_option_t option,
-					mach_msg_size_t send_size,
-					mach_msg_size_t rcv_size,
-					mach_port_name_t rcv_name,
-					mach_msg_timeout_t timeout,
-					mach_port_name_t notify);
-#endif /* __APPLE_API_PRIVATE */
-
 extern mach_msg_return_t	mach_msg(
 					mach_msg_header_t *msg,
 					mach_msg_option_t option,
@@ -668,5 +697,9 @@ extern mach_msg_return_t	mach_msg(
 					mach_port_name_t rcv_name,
 					mach_msg_timeout_t timeout,
 					mach_port_name_t notify);
+
+#endif	/* KERNEL */
+
+__END_DECLS
 
 #endif	/* _MACH_MESSAGE_H_ */

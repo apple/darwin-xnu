@@ -51,7 +51,6 @@
  */
 #ifndef I386_PIO_H
 #define I386_PIO_H
-#include <cpus.h>
 #include <mach_assert.h>
 
 typedef unsigned short i386_ioport_t;

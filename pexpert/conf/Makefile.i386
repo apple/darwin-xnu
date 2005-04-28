@@ -1,7 +1,21 @@
 ######################################################################
 #BEGIN  Machine dependent Makefile fragment for i386
 ######################################################################
-CFLAGS += -DNCPUS=2 
+
+# Enable -Werror for i386 builds
+CFLAGS+= $(WERROR)
+CWARNFLAGS= $(filter-out -Wbad-function-cast, $(CWARNFLAGS_STD))
+
+# Objects that don't compile cleanly:
+OBJS_NO_WERROR=		\
+	ioconf.o	\
+	bootargs.o	\
+	device_tree.o
+
+OBJS_WERROR=$(filter-out $(OBJS_NO_WERROR),$(OBJS))
+
+$(OBJS_WERROR):		WERROR=-Werror
+
 ######################################################################
 #END    Machine dependent Makefile fragment for i386
 ######################################################################

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -68,7 +68,7 @@ nvread(dev, uio, ioflag)
     int error = 0;
 
     offset = uio->uio_offset;
-    size = uio->uio_resid;
+    size = uio_resid(uio);
 
     for (read = 0; read < size; read++, offset++)  {
         error = PEnvread(offset, 1, &cc);
@@ -88,7 +88,6 @@ nvread(dev, uio, ioflag)
 
 nvwrite(dev_t dev,  struct uio *uio, int ioflag)
 {
-        register struct iovec *iov;
         long offset;
         long size;
         int c;
@@ -97,7 +96,7 @@ nvwrite(dev_t dev,  struct uio *uio, int ioflag)
         int error = 0;
 
         offset = uio->uio_offset;
-        size = uio->uio_resid;
+        size = uio_resid(uio);
 
         for (wrote = 0; wrote < size; wrote++, offset++) {
             c = uwritec(uio);

@@ -247,6 +247,24 @@ public:
     virtual bool isEqualTo(const OSMetaClassBase *anObject) const;
 
 
+    /*!
+        @function setOptions
+        @abstract This function is used to recursively set option bits in this set and all child collections.
+	@param options Set the (options & mask) bits.
+        @param mask The mask of bits which need to be set, 0 to get the current value.
+        @result The options before the set operation, NB setOptions(?,0) returns the current value of this collection.
+     */
+    virtual unsigned setOptions(unsigned options, unsigned mask, void * = 0);
+
+    /*!
+        @function copyCollection
+        @abstract Do a deep copy of this ordered set and its collections.
+	@discussion This function copies this set and all included collections recursively.  Objects that don't derive from OSContainter are NOT copied, that is objects like OSString and OSData.
+        @param cycleDict Is a dictionary of all of the collections that have been, to start the copy at the top level just leave this field 0.
+        @result The newly copied collecton or 0 if insufficient memory
+    */
+    OSCollection *copyCollection(OSDictionary *cycleDict = 0);
+
     OSMetaClassDeclareReservedUnused(OSOrderedSet, 0);
     OSMetaClassDeclareReservedUnused(OSOrderedSet, 1);
     OSMetaClassDeclareReservedUnused(OSOrderedSet, 2);

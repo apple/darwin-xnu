@@ -62,9 +62,13 @@ protected:
     AbsoluteTime abstime;
 
 /*! @struct ExpansionData
-    @discussion This structure will be used to expand the capablilties of the IOWorkLoop in the future.
+    @discussion This structure is private to the IOTimerEventSource implementation.
     */    
-    struct ExpansionData { };
+    struct ExpansionData
+    {
+        SInt32	     calloutGeneration;
+        IOWorkLoop * workLoop;
+    };
 
 /*! @var reserved
     Reserved for future use.  (Internal use only)  */
@@ -88,6 +92,8 @@ protected:
 /*! @function checkForWork
     @abstract Have to implement it is mandatory in $link IOEventSource, but IOTimerEventSources don't actually use this work-loop mechanism. */
     virtual bool checkForWork();
+
+    virtual void setWorkLoop(IOWorkLoop *workLoop);
 
 public:
 
@@ -202,6 +208,9 @@ public:
     @abstract Disable any outstanding calls to this event source.
     @discussion Clear down any oustanding calls.  By the time this function completes it is guaranteed that the action will not be called again. */
    virtual void cancelTimeout();
+
+private:
+    static void timeoutAndRelease(void *self, void *wl);
 
 private:
     OSMetaClassDeclareReservedUnused(IOTimerEventSource, 0);

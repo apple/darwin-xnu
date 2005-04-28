@@ -23,210 +23,159 @@
 #include <sys/param.h>
 #include <sys/fcntl.h>
 #include <sys/malloc.h>
-#include <sys/namei.h>
 #include <sys/proc.h>
-#include <sys/stat.h>
 #include <sys/sysctl.h>
 #include <sys/vnode.h>
 #include <sys/vm.h>
+#include <sys/systm.h>
 
+#include <mach/mach_types.h>
 #include <mach/kern_return.h>
-
-/* prototypes not exported by osfmk. */
-extern void kmem_free(vm_map_t, vm_offset_t, vm_size_t);
-extern kern_return_t kmem_alloc_wired(vm_map_t, vm_offset_t *, vm_size_t);
+#include <kern/kern_types.h>
+#include <vm/vm_kern.h>
 
 
-/* Globals */
-static off_t imagesizelimit = (4 * 4096);
+/* prototypes not exported by osfmk/console. */
+extern void panic_dialog_test( void );
+extern int  panic_dialog_set_image( const unsigned char * ptr, unsigned int size );
+extern void panic_dialog_get_image( unsigned char ** ptr, unsigned int * size );
 
-/* Information about the current panic image */
-static int image_bits = 32;	/* Bitdepth */
-
-static char *image_pathname = NULL;	/* path to it */
-static size_t image_pathlen = 0;	/* and the length of the pathname */
-
-static vm_offset_t image_ptr = NULL; /* the image itself */
-static off_t image_size = 0; /* and the imagesize */
+/* make the compiler happy */
+extern int sysctl_dopanicinfo(int *, u_int, user_addr_t, size_t *, user_addr_t, size_t, struct proc *);
 
 
-__private_extern__ void
-get_panicimage(vm_offset_t *imageptr, vm_size_t *imagesize, int *imagebits)
-{
-	*imageptr = image_ptr;
-	*imagesize = image_size;
-	*imagebits = image_bits;
-}
+#define PANIC_IMAGE_SIZE_LIMIT	(32 * 4096)				/* 128K - Maximum amount of memory consumed for the panic UI */
+#define KERN_PANICINFO_TEST	(KERN_PANICINFO_IMAGE+2)		/* Allow the panic UI to be tested by root without causing a panic */
 
-static int
-panicimage_from_file(
-	char *imname,
-	off_t sizelimit,
-	vm_offset_t *image,
-	off_t *filesize,
-	struct proc *p)
-{
-	int error = 0;
-	int error1 = 0;
-	int aresid;
-	struct nameidata nd;
-	struct vattr	vattr;
-	struct vnode * vp;
-	kern_return_t	kret;
-	struct pcred *pcred = p->p_cred;
-	struct ucred *cred = pcred->pc_ucred;
-	vm_offset_t iobuf;
-
-	/* Open the file */
-	NDINIT(&nd, LOOKUP, FOLLOW, UIO_SYSSPACE, imname, p);
-	error = vn_open(&nd, FREAD, S_IRUSR);
-	if (error)
-		return (error);
-	vp = nd.ni_vp;
-	
-	if (vp->v_type != VREG) { 
-		error = EFAULT;
-		goto out;
-	}
-
-	/* get the file size */
-	error = VOP_GETATTR(vp, &vattr, cred, p);
-	if (error)
-		goto out;
-
-	/* validate the file size */
-	if (vattr.va_size > sizelimit) {
-		error = EFBIG;
-		goto out;
-	}
-
-	/* allocate kernel wired memory */
-	kret = kmem_alloc_wired(kernel_map, &iobuf,
-				(vm_size_t)vattr.va_size);
-	if (kret != KERN_SUCCESS) {
-		switch (kret) {
-		default:
-			error = EINVAL;
-			break;
-		case KERN_NO_SPACE:
-		case KERN_RESOURCE_SHORTAGE:
-			error = ENOMEM;
-			break;
-		case KERN_PROTECTION_FAILURE:
-			error = EPERM;
-			break;
-		}
-		goto out;
-	}
-
-	/* read the file in the kernel buffer */
-	error = vn_rdwr(UIO_READ, vp, (caddr_t)iobuf, (int)vattr.va_size,
-			(off_t)0, UIO_SYSSPACE, IO_NODELOCKED|IO_UNIT,
-			cred, &aresid, p);
-	if (error) {
-		(void)kmem_free(kernel_map, iobuf, (vm_size_t)vattr.va_size);
-		goto out;
-	}
-
-	/*
-	 * return the image to the caller
-	 * freeing this memory is callers responsibility
-	 */
-	*image = iobuf;
-	*filesize = (off_t)vattr.va_size;
-
-out:
-	VOP_UNLOCK(vp, 0, p);
-	error1 = vn_close(vp, FREAD, cred, p);
-	if (error == 0)
-		error = error1;
-	return (error);
-}
+/* Local data */
+static int image_size_limit = PANIC_IMAGE_SIZE_LIMIT;
 
 __private_extern__ int
 sysctl_dopanicinfo(name, namelen, oldp, oldlenp, newp, newlen, p)
 	int *name;
 	u_int namelen;
-	void *oldp;
+	user_addr_t oldp;
 	size_t *oldlenp;
-	void *newp;
+	user_addr_t newp;
 	size_t newlen;
 	struct proc *p;
 {
 	int error = 0;
-	int bitdepth = 32;	/* default is 32 bits */
-	char *imname;
+	vm_offset_t newimage = (vm_offset_t )NULL;
+	kern_return_t	kret;
+	unsigned char * prev_image_ptr;
+	unsigned int prev_image_size;
+
 
 	/* all sysctl names at this level are terminal */
 	if (namelen != 1)
 		return (ENOTDIR);		/* overloaded */
 
-	switch (name[0]) {
-	default:
-		return (EOPNOTSUPP);
-	case KERN_PANICINFO_MAXSIZE:
-		if (newp != NULL && (error = suser(p->p_ucred, &p->p_acflag)))
-			return (error);
-		error = sysctl_quad(oldp, oldlenp, newp, newlen, &imagesizelimit);
+	if ( (error = proc_suser(p)) )	/* must be super user to muck with image */
 		return (error);
 
-	case KERN_PANICINFO_IMAGE16:
-		bitdepth = 16;
-		/* and fall through */
-	case KERN_PANICINFO_IMAGE32:
-		/* allocate a buffer for the image pathname */
-		MALLOC_ZONE(imname, char *, MAXPATHLEN, M_NAMEI, M_WAITOK);
+	switch (name[0]) {
+	default:
+		return (ENOTSUP);
 
-		if (!newp) {
-			bcopy(image_pathname, imname, image_pathlen);
-			imname[image_pathlen] = '\0';
-		} else
-			imname[0] = '\0';
-		error = sysctl_string(oldp, oldlenp, newp, newlen,
-		    imname, MAXPATHLEN);
-		if (newp && !error) {
-			char *tmpstr, *oldstr;
-			off_t filesize = 0;
-			size_t len;
-			vm_offset_t image;
-			vm_offset_t oimage = NULL;
-			vm_size_t osize = 0;	/* covariable: quiet compiler */
+	case KERN_PANICINFO_TEST:
+		
+		panic_dialog_test();
+		return (0);
 
-			len = strlen(imname);
-			oldstr = image_pathname;
+	case KERN_PANICINFO_MAXSIZE:
 
-			error = panicimage_from_file(imname, imagesizelimit,
-					&image, &filesize, p);
-			if (error)
-				goto errout;
+		/* return the image size limits */
 
-			/* release the old image */
-			if (image_ptr) {
-				oimage = image_ptr;
-				osize = image_size;
+		newlen = 0;
+		newp = USER_ADDR_NULL;
+
+		error = sysctl_int(oldp, oldlenp, newp, newlen, &image_size_limit);
+
+		return (error);
+
+	case KERN_PANICINFO_IMAGE:
+
+		/* If we have a new image, allocate wired kernel memory and copy it in from user space */
+		if ( newp != USER_ADDR_NULL ) {
+
+			/* check the length of the incoming image before allocating space for it. */
+			if ( newlen > (size_t)image_size_limit )
+				return (ENOMEM);
+
+			/* allocate some kernel wired memory for the new image */
+			kret = kmem_alloc(kernel_map, &newimage, (vm_size_t)round_page_32(newlen));
+
+			if (kret != KERN_SUCCESS) {
+				switch (kret) {
+				default:
+					error = EINVAL;
+					break;
+				case KERN_NO_SPACE:
+				case KERN_RESOURCE_SHORTAGE:
+					error = ENOMEM;
+					break;
+				case KERN_PROTECTION_FAILURE:
+					error = EPERM;
+					break;
+				}
+	
+				return (error);
 			}
 
-			/* remember the new one */
-			image_ptr = image;
-			image_bits = bitdepth;	/* new bith depth */
-			image_size = filesize; /* new imagesize */
+			/* copy the image in from user space */
+			if ( (error = copyin(newp, (char *) newimage, newlen)) )
+				goto errout;
 
-			if (oimage)
-				kmem_free(kernel_map, oimage, osize);
+		} else {	/* setup to make the default image active */
 
-			/* save the new name */
-			MALLOC(tmpstr, char *, len+1, M_TEMP, M_WAITOK);
-			bcopy(imname, tmpstr, len);
-			tmpstr[len] = '\0';
-
-			image_pathname = tmpstr;	/* new pathname */
-			image_pathlen = len;	/* new pathname length */
-
-			/* free the old name */
-			FREE(oldstr, M_TEMP);
+			newimage = (vm_offset_t )NULL;
+			newlen = 0;
 		}
+
+		/* get the current image location and size */
+		panic_dialog_get_image( &prev_image_ptr, &prev_image_size );
+
+		/* did the caller request a copy of the previous image ? */
+		if ( oldp != USER_ADDR_NULL ) {
+			if ( *oldlenp < prev_image_size ) {
+				error = ERANGE;
+				goto errout;
+			}
+
+			/* copy the image to user space or zero the size if the default image is active */
+			if ( prev_image_ptr != NULL ) {
+				if ( (error = copyout( prev_image_ptr, oldp, prev_image_size )) )
+					goto errout;
+
+				*oldlenp = prev_image_size;
+			}
+			else /* tell the user that the default image is active */
+				*oldlenp = 0;
+		}
+
+		/* Make the new image active, or reactivate the default image.
+		   But, handle the special case of asking for the current image
+		   without changing the current image. 
+		*/
+
+		if ( !(oldp && newp == USER_ADDR_NULL) ) {
+			if ( (error = panic_dialog_set_image( (unsigned char *) newimage, newlen )) )
+				goto errout;
+
+			/* free the wired memory used by the previous image */
+			if ( prev_image_ptr != NULL ) {
+				(void)kmem_free(kernel_map, (vm_offset_t) prev_image_ptr, (vm_size_t)round_page_32(prev_image_size));
+				printf("Panic UI memory freed (%d)\n", round_page_32(prev_image_size));
+			}
+		}
+
+		return (0);
+
 errout:
-		FREE_ZONE(imname, MAXPATHLEN, M_NAMEI);
+		if ( newimage != (vm_offset_t )NULL )
+			(void)kmem_free(kernel_map, newimage, (vm_size_t)round_page_32(newlen));
+
 		return (error);
 	}
 }

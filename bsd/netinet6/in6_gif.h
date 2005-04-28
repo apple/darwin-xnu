@@ -34,12 +34,12 @@
 #define _NETINET6_IN6_GIF_H_
 #include <sys/appleapiopts.h>
 
-#ifdef __APPLE_API_PRIVATE
+#ifdef KERNEL_PRIVATE
 #define GIF_HLIM	30
 
-int in6_gif_input __P((struct mbuf **, int *));
-int in6_gif_output __P((struct ifnet *, int, struct mbuf *, struct rtentry *));
-int gif_encapcheck6 __P((const struct mbuf *, int, int, void *));
-#endif /* __APPLE_API_PRIVATE */
+int in6_gif_input(struct mbuf **, int *);
+int in6_gif_output(struct ifnet *, int, struct mbuf *, struct rtentry *);
+int gif_encapcheck6(const struct mbuf *, int, int, void *);
+#endif KERNEL_PRIVATE
 
-#endif /*_NETINET6_IN6_GIF_H_*/
+#endif _NETINET6_IN6_GIF_H_

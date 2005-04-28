@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -21,10 +21,14 @@
  */
 #include <string.h>
 
+#include <mach/mach_types.h>
+
+#include <kern/kern_types.h>
 #include <kern/queue.h>
 #include <kern/kalloc.h>
 #include <kern/lock.h>
 #include <kern/assert.h> 
+
 #include <vm/vm_kern.h>
 
 #include "libsa/malloc.h"
@@ -41,8 +45,8 @@ typedef struct malloc_block {
 
 	struct malloc_block	*malFwd;
 	struct malloc_block	*malBwd;
+	void			*malActl;
 	unsigned int		malSize;
-	unsigned int		malActl;
 } malloc_block;
 
 static malloc_block malAnchor = {&malAnchor, &malAnchor, 0, 0};
@@ -68,7 +72,7 @@ void * malloc(size_t size) {
 	
 	rmem = (nmem + 15) & -16;					/* Round to 16 byte boundary */
 	amem = (malloc_block *)rmem;				/* Point to the block */
-	amem->malActl = (unsigned int)nmem;			/* Set the actual address */
+	amem->malActl = nmem;					/* Set the actual address */
 	amem->malSize = nsize;						/* Size */
 	
 	mutex_lock(malloc_lock);
@@ -123,7 +127,7 @@ void free(void * address) {
 __private_extern__ void
 malloc_init(void)
 {
-    malloc_lock = mutex_alloc(ETAP_IO_AHA);
+    malloc_lock = mutex_alloc(0);
     malInited = 1;
 }
 
@@ -142,13 +146,13 @@ void malloc_reset(void) {
 
  	mutex_lock(malloc_lock);
 	
-	amem = malAnchor.malFwd;					/* Get the first one */
+	amem = malAnchor.malFwd;				/* Get the first one */
 	
-	while(amem != &malAnchor) {					/* Go until we hit the anchor */
+	while(amem != &malAnchor) {				/* Go until we hit the anchor */
 	
-		bmem = amem->malFwd;					/* Next one */
- 		kfree(amem->malActl, amem->malSize);	/* Toss it */
- 		amem = bmem;							/* Skip to it */
+		bmem = amem->malFwd;				/* Next one */
+ 		kfree(amem->malActl, amem->malSize);		/* Toss it */
+ 		amem = bmem;					/* Skip to it */
 	
 	} 
 

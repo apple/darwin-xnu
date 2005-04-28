@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -51,32 +51,27 @@
  */
 
 /*
- *	processor.h:	Processor and processor-set definitions.
+ *	processor.h:	Processor and processor-related definitions.
  */
 
 #ifndef	_KERN_PROCESSOR_H_
 #define	_KERN_PROCESSOR_H_
 
-/*
- *	Data structures for managing processors and sets of processors.
- */
 #include <mach/boolean.h>
 #include <mach/kern_return.h>
 #include <kern/kern_types.h>
 
-#include <sys/appleapiopts.h>
-
-#ifdef	__APPLE_API_PRIVATE
+#include <sys/cdefs.h>
 
 #ifdef	MACH_KERNEL_PRIVATE
 
-#include <cpus.h>
-
 #include <mach/mach_types.h>
+#include <kern/ast.h>
 #include <kern/cpu_number.h>
 #include <kern/lock.h>
 #include <kern/queue.h>
 #include <kern/sched.h>
+#include <kern/processor_data.h>
 
 #include <machine/ast_types.h>
 
@@ -87,7 +82,7 @@ struct processor_set {
 
 	queue_head_t		processors;		/* all processors here */
 	int					processor_count;/* how many ? */
-	decl_simple_lock_data(,sched_lock)	/* lock for above */
+	decl_simple_lock_data(,sched_lock)	/* lock for runq and above */
 
 	struct	run_queue	runq;			/* runq for this set */
 
@@ -100,7 +95,6 @@ struct processor_set {
 	decl_mutex_data(,	lock)			/* lock for above */
 
 	int					timeshare_quanta;	/* timeshare quantum factor */
-	int					quantum_factors[NCPUS+1];
 
 	struct ipc_port	*	pset_self;		/* port for operations */
 	struct ipc_port *	pset_name_self;	/* port for information */
@@ -110,16 +104,19 @@ struct processor_set {
 
 	integer_t			mach_factor;	/* mach_factor */
 	integer_t			load_average;	/* load_average */
-	uint32_t			sched_load;		/* load avg for scheduler */
+
+	uint32_t			pri_shift;		/* timeshare usage -> priority */
 };
 
+extern struct processor_set	default_pset;
+
 struct processor {
-	queue_chain_t		processor_queue;/* idle/active/action queue link,
+	queue_chain_t		processor_queue;/* idle/active queue link,
 										 * MUST remain the first element */
 	int					state;			/* See below */
 	struct thread
 						*active_thread,	/* thread running on processor */
-						*next_thread,	/* next thread to run if dispatched */
+						*next_thread,	/* next thread when dispatched */
 						*idle_thread;	/* this processor's idle thread. */
 
 	processor_set_t		processor_set;	/* current membership */
@@ -135,16 +132,18 @@ struct processor {
 
 	struct run_queue	runq;			/* local runq for this processor */
 
-	queue_chain_t		processors;		/* all processors in set */
+	queue_chain_t		processors;		/* processors in set */
 	decl_simple_lock_data(,lock)
-	struct ipc_port		*processor_self;/* port for operations */
-	int					slot_num;		/* machine-indep slot number */
+	struct ipc_port *	processor_self;	/* port for operations */
+	processor_t			processor_list;	/* all existing processors */
+	processor_data_t	processor_data;	/* per-processor data */
 };
 
-extern struct processor_set	default_pset;
-extern processor_t	master_processor;
+extern processor_t		processor_list;
+extern unsigned int		processor_count;
+decl_simple_lock_data(extern,processor_list_lock)
 
-extern struct processor	processor_array[NCPUS];
+extern processor_t	master_processor;
 
 /*
  *	NOTE: The processor->processor_set link is needed in one of the
@@ -177,23 +176,10 @@ extern struct processor	processor_array[NCPUS];
 #define PROCESSOR_SHUTDOWN		4	/* Going off-line */
 #define PROCESSOR_START			5	/* Being started */
 
-/*
- *	Use processor ptr array to find current processor's data structure.
- *	This replaces a multiplication (index into processor_array) with
- *	an array lookup and a memory reference.  It also allows us to save
- *	space if processor numbering gets too sparse.
- */
+extern processor_t	current_processor(void);
 
-extern processor_t	processor_ptr[NCPUS];
-
-#define cpu_to_processor(i)	(processor_ptr[i])
-
-#define current_processor()	(processor_ptr[cpu_number()])
-
-/* Compatibility -- will go away */
-
-#define cpu_state(slot_num)	(processor_ptr[slot_num]->state)
-#define cpu_idle(slot_num)	(cpu_state(slot_num) == PROCESSOR_IDLE)
+extern processor_t	cpu_to_processor(
+						int			cpu);
 
 /* Useful lock macros */
 
@@ -204,17 +190,17 @@ extern processor_t	processor_ptr[NCPUS];
 #define processor_lock(pr)	simple_lock(&(pr)->lock)
 #define processor_unlock(pr)	simple_unlock(&(pr)->lock)
 
-extern void		pset_sys_bootstrap(void);
+extern void		processor_bootstrap(void);
 
-#define timeshare_quanta_update(pset)					\
-MACRO_BEGIN												\
-	int		proc_count = (pset)->processor_count;		\
-	int		runq_count = (pset)->runq.count;			\
-														\
-	(pset)->timeshare_quanta = (pset)->quantum_factors[	\
-					(runq_count > proc_count)?			\
-							proc_count: runq_count];	\
-MACRO_END
+extern void		processor_init(
+					processor_t		processor,
+					int				slot_num);
+
+extern void		timeshare_quanta_update(
+					processor_set_t		pset);
+
+extern void		pset_init(
+					processor_set_t		pset);
 
 #define pset_run_incr(pset)					\
 	hw_atomic_add(&(pset)->run_count, 1)
@@ -227,9 +213,6 @@ MACRO_END
 
 #define pset_share_decr(pset)				\
 	hw_atomic_sub(&(pset)->share_count, 1)
-
-extern void		cpu_up(
-					int		cpu);
 
 extern kern_return_t	processor_shutdown(
 							processor_t		processor);
@@ -263,10 +246,6 @@ extern void		thread_change_psets(
 					processor_set_t		old_pset,
 					processor_set_t		new_pset);
 
-extern kern_return_t	processor_assign(
-							processor_t			processor,
-							processor_set_t		new_pset,
-							boolean_t			wait);
 
 extern kern_return_t	processor_info_count(
 							processor_flavor_t		flavor,
@@ -274,18 +253,14 @@ extern kern_return_t	processor_info_count(
 
 #endif	/* MACH_KERNEL_PRIVATE */
 
-extern kern_return_t	processor_start(
-							processor_t		processor);
-
-extern kern_return_t	processor_exit(
-							processor_t		processor);
-
-#endif	/* __APPLE_API_PRIVATE */
+__BEGIN_DECLS
 
 extern void		pset_deallocate(
 					processor_set_t	pset);
 
 extern void		pset_reference(
 					processor_set_t	pset);
+
+__END_DECLS
 
 #endif	/* _KERN_PROCESSOR_H_ */

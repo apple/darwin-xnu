@@ -36,7 +36,7 @@
 #include <sys/time.h>
 #include <sys/attr.h>
 
-#ifndef _POSIX_SOURCE
+#ifndef _POSIX_C_SOURCE
 
 struct vstat {
 	fsid_t			vst_volid;		/* volume identifier */
@@ -49,7 +49,7 @@ struct vstat {
 	gid_t	  		vst_gid;		/* group ID of the file's group */
 	dev_t			vst_dev;		/* inode's device */
 	dev_t	  		vst_rdev;		/* device type */
-#ifndef _POSIX_SOURCE
+#ifndef _POSIX_C_SOURCE
 	struct	timespec vst_atimespec;	/* time of last access */
 	struct	timespec vst_mtimespec;	/* time of last data modification */
 	struct	timespec vst_ctimespec;	/* time of last file status change */
@@ -67,7 +67,7 @@ struct vstat {
 	u_int32_t 		vst_flags;		/* user defined flags for file */
 };
 
-#endif /* ! _POSIX_SOURCE */
+#endif /* ! _POSIX_C_SOURCE */
 #endif /* __APPLE_API_OBSOLETE */
 
 #endif /* !_SYS_VSTAT_H_ */

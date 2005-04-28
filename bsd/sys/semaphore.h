@@ -54,6 +54,8 @@ int sem_unlink(const char *);
 int sem_wait(sem_t *);
 __END_DECLS
 
-#endif /* KERNEL */
+#else	/* KERNEL */
+void psem_cache_init(void);
+#endif	/* KERNEL */
 
 #endif	/* _SYS_SEMAPHORE_H_ */

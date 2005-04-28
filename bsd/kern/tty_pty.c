@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -64,10 +64,11 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/ioctl.h>
-#include <sys/proc.h>
+#include <sys/proc_internal.h>
+#include <sys/kauth.h>
 #include <sys/tty.h>
 #include <sys/conf.h>
-#include <sys/file.h>
+#include <sys/file_internal.h>
 #include <sys/uio.h>
 #include <sys/kernel.h>
 #include <sys/vnode.h>
@@ -78,23 +79,24 @@
 
 #define FREE_BSDSTATIC	static
 #else
-#include <machine/spl.h>
-
 #define FREE_BSDSTATIC __private_extern__
 #define d_devtotty_t    struct tty **
 
 #ifdef d_stop_t
 #undef d_stop_t
 #endif
-typedef void d_stop_t	__P((struct tty *tp, int rw));
+typedef void d_stop_t(struct tty *tp, int rw);
 
 #endif /* NeXT */
 
+/* XXX function should be removed??? */
+int pty_init(int n_ptys);
+
 #ifdef notyet
-static void ptyattach __P((int n));
+static void ptyattach(int n);
 #endif
-static void ptsstart __P((struct tty *tp));
-static void ptcwakeup __P((struct tty *tp, int flag));
+static void ptsstart(struct tty *tp);
+static void ptcwakeup(struct tty *tp, int flag);
 
 FREE_BSDSTATIC	d_open_t	ptsopen;
 FREE_BSDSTATIC	d_close_t	ptsclose;
@@ -204,7 +206,8 @@ ptyattach(n)
 #endif
 
 #ifndef DEVFS
-int pty_init()
+int
+pty_init(__unused int n_ptys)
 {
     return 0;
 }
@@ -212,7 +215,8 @@ int pty_init()
 #include <miscfs/devfs/devfs.h>
 #define START_CHAR	'p'
 #define HEX_BASE	16
-int pty_init(int n_ptys)
+int
+pty_init(int n_ptys)
 {
     int 	i;
     int		j;
@@ -238,23 +242,24 @@ int pty_init(int n_ptys)
 
 /*ARGSUSED*/
 FREE_BSDSTATIC int
-ptsopen(dev, flag, devtype, p)
-	dev_t dev;
-	int flag, devtype;
-	struct proc *p;
+ptsopen(dev_t dev, int flag, __unused int devtype, __unused struct proc *p)
 {
 	register struct tty *tp;
 	int error;
+	boolean_t   funnel_state;
 
+	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 #ifndef NeXT
 	tp = &pt_tty[minor(dev)];
 #else
 	/*
-	 * You will see this sourt of code coming up in diffs later both
+	 * You will see this sort of code coming up in diffs later both
 	 * the ttymalloc and the tp indirection.
 	 */
-	if (minor(dev) >= npty)
-		return (ENXIO);
+	if (minor(dev) >= npty) {
+	        error = ENXIO;
+		goto out;
+	}
 	if (!pt_tty[minor(dev)]) {
 		tp = pt_tty[minor(dev)] = ttymalloc();
 	} else
@@ -268,8 +273,10 @@ ptsopen(dev, flag, devtype, p)
 		tp->t_cflag = TTYDEF_CFLAG;
 		tp->t_ispeed = tp->t_ospeed = TTYDEF_SPEED;
 		ttsetwater(tp);		/* would be done in xxparam() */
-	} else if (tp->t_state&TS_XCLUDE && p->p_ucred->cr_uid != 0)
-		return (EBUSY);
+	} else if (tp->t_state&TS_XCLUDE && suser(kauth_cred_get(), NULL)) {
+	        error = EBUSY;
+		goto out;
+	}
 	if (tp->t_oproc)			/* Ctrlr still around. */
 		(void)(*linesw[tp->t_line].l_modem)(tp, 1);
 	while ((tp->t_state & TS_CARR_ON) == 0) {
@@ -278,27 +285,31 @@ ptsopen(dev, flag, devtype, p)
 		error = ttysleep(tp, TSA_CARR_ON(tp), TTIPRI | PCATCH,
 				 "ptsopn", 0);
 		if (error)
-			return (error);
+			goto out;
 	}
 	error = (*linesw[tp->t_line].l_open)(dev, tp);
 	if (error == 0)
 		ptcwakeup(tp, FREAD|FWRITE);
+out:
+	(void) thread_funnel_set(kernel_flock, funnel_state);
 	return (error);
 }
 
 FREE_BSDSTATIC int
-ptsclose(dev, flag, mode, p)
-	dev_t dev;
-	int flag, mode;
-	struct proc *p;
+ptsclose(dev_t dev, int flag, __unused int mode, __unused proc_t p)
 {
 	register struct tty *tp;
 	int err;
+	boolean_t   funnel_state;
+
+	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 
 	tp = pt_tty[minor(dev)];
 	err = (*linesw[tp->t_line].l_close)(tp, flag);
 	ptsstop(tp, FREAD|FWRITE);
 	(void) ttyclose(tp);
+
+	(void) thread_funnel_set(kernel_flock, funnel_state);
 	return (err);
 }
 
@@ -317,21 +328,27 @@ ptsread(dev, uio, flag)
 	register struct pt_ioctl *pti = &pt_ioctl[minor(dev)];
 	int error = 0;
 	struct uthread *ut;
+	boolean_t   funnel_state;
 
-	ut = (struct uthread *)get_bsdthread_info(current_act());
+	funnel_state = thread_funnel_set(kernel_flock, TRUE);
+
+
+	ut = (struct uthread *)get_bsdthread_info(current_thread());
 again:
 	if (pti->pt_flags & PF_REMOTE) {
 		while (isbackground(p, tp)) {
 			if ((p->p_sigignore & sigmask(SIGTTIN)) ||
 			    (ut->uu_sigmask & sigmask(SIGTTIN)) ||
 			    p->p_pgrp->pg_jobc == 0 ||
-			    p->p_flag & P_PPWAIT)
-				return (EIO);
+			    p->p_flag & P_PPWAIT) {
+				error = EIO;
+				goto out;
+			}
 			pgsignal(p->p_pgrp, SIGTTIN, 1);
 			error = ttysleep(tp, &lbolt, TTIPRI | PCATCH | PTTYBLOCK, "ptsbg",
 					 0);
 			if (error)
-				return (error);
+			        goto out;
 		}
 		if (tp->t_canq.c_cc == 0) {
 			if (flag & IO_NDELAY)
@@ -339,22 +356,31 @@ again:
 			error = ttysleep(tp, TSA_PTS_READ(tp), TTIPRI | PCATCH,
 					 "ptsin", 0);
 			if (error)
-				return (error);
+			        goto out;
 			goto again;
 		}
-		while (tp->t_canq.c_cc > 1 && uio->uio_resid > 0)
-			if (ureadc(getc(&tp->t_canq), uio) < 0) {
-				error = EFAULT;
+		while (tp->t_canq.c_cc > 1 && uio_resid(uio) > 0) {
+			int cc;
+			char buf[BUFSIZ];
+
+			cc = min(uio_resid(uio), BUFSIZ);
+			// Don't copy the very last byte
+			cc = min(cc, tp->t_canq.c_cc - 1);
+			cc = q_to_b(&tp->t_canq, buf, cc);
+			error = uiomove(buf, cc, uio);
+			if (error)
 				break;
-			}
+		}
 		if (tp->t_canq.c_cc == 1)
 			(void) getc(&tp->t_canq);
 		if (tp->t_canq.c_cc)
-			return (error);
+		        goto out;
 	} else
 		if (tp->t_oproc)
 			error = (*linesw[tp->t_line].l_read)(tp, uio, flag);
 	ptcwakeup(tp, FWRITE);
+out:
+	(void) thread_funnel_set(kernel_flock, funnel_state);
 	return (error);
 }
 
@@ -370,11 +396,19 @@ ptswrite(dev, uio, flag)
 	int flag;
 {
 	register struct tty *tp;
+	int error;
+	boolean_t   funnel_state;
+
+	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 
 	tp = pt_tty[minor(dev)];
 	if (tp->t_oproc == 0)
-		return (EIO);
-	return ((*linesw[tp->t_line].l_write)(tp, uio, flag));
+		error = EIO;
+	else
+	        error = (*linesw[tp->t_line].l_write)(tp, uio, flag);
+
+	(void) thread_funnel_set(kernel_flock, funnel_state);
+	return (error);
 }
 
 /*
@@ -386,14 +420,20 @@ ptsstart(tp)
 	struct tty *tp;
 {
 	register struct pt_ioctl *pti = &pt_ioctl[minor(tp->t_dev)];
+	boolean_t   funnel_state;
+
+	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 
 	if (tp->t_state & TS_TTSTOP)
-		return;
+	        goto out;
 	if (pti->pt_flags & PF_STOPPED) {
 		pti->pt_flags &= ~PF_STOPPED;
 		pti->pt_send = TIOCPKT_START;
 	}
 	ptcwakeup(tp, FREAD);
+out:
+	(void) thread_funnel_set(kernel_flock, funnel_state);
+	return;
 }
 
 static void
@@ -402,6 +442,9 @@ ptcwakeup(tp, flag)
 	int flag;
 {
 	struct pt_ioctl *pti = &pt_ioctl[minor(tp->t_dev)];
+	boolean_t   funnel_state;
+
+	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 
 	if (flag & FREAD) {
 		selwakeup(&pti->pt_selr);
@@ -411,25 +454,31 @@ ptcwakeup(tp, flag)
 		selwakeup(&pti->pt_selw);
 		wakeup(TSA_PTC_WRITE(tp));
 	}
+	(void) thread_funnel_set(kernel_flock, funnel_state);
 }
 
 FREE_BSDSTATIC int
-ptcopen(dev, flag, devtype, p)
-	dev_t dev;
-	int flag, devtype;
-	struct proc *p;
+ptcopen(dev_t dev, __unused int flag, __unused int devtype, __unused proc_t p)
 {
 	register struct tty *tp;
 	struct pt_ioctl *pti;
+	int error = 0;
+	boolean_t   funnel_state;
 
-	if (minor(dev) >= npty)
-		return (ENXIO);
+	funnel_state = thread_funnel_set(kernel_flock, TRUE);
+
+	if (minor(dev) >= npty) {
+		error = ENXIO;
+		goto out;
+	}
 	if(!pt_tty[minor(dev)]) {
 		tp = pt_tty[minor(dev)] = ttymalloc();
 	} else
 		tp = pt_tty[minor(dev)];
-	if (tp->t_oproc)
-		return (EIO);
+	if (tp->t_oproc) {
+		error = EIO;
+		goto out;
+	}
 	tp->t_oproc = ptsstart;
 #ifdef sun4c
 	tp->t_stop = ptsstop;
@@ -440,17 +489,18 @@ ptcopen(dev, flag, devtype, p)
 	pti->pt_flags = 0;
 	pti->pt_send = 0;
 	pti->pt_ucntl = 0;
-	return (0);
+out:
+	(void) thread_funnel_set(kernel_flock, funnel_state);
+	return (error);
 }
 
 FREE_BSDSTATIC int
-ptcclose(dev, flags, fmt, p)
-	dev_t dev;
-	int flags;
-	int fmt;
-	struct proc *p;
+ptcclose(dev_t dev, __unused int flags, __unused int fmt, __unused proc_t p)
 {
 	register struct tty *tp;
+	boolean_t   funnel_state;
+
+	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 
 	tp = pt_tty[minor(dev)];
 	(void)(*linesw[tp->t_line].l_modem)(tp, 0);
@@ -470,6 +520,8 @@ ptcclose(dev, flags, fmt, p)
 	}
 
 	tp->t_oproc = 0;		/* mark closed */
+
+	(void) thread_funnel_set(kernel_flock, funnel_state);
 	return (0);
 }
 
@@ -483,6 +535,9 @@ ptcread(dev, uio, flag)
 	struct pt_ioctl *pti = &pt_ioctl[minor(dev)];
 	char buf[BUFSIZ];
 	int error = 0, cc;
+	boolean_t   funnel_state;
+
+	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 
 	/*
 	 * We want to block until the slave
@@ -495,43 +550,48 @@ ptcread(dev, uio, flag)
 			if (pti->pt_flags&PF_PKT && pti->pt_send) {
 				error = ureadc((int)pti->pt_send, uio);
 				if (error)
-					return (error);
+					goto out;
 				if (pti->pt_send & TIOCPKT_IOCTL) {
-					cc = min(uio->uio_resid,
+					cc = min(uio_resid(uio),
 						sizeof(tp->t_termios));
 					uiomove((caddr_t)&tp->t_termios, cc,
 						uio);
 				}
 				pti->pt_send = 0;
-				return (0);
+				goto out;
 			}
 			if (pti->pt_flags&PF_UCNTL && pti->pt_ucntl) {
 				error = ureadc((int)pti->pt_ucntl, uio);
 				if (error)
-					return (error);
+					goto out;
 				pti->pt_ucntl = 0;
-				return (0);
+				goto out;
 			}
 			if (tp->t_outq.c_cc && (tp->t_state&TS_TTSTOP) == 0)
 				break;
 		}
 		if ((tp->t_state & TS_CONNECTED) == 0)
-			return (0);	/* EOF */
-		if (flag & IO_NDELAY)
-			return (EWOULDBLOCK);
+			goto out;	/* EOF */
+		if (flag & IO_NDELAY) {
+			error = EWOULDBLOCK;
+			goto out;
+		}
 		error = tsleep(TSA_PTC_READ(tp), TTIPRI | PCATCH, "ptcin", 0);
 		if (error)
-			return (error);
+		        goto out;
 	}
 	if (pti->pt_flags & (PF_PKT|PF_UCNTL))
 		error = ureadc(0, uio);
-	while (uio->uio_resid > 0 && error == 0) {
-		cc = q_to_b(&tp->t_outq, buf, min(uio->uio_resid, BUFSIZ));
+	while (uio_resid(uio) > 0 && error == 0) {
+		cc = q_to_b(&tp->t_outq, buf, min(uio_resid(uio), BUFSIZ));
 		if (cc <= 0)
 			break;
 		error = uiomove(buf, cc, uio);
 	}
-	ttwwakeup(tp);
+	(*linesw[tp->t_line].l_start)(tp);
+
+out:
+	(void) thread_funnel_set(kernel_flock, funnel_state);
 	return (error);
 }
 
@@ -542,6 +602,9 @@ ptsstop(tp, flush)
 {
 	struct pt_ioctl *pti = &pt_ioctl[minor(tp->t_dev)];
 	int flag;
+	boolean_t   funnel_state;
+
+	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 
 	/* note: FLUSHREAD and FLUSHWRITE already ok */
 	if (flush == 0) {
@@ -557,6 +620,8 @@ ptsstop(tp, flush)
 	if (flush & FWRITE)
 		flag |= FREAD;
 	ptcwakeup(tp, flag);
+
+	(void) thread_funnel_set(kernel_flock, funnel_state);
 }
 
 FREE_BSDSTATIC int
@@ -568,30 +633,35 @@ ptcselect(dev, rw, wql, p)
 {
 	register struct tty *tp = pt_tty[minor(dev)];
 	struct pt_ioctl *pti = &pt_ioctl[minor(dev)];
-	int s;
+	int retval = 0;
+	boolean_t   funnel_state;
 
-	if ((tp->t_state & TS_CONNECTED) == 0)
-		return (1);
+	funnel_state = thread_funnel_set(kernel_flock, TRUE);
+
+	if ((tp->t_state & TS_CONNECTED) == 0) {
+		retval = 1;
+		goto out;
+	}
 	switch (rw) {
 
 	case FREAD:
 		/*
 		 * Need to block timeouts (ttrstart).
 		 */
-		s = spltty();
 		if ((tp->t_state&TS_ISOPEN) &&
 		     tp->t_outq.c_cc && (tp->t_state&TS_TTSTOP) == 0) {
-			splx(s);
-			return (1);
+			retval = 1;
+			goto out;
 		}
-		splx(s);
 		/* FALLTHROUGH */
 
 	case 0:					/* exceptional */
 		if ((tp->t_state&TS_ISOPEN) &&
 		    ((pti->pt_flags&PF_PKT && pti->pt_send) ||
-		     (pti->pt_flags&PF_UCNTL && pti->pt_ucntl)))
-			return (1);
+		     (pti->pt_flags&PF_UCNTL && pti->pt_ucntl))) {
+			retval = 1;
+			goto out;
+		}
 		selrecord(p, &pti->pt_selr, wql);
 		break;
 
@@ -599,20 +669,28 @@ ptcselect(dev, rw, wql, p)
 	case FWRITE:
 		if (tp->t_state&TS_ISOPEN) {
 			if (pti->pt_flags & PF_REMOTE) {
-			    if (tp->t_canq.c_cc == 0)
-				return (1);
+			    if (tp->t_canq.c_cc == 0) {
+				retval = 1;
+				goto out;
+			    }
 			} else {
-			    if (tp->t_rawq.c_cc + tp->t_canq.c_cc < TTYHOG-2)
-				    return (1);
-			    if (tp->t_canq.c_cc == 0 && (tp->t_iflag&ICANON))
-				    return (1);
+			    if (tp->t_rawq.c_cc + tp->t_canq.c_cc < TTYHOG-2) {
+				    retval = 1;
+				    goto out;
+			    }
+			    if (tp->t_canq.c_cc == 0 && (tp->t_iflag&ICANON)) {
+				    retval = 1;
+				    goto out;
+			    }
 			}
 		}
 		selrecord(p, &pti->pt_selw, wql);
 		break;
 
 	}
-	return (0);
+out:
+	(void) thread_funnel_set(kernel_flock, funnel_state);
+	return (retval);
 }
 
 FREE_BSDSTATIC int
@@ -625,9 +703,12 @@ ptcwrite(dev, uio, flag)
 	register u_char *cp = NULL;
 	register int cc = 0;
 	u_char locbuf[BUFSIZ];
-	int cnt = 0;
+	int wcnt = 0;
 	struct pt_ioctl *pti = &pt_ioctl[minor(dev)];
 	int error = 0;
+	boolean_t   funnel_state;
+
+	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 
 again:
 	if ((tp->t_state&TS_ISOPEN) == 0)
@@ -635,20 +716,21 @@ again:
 	if (pti->pt_flags & PF_REMOTE) {
 		if (tp->t_canq.c_cc)
 			goto block;
-		while ((uio->uio_resid > 0 || cc > 0) &&
+		while ((uio_resid(uio) > 0 || cc > 0) &&
 		       tp->t_canq.c_cc < TTYHOG - 1) {
 			if (cc == 0) {
-				cc = min(uio->uio_resid, BUFSIZ);
+				cc = min(uio_resid(uio), BUFSIZ);
 				cc = min(cc, TTYHOG - 1 - tp->t_canq.c_cc);
 				cp = locbuf;
 				error = uiomove((caddr_t)cp, cc, uio);
 				if (error)
-					return (error);
+					goto out;
 				/* check again for safety */
 				if ((tp->t_state & TS_ISOPEN) == 0) {
 					/* adjust as usual */
-					uio->uio_resid += cc;
-					return (EIO);
+					uio_setresid(uio, (uio_resid(uio) + cc));
+					error = EIO;
+					goto out;
 				}
 			}
 			if (cc > 0) {
@@ -666,24 +748,25 @@ again:
 			}
 		}
 		/* adjust for data copied in but not written */
-		uio->uio_resid += cc;
+		uio_setresid(uio, (uio_resid(uio) + cc));
 		(void) putc(0, &tp->t_canq);
 		ttwakeup(tp);
 		wakeup(TSA_PTS_READ(tp));
-		return (0);
+		goto out;
 	}
-	while (uio->uio_resid > 0 || cc > 0) {
+	while (uio_resid(uio) > 0 || cc > 0) {
 		if (cc == 0) {
-			cc = min(uio->uio_resid, BUFSIZ);
+			cc = min(uio_resid(uio), BUFSIZ);
 			cp = locbuf;
 			error = uiomove((caddr_t)cp, cc, uio);
 			if (error)
-				return (error);
+				goto out;
 			/* check again for safety */
 			if ((tp->t_state & TS_ISOPEN) == 0) {
 				/* adjust for data copied in but not written */
-				uio->uio_resid += cc;
-				return (EIO);
+				uio_setresid(uio, (uio_resid(uio) + cc));
+				error = EIO;
+				goto out;
 			}
 		}
 		while (cc > 0) {
@@ -693,12 +776,14 @@ again:
 				goto block;
 			}
 			(*linesw[tp->t_line].l_rint)(*cp++, tp);
-			cnt++;
+			wcnt++;
 			cc--;
 		}
 		cc = 0;
 	}
-	return (0);
+out:
+	(void) thread_funnel_set(kernel_flock, funnel_state);
+	return (error);
 block:
 	/*
 	 * Come here to wait for slave to open, for space
@@ -706,21 +791,22 @@ block:
 	 */
 	if ((tp->t_state & TS_CONNECTED) == 0) {
 		/* adjust for data copied in but not written */
-		uio->uio_resid += cc;
-		return (EIO);
+		uio_setresid(uio, (uio_resid(uio) + cc));
+		error = EIO;
+		goto out;
 	}
 	if (flag & IO_NDELAY) {
 		/* adjust for data copied in but not written */
-		uio->uio_resid += cc;
-		if (cnt == 0)
-			return (EWOULDBLOCK);
-		return (0);
+		uio_setresid(uio, (uio_resid(uio) + cc));
+		if (wcnt == 0)
+			error = EWOULDBLOCK;
+		goto out;
 	}
 	error = tsleep(TSA_PTC_WRITE(tp), TTOPRI | PCATCH, "ptcout", 0);
 	if (error) {
 		/* adjust for data copied in but not written */
-		uio->uio_resid += cc;
-		return (error);
+		uio_setresid(uio, (uio_resid(uio) + cc));
+		goto out;
 	}
 	goto again;
 }
@@ -759,7 +845,10 @@ ptyioctl(dev, cmd, data, flag, p)
 	register struct tty *tp = pt_tty[minor(dev)];
 	register struct pt_ioctl *pti = &pt_ioctl[minor(dev)];
 	register u_char *cc = tp->t_cc;
-	int stop, error;
+	int stop, error = 0;
+	boolean_t   funnel_state;
+
+	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 
 	/*
 	 * IF CONTROLLER STTY THEN MUST FLUSH TO PREVENT A HANG.
@@ -785,7 +874,7 @@ ptyioctl(dev, cmd, data, flag, p)
 			}
 			tp->t_lflag &= ~EXTPROC;
 		}
-		return(0);
+		goto out;
 	} else
 #ifndef NeXT
 	if (cdevsw[major(dev)]->d_open == ptcopen)
@@ -800,25 +889,29 @@ ptyioctl(dev, cmd, data, flag, p)
 			 * in that case, tp must be the controlling terminal.
 			 */
 			*(int *)data = tp->t_pgrp ? tp->t_pgrp->pg_id : 0;
-			return (0);
+			goto out;
 
 		case TIOCPKT:
 			if (*(int *)data) {
-				if (pti->pt_flags & PF_UCNTL)
-					return (EINVAL);
+			        if (pti->pt_flags & PF_UCNTL) {
+					error = EINVAL;
+					goto out;
+				}
 				pti->pt_flags |= PF_PKT;
 			} else
 				pti->pt_flags &= ~PF_PKT;
-			return (0);
+			goto out;
 
 		case TIOCUCNTL:
 			if (*(int *)data) {
-				if (pti->pt_flags & PF_PKT)
-					return (EINVAL);
+			        if (pti->pt_flags & PF_PKT) {
+					error = EINVAL;
+					goto out;
+				}
 				pti->pt_flags |= PF_UCNTL;
 			} else
 				pti->pt_flags &= ~PF_UCNTL;
-			return (0);
+			goto out;
 
 		case TIOCREMOTE:
 			if (*(int *)data)
@@ -826,9 +919,9 @@ ptyioctl(dev, cmd, data, flag, p)
 			else
 				pti->pt_flags &= ~PF_REMOTE;
 			ttyflush(tp, FREAD|FWRITE);
-			return (0);
+			goto out;
 
-#ifdef COMPAT_43
+#if COMPAT_43_TTY
 		case TIOCSETP:
 		case TIOCSETN:
 #endif
@@ -841,30 +934,33 @@ ptyioctl(dev, cmd, data, flag, p)
 
 		case TIOCSIG:
 			if (*(unsigned int *)data >= NSIG ||
-			    *(unsigned int *)data == 0)
-				return(EINVAL);
+			    *(unsigned int *)data == 0) {
+				error = EINVAL;
+				goto out;
+			}
 			if ((tp->t_lflag&NOFLSH) == 0)
 				ttyflush(tp, FREAD|FWRITE);
 			pgsignal(tp->t_pgrp, *(unsigned int *)data, 1);
 			if ((*(unsigned int *)data == SIGINFO) &&
 			    ((tp->t_lflag&NOKERNINFO) == 0))
 				ttyinfo(tp);
-			return(0);
+			goto out;
 		}
 	error = (*linesw[tp->t_line].l_ioctl)(tp, cmd, data, flag, p);
-	if (error < 0)
-		 error = ttioctl(tp, cmd, data, flag, p);
-	if (error < 0) {
-		if (pti->pt_flags & PF_UCNTL &&
-		    (cmd & ~0xff) == UIOCCMD(0)) {
+	if (error == ENOTTY) {
+		error = ttioctl(tp, cmd, data, flag, p);
+		if (error == ENOTTY
+		&&  pti->pt_flags & PF_UCNTL && (cmd & ~0xff) == UIOCCMD(0)) {
+			/* Process the UIOCMD ioctl group */
 			if (cmd & 0xff) {
 				pti->pt_ucntl = (u_char)cmd;
 				ptcwakeup(tp, FREAD);
 			}
-			return (0);
+			error = 0;
+			goto out;
 		}
-		error = ENOTTY;
 	}
+
 	/*
 	 * If external processing and packet mode send ioctl packet.
 	 */
@@ -873,11 +969,11 @@ ptyioctl(dev, cmd, data, flag, p)
 		case TIOCSETA:
 		case TIOCSETAW:
 		case TIOCSETAF:
-#ifdef COMPAT_43
+#if COMPAT_43_TTY
 		case TIOCSETP:
 		case TIOCSETN:
 #endif
-#if defined(COMPAT_43) || defined(COMPAT_SUNOS)
+#if COMPAT_43_TTY || defined(COMPAT_SUNOS)
 		case TIOCSETC:
 		case TIOCSLTC:
 		case TIOCLBIS:
@@ -907,6 +1003,8 @@ ptyioctl(dev, cmd, data, flag, p)
 			ptcwakeup(tp, FREAD);
 		}
 	}
+out:
+	(void) thread_funnel_set(kernel_flock, funnel_state);
 	return (error);
 }
 

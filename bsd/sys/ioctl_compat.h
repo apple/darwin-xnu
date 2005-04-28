@@ -123,26 +123,33 @@ struct sgttyb {
 #define		EVENP		0x00000080	/* get/send even parity */
 #define		ANYP		0x000000c0	/* get any parity/send none */
 #define		NLDELAY		0x00000300	/* \n delay */
+#define		TBDELAY		0x00000c00	/* horizontal tab delay */
+#define		XTABS		0x00000c00	/* expand tabs on output */
+#define		CRDELAY		0x00003000	/* \r delay */
+#define		VTDELAY		0x00004000	/* vertical tab delay */
+#define		BSDELAY		0x00008000	/* \b delay */
+#ifndef	_SYS_TERMIOS_H_
+/*
+ * These manifest constants have the same names as those in <sys/termios.h>,
+ * so you are not permitted to have both definitions in scope simultaneously
+ * in the same compilation unit.
+ */
 #define			NL0	0x00000000
 #define			NL1	0x00000100	/* tty 37 */
 #define			NL2	0x00000200	/* vt05 */
 #define			NL3	0x00000300
-#define		TBDELAY		0x00000c00	/* horizontal tab delay */
 #define			TAB0	0x00000000
 #define			TAB1	0x00000400	/* tty 37 */
 #define			TAB2	0x00000800
-#define		XTABS		0x00000c00	/* expand tabs on output */
-#define		CRDELAY		0x00003000	/* \r delay */
 #define			CR0	0x00000000
 #define			CR1	0x00001000	/* tn 300 */
 #define			CR2	0x00002000	/* tty 37 */
 #define			CR3	0x00003000	/* concept 100 */
-#define		VTDELAY		0x00004000	/* vertical tab delay */
 #define			FF0	0x00000000
 #define			FF1	0x00004000	/* tty 37 */
-#define		BSDELAY		0x00008000	/* \b delay */
 #define			BS0	0x00000000
 #define			BS1	0x00008000
+#endif	/* !_SYS_TERMIOS_H_ */
 #define		ALLDELAY	(NLDELAY|TBDELAY|CRDELAY|VTDELAY|BSDELAY)
 #define		CRTBS		0x00010000	/* do backspacing for crt */
 #define		PRTERA		0x00020000	/* \ ... / erase */

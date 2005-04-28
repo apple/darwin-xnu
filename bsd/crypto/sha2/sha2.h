@@ -115,23 +115,23 @@ typedef SHA512_CTX SHA384_CTX;
 
 /*** SHA-256/384/512 Function Prototypes ******************************/
 
-void SHA256_Init __P((SHA256_CTX *));
-void SHA256_Update __P((SHA256_CTX*, const u_int8_t*, size_t));
-void SHA256_Final __P((u_int8_t[SHA256_DIGEST_LENGTH], SHA256_CTX*));
-char* SHA256_End __P((SHA256_CTX*, char[SHA256_DIGEST_STRING_LENGTH]));
-char* SHA256_Data __P((const u_int8_t*, size_t, char[SHA256_DIGEST_STRING_LENGTH]));
+void SHA256_Init(SHA256_CTX *);
+void SHA256_Update(SHA256_CTX*, const u_int8_t*, size_t);
+void SHA256_Final(u_int8_t[SHA256_DIGEST_LENGTH], SHA256_CTX*);
+char* SHA256_End(SHA256_CTX*, char[SHA256_DIGEST_STRING_LENGTH]);
+char* SHA256_Data(const u_int8_t*, size_t, char[SHA256_DIGEST_STRING_LENGTH]);
 
-void SHA384_Init __P((SHA384_CTX*));
-void SHA384_Update __P((SHA384_CTX*, const u_int8_t*, size_t));
-void SHA384_Final __P((u_int8_t[SHA384_DIGEST_LENGTH], SHA384_CTX*));
-char* SHA384_End __P((SHA384_CTX*, char[SHA384_DIGEST_STRING_LENGTH]));
-char* SHA384_Data __P((const u_int8_t*, size_t, char[SHA384_DIGEST_STRING_LENGTH]));
+void SHA384_Init(SHA384_CTX*);
+void SHA384_Update(SHA384_CTX*, const u_int8_t*, size_t);
+void SHA384_Final(u_int8_t[SHA384_DIGEST_LENGTH], SHA384_CTX*);
+char* SHA384_End(SHA384_CTX*, char[SHA384_DIGEST_STRING_LENGTH]);
+char* SHA384_Data(const u_int8_t*, size_t, char[SHA384_DIGEST_STRING_LENGTH]);
 
-void SHA512_Init __P((SHA512_CTX*));
-void SHA512_Update __P((SHA512_CTX*, const u_int8_t*, size_t));
-void SHA512_Final __P((u_int8_t[SHA512_DIGEST_LENGTH], SHA512_CTX*));
-char* SHA512_End __P((SHA512_CTX*, char[SHA512_DIGEST_STRING_LENGTH]));
-char* SHA512_Data __P((const u_int8_t*, size_t, char[SHA512_DIGEST_STRING_LENGTH]));
+void SHA512_Init(SHA512_CTX*);
+void SHA512_Update(SHA512_CTX*, const u_int8_t*, size_t);
+void SHA512_Final(u_int8_t[SHA512_DIGEST_LENGTH], SHA512_CTX*);
+char* SHA512_End(SHA512_CTX*, char[SHA512_DIGEST_STRING_LENGTH]);
+char* SHA512_Data(const u_int8_t*, size_t, char[SHA512_DIGEST_STRING_LENGTH]);
 
 #ifdef	__cplusplus
 }

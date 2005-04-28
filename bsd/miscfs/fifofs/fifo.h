@@ -57,59 +57,66 @@
 #ifndef __FIFOFS_FOFO_H__
 #define __FIFOFS_FOFO_H__
 
-#include  <sys/appleapiopts.h>
+#ifdef BSD_KERNEL_PRIVATE
 
-#ifdef __APPLE_API_PRIVATE
+
+/*
+ * This structure is associated with the FIFO vnode and stores
+ * the state associated with the FIFO.
+ */
+struct fifoinfo {
+	unsigned int	fi_flags;
+    struct socket   *fi_readsock;
+    struct socket   *fi_writesock;
+    long        fi_readers;
+    long        fi_writers;
+	unsigned int	fi_count;
+};
+
+#define FIFO_INCREATE	1
+#define FIFO_CREATEWAIT	2
+#define FIFO_CREATED	4
+
+
 /*
  * Prototypes for fifo operations on vnodes.
  */
-int	fifo_ebadf();
+int	fifo_ebadf(void *);
 
-int	fifo_lookup __P((struct vop_lookup_args *));
-#define fifo_create ((int (*) __P((struct  vop_create_args *)))err_create)
-#define fifo_mknod ((int (*) __P((struct  vop_mknod_args *)))err_mknod)
-int	fifo_open __P((struct vop_open_args *));
-int	fifo_close __P((struct vop_close_args *));
-#define fifo_access ((int (*) __P((struct  vop_access_args *)))fifo_ebadf)
-#define fifo_getattr ((int (*) __P((struct  vop_getattr_args *)))fifo_ebadf)
-#define fifo_setattr ((int (*) __P((struct  vop_setattr_args *)))fifo_ebadf)
-int	fifo_read __P((struct vop_read_args *));
-int	fifo_write __P((struct vop_write_args *));
-#define fifo_lease_check ((int (*) __P((struct  vop_lease_args *)))nullop)
-int	fifo_ioctl __P((struct vop_ioctl_args *));
-int	fifo_select __P((struct vop_select_args *));
-#define	fifo_revoke vop_revoke
-#define fifo_mmap ((int (*) __P((struct  vop_mmap_args *)))err_mmap)
-#define fifo_fsync ((int (*) __P((struct  vop_fsync_args *)))nullop)
-#define fifo_seek ((int (*) __P((struct  vop_seek_args *)))err_seek)
-#define fifo_remove ((int (*) __P((struct  vop_remove_args *)))err_remove)
-#define fifo_link ((int (*) __P((struct  vop_link_args *)))err_link)
-#define fifo_rename ((int (*) __P((struct  vop_rename_args *)))err_rename)
-#define fifo_mkdir ((int (*) __P((struct  vop_mkdir_args *)))err_mkdir)
-#define fifo_rmdir ((int (*) __P((struct  vop_rmdir_args *)))err_rmdir)
-#define fifo_symlink ((int (*) __P((struct  vop_symlink_args *)))err_symlink)
-#define fifo_readdir ((int (*) __P((struct  vop_readdir_args *)))err_readdir)
-#define fifo_readlink ((int (*) __P((struct  vop_readlink_args *)))err_readlink)
-#define fifo_abortop ((int (*) __P((struct  vop_abortop_args *)))err_abortop)
-int	fifo_inactive __P((struct  vop_inactive_args *));
-#define fifo_reclaim ((int (*) __P((struct  vop_reclaim_args *)))nullop)
-#define fifo_lock ((int (*) __P((struct  vop_lock_args *)))vop_nolock)
-#define fifo_unlock ((int (*) __P((struct  vop_unlock_args *)))vop_nounlock)
-int	fifo_bmap __P((struct vop_bmap_args *));
-#define fifo_strategy ((int (*) __P((struct  vop_strategy_args *)))err_strategy)
-int	fifo_print __P((struct vop_print_args *));
-#define fifo_islocked ((int(*) __P((struct vop_islocked_args *)))vop_noislocked)
-int	fifo_pathconf __P((struct vop_pathconf_args *));
-int	fifo_advlock __P((struct vop_advlock_args *));
-#define fifo_blkatoff ((int (*) __P((struct  vop_blkatoff_args *)))err_blkatoff)
-#define fifo_valloc ((int (*) __P((struct  vop_valloc_args *)))err_valloc)
-#define fifo_reallocblks \
-	((int (*) __P((struct  vop_reallocblks_args *)))err_reallocblks)
-#define fifo_vfree ((int (*) __P((struct  vop_vfree_args *)))err_vfree)
-#define fifo_truncate ((int (*) __P((struct  vop_truncate_args *)))nullop)
-#define fifo_update ((int (*) __P((struct  vop_update_args *)))nullop)
-#define fifo_bwrite ((int (*) __P((struct  vop_bwrite_args *)))nullop)
-#define fifo_blktooff ((int (*) __P((struct vop_blktooff_args *)))err_blktooff)
+int	fifo_lookup (struct vnop_lookup_args *);
+#define fifo_create (int (*) (struct  vnop_create_args *))err_create
+#define fifo_mknod (int (*) (struct  vnop_mknod_args *))err_mknod
+int	fifo_open (struct vnop_open_args *);
+int	fifo_close (struct vnop_close_args *);
+int	fifo_close_internal (vnode_t, int, vfs_context_t, int);
+#define fifo_access (int (*) (struct  vnop_access_args *))fifo_ebadf
+#define fifo_getattr (int (*) (struct  vnop_getattr_args *))fifo_ebadf
+#define fifo_setattr (int (*) (struct  vnop_setattr_args *))fifo_ebadf
+int	fifo_read (struct vnop_read_args *);
+int	fifo_write (struct vnop_write_args *);
+int	fifo_ioctl (struct vnop_ioctl_args *);
+int	fifo_select (struct vnop_select_args *);
+#define	fifo_revoke nop_revoke
+#define fifo_mmap (int (*) (struct  vnop_mmap_args *))err_mmap
+#define fifo_fsync (int (*) (struct  vnop_fsync_args *))nullop
+#define fifo_remove (int (*) (struct  vnop_remove_args *))err_remove
+#define fifo_link (int (*) (struct  vnop_link_args *))err_link
+#define fifo_rename (int (*) (struct  vnop_rename_args *))err_rename
+#define fifo_mkdir (int (*) (struct  vnop_mkdir_args *))err_mkdir
+#define fifo_rmdir (int (*) (struct  vnop_rmdir_args *))err_rmdir
+#define fifo_symlink (int (*) (struct  vnop_symlink_args *))err_symlink
+#define fifo_readdir (int (*) (struct  vnop_readdir_args *))err_readdir
+#define fifo_readlink (int (*) (struct  vnop_readlink_args *))err_readlink
+int	fifo_inactive (struct  vnop_inactive_args *);
+#define fifo_reclaim (int (*) (struct  vnop_reclaim_args *))nullop
+#define fifo_strategy (int (*) (struct  vnop_strategy_args *))err_strategy
+int	fifo_pathconf (struct vnop_pathconf_args *);
+int	fifo_advlock (struct vnop_advlock_args *);
+#define fifo_valloc (int (*) (struct  vnop_valloc_args *))err_valloc
+#define fifo_vfree (int (*) (struct  vnop_vfree_args *))err_vfree
+#define fifo_bwrite (int (*) (struct  vnop_bwrite_args *))nullop
+#define fifo_blktooff (int (*) (struct vnop_blktooff_args *))err_blktooff
 
-#endif /* __APPLE_API_PRIVATE */
+#endif /* BSD_KERNEL_PRIVATE */
+
 #endif /* __FIFOFS_FOFO_H__ */

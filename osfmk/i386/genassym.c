@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -49,7 +49,6 @@
  */
 
 #include <platforms.h>
-#include <cpus.h>
 #include <mach_kdb.h>
 #include <mach_ldebug.h>
 #include <stat_time.h>
@@ -61,25 +60,23 @@
 #include <kern/thread.h>
 #include <kern/task.h>
 #include <kern/lock.h>
-#include <kern/thread_act.h>
+#include <kern/locks.h>
 #include <ipc/ipc_space.h>
 #include <ipc/ipc_port.h>
 #include <ipc/ipc_pset.h>
 #include <kern/host.h>
 #include <kern/misc_protos.h>
-#include <kern/syscall_emulation.h>
 #include <i386/thread.h>
 #include <mach/i386/vm_param.h>
 #include <i386/seg.h>
 #include <i386/pmap.h>
 #include <i386/tss.h>
+#include <i386/cpu_capabilities.h>
+#include <machine/commpage.h>
 #include <vm/vm_map.h>
-#if	NCPUS > 1
 #include <i386/mp_desc.h>
-#endif
-
-extern void   kernel_preempt_check(void);
-cpu_data_t    cpu_data[NCPUS];
+#include <i386/cpuid.h>
+#include <pexpert/i386/boot.h>
 
 /*
  * genassym.c is used to produce an
@@ -129,43 +126,35 @@ main(
 #endif	/* MACH_LDEBUG */
 
 	/* Mutex structure */
-	DECLARE("MUTEX_LOCKED",	offsetof(mutex_t *, locked));
-	DECLARE("MUTEX_WAITERS",offsetof(mutex_t *, waiters));
-	DECLARE("MUTEX_PROMOTED_PRI",offsetof(mutex_t *, promoted_pri));
+	DECLARE("MUTEX_LOCKED",	offsetof(mutex_t *, lck_mtx.lck_mtx_locked));
+	DECLARE("MUTEX_WAITERS",offsetof(mutex_t *, lck_mtx.lck_mtx_waiters));
+	DECLARE("MUTEX_PROMOTED_PRI",offsetof(mutex_t *, lck_mtx.lck_mtx_pri));
 #if	MACH_LDEBUG
 	DECLARE("MUTEX_TYPE",	offsetof(mutex_t *, type));
 	DECLARE("MUTEX_PC",	offsetof(mutex_t *, pc));
 	DECLARE("MUTEX_THREAD",	offsetof(mutex_t *, thread));
 	DECLARE("MUTEX_TAG",	MUTEX_TAG);
 #endif	/* MACH_LDEBUG */
-						 
-#if	MACH_LDEBUG
-	DECLARE("TH_MUTEX_COUNT",	offsetof(thread_t, mutex_count));
-#endif	/* MACH_LDEBUG */
+	DECLARE("MUTEX_IND",	LCK_MTX_TAG_INDIRECT);
+	DECLARE("MUTEX_ITAG",	offsetof(lck_mtx_t *, lck_mtx_tag));
+	DECLARE("MUTEX_PTR",	offsetof(lck_mtx_t *, lck_mtx_ptr));
+
 	DECLARE("TH_RECOVER",		offsetof(thread_t, recover));
 	DECLARE("TH_CONTINUATION",	offsetof(thread_t, continuation));
-	DECLARE("TH_TOP_ACT",		offsetof(thread_t, top_act));
 	DECLARE("TH_KERNEL_STACK",	offsetof(thread_t, kernel_stack));
 
-	DECLARE("TASK_EMUL", 		offsetof(task_t, eml_dispatch));
 	DECLARE("TASK_MACH_EXC_PORT",
 		offsetof(task_t, exc_actions[EXC_MACH_SYSCALL].port));
 
 	/* These fields are being added on demand */
 	DECLARE("ACT_MACH_EXC_PORT",
-		offsetof(thread_act_t, exc_actions[EXC_MACH_SYSCALL].port));
+		offsetof(thread_t, exc_actions[EXC_MACH_SYSCALL].port));
 
-        DECLARE("ACT_THREAD",	offsetof(thread_act_t, thread));
-	DECLARE("ACT_TASK",	offsetof(thread_act_t, task));
-	DECLARE("ACT_PCB",	offsetof(thread_act_t, mact.pcb));
-	DECLARE("ACT_LOWER",	offsetof(thread_act_t, lower));
-	DECLARE("ACT_MAP",	offsetof(thread_act_t, map));
+	DECLARE("ACT_TASK",	offsetof(thread_t, task));
+	DECLARE("ACT_PCB",	offsetof(thread_t, machine.pcb));
+	DECLARE("ACT_MAP",	offsetof(thread_t, map));
 
 	DECLARE("MAP_PMAP",	offsetof(vm_map_t, pmap));
-
-	DECLARE("DISP_MIN",	offsetof(eml_dispatch_t, disp_min));
-	DECLARE("DISP_COUNT",	offsetof(eml_dispatch_t, disp_count));
-	DECLARE("DISP_VECTOR",	offsetof(eml_dispatch_t, disp_vector[0]));
 
 #define IKS ((size_t) (STACK_IKS(0)))
 
@@ -209,20 +198,30 @@ main(
 	DECLARE("I_EFL",	offsetof(struct i386_interrupt_state *, efl));
 
 	DECLARE("NBPG",			I386_PGBYTES);
+	DECLARE("PAGE_SIZE",            I386_PGBYTES);
+	DECLARE("PAGE_MASK",            I386_PGBYTES-1);
+	DECLARE("PAGE_SHIFT",           12);
+	DECLARE("NKPT",                 NKPT);
+	DECLARE("KPTDI",                KPTDI);
 	DECLARE("VM_MIN_ADDRESS",	VM_MIN_ADDRESS);
 	DECLARE("VM_MAX_ADDRESS",	VM_MAX_ADDRESS);
 	DECLARE("KERNELBASE",		VM_MIN_KERNEL_ADDRESS);
 	DECLARE("LINEAR_KERNELBASE",	LINEAR_KERNEL_ADDRESS);
 	DECLARE("KERNEL_STACK_SIZE",	KERNEL_STACK_SIZE);
 
-	DECLARE("PDESHIFT",	PDESHIFT);
-	DECLARE("PTESHIFT",	PTESHIFT);
-	DECLARE("PTEMASK",	PTEMASK);
+	DECLARE("COMM_PAGE_BASE_ADDR",  _COMM_PAGE_BASE_ADDRESS);
 
+	DECLARE("PDESHIFT",	PDESHIFT);
+	DECLARE("PTEMASK",	PTEMASK);
+	DECLARE("PTEINDX",      PTEINDX);
 	DECLARE("PTE_PFN",	INTEL_PTE_PFN);
 	DECLARE("PTE_V",	INTEL_PTE_VALID);
 	DECLARE("PTE_W",	INTEL_PTE_WRITE);
+        DECLARE("PTE_PS",       INTEL_PTE_PS);
+	DECLARE("PTE_U",        INTEL_PTE_USER);
 	DECLARE("PTE_INVALID",	~INTEL_PTE_VALID);
+	DECLARE("CR4_PAE",      CR4_PAE);
+	DECLARE("NPGPTD", NPGPTD);
 
 	DECLARE("IDTSZ",	IDTSZ);
 	DECLARE("GDTSZ",	GDTSZ);
@@ -237,29 +236,49 @@ main(
 #if	MACH_KDB
 	DECLARE("DEBUG_TSS",	DEBUG_TSS);
 #endif	/* MACH_KDB */
+        DECLARE("CPU_DATA_GS",	CPU_DATA_GS);
 
-        DECLARE("CPU_DATA",	CPU_DATA);
-        DECLARE("CPD_ACTIVE_THREAD",
-		offsetof(cpu_data_t *, active_thread));
+        DECLARE("CPU_THIS",
+		offsetof(cpu_data_t *, cpu_this));
+        DECLARE("CPU_ACTIVE_THREAD",
+		offsetof(cpu_data_t *, cpu_active_thread));
+        DECLARE("CPU_ACTIVE_KLOADED",
+		offsetof(cpu_data_t *, cpu_active_kloaded));
+        DECLARE("CPU_ACTIVE_STACK",
+		offsetof(cpu_data_t *, cpu_active_stack));
+        DECLARE("CPU_KERNEL_STACK",
+		offsetof(cpu_data_t *, cpu_kernel_stack));
+        DECLARE("CPU_INT_STACK_TOP",
+		offsetof(cpu_data_t *, cpu_int_stack_top));
 #if	MACH_RT
-        DECLARE("CPD_PREEMPTION_LEVEL",
-		offsetof(cpu_data_t *, preemption_level));
+        DECLARE("CPU_PREEMPTION_LEVEL",
+		offsetof(cpu_data_t *, cpu_preemption_level));
 #endif	/* MACH_RT */
-        DECLARE("CPD_INTERRUPT_LEVEL",
-		offsetof(cpu_data_t *, interrupt_level));
-        DECLARE("CPD_SIMPLE_LOCK_COUNT",
-		offsetof(cpu_data_t *,simple_lock_count));
-        DECLARE("CPD_CPU_NUMBER",
+        DECLARE("CPU_INTERRUPT_LEVEL",
+		offsetof(cpu_data_t *, cpu_interrupt_level));
+        DECLARE("CPU_SIMPLE_LOCK_COUNT",
+		offsetof(cpu_data_t *,cpu_simple_lock_count));
+        DECLARE("CPU_NUMBER_GS",
 		offsetof(cpu_data_t *,cpu_number));
-        DECLARE("CPD_CPU_PHYS_NUMBER",
-		offsetof(cpu_data_t *,cpu_phys_number));
-        DECLARE("CPD_CPU_STATUS",
-		offsetof(cpu_data_t *,cpu_status));
-        DECLARE("CPD_MCOUNT_OFF",
-		offsetof(cpu_data_t *,mcount_off));
+        DECLARE("CPU_RUNNING",
+		offsetof(cpu_data_t *,cpu_running));
+        DECLARE("CPU_MCOUNT_OFF",
+		offsetof(cpu_data_t *,cpu_mcount_off));
+	DECLARE("CPU_PENDING_AST",
+		offsetof(cpu_data_t *,cpu_pending_ast));
+	DECLARE("CPU_DESC_TABLEP",
+		offsetof(cpu_data_t *,cpu_desc_tablep));
+	DECLARE("CPU_PROCESSOR",
+		offsetof(cpu_data_t *,cpu_processor));
+	DECLARE("CPU_RTC_NANOTIME",
+		offsetof(cpu_data_t *,cpu_rtc_nanotime));
 
-	DECLARE("PTES_PER_PAGE",	NPTES);
 	DECLARE("INTEL_PTE_KERNEL",	INTEL_PTE_VALID|INTEL_PTE_WRITE);
+	DECLARE("PTDPTDI",     PTDPTDI);
+	DECLARE("PDESHIFT",     PDESHIFT);
+	DECLARE("PDESIZE",     PDESIZE);
+	DECLARE("PTESIZE",     PTESIZE);
+	DECLARE("APTDPTDI",     APTDPTDI);
 
 	DECLARE("KERNELBASEPDE",
 		(LINEAR_KERNEL_ADDRESS >> PDESHIFT) *
@@ -283,25 +302,53 @@ main(
 	DECLARE("USL_INTERLOCK",	offsetof(usimple_lock_t, interlock));
 
 	DECLARE("INTSTACK_SIZE",	INTSTACK_SIZE);
-#if	NCPUS > 1
 	DECLARE("MP_GDT",	   offsetof(struct mp_desc_table *, gdt[0]));
 	DECLARE("MP_IDT",	   offsetof(struct mp_desc_table *, idt[0]));
-#endif	/* NCPUS > 1 */
-#if	!STAT_TIME
-	DECLARE("LOW_BITS",	   offsetof(struct timer *, low_bits));
-	DECLARE("HIGH_BITS",	   offsetof(struct timer *, high_bits));
-	DECLARE("HIGH_BITS_CHECK", offsetof(struct timer *, high_bits_check));
-	DECLARE("TIMER_HIGH_UNIT", TIMER_HIGH_UNIT);
-	DECLARE("TH_SYS_TIMER",    offsetof(struct timer *, system_timer));
-	DECLARE("TH_USER_TIMER",   offsetof(struct timer *, user_timer));
+	DECLARE("TIMER_LOW",	 	offsetof(struct timer *, low_bits));
+	DECLARE("TIMER_HIGH",		offsetof(struct timer *, high_bits));
+	DECLARE("TIMER_HIGHCHK",	offsetof(struct timer *, high_bits_check));
+	DECLARE("KADDR", offsetof(struct KernelBootArgs *, kaddr));
+	DECLARE("KSIZE", offsetof(struct KernelBootArgs *, ksize));
+
+	DECLARE("NANOTIME_BASE_TSC",
+		offsetof(commpage_nanotime_t*, nt_base_tsc));
+	DECLARE("NANOTIME_BASE_NS",
+		offsetof(commpage_nanotime_t*, nt_base_ns));
+	DECLARE("NANOTIME_SCALE",
+		offsetof(commpage_nanotime_t*, nt_scale));
+	DECLARE("NANOTIME_SHIFT",
+		offsetof(commpage_nanotime_t*, nt_shift));
+	DECLARE("NANOTIME_CHECK_TSC",
+		offsetof(commpage_nanotime_t*, nt_check_tsc));
+
+	DECLARE("RTN_TSC",
+		offsetof(rtc_nanotime_t *, rnt_tsc));
+	DECLARE("RTN_NANOS",
+		offsetof(rtc_nanotime_t *, rnt_nanos));
+	DECLARE("RTN_SCALE",
+		offsetof(rtc_nanotime_t *, rnt_scale));
+	DECLARE("RTN_SHIFT",
+		offsetof(rtc_nanotime_t *, rnt_shift));
+
+	/* values from kern/timer.h */
+	DECLARE("TIMER_LOW",
+		offsetof(struct timer *, low_bits));
+	DECLARE("TIMER_HIGH",
+		offsetof(struct timer *, high_bits));
+	DECLARE("TIMER_HIGHCHK",
+		offsetof(struct timer *, high_bits_check));
+#if !STAT_TIME
+	DECLARE("TIMER_TSTAMP",
+		offsetof(struct timer *, tstamp));
+
+	DECLARE("CURRENT_TIMER",
+		offsetof(struct processor *, processor_data.current_timer));
 #endif
+	DECLARE("SYSTEM_TIMER",
+		offsetof(struct thread *, system_timer));
+	DECLARE("USER_TIMER",
+		offsetof(struct thread *, user_timer));
 
 	return (0);
 }
 
-
-/* Dummy to keep linker quiet */
-void
-kernel_preempt_check(void)
-{
-}

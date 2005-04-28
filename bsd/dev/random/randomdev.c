@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1999-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -31,6 +31,7 @@
 #include <kern/lock.h>
 #include <sys/time.h>
 #include <sys/malloc.h>
+#include <sys/uio_internal.h>
 
 #include <dev/random/randomdev.h>
 #include <dev/random/YarrowCoreLib/include/yarrow.h>
@@ -49,9 +50,9 @@ static struct cdevsw random_cdevsw =
 	random_close,		/* close */
 	random_read,		/* read */
 	random_write,		/* write */
-	random_ioctl,			/* ioctl */
-	nulldev,			/* stop */
-	nulldev,			/* reset */
+	random_ioctl,		/* ioctl */
+	(stop_fcn_t *)nulldev, /* stop */
+	(reset_fcn_t *)nulldev, /* reset */
 	NULL,				/* tty's */
 	eno_select,			/* select */
 	eno_mmap,			/* mmap */
@@ -69,10 +70,11 @@ static mutex_t *gYarrowMutex = 0;
 
 #define RESEED_TICKS 50 /* how long a reseed operation can take */
 
+
 /*
  *Initialize ONLY the Yarrow generator.
  */
-void PreliminarySetup ()
+void PreliminarySetup( void )
 {
     prng_error_status perr;
     struct timeval tt;
@@ -120,7 +122,7 @@ void PreliminarySetup ()
  * and to register ourselves with devfs
  */
 void
-random_init()
+random_init( void )
 {
 	int ret;
 
@@ -152,12 +154,8 @@ random_init()
 }
 
 int
-random_ioctl(dev, cmd, data, flag, p)
-        dev_t dev;
-        u_long cmd;
-        caddr_t data;
-        int flag;
-        struct proc *p;
+random_ioctl(	__unused dev_t dev, u_long cmd, __unused caddr_t data, 
+				__unused int flag, __unused struct proc *p  )
 {
 	switch (cmd) {
 	case FIONBIO:
@@ -176,7 +174,7 @@ random_ioctl(dev, cmd, data, flag, p)
  */
  
 int
-random_open(dev_t dev, int flags, int devtype, struct proc *p)
+random_open(__unused dev_t dev, int flags, __unused int devtype, __unused struct proc *p)
 {
 	if (gRandomError != 0) {
 		/* forget it, yarrow didn't come up */
@@ -191,7 +189,7 @@ random_open(dev_t dev, int flags, int devtype, struct proc *p)
 		if (securelevel >= 2)
 			return (EPERM);
 #ifndef __APPLE__
-		if ((securelevel >= 1) && suser(p->p_ucred, &p->p_acflag))
+		if ((securelevel >= 1) && proc_suser(p))
 			return (EPERM);
 #endif	/* !__APPLE__ */
 	}
@@ -205,7 +203,7 @@ random_open(dev_t dev, int flags, int devtype, struct proc *p)
  */
  
 int
-random_close(dev_t dev, int flags, int mode, struct proc *p)
+random_close(__unused dev_t dev, __unused int flags, __unused int mode, __unused struct proc *p)
 {
 	return (0);
 }
@@ -216,7 +214,7 @@ random_close(dev_t dev, int flags, int mode, struct proc *p)
  * prng.
  */
 int
-random_write (dev_t dev, struct uio *uio, int ioflag)
+random_write (__unused dev_t dev, struct uio *uio, __unused int ioflag)
 {
     int retCode = 0;
     char rdBuffer[256];
@@ -230,9 +228,10 @@ random_write (dev_t dev, struct uio *uio, int ioflag)
     
     /* Security server is sending us entropy */
 
-    while (uio->uio_resid > 0 && retCode == 0) {
+    while (uio_resid(uio) > 0 && retCode == 0) {
         /* get the user's data */
-        int bytesToInput = min(uio->uio_resid, sizeof (rdBuffer));
+        // LP64todo - fix this!  uio_resid may be 64-bit value
+        int bytesToInput = min(uio_resid(uio), sizeof (rdBuffer));
         retCode = uiomove(rdBuffer, bytesToInput, uio);
         if (retCode != 0)
             goto /*ugh*/ error_exit;
@@ -263,7 +262,7 @@ error_exit: /* do this to make sure the mutex unlocks. */
  * return data to the caller.  Results unpredictable.
  */ 
 int
-random_read(dev_t dev, struct uio *uio, int ioflag)
+random_read(__unused dev_t dev, struct uio *uio, __unused int ioflag)
 {
     int retCode = 0;
     char wrBuffer[512];
@@ -274,9 +273,10 @@ random_read(dev_t dev, struct uio *uio, int ioflag)
    /* lock down the mutex */
     mutex_lock(gYarrowMutex);
 
-    while (uio->uio_resid > 0 && retCode == 0) {
+    while (uio_resid(uio) > 0 && retCode == 0) {
         /* get the user's data */
-        int bytesToRead = min(uio->uio_resid, sizeof (wrBuffer));
+        // LP64todo - fix this!  uio_resid may be 64-bit value
+        int bytesToRead = min(uio_resid(uio), sizeof (wrBuffer));
         
         /* get the data from Yarrow */
         if (prngOutput(gPrngRef, (BYTE *) wrBuffer, sizeof (wrBuffer)) != 0) {
@@ -317,7 +317,7 @@ read_random(void* buffer, u_int numbytes)
  * Return an unsigned long pseudo-random number.
  */
 u_long
-RandomULong()
+RandomULong( void )
 {
 	u_long buf;
 	read_random(&buf, sizeof (buf));

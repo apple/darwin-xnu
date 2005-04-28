@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -61,7 +61,6 @@
 #ifndef	_KERN_SCHED_H_
 #define _KERN_SCHED_H_
 
-#include <simple_clock.h>
 #include <stat_time.h>
 
 #include <mach/policy.h>
@@ -71,22 +70,6 @@
 #include <kern/macro_help.h>
 #include <kern/timer_call.h>
 #include <kern/ast.h>
-
-#if	STAT_TIME
-
-/*
- *	Statistical timing uses microseconds as timer units.
- */
-#define PRI_SHIFT	(16 - SCHED_TICK_SHIFT)
-
-#else	/* STAT_TIME */
-
-/*
- *	Otherwise machine provides shift(s) based on time units it uses.
- */
-#include <machine/sched_param.h>
-
-#endif	/* STAT_TIME */
 
 #define	NRQS		128				/* 128 levels per run queue */
 #define NRQBM		(NRQS / 32)		/* number of words per bit map */
@@ -156,24 +139,20 @@
 #define BASEPRI_RTQUEUES	(BASEPRI_REALTIME + 1)				/* 97 */
 #define BASEPRI_REALTIME	(MAXPRI - (NRQS / 4) + 1)			/* 96 */
 
-#define MAXPRI_STANDARD		(BASEPRI_REALTIME - 1)				/* 95 */
-
-#define MAXPRI_KERNEL		MAXPRI_STANDARD						/* 95 */
+#define MAXPRI_KERNEL		(BASEPRI_REALTIME - 1)				/* 95 */
 #define BASEPRI_PREEMPT		(MAXPRI_KERNEL - 2)					/* 93 */
 #define BASEPRI_KERNEL		(MINPRI_KERNEL + 1)					/* 81 */
 #define MINPRI_KERNEL		(MAXPRI_KERNEL - (NRQS / 8) + 1)	/* 80 */
 
-#define MAXPRI_SYSTEM		(MINPRI_KERNEL - 1)					/* 79 */
-#define MINPRI_SYSTEM		(MAXPRI_SYSTEM - (NRQS / 8) + 1)	/* 64 */
+#define MAXPRI_RESERVED		(MINPRI_KERNEL - 1)					/* 79 */
+#define MINPRI_RESERVED		(MAXPRI_RESERVED - (NRQS / 8) + 1)	/* 64 */
 
-#define MAXPRI_USER			(MINPRI_SYSTEM - 1)					/* 63 */
+#define MAXPRI_USER			(MINPRI_RESERVED - 1)				/* 63 */
 #define BASEPRI_CONTROL		(BASEPRI_DEFAULT + 17)				/* 48 */
 #define BASEPRI_FOREGROUND	(BASEPRI_DEFAULT + 16)				/* 47 */
 #define BASEPRI_BACKGROUND	(BASEPRI_DEFAULT + 15)				/* 46 */
 #define BASEPRI_DEFAULT		(MAXPRI_USER - (NRQS / 4))			/* 31 */
 #define MINPRI_USER			MINPRI								/*  0 */
-
-#define MINPRI_STANDARD		MINPRI_USER							/*  0 */
 
 /*
  *	Macro to check for invalid priorities.
@@ -224,9 +203,6 @@ MACRO_END
 extern run_queue_t	run_queue_remove(
 						thread_t	thread);
 
-/* Periodic computation of load factors */
-extern void		compute_mach_factor(void);
-
 /* Handle quantum expiration for an executing thread */
 extern void		thread_quantum_expire(
 					timer_call_param_t	processor,
@@ -242,53 +218,54 @@ extern uint32_t	std_quantum_us;
 
 extern uint32_t	max_rt_quantum, min_rt_quantum;
 
-/*
- *	Shift structures for holding update shifts.  Actual computation
- *	is  usage = (usage >> shift1) +/- (usage >> abs(shift2))  where the
- *	+/- is determined by the sign of shift 2.
- */
-struct shift {
-	int	shift1;
-	int	shift2;
-};
-
-typedef	struct shift	*shift_t, shift_data_t;
+extern uint32_t	sched_cswtime;
 
 /*
  *	Age usage (1 << SCHED_TICK_SHIFT) times per second.
  */
-
-extern unsigned	sched_tick;
-
 #define SCHED_TICK_SHIFT	3
 
-#define SCHED_SCALE		128
-#define SCHED_SHIFT		7
+extern unsigned		sched_tick;
+extern uint32_t		sched_tick_interval;
+
+/* Periodic computation of various averages */
+extern void		compute_averages(void);
+
+extern void		compute_averunnable(
+					void			*nrun);
+
+extern void		compute_stack_target(
+					void			*arg);
+
+/*
+ *	Conversion factor from usage
+ *	to priority.
+ */
+extern uint32_t		sched_pri_shift;
+
+/*
+ *	Scaling factor for usage
+ *	based on load.
+ */
+extern int8_t		sched_load_shifts[NRQS];
+
+extern int32_t		sched_poll_yield_shift;
+extern uint32_t		sched_safe_duration;
+
+extern uint64_t		max_unsafe_computation;
+extern uint64_t		max_poll_computation;
+
+extern uint32_t		avenrun[3], mach_factor[3];
 
 /*
  *	thread_timer_delta macro takes care of both thread timers.
  */
-#define thread_timer_delta(thread)  						\
+#define thread_timer_delta(thread, delta)					\
 MACRO_BEGIN													\
-	register uint32_t	delta;								\
-															\
-	delta = 0;												\
-	TIMER_DELTA((thread)->system_timer,						\
-					(thread)->system_timer_save, delta);	\
-	TIMER_DELTA((thread)->user_timer,						\
-					(thread)->user_timer_save, delta);		\
-	(thread)->cpu_delta += delta;							\
-	(thread)->sched_delta += (delta * 						\
-					(thread)->processor_set->sched_load);	\
+	(delta) = timer_delta(&(thread)->system_timer,			\
+							&(thread)->system_timer_save);	\
+	(delta) += timer_delta(&(thread)->user_timer,			\
+							&(thread)->user_timer_save);	\
 MACRO_END
-
-#if	SIMPLE_CLOCK
-/*
- *	sched_usec is an exponential average of number of microseconds
- *	in a second for clock drift compensation.
- */
-
-extern int	sched_usec;
-#endif	/* SIMPLE_CLOCK */
 
 #endif	/* _KERN_SCHED_H_ */

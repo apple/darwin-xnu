@@ -68,7 +68,7 @@ dest6_input(mp, offp)
 
 	/* validation of the length of the header */
 #ifndef PULLDOWN_TEST
-	IP6_EXTHDR_CHECK(m, off, sizeof(*dstopts), IPPROTO_DONE);
+	IP6_EXTHDR_CHECK(m, off, sizeof(*dstopts), return IPPROTO_DONE);
 	dstopts = (struct ip6_dest *)(mtod(m, caddr_t) + off);
 #else
 	IP6_EXTHDR_GET(dstopts, struct ip6_dest *, m, off, sizeof(*dstopts));
@@ -78,7 +78,7 @@ dest6_input(mp, offp)
 	dstoptlen = (dstopts->ip6d_len + 1) << 3;
 
 #ifndef PULLDOWN_TEST
-	IP6_EXTHDR_CHECK(m, off, dstoptlen, IPPROTO_DONE);
+	IP6_EXTHDR_CHECK(m, off, dstoptlen, return IPPROTO_DONE);
 	dstopts = (struct ip6_dest *)(mtod(m, caddr_t) + off);
 #else
 	IP6_EXTHDR_GET(dstopts, struct ip6_dest *, m, off, dstoptlen);
@@ -107,7 +107,7 @@ dest6_input(mp, offp)
 
 		default:		/* unknown option */
 			optlen = ip6_unknown_opt(opt, m,
-			    opt - mtod(m, u_int8_t *));
+			    opt - mtod(m, u_int8_t *), 0);
 			if (optlen == -1)
 				return (IPPROTO_DONE);
 			optlen += 2;

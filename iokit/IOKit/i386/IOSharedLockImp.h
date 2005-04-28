@@ -49,16 +49,6 @@
 
 #include <architecture/i386/asm_help.h>
 
-// 'Till we're building in kernel
-.macro DISABLE_PREEMPTION
-#ifdef KERNEL
-#endif
-.endmacro
-.macro ENABLE_PREEMPTION
-#ifdef KERNEL
-#endif
-.endmacro
-
 /* 
  * void
  * ev_lock(p)
@@ -95,7 +85,6 @@ LEAF(_ev_unlock, 0)
 LEAF(_IOSpinUnlock, 0)
 	movl		4(%esp), %ecx
 	movl		$0, (%ecx)
-	ENABLE_PREEMPTION()
 	ret
 END(_ev_unlock)
 
@@ -111,7 +100,6 @@ END(_ev_unlock)
 
 LEAF(_ev_try_lock, 0)
 LEAF(_IOTrySpinLock, 0)
-        DISABLE_PREEMPTION()
         movl            4(%esp), %ecx 
 	xorl		%eax, %eax
         lock
@@ -120,7 +108,6 @@ LEAF(_IOTrySpinLock, 0)
 	movl	$1, %eax		/* yes */
 	ret
 1:
-	ENABLE_PREEMPTION()
 	xorl	%eax, %eax		/* no */
 END(_ev_try_lock)
 

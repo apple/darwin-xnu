@@ -59,8 +59,8 @@
  *
  */
 
-#ifndef	THREAD_STATUS_H_
-#define	THREAD_STATUS_H_
+#ifndef	_MACH_THREAD_STATUS_H_
+#define	_MACH_THREAD_STATUS_H_
 
 /*
  *	The actual structure that comprises the thread state is defined
@@ -84,4 +84,4 @@ typedef	int	thread_state_data_t[THREAD_STATE_MAX];
 typedef	int			thread_state_flavor_t;
 typedef thread_state_flavor_t	*thread_state_flavor_array_t;
 
-#endif	/* THREAD_STATUS_H_ */
+#endif	/* _MACH_THREAD_STATUS_H_ */

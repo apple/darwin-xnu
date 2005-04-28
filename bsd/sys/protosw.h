@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -60,12 +60,21 @@
 #ifndef _SYS_PROTOSW_H_
 #define _SYS_PROTOSW_H_
 
+#include <sys/appleapiopts.h>
+#include <sys/cdefs.h>
+
+#define	PR_SLOWHZ	2		/* 2 slow timeouts per second */
+#define	PR_FASTHZ	5		/* 5 fast timeouts per second */
+
+#ifdef PRIVATE
+
 /* Forward declare these structures referenced from prototypes below. */
 struct mbuf;
 struct proc;
 struct sockaddr;
 struct socket;
 struct sockopt;
+struct socket_filter;
 
 /*#ifdef _KERNEL*/
 /*
@@ -91,49 +100,65 @@ struct sockopt;
  * described below.
  */
  
-#include <sys/appleapiopts.h>
 #include <sys/socketvar.h>
 #include <sys/queue.h>
+#ifdef KERNEL
+#include <kern/locks.h>
+#endif /* KERNEL */
 
-#ifdef __APPLE_API_UNSTABLE
+#if __DARWIN_ALIGN_POWER
+#pragma options align=power
+#endif
+
 struct protosw {
 	short	pr_type;		/* socket type used for */
 	struct	domain *pr_domain;	/* domain protocol a member of */
 	short	pr_protocol;		/* protocol number */
 	unsigned int pr_flags;		/* see below */
 /* protocol-protocol hooks */
-	void	(*pr_input) __P((struct mbuf *, int len));
+	void	(*pr_input)(struct mbuf *, int len);
 					/* input to protocol (from below) */
-	int	(*pr_output)	__P((struct mbuf *m, struct socket *so));
+	int	(*pr_output)(struct mbuf *m, struct socket *so);
 					/* output to protocol (from above) */
-	void	(*pr_ctlinput)__P((int, struct sockaddr *, void *));
+	void	(*pr_ctlinput)(int, struct sockaddr *, void *);
 					/* control input (from below) */
-	int	(*pr_ctloutput)__P((struct socket *, struct sockopt *));
+	int	(*pr_ctloutput)(struct socket *, struct sockopt *);
 					/* control output (from above) */
 /* user-protocol hook */
 	void	*pr_ousrreq;
 /* utility hooks */
-	void	(*pr_init) __P((void));	/* initialization hook */
-	void	(*pr_fasttimo) __P((void));
+	void	(*pr_init)(void);	/* initialization hook */
+	void	(*pr_fasttimo)(void);
 					/* fast timeout (200ms) */
-	void	(*pr_slowtimo) __P((void));
+	void	(*pr_slowtimo)(void);
 					/* slow timeout (500ms) */
-	void	(*pr_drain) __P((void));
+	void	(*pr_drain)(void);
 					/* flush any excess space possible */
 #if __APPLE__
-	int	(*pr_sysctl)();		/* sysctl for protocol */
+	int	(*pr_sysctl)(int *, u_int, void *, size_t *, void *, size_t);
+					/* sysctl for protocol */
 #endif
 	struct	pr_usrreqs *pr_usrreqs;	/* supersedes pr_usrreq() */
 #if __APPLE__
+	int	(*pr_lock) 	(struct socket *so, int locktype, int debug); /* lock function for protocol */
+	int	(*pr_unlock) 	(struct socket *so, int locktype, int debug); /* unlock for protocol */
+#ifdef _KERN_LOCKS_H_
+	lck_mtx_t *	(*pr_getlock) 	(struct socket *so, int locktype);
+#else
+	void *	(*pr_getlock) 	(struct socket *so, int locktype);
+#endif
+#endif
+#if __APPLE__
 /* Implant hooks */
-	TAILQ_HEAD(pr_sfilter, NFDescriptor) pr_sfilter;
+	TAILQ_HEAD(, socket_filter) pr_filter_head;
 	struct protosw *pr_next;	/* Chain for domain */
-	u_long	reserved[4];		/* Padding for future use */
+	u_long	reserved[1];		/* Padding for future use */
 #endif
 };
 
-#define	PR_SLOWHZ	2		/* 2 slow timeouts per second */
-#define	PR_FASTHZ	5		/* 5 fast timeouts per second */
+#if __DARWIN_ALIGN_POWER
+#pragma options align=reset
+#endif
 
 /*
  * Values for pr_flags.
@@ -144,13 +169,16 @@ struct protosw {
  *	is only relevant if PR_CONNREQUIRED is set (otherwise sendto is allowed
  *	anyhow).
  */
-#define	PR_ATOMIC	0x01		/* exchange atomic messages only */
-#define	PR_ADDR		0x02		/* addresses given with messages */
+#define	PR_ATOMIC			0x01		/* exchange atomic messages only */
+#define	PR_ADDR			0x02		/* addresses given with messages */
 #define	PR_CONNREQUIRED	0x04		/* connection required by protocol */
-#define	PR_WANTRCVD	0x08		/* want PRU_RCVD calls */
-#define	PR_RIGHTS	0x10		/* passes capabilities */
-#define PR_IMPLOPCL	0x20		/* implied open/close */
-#define	PR_LASTHDR	0x40		/* enforce ipsec policy; last header */
+#define	PR_WANTRCVD		0x08		/* want PRU_RCVD calls */
+#define	PR_RIGHTS			0x10		/* passes capabilities */
+#define	PR_IMPLOPCL		0x20		/* implied open/close */
+#define	PR_LASTHDR		0x40		/* enforce ipsec policy; last header */
+#define	PR_PROTOLOCK		0x80		/* protocol takes care of it's own locking */
+#define	PR_PCBLOCK		0x100	/* protocol supports per pcb finer grain locking */
+#define	PR_DISPOSE		0x200	/* protocol requires late lists disposal */
 
 /*
  * The arguments to usrreq are:
@@ -217,35 +245,31 @@ struct uio;
  * migrate this stuff back into the main structure.
  */
 struct pr_usrreqs {
-	int	(*pru_abort) __P((struct socket *so));
-	int	(*pru_accept) __P((struct socket *so, struct sockaddr **nam));
-	int	(*pru_attach) __P((struct socket *so, int proto,
-				   struct proc *p));
-	int	(*pru_bind) __P((struct socket *so, struct sockaddr *nam,
-				 struct proc *p));
-	int	(*pru_connect) __P((struct socket *so, struct sockaddr *nam,
-				    struct proc *p));
-	int	(*pru_connect2) __P((struct socket *so1, struct socket *so2));
-	int	(*pru_control) __P((struct socket *so, u_long cmd, caddr_t data,
-				    struct ifnet *ifp, struct proc *p));
-	int	(*pru_detach) __P((struct socket *so));
-	int	(*pru_disconnect) __P((struct socket *so));
-	int	(*pru_listen) __P((struct socket *so, struct proc *p));
-	int	(*pru_peeraddr) __P((struct socket *so, 
-				     struct sockaddr **nam));
-	int	(*pru_rcvd) __P((struct socket *so, int flags));
-	int	(*pru_rcvoob) __P((struct socket *so, struct mbuf *m,
-				   int flags));
-	int	(*pru_send) __P((struct socket *so, int flags, struct mbuf *m, 
+	int	(*pru_abort)(struct socket *so);
+	int	(*pru_accept)(struct socket *so, struct sockaddr **nam);
+	int	(*pru_attach)(struct socket *so, int proto, struct proc *p);
+	int	(*pru_bind)(struct socket *so, struct sockaddr *nam,
+				 struct proc *p);
+	int	(*pru_connect)(struct socket *so, struct sockaddr *nam,
+				    struct proc *p);
+	int	(*pru_connect2)(struct socket *so1, struct socket *so2);
+	int	(*pru_control)(struct socket *so, u_long cmd, caddr_t data,
+				    struct ifnet *ifp, struct proc *p);
+	int	(*pru_detach)(struct socket *so);
+	int	(*pru_disconnect)(struct socket *so);
+	int	(*pru_listen)(struct socket *so, struct proc *p);
+	int	(*pru_peeraddr)(struct socket *so, struct sockaddr **nam);
+	int	(*pru_rcvd)(struct socket *so, int flags);
+	int	(*pru_rcvoob)(struct socket *so, struct mbuf *m, int flags);
+	int	(*pru_send)(struct socket *so, int flags, struct mbuf *m, 
 				 struct sockaddr *addr, struct mbuf *control,
-				 struct proc *p));
+				 struct proc *p);
 #define	PRUS_OOB	0x1
 #define	PRUS_EOF	0x2
 #define	PRUS_MORETOCOME	0x4
-	int	(*pru_sense) __P((struct socket *so, struct stat *sb));
-	int	(*pru_shutdown) __P((struct socket *so));
-	int	(*pru_sockaddr) __P((struct socket *so, 
-				     struct sockaddr **nam));
+	int	(*pru_sense)(struct socket *so, struct stat *sb);
+	int	(*pru_shutdown)(struct socket *so);
+	int	(*pru_sockaddr)(struct socket *so, struct sockaddr **nam);
 	 
 	/*
 	 * These three added later, so they are out of order.  They are used
@@ -255,16 +279,18 @@ struct pr_usrreqs {
 	 * through these entry points.  For protocols which still use
 	 * the generic code, these just point to those routines.
 	 */
-	int	(*pru_sosend) __P((struct socket *so, struct sockaddr *addr,
+	int	(*pru_sosend)(struct socket *so, struct sockaddr *addr,
 				   struct uio *uio, struct mbuf *top,
-				   struct mbuf *control, int flags));
-	int	(*pru_soreceive) __P((struct socket *so, 
+				   struct mbuf *control, int flags);
+	int	(*pru_soreceive)(struct socket *so, 
 				      struct sockaddr **paddr,
 				      struct uio *uio, struct mbuf **mp0,
-				      struct mbuf **controlp, int *flagsp));
-	int	(*pru_sopoll) __P((struct socket *so, int events, 
-				   struct ucred *cred, void *));
+				      struct mbuf **controlp, int *flagsp);
+	int	(*pru_sopoll)(struct socket *so, int events, 
+				   struct ucred *cred, void *);
 };
+
+__BEGIN_DECLS
 
 extern int	pru_abort_notsupp(struct socket *so);
 extern int	pru_accept_notsupp(struct socket *so, struct sockaddr **nam);
@@ -300,8 +326,9 @@ extern int	pru_soreceive_notsupp(struct socket *so,
 				      struct uio *uio, struct mbuf **mp0,
 				      struct mbuf **controlp, int *flagsp);
 extern int	pru_sopoll_notsupp(struct socket *so, int events, 
-				   struct ucred *cred);
+				   struct ucred *cred, void *);
 
+__END_DECLS
 
 #endif /* KERNEL */
 
@@ -375,13 +402,19 @@ char	*prcorequests[] = {
 #endif
 
 #ifdef KERNEL
-void	pfctlinput __P((int, struct sockaddr *));
-void	pfctlinput2 __P((int, struct sockaddr *, void *));
-struct protosw *pffindproto __P((int family, int protocol, int type));
-struct protosw *pffindtype __P((int family, int type));
+
+__BEGIN_DECLS
+
+void	pfctlinput(int, struct sockaddr *);
+void	pfctlinput2(int, struct sockaddr *, void *);
+struct protosw *pffindproto(int family, int protocol, int type);
+struct protosw *pffindproto_locked(int family, int protocol, int type);
+struct protosw *pffindtype(int family, int type);
 
 extern int net_add_proto(struct protosw *, struct domain *);
 extern int net_del_proto(int, int, struct domain *);
+
+__END_DECLS
 
 /* Temp hack to link static domains together */
 
@@ -395,5 +428,6 @@ static void link_ ## psw ## _protos() \
 } 
 
 #endif
-#endif /* __APPLE_API_UNSTABLE */
+
+#endif /* PRIVATE */
 #endif	/* !_SYS_PROTOSW_H_ */

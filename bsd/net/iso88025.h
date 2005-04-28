@@ -42,8 +42,6 @@
 
 #ifndef _NET_ISO88025_H_
 #define _NET_ISO88025_H_
-#include <sys/appleapiopts.h>
-#ifdef __APPLE_API_PRIVATE
 
 /*
  * General ISO 802.5 definitions
@@ -116,13 +114,4 @@ struct	iso88025_addr {
 #define ISO88025_DEFAULT_MTU	1500
 #define senderr(e) { error = (e); goto bad;}
 
-#ifndef __APPLE__
-/* Not implemented in Darwin */
-void	iso88025_ifattach __P((struct ifnet *));
-int	iso88025_ioctl __P((struct ifnet *, int , caddr_t ));
-int	iso88025_output __P((struct ifnet *, struct mbuf *, struct sockaddr *, struct rtentry *));
-void	iso88025_input __P((struct ifnet *, struct iso88025_header *, struct mbuf *));
-#endif
-
-#endif /* __APPLE_API_PRIVATE */
 #endif

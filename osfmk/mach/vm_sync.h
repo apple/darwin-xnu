@@ -54,8 +54,8 @@
  *
  */
 
-#ifndef VM_SYNC_H_
-#define VM_SYNC_H_
+#ifndef _MACH_VM_SYNC_H_
+#define _MACH_VM_SYNC_H_
 
 typedef unsigned		vm_sync_t;
 
@@ -68,5 +68,6 @@ typedef unsigned		vm_sync_t;
 #define VM_SYNC_INVALIDATE	((vm_sync_t) 0x04)
 #define VM_SYNC_KILLPAGES       ((vm_sync_t) 0x08)
 #define VM_SYNC_DEACTIVATE      ((vm_sync_t) 0x10)
+#define VM_SYNC_CONTIGUOUS      ((vm_sync_t) 0x20)
 
-#endif  /* VM_SYNC_H_ */
+#endif  /* _MACH_VM_SYNC_H_ */

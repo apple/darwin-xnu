@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1996-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1996-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -230,7 +230,7 @@ static int ReadMultipleNodes( BTScanState *theScanStatePtr )
 {
 	int						myErr = E_NONE;
 	BTreeControlBlockPtr  	myBTreeCBPtr;
-	daddr_t					myPhyBlockNum;
+	daddr64_t				myPhyBlockNum;
 	u_int32_t				myBufferSize;
 	struct vnode *			myDevPtr;
 	int						myBlockRun;
@@ -239,8 +239,8 @@ static int ReadMultipleNodes( BTScanState *theScanStatePtr )
 	// release old buffer if we have one
 	if ( theScanStatePtr->bufferPtr != NULL )
 	{
-	    theScanStatePtr->bufferPtr->b_flags |= (B_INVAL | B_AGE);
-		brelse( theScanStatePtr->bufferPtr );
+	        buf_markinvalid(theScanStatePtr->bufferPtr);
+		buf_brelse( theScanStatePtr->bufferPtr );
 		theScanStatePtr->bufferPtr = NULL;
 		theScanStatePtr->currentNodePtr = NULL;
 	}
@@ -248,8 +248,8 @@ static int ReadMultipleNodes( BTScanState *theScanStatePtr )
 	myBTreeCBPtr = theScanStatePtr->btcb;
 			
 	// map logical block in catalog btree file to physical block on volume
-	myErr = VOP_BMAP( myBTreeCBPtr->fileRefNum, theScanStatePtr->nodeNum, 
-					  &myDevPtr, &myPhyBlockNum, &myBlockRun );
+	myErr = hfs_bmap(myBTreeCBPtr->fileRefNum, theScanStatePtr->nodeNum, 
+	                 &myDevPtr, &myPhyBlockNum, &myBlockRun);
 	if ( myErr != E_NONE )
 	{
 		goto ExitThisRoutine;
@@ -266,18 +266,18 @@ static int ReadMultipleNodes( BTScanState *theScanStatePtr )
 	}
 	
 	// now read blocks from the device 
-	myErr = bread( 	myDevPtr, 
-							myPhyBlockNum, 
-							myBufferSize,  
-							NOCRED, 
-							&theScanStatePtr->bufferPtr );
+	myErr = (int)buf_bread(myDevPtr, 
+	                       myPhyBlockNum, 
+	                       myBufferSize,  
+	                       NOCRED, 
+	                       &theScanStatePtr->bufferPtr );
 	if ( myErr != E_NONE )
 	{
 		goto ExitThisRoutine;
 	}
 
-	theScanStatePtr->nodesLeftInBuffer = theScanStatePtr->bufferPtr->b_bcount / theScanStatePtr->btcb->nodeSize;
-	theScanStatePtr->currentNodePtr = (BTNodeDescriptor *) theScanStatePtr->bufferPtr->b_data;
+	theScanStatePtr->nodesLeftInBuffer = buf_count(theScanStatePtr->bufferPtr) / theScanStatePtr->btcb->nodeSize;
+	theScanStatePtr->currentNodePtr = (BTNodeDescriptor *) buf_dataptr(theScanStatePtr->bufferPtr);
 
 ExitThisRoutine:
 	return myErr;
@@ -357,7 +357,7 @@ int		BTScanInitialize(	const FCB *		btreeFile,
 	scanState->currentNodePtr		= NULL;
 	scanState->nodesLeftInBuffer	= 0;		// no nodes currently in buffer
 	scanState->recordsFound			= recordsFound;
-	scanState->startTime			= time;		// initialize our throttle
+	microuptime(&scanState->startTime);			// initialize our throttle
 		
 	return noErr;
 	
@@ -391,8 +391,8 @@ int	 BTScanTerminate(	BTScanState *		scanState,
 
 	if ( scanState->bufferPtr != NULL )
 	{
-		scanState->bufferPtr->b_flags |= (B_INVAL | B_AGE);
-		brelse( scanState->bufferPtr );
+		buf_markinvalid(scanState->bufferPtr);
+		buf_brelse( scanState->bufferPtr );
 		scanState->bufferPtr = NULL;
 		scanState->currentNodePtr = NULL;
 	}

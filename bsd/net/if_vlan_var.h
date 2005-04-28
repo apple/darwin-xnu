@@ -53,6 +53,7 @@
 #ifndef _NET_IF_VLAN_VAR_H_
 #define	_NET_IF_VLAN_VAR_H_	1
 
+#define	ETHER_VLAN_ENCAP_LEN	4	/* len of 802.1Q VLAN encapsulation */
 struct	ether_vlan_header {
 	u_char	evl_dhost[ETHER_ADDR_LEN];
 	u_char	evl_shost[ETHER_ADDR_LEN];
@@ -79,4 +80,7 @@ struct	vlanreq {
 	u_short	vlr_tag;
 };
 
+#ifdef KERNEL_PRIVATE
+int vlan_family_init(void);
+#endif KERNEL_PRIVATE
 #endif /* _NET_IF_VLAN_VAR_H_ */

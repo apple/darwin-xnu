@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2001-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -19,24 +19,13 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
-/*
- * Copyright (c) 2001 Apple Computer, Inc.  All rights reserved.
- *
- * HISTORY
- *
- * 30 January 2001 (debo)
- *  Created.
- */
 
 #ifndef	_MACH_MACH_TIME_H_
 #define	_MACH_MACH_TIME_H_
 
 #include <mach/mach_types.h>
 
-uint64_t			mach_absolute_time(void);
-
-kern_return_t		mach_wait_until(
-						uint64_t		deadline);
+#include <sys/cdefs.h>
 
 struct mach_timebase_info {
 	uint32_t	numer;
@@ -46,7 +35,18 @@ struct mach_timebase_info {
 typedef struct mach_timebase_info	*mach_timebase_info_t;
 typedef struct mach_timebase_info	mach_timebase_info_data_t;
 
+__BEGIN_DECLS
+#ifndef	KERNEL
+
 kern_return_t		mach_timebase_info(
 						mach_timebase_info_t	info);
+
+kern_return_t		mach_wait_until(
+						uint64_t		deadline);
+
+#endif	/* KERNEL */
+
+uint64_t			mach_absolute_time(void);
+__END_DECLS
 
 #endif /* _MACH_MACH_TIME_H_ */

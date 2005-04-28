@@ -10,11 +10,13 @@ DATAFILES = \
 	arp.4	\
 	bpf.4	\
 	divert.4	\
+        dummynet.4 \
 	faith.4	\
 	fd.4	\
 	gif.4	\
 	icmp.4	\
 	icmp6.4	\
+	ifmib.4 \
 	inet.4	\
 	inet6.4	\
 	ip.4	\

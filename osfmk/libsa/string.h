@@ -22,40 +22,8 @@
 /*
  * @OSF_COPYRIGHT@
  */
-/*
- * HISTORY
- * 
- * Revision 1.1.1.1  1998/09/22 21:05:51  wsanchez
- * Import of Mac OS X kernel (~semeria)
- *
- * Revision 1.1.1.1  1998/03/07 02:25:35  wsanchez
- * Import of OSF Mach kernel (~mburg)
- *
- * Revision 1.1.4.1  1997/02/21  15:43:21  barbou
- * 	Removed "size_t" definition, include "types.h" instead.
- * 	[1997/02/21  15:36:54  barbou]
- *
- * Revision 1.1.2.4  1996/10/10  14:13:33  emcmanus
- * 	Added memmove() prototype.
- * 	[1996/10/10  14:11:51  emcmanus]
- * 
- * Revision 1.1.2.3  1996/10/07  07:20:26  paire
- * 	Added strncat() prototype, since it is defined in libsa_mach.
- * 	[96/10/07            paire]
- * 
- * Revision 1.1.2.2  1996/10/04  11:36:07  emcmanus
- * 	Added strspn() prototype, since it is defined in libsa_mach.
- * 	[1996/10/04  11:31:57  emcmanus]
- * 
- * Revision 1.1.2.1  1996/09/17  16:56:15  bruel
- * 	created for standalone mach servers.
- * 	[96/09/17            bruel]
- * 
- * $EndLog$
- */
-
-#ifndef	_MACH_STRING_H_
-#define	_MACH_STRING_H_	1
+#ifndef	_STRING_H_
+#define	_STRING_H_	1
 
 #ifdef MACH_KERNEL_PRIVATE
 #include <types.h>
@@ -72,6 +40,7 @@ extern "C" {
 #endif
 
 extern void	*memcpy(void *, const void *, size_t);
+extern int	memcmp(const void *, const void *, size_t);
 extern void	*memmove(void *, const void *, size_t);
 extern void	*memset(void *, int, size_t);
 
@@ -82,11 +51,16 @@ extern char	*strcat(char *, const char *);
 extern char	*strncat(char *, const char *, size_t);
 extern int	strcmp(const char *, const char *);
 extern int	strncmp(const char *,const char *, size_t);
+extern int	strcasecmp(const char *s1, const char *s2);
+extern int	strncasecmp(const char *s1, const char *s2, size_t n);
 extern char	*strchr(const char *s, int c);
-extern size_t	strspn(const char *, const char *);
+
+extern int	bcmp(const void *, const void *, size_t);
+extern void	bcopy(const void *, void *, size_t);
+extern void	bzero(void *, size_t);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif	/* _MACH_STRING_H_ */
+#endif	/* _STRING_H_ */

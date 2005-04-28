@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -19,6 +19,8 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
+#ifdef	XNU_KERNEL_PRIVATE
+
 #ifndef _PPC_SAVEAREA_H_
 #define _PPC_SAVEAREA_H_
 
@@ -57,7 +59,7 @@ typedef struct savearea_comm {
 
 												/*	 0x20 */
 	unsigned int	save_time[2];				/* Context save time - for debugging or performance */
-	struct thread_activation	*save_act;		/* Associated activation  */
+	struct thread	*save_act;					/* Associated thread */
     unsigned int	save_02c;
 	uint64_t		sac_vrswap;					/* XOR mask to swap V to R or vice versa */
 	unsigned int	save_flags;					/* Various flags */
@@ -96,7 +98,6 @@ typedef struct savearea {
 	uint64_t		save_xdat1;					/* Exception data 1 */
 	uint64_t		save_xdat2;					/* Exception data 2 */
 	uint64_t		save_xdat3;					/* Exception data 3 */
-                                             
                                                 /* offset 0x0080 */
 	uint64_t	 	save_r0;
 	uint64_t	 	save_r1;
@@ -309,14 +310,15 @@ struct Saveanchor {
 	volatile unsigned int	savefreecnt;	/* 020 Number of saveareas on global free list */
 	volatile int			saveadjust;		/* 024 If 0 number of saveareas is ok, otherwise # to change (pos means grow, neg means shrink */
 	volatile int			saveinuse;		/* 028 Number of areas in use counting those on the local free list */
-	volatile int			savetarget;		/* 02C Number of savearea's needed */
+	unsigned int			savetarget;		/* 02C Number of saveareas needed */
 	int						savemaxcount;	/* 030 Maximum saveareas ever allocated */
-	unsigned int			saveRSVD034[3];	/* 034 reserved */
+	unsigned int			saveinusesnapshot;		/* 034 snapshot inuse count */
+	volatile addr64_t		savefreesnapshot;		/* 038 snapshot global free list header */
 /*											   040 */
-
 };
 #pragma pack()
 
+extern struct Saveanchor	saveanchor;			/* Aliged savearea anchor */
 
 #define sac_cnt		(4096 / sizeof(savearea))	/* Number of saveareas per page */
 #define sac_empty	(0xFFFFFFFF << (32 - sac_cnt))	/* Mask with all entries empty */
@@ -327,11 +329,11 @@ struct Saveanchor {
 #define LocalSaveMin	(LocalSaveTarget / 2)	/* Min size of local savearea free list before we grow */
 #define LocalSaveMax	(LocalSaveTarget * 2)	/* Max size of local savearea free list before we trim */
 
-#define FreeListMin		(2 * LocalSaveTarget * NCPUS)	/* Always make sure there are enough to fill local list twice per processor */
-#define SaveLowHysteresis	LocalSaveTarget	/* The number off from target before we adjust upwards */
-#define SaveHighHysteresis	FreeListMin		/* The number off from target before we adjust downwards */
+#define FreeListMin		(2 * LocalSaveTarget)	/* Always make sure there are enough to fill local list twice per processor */
+#define SaveLowHysteresis	LocalSaveTarget		/* The number off from target before we adjust upwards */
+#define SaveHighHysteresis	(2 * FreeListMin)	/* The number off from target before we adjust downwards */
 #define InitialSaveAreas 	(2 * FreeListMin)	/* The number of saveareas to make at boot time */
-#define InitialSaveTarget	FreeListMin		/* The number of saveareas for an initial target. This should be the minimum ever needed. */
+#define InitialSaveTarget	FreeListMin			/* The number of saveareas for an initial target. This should be the minimum ever needed. */
 #define	InitialSaveBloks	(InitialSaveAreas + sac_cnt - 1) / sac_cnt	/* The number of savearea blocks to allocate at boot */
 #define BackPocketSaveBloks	8				/* Number of pages of back pocket saveareas */
 
@@ -350,6 +352,17 @@ struct savearea_comm	*save_trim_free(void);	/* Remove free pages from savearea p
 int				save_recover(void);			/* returns nonzero if we can recover enough from the free pool */
 void 			savearea_init(vm_offset_t addr);	/* Boot-time savearea initialization */
 
+void 			save_fake_zone_info(		/* report savearea usage statistics as fake zone info */
+					int *count,
+					vm_size_t *cur_size,
+					vm_size_t *max_size,
+					vm_size_t *elem_size,
+					vm_size_t *alloc_size, 
+					int *collectable, 
+					int *exhaustable);
+
+void			save_snapshot(void);
+void			save_snapshot_restore(void);
 
 #endif /* MACH_KERNEL_PRIVATE */
 #endif /* __APPLE_API_PRIVATE */
@@ -375,3 +388,5 @@ void 			savearea_init(vm_offset_t addr);	/* Boot-time savearea initialization */
 
 
 #endif /* _PPC_SAVEAREA_H_ */
+
+#endif	/* XNU_KERNEL_PRIVATE */

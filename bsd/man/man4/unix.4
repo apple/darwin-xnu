@@ -148,6 +148,35 @@ passed to a receiver.
 Descriptors that are awaiting delivery, or that are
 purposely not received, are automatically closed by the system
 when the destination socket is closed.
+.Pp
+The effective credentials (i.e., the user ID and group list) the of a
+peer on a
+.Dv SOCK_STREAM
+socket may be obtained using the
+.Dv LOCAL_PEERCRED
+socket option.
+This may be used by a server to obtain and verify the credentials of
+its client, and vice versa by the client to verify the credentials
+of the server.
+These will arrive in the form of a filled in
+.Ar struct xucred
+(defined in
+.Pa sys/ucred.h ) .
+The credentials presented to the server (the
+.Xr listen 2
+caller) are those of the client when it called
+.Xr connect 2 ;
+the credentials presented to the client (the
+.Xr connect 2
+caller) are those of the server when it called
+.Xr listen 2 .
+This mechanism is reliable; there is no way for either party to influence
+the credentials presented to its peer except by calling the appropriate
+system call (e.g.,
+.Xr connect 2
+or
+.Xr listen 2 )
+under different effective credentials.
 .Sh SEE ALSO
 .Xr socket 2 ,
 .Xr intro 4

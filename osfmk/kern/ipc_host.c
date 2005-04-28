@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -57,8 +57,8 @@
  */
 #include <mach/message.h>
 #include <mach/mach_traps.h>
-#include <mach/etap_events.h>
 #include <mach/mach_host_server.h>
+#include <mach/host_priv_server.h>
 #include <kern/host.h>
 #include <kern/processor.h>
 #include <kern/lock.h>
@@ -96,7 +96,7 @@ void ipc_host_init(void)
 	ipc_port_t	port;
 	int i;
 
-	mutex_init(&realhost.lock, ETAP_MISC_MASTER);
+	mutex_init(&realhost.lock, 0);
 
 	/*
 	 *	Allocate and set up the two host ports.
@@ -156,12 +156,15 @@ void ipc_host_init(void)
  */
 
 mach_port_name_t
-host_self_trap(void)
+host_self_trap(
+	__unused struct host_self_trap_args *args)
 {
 	ipc_port_t sright;
+	mach_port_name_t name;
 
 	sright = ipc_port_copy_send(current_task()->itk_host);
-	return ipc_port_copyout_send(sright, current_space());
+	name = ipc_port_copyout_send(sright, current_space());
+	return name;
 }
 
 /*
@@ -723,9 +726,7 @@ host_get_exception_ports(
 	exception_behavior_array_t      behaviors,
 	thread_state_flavor_array_t     flavors		)
 {
-	register int	i,
-			j,
-			count;
+	unsigned int	i, j, count;
 
 	if (host_priv == HOST_PRIV_NULL)
 		return KERN_INVALID_ARGUMENT;
@@ -787,7 +788,7 @@ host_swap_exception_ports(
 	exception_behavior_array_t      behaviors,
 	thread_state_flavor_array_t     flavors		)
 {
-	register int	i,
+	unsigned int	i,
 			j,
 			count;
 	ipc_port_t	old_port[EXC_TYPES_COUNT];

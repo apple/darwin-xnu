@@ -2,6 +2,33 @@
 #BEGIN	Machine dependent Makefile fragment for i386
 ######################################################################
 
+# Enable -Werror for i386 builds
+CFLAGS+= $(WERROR)
+CWARNFLAGS= $(filter-out -Wbad-function-cast, $(CWARNFLAGS_STD))
+
+# Objects that don't compile cleanly in libsa:
+OBJS_NO_WERROR=		\
+	ioconf.o	\
+	UNDRequest.o	\
+	bootstrap.cpo	\
+	bsearch.o	\
+	c++rem3.o	\
+	catalogue.cpo	\
+	dgraph.o	\
+	kext.cpo	\
+	kld_patch.o	\
+	load.o		\
+	mach.o		\
+	malloc.o	\
+	misc.o		\
+	sort.o		\
+	strrchr.o	\
+	strstr.o	\
+	vers_rsrc.o
+
+OBJS_WERROR=$(filter-out $(OBJS_NO_WERROR),$(OBJS))
+
+$(OBJS_WERROR):		WERROR=-Werror
 
 ######################################################################
 #END	Machine dependent Makefile fragment for i386

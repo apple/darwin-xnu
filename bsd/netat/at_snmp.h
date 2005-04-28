@@ -23,6 +23,8 @@
 #define _NETAT_AT_SNMP_H_
 #include <sys/appleapiopts.h>
 
+#ifdef __APPLE_API_OBSOLETE
+
 #define MAX_PHYS_ADDR_SIZE	6	/* maximum physical addr size */
 #define	MAX_IFS			25	/* max # interfaces */
 #define	IF_NAME_SIZE		6	/* max name length of I/F name */
@@ -212,4 +214,5 @@ typedef struct snmpStats {
 
 #define SNMP_TYPE(var,type)	 ((var & SNMP_OBJ_TYPE_MASK) == type)	
 
+#endif /* __APPLE_API_OBSOLETE */
 #endif /* _NETAT_AT_SNMP_H_ */

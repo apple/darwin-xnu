@@ -81,7 +81,7 @@
 struct klist;
 
 struct filedesc {
-	struct	file **fd_ofiles;	/* file structures for open files */
+	struct	fileproc **fd_ofiles;	/* file structures for open files */
 	char	*fd_ofileflags;		/* per-process open file flags */
 	struct	vnode *fd_cdir;		/* current directory */
 	struct	vnode *fd_rdir;		/* root directory */
@@ -95,14 +95,22 @@ struct filedesc {
 	struct  klist *fd_knlist;       /* list of attached knotes */
 	u_long  fd_knhashmask;          /* size of knhash */
 	struct  klist *fd_knhash;       /* hash table for attached knotes */
+        int	fd_flags;
 };
+
+/*
+ * definitions for fd_flags;
+ */
+#define	FD_CHROOT	0x01	/* process was chrooted... keep track even */
+                                /* if we're force unmounted and unable to */
+                                /* take a vnode_ref on fd_rdir during a fork */
 
 /*
  * Per-process open flags.
  */
 #define	UF_EXCLOSE 	0x01		/* auto-close on exec */
-#define	UF_MAPPED 	0x02		/* mapped from device */
 #define UF_RESERVED	0x04		/* open pending / in progress */
+#define UF_CLOSING	0x08		/* close in progress */
 
 /*
  * Storage required per open file descriptor.
@@ -113,24 +121,23 @@ struct filedesc {
 /*
  * Kernel global variables and routines.
  */
-extern int	dupfdopen __P((struct filedesc *fdp,
-				int indx, int dfd, int mode, int error));
-extern int	fdalloc __P((struct proc *p, int want, int *result));
-extern void	fdrelse __P((struct proc *p, int fd));
-extern int	fdavail __P((struct proc *p, int n));
-extern int	fdgetf __P((struct proc *p, int fd, struct file **resultfp));
+extern int	dupfdopen(struct filedesc *fdp,
+				int indx, int dfd, int mode, int error);
+extern int	fdalloc(struct proc *p, int want, int *result);
+extern void	fdrelse(struct proc *p, int fd);
+extern int	fdavail(struct proc *p, int n);
 #define		fdfile(p, fd)					\
 			(&(p)->p_fd->fd_ofiles[(fd)])
 #define		fdflags(p, fd)					\
 			(&(p)->p_fd->fd_ofileflags[(fd)])
-extern int	falloc __P((struct proc *p,
-				struct file **resultfp, int *resultfd));
-extern void	ffree __P((struct file *fp));
+extern int	falloc(struct proc *p,
+				struct fileproc **resultfp, int *resultfd);
+extern void	ffree(struct file *fp);
 
 #ifdef __APPLE_API_PRIVATE
-extern struct	filedesc *fdcopy __P((struct proc *p));
-extern void	fdfree __P((struct proc *p));
-extern void	fdexec __P((struct proc *p));
+extern struct	filedesc *fdcopy(struct proc *p);
+extern void	fdfree(struct proc *p);
+extern void	fdexec(struct proc *p);
 #endif /* __APPLE_API_PRIVATE */
 
 #endif /* KERNEL */

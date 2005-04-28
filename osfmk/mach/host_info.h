@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -59,10 +59,13 @@
 #ifndef	_MACH_HOST_INFO_H_
 #define	_MACH_HOST_INFO_H_
 
+#include <mach/message.h>
 #include <mach/vm_statistics.h>
 #include <mach/machine.h>
 #include <mach/machine/vm_types.h>
 #include <mach/time_value.h>
+
+#include <sys/cdefs.h>
 
 /*
  *	Generic information structure to allow for expansion.
@@ -78,8 +81,6 @@ typedef char	kernel_version_t[KERNEL_VERSION_MAX];
 #define KERNEL_BOOT_INFO_MAX (4096)
 typedef char	kernel_boot_info_t[KERNEL_BOOT_INFO_MAX];
 
-#define	KERNEL_BOOTMAGIC_MAX	(8192)
-
 /*
  *	Currently defined information.
  */
@@ -92,18 +93,47 @@ typedef	integer_t	host_flavor_t;
 #define HOST_SEMAPHORE_TRAPS	7	/* Has semaphore traps */
 #define HOST_MACH_MSG_TRAP	8	/* Has mach_msg_trap */
 
-struct host_basic_info {
+#ifdef MACH_KERNEL_PRIVATE
+struct host_basic_info_old {
 	integer_t	max_cpus;	/* max number of cpus possible */
 	integer_t	avail_cpus;	/* number of cpus now available */
-	vm_size_t	memory_size;	/* size of memory in bytes */
+	natural_t	memory_size;	/* size of memory in bytes */
 	cpu_type_t	cpu_type;	/* cpu type */
 	cpu_subtype_t	cpu_subtype;	/* cpu subtype */
 };
 
+typedef	struct host_basic_info_old	host_basic_info_data_old_t;
+typedef struct host_basic_info_old	*host_basic_info_old_t;
+#define HOST_BASIC_INFO_OLD_COUNT ((mach_msg_type_number_t) \
+		(sizeof(host_basic_info_data_old_t)/sizeof(integer_t)))
+#endif
+
+#if __DARWIN_ALIGN_POWER
+#pragma options align=power
+#endif
+
+struct host_basic_info {
+	integer_t		max_cpus;		/* max number of CPUs possible */
+	integer_t		avail_cpus;		/* number of CPUs now available */
+	natural_t		memory_size;		/* size of memory in bytes, capped at 2 GB */
+	cpu_type_t		cpu_type;		/* cpu type */
+	cpu_subtype_t		cpu_subtype;		/* cpu subtype */
+	cpu_threadtype_t	cpu_threadtype;		/* cpu threadtype */
+	integer_t		physical_cpu;		/* number of physical CPUs now available */
+	integer_t		physical_cpu_max;	/* max number of physical CPUs possible */
+	integer_t		logical_cpu;		/* number of logical cpu now available */
+	integer_t		logical_cpu_max;	/* max number of physical CPUs possible */
+	uint64_t		max_mem;		/* actual size of physical memory */
+};
+
+#if __DARWIN_ALIGN_POWER
+#pragma options align=reset
+#endif
+
 typedef	struct host_basic_info	host_basic_info_data_t;
 typedef struct host_basic_info	*host_basic_info_t;
-#define HOST_BASIC_INFO_COUNT \
-		(sizeof(host_basic_info_data_t)/sizeof(integer_t))
+#define HOST_BASIC_INFO_COUNT ((mach_msg_type_number_t) \
+		(sizeof(host_basic_info_data_t)/sizeof(integer_t)))
 
 struct host_sched_info {
 	integer_t	min_timeout;	/* minimum timeout in milliseconds */
@@ -112,21 +142,21 @@ struct host_sched_info {
 
 typedef	struct host_sched_info	host_sched_info_data_t;
 typedef struct host_sched_info	*host_sched_info_t;
-#define HOST_SCHED_INFO_COUNT \
-		(sizeof(host_sched_info_data_t)/sizeof(integer_t))
+#define HOST_SCHED_INFO_COUNT ((mach_msg_type_number_t) \
+		(sizeof(host_sched_info_data_t)/sizeof(integer_t)))
 
 struct kernel_resource_sizes {
-	vm_size_t	task;
-        vm_size_t	thread;
-        vm_size_t	port;
-        vm_size_t	memory_region;
-        vm_size_t	memory_object;
+	natural_t	task;
+        natural_t	thread;
+        natural_t	port;
+        natural_t	memory_region;
+        natural_t	memory_object;
 };
 
 typedef struct kernel_resource_sizes	kernel_resource_sizes_data_t;
 typedef struct kernel_resource_sizes	*kernel_resource_sizes_t;
-#define HOST_RESOURCE_SIZES_COUNT \
-		(sizeof(kernel_resource_sizes_data_t)/sizeof(integer_t))
+#define HOST_RESOURCE_SIZES_COUNT ((mach_msg_type_number_t) \
+		(sizeof(kernel_resource_sizes_data_t)/sizeof(integer_t)))
 
 struct host_priority_info {
     	integer_t	kernel_priority;
@@ -141,8 +171,8 @@ struct host_priority_info {
 
 typedef struct host_priority_info	host_priority_info_data_t;
 typedef struct host_priority_info	*host_priority_info_t;
-#define HOST_PRIORITY_INFO_COUNT \
-		(sizeof(host_priority_info_data_t)/sizeof(integer_t))
+#define HOST_PRIORITY_INFO_COUNT ((mach_msg_type_number_t) \
+		(sizeof(host_priority_info_data_t)/sizeof(integer_t)))
 
 /* host_statistics() */
 #define	HOST_LOAD_INFO		1	/* System loading stats */
@@ -156,19 +186,22 @@ struct host_load_info {
 
 typedef struct host_load_info	host_load_info_data_t;
 typedef struct host_load_info	*host_load_info_t;
-#define	HOST_LOAD_INFO_COUNT \
-		(sizeof(host_load_info_data_t)/sizeof(integer_t))
+#define	HOST_LOAD_INFO_COUNT ((mach_msg_type_number_t) \
+		(sizeof(host_load_info_data_t)/sizeof(integer_t)))
 
 /* in <mach/vm_statistics.h> */
-#define	HOST_VM_INFO_COUNT \
-		(sizeof(vm_statistics_data_t)/sizeof(integer_t))
+#define	HOST_VM_INFO_COUNT ((mach_msg_type_number_t) \
+		(sizeof(vm_statistics_data_t)/sizeof(integer_t)))
+#define	HOST_VM_INFO_REV0_COUNT ((mach_msg_type_number_t) \
+		(sizeof(vm_statistics_rev0_data_t)/sizeof(integer_t)))
 
 struct host_cpu_load_info {		/* number of ticks while running... */
-	unsigned long	cpu_ticks[CPU_STATE_MAX]; /* ... in the given mode */
+	natural_t	cpu_ticks[CPU_STATE_MAX]; /* ... in the given mode */
 };
+
 typedef struct host_cpu_load_info	host_cpu_load_info_data_t;
 typedef struct host_cpu_load_info	*host_cpu_load_info_t;
-#define HOST_CPU_LOAD_INFO_COUNT \
-		(sizeof (host_cpu_load_info_data_t) / sizeof (integer_t))
+#define HOST_CPU_LOAD_INFO_COUNT ((mach_msg_type_number_t) \
+		(sizeof (host_cpu_load_info_data_t) / sizeof (integer_t)))
 
 #endif	/* _MACH_HOST_INFO_H_ */

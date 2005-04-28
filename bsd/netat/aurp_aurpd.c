@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -40,6 +40,7 @@
 #include <sys/systm.h>
 #include <sys/kernel.h>
 #include <sys/proc.h>
+#include <sys/kauth.h>
 #include <sys/filedesc.h>
 #include <sys/fcntl.h>
 #include <sys/mbuf.h>
@@ -48,6 +49,8 @@
 #include <sys/protosw.h>
 #include <sys/malloc.h>
 #include <sys/proc.h>
+#include <sys/uio_internal.h>
+#include <kern/locks.h>
 #include <netinet/in.h>
 #include <net/if.h>
 
@@ -61,6 +64,8 @@
 
 #define M_RCVBUF (64 * 1024)
 #define M_SNDBUF (64 * 1024)
+
+extern lck_mtx_t * atalk_mutex;
 
 static int ip_to_atalk(struct sockaddr_in *fp, register gbuf_t *p_mbuf);
 static int aurp_bindrp(struct socket *so);
@@ -89,7 +94,7 @@ aurpd_start()
 	int maxbuf;
 	struct sockopt sopt;
 
-	if (suser(current_proc()->p_ucred, &current_proc()->p_acflag) != 0 )
+	if (suser(kauth_cred_get(), 0) != 0 )
 		return(EPERM);
 
 	/*
@@ -134,7 +139,7 @@ aurpd_start()
 		goto out;
 	} else {
 		maxbuf = M_RCVBUF;
-		sopt.sopt_val     = &maxbuf;
+		sopt.sopt_val     = CAST_USER_ADDR_T(&maxbuf);
 		sopt.sopt_valsize = sizeof(maxbuf);
 		sopt.sopt_level   = SOL_SOCKET;
 		sopt.sopt_name    = SO_RCVBUF;
@@ -154,7 +159,7 @@ aurpd_start()
 	} else {
 
 		maxbuf = M_SNDBUF;
-		sopt.sopt_val     = &maxbuf;
+		sopt.sopt_val     = CAST_USER_ADDR_T(&maxbuf);
 		sopt.sopt_valsize = sizeof(maxbuf);
 		sopt.sopt_level   = SOL_SOCKET;
 		sopt.sopt_name    = SO_SNDBUF;
@@ -171,8 +176,8 @@ aurpd_start()
 	so->so_snd.sb_flags |=(SB_SEL|SB_NOINTR);
 
 out:
-	sbunlock(&so->so_snd);
-	sbunlock(&so->so_rcv);
+	sbunlock(&so->so_snd, 0);
+	sbunlock(&so->so_rcv, 0);
 
 	return(error);
 }
@@ -181,7 +186,7 @@ int
 AURPgetmsg(err)
 	int *err;
 {	register struct socket *so;
-	register int s, events;
+	register int events;
 
 	so = aurp_global.tunnel;
 	*err = 0;
@@ -189,7 +194,8 @@ AURPgetmsg(err)
 	for (;;)
 	{	gbuf_t *from, *p_mbuf;
 		int flags = MSG_DONTWAIT;
-		struct uio auio;
+		uio_t auio;
+		char uio_buf[ UIO_SIZEOF(0) ];
 
 		/*
 		 * Wait for a package to arrive.  This will be from the
@@ -201,7 +207,8 @@ AURPgetmsg(err)
 		events = aurp_global.event;
 		if (((*err == 0) || (*err == EWOULDBLOCK)) && events == 0)
 		  {
-		    *err = tsleep(&aurp_global.event_anchor, PSOCK | PCATCH, "AURPgetmsg", 0);
+			lck_mtx_assert(atalk_mutex, LCK_MTX_ASSERT_OWNED);
+		    *err = msleep(&aurp_global.event_anchor, atalk_mutex, PSOCK | PCATCH, "AURPgetmsg", 0);
 		    events = aurp_global.event;
 		    aurp_global.event = 0;
 		  }	
@@ -237,11 +244,8 @@ AURPgetmsg(err)
 		 *  give it no iov's, point off to non-existant user space,
 		 *  but make sure the 'resid' count means somehting.
 		 */
-
-		auio.uio_iov = NULL;
-		auio.uio_iovcnt = 0;
-		auio.uio_segflg = UIO_SYSSPACE;
-		auio.uio_offset = 0;			/* XXX */
+		auio = uio_createwithbuffer(0, 0, UIO_SYSSPACE, UIO_READ, 
+								  &uio_buf[0], sizeof(uio_buf));
 
 		/* Keep up an even flow... */
 		for (;;)
@@ -253,8 +257,8 @@ AURPgetmsg(err)
 #define A_LARGE_SIZE 700
 
 			flags = MSG_DONTWAIT;
-			auio.uio_resid = A_LARGE_SIZE;
-			*err = soreceive(so, (struct sockaddr **)&from, &auio, &p_mbuf, 0, &flags);
+			uio_setresid(auio, A_LARGE_SIZE);
+			*err = soreceive(so, (struct sockaddr **)&from, auio, &p_mbuf, 0, &flags);
 			dPrintf(D_M_AURP, D_L_VERBOSE,
 				("AURPgetmsg: soreceive returned %d, aurp_global.event==0x%x\n", *err, events));
 			/* soreceive() sets *mp to zero! at start */
@@ -278,7 +282,6 @@ AURPgetmsg(err)
 				 * which will wake us from the sleep at
 				 * the top of the outer loop.
 				 */
-				int s;
 				ATDISABLE(s, aurp_global.glock);
 				aurp_global.event &= ~AE_UDPIP;
 				ATENABLE(s, aurp_global.glock);
@@ -296,9 +299,8 @@ AURPgetmsg(err)
  *
  * This conforms to the so_upcall function pointer member of struct sockbuf.
  */
-void aurp_wakeup(struct socket *so, register caddr_t p, int state)
+void aurp_wakeup(__unused struct socket *so, register caddr_t p, __unused int state)
 {
-	register int s;
 	register int bit;
 
 	bit = (int) p;
@@ -322,7 +324,6 @@ aurp_bindrp(struct socket *so)
 {
 	struct sockaddr_in sin;
 	struct proc *p = current_proc();
-	gbuf_t *m;
 	int error;
 
 
@@ -336,8 +337,8 @@ aurp_bindrp(struct socket *so)
 	sblock(&so->so_snd, M_WAIT);
 	so->so_state |= SS_PRIV;
 	error = (*so->so_proto->pr_usrreqs->pru_bind)(so, (struct sockaddr *) &sin, p);
-	sbunlock(&so->so_snd);
-	sbunlock(&so->so_rcv);
+	sbunlock(&so->so_snd, 0);
+	sbunlock(&so->so_rcv, 0);
 
 	return (error);
 }
@@ -409,7 +410,6 @@ atalk_to_ip(register gbuf_t *m)
 	int error;
 	int flags = MSG_DONTWAIT;
 	struct sockaddr_in rem_addr;
-	int s;
 
 	m->m_type = MT_HEADER;
 	m->m_pkthdr.len = gbuf_msgsize(m);

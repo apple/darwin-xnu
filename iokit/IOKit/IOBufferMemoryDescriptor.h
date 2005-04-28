@@ -27,12 +27,17 @@
 enum {
     kIOMemoryPhysicallyContiguous	= 0x00000010,
     kIOMemoryPageable	      		= 0x00000020,
+    kIOMemoryPurgeable	      		= 0x00000040,
     kIOMemorySharingTypeMask		= 0x000f0000,
     kIOMemoryUnshared			= 0x00000000,
     kIOMemoryKernelUserShared		= 0x00010000
 };
 
 #define _IOBUFFERMEMORYDESCRIPTOR_INTASKWITHOPTIONS_	1
+/*!
+    @class IOBufferMemoryDescriptor
+    @abstract Provides a simple memory descriptor that allocates its own buffer memory.
+*/
 
 class IOBufferMemoryDescriptor : public IOGeneralMemoryDescriptor
 {
@@ -135,16 +140,17 @@ public:
                                                     vm_offset_t  alignment = 1);
 
 /*! @function inTaskWithOptions
-    @abstract Create a memory buffer with memory descriptor for that buffer. Added in Mac OS X 10.2.
-    @discussion This method allocates a memory buffer with a given size and alignment in the task's address space specified, and returns a memory descriptor instance representing the memory. It is recommended memory allocated for I/O or sharing via mapping be created via IOBufferMemoryDescriptor. Options passed with the request specify the kind of memory to be allocated - pageablity and sharing are specified with option bits. This function may block and so should not be called from interrupt level or while a simple lock is held.
+    @abstract Creates a memory buffer with memory descriptor for that buffer. 
+    @discussion Added in Mac OS X 10.2, this method allocates a memory buffer with a given size and alignment in the task's address space specified, and returns a memory descriptor instance representing the memory. It is recommended that memory allocated for I/O or sharing via mapping be created via IOBufferMemoryDescriptor. Options passed with the request specify the kind of memory to be allocated - pageablity and sharing are specified with option bits. This function may block and so should not be called from interrupt level or while a simple lock is held.
     @param inTask The task the buffer will be allocated in.
-    @param options Options for the allocation:
-    kIOMemoryPhysicallyContiguous - pass to request memory be physically contiguous. This option is heavily discouraged. The request may fail if memory is fragmented, may cause large amounts of paging activity, and may take a very long time to execute.
-    kIOMemoryPageable - pass to request memory be non-wired - the default for kernel allocated memory is wired.
+    @param options Options for the allocation:<br>
+    kIOMemoryPhysicallyContiguous - pass to request memory be physically contiguous. This option is heavily discouraged. The request may fail if memory is fragmented, may cause large amounts of paging activity, and may take a very long time to execute.<br>
+    kIOMemoryPageable - pass to request memory be non-wired - the default for kernel allocated memory is wired.<br>
+    kIOMemoryPurgeable - pass to request memory that may later have its purgeable state set with IOMemoryDescriptor::setPurgeable. Only supported for kIOMemoryPageable allocations.<br>
     kIOMemoryKernelUserShared - pass to request memory that will be mapped into both the kernel and client applications.
     @param capacity The number of bytes to allocate.
     @param alignment The minimum required alignment of the buffer in bytes - 1 is the default for no required alignment. For example, pass 256 to get memory allocated at an address with bits 0-7 zero.
-    @result An instance of class IOBufferMemoryDescriptor. To be released by the caller, which will free the memory desriptor and associated buffer. */
+    @result Returns an instance of class IOBufferMemoryDescriptor to be released by the caller, which will free the memory desriptor and associated buffer. */
 
     static IOBufferMemoryDescriptor * inTaskWithOptions(
 					    task_t       inTask,

@@ -26,7 +26,6 @@
  */
  
 #include <sys/appleapiopts.h>
-#include <cpus.h>
 #include <ppc/asm.h>
 #include <ppc/proc_reg.h>
 #include <ppc/exception.h>
@@ -188,9 +187,7 @@ a64NotEmulated:
 // This routine supports all legal permutations of alignment interrupts occuring in user or
 // supervisor mode, 32 or 64-bit addressing, and translation on or off.  We do not emulate
 // instructions that go past the end of an address space, such as "LHZ -1(0)"; we just pass
-// along the alignment exception rather than wrap around to byte 0.  (Treatment of address
-// space wrap is a moot point in Mac OS X, since we do not map either the last page or
-// page 0.)
+// along the alignment exception rather than wrap around to byte 0.
 //
 // First, check for a few special cases such as virtual machines, etc.
 
@@ -200,11 +197,13 @@ LEXT(AlignAssist64)
         crset	kAlignment								// mark as alignment interrupt
 
 a64AlignAssistJoin:										// join here from program interrupt handler
+      	li		r0,0									// Get a 0
         mfsprg	r31,0									// get the per_proc data ptr
         mcrf	cr3,cr6									// save feature flags here...
         lwz		r21,spcFlags(r31)						// grab the special flags
         ld		r29,savesrr1(r13)						// get the MSR etc at the fault
         ld		r28,savesrr0(r13)						// get the EA of faulting instruction
+       	stw		r0,savemisc3(r13)						// Assume we will handle this ok
         mfmsr	r26										// save MSR at entry
         rlwinm.	r0,r21,0,runningVMbit,runningVMbit		// Are we running a VM?
         lwz		r19,dgFlags(0)							// Get the diagnostics flags
@@ -267,11 +266,12 @@ a64AlignAssistJoin:										// join here from program interrupt handler
 //
 // When we "bctr" to the opcode-specific reoutine, the following are all set up:
 //		MSR = EE and IR off, SF and FP on
+//		r12 = full 64-bit EA (r17 is clamped EA)
 //		r13 = save-area pointer (physical)
 //		r14 = ptr to saver0 in save-area (ie, to base of GPRs)
 //		r15 = 0x00000000FFFFFFFF if 32-bit mode fault, 0xFFFFFFFFFFFFFFFF if 64
 //		r16 = RA * 8 (ie, reg# not reg value)
-//		r17 = EA
+//		r17 = EA, clamped to 32 bits if 32-bit mode fault (see also r12)
 //		r18 = (RA|0) (reg value)
 //		r19 = -1 if X-form, 0 if D-form
 //		r20 = faulting instruction
@@ -321,7 +321,7 @@ a64GotInstruction:					// here from program interrupt with instruction in r20
         sradi	r15,r29,32			// propogate SF bit from SRR1 (MSR_SF, which is bit 0)
         andc	r18,r18,r24			// r18 <- (RA|0)
         mtcrf	0x02,r21			// move opcode bits 24-27 to CR6 (kUpdate is bit 25)
-        add		r17,r18,r12			// r17 <- EA, which might need to be clamped to 32 bits
+        add		r12,r18,r12			// r12 <- 64-bit EA
         mtctr	r30					// set up branch address
         
         oris	r15,r15,0xFFFF		// start to fill low word of r15 with 1s
@@ -329,7 +329,7 @@ a64GotInstruction:					// here from program interrupt with instruction in r20
         lis		r22,ha16(EXT(aaFPopTable))	// start to compute address of floating pt table
         ori		r15,r15,0xFFFF		// now bits 32-63 of r15 are 1s
         addi	r22,r22,lo16(EXT(aaFPopTable))
-        and		r17,r17,r15			// clamp EA to 32 bits if necessary
+        and		r17,r12,r15			// clamp EA to 32 bits if fault occured in 32-bit mode
         rlwimi	r22,r21,2,22,26		// move RT into aaFPopTable address (which is 1KB aligned)
         
         bf--	kAlignment,a64HandleProgramInt	// return to Program Interrupt handler
@@ -487,27 +487,30 @@ a64Stwbrx:
 // Load doubleword (ld[u], ldx[u]), also lwa.
 
 a64LdLwa:							// these are DS form: ld=0, ldu=1, and lwa=2
-        andi.	r0,r20,2			// ld[u] or lwa? (test bit 30 of DS field)
+        mtcrf	0x01,r20			// move DS field to cr7
         rlwinm	r3,r20,0,30,31		// must adjust EA by subtracting DS field
-        sub		r17,r17,r3
-        and		r17,r17,r15			// re-clamp to 32 bits if necessary
-        bne		a64Lwa				// handle lwa
+        sub		r12,r12,r3			// subtract from full 64-bit EA
+        and		r17,r12,r15			// then re-clamp to 32 bits if necessary
+        bt		30,a64Lwa			// handle lwa
+        crmove	kUpdate,31			// if opcode bit 31 is set, it is ldu so set update flag
 a64Ldx:
         bl		a64Load8Bytes		// load 8 bytes from user space into r30
         stdx	r30,r14,r21			// update register file
         b		a64UpdateCheck		// update RA if necessary and exit
 
 
-// Store doubleword (stdx[u], std[u])
+// Store doubleword (stdx[u], std[u], stwcx)
 
 a64StdxStwcx:
         bf--	30,a64PassAlong		// stwcx, so pass along alignment exception
         b		a64Stdx				// was stdx
-a64StdStfiwx:
+a64StdStfiwx:						// if DS form: 0=std, 1=stdu, 2-3=undefined
         bt		30,a64Stfiwx		// handle stfiwx
-        rlwinm.	r3,r20,0,30,31		// must adjust EA by subtracting DS field
-        sub		r17,r17,r3
-        and		r17,r17,r15			// re-clamp to 32 bits if necessary
+        rlwinm	r3,r20,0,30,31		// must adjust EA by subtracting DS field
+        mtcrf	0x01,r20			// move DS field to cr7
+        sub		r12,r12,r3			// subtract from full 64-bit EA
+        and		r17,r12,r15			// then re-clamp to 32 bits if necessary
+        crmove	kUpdate,31			// if DS==1, then it is update form
 a64Stdx:
         ldx		r30,r14,r21			// get RT
         bl		a64Store8Bytes		// store RT into user space
@@ -520,21 +523,21 @@ a64DcbzDcbz128:
         andis.	r0,r20,0x0020		// bit 10 set?
         li		r3,0				// get a 0 to store
         li		r0,4				// assume 32-bit version, store 8 bytes 4x
-        li		r4,_COMM_PAGE_BASE_ADDRESS
         rldicr	r17,r17,0,63-5		// 32-byte align EA
+		li		r4,_COMM_PAGE_BASE_ADDRESS
         beq		a64DcbzSetup		// it was the 32-byte version
         rldicr	r17,r17,0,63-7		// zero low 7 bits of EA
         li		r0,16				// store 8 bytes 16x
 a64DcbzSetup:
-        xor		r4,r4,r28			// was dcbz in the commpage(s)?
+		sub		r4,r28,r4			// get instruction offset from start of commpage
         and		r4,r4,r15			// mask off high-order bits if 32-bit mode
-        srdi.	r4,r4,12			// check SRR0
-        bne		a64NotCommpage		// not in commpage
+		cmpldi  r4,_COMM_PAGE_AREA_USED // did fault occur in commpage area?
+        bge		a64NotCommpage		// not in commpage
         rlwinm.	r4,r29,0,MSR_PR_BIT,MSR_PR_BIT	// did fault occur in user mode?
         beq--	a64NotCommpage		// do not zero cr7 if kernel got alignment exception
         lwz		r4,savecr(r13)		// if we take a dcbz{128} in the commpage...
         rlwinm	r4,r4,0,0,27		// ...clear user's cr7...
-        stw		r4,savecr(r13)		// ...as a flag for _COMM_PAGE_BIGCOPY
+        stw		r4,savecr(r13)		// ...as a flag for commpage code
 a64NotCommpage:
         mtctr	r0
         cmpw	r0,r0				// turn cr0 beq on so we can check for DSIs
@@ -836,12 +839,14 @@ a64ExitEm:
 		b		a64Exit					// Join standard exit routine...
 
 a64PassAlong:							// unhandled exception, just pass it along
+        li		r0,1					// Set that the alignment/program exception was not emulated
         crset	kNotify					// return T_ALIGNMENT or T_PROGRAM
+		stw		r0,savemisc3(r13)		// Set that emulation was not done
         crclr	kTrace					// not a trace interrupt
         b		a64Exit1
 a64UpdateCheck:							// successfully emulated, may be update form
         bf		kUpdate,a64Exit			// update?
-        stdx	r17,r14,r16				// yes, store EA into RA
+        stdx	r12,r14,r16				// yes, store 64-bit EA into RA
 a64Exit:								// instruction successfully emulated
         addi	r28,r28,4				// bump SRR0 past the emulated instruction
         li		r30,T_IN_VAIN			// eat the interrupt since we emulated it

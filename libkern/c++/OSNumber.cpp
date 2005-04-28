@@ -24,7 +24,7 @@
 #include <sys/cdefs.h>
 
 __BEGIN_DECLS
-extern int sscanf(const char *input, const char *fmt, ...);
+extern unsigned long strtoul(const char *, char **, int);
 __END_DECLS
 
 #include <libkern/c++/OSNumber.h>
@@ -60,18 +60,7 @@ bool OSNumber::init(unsigned long long inValue, unsigned int numberOfBits)
 
 bool OSNumber::init(const char *value, unsigned int numberOfBits)
 {
-    unsigned long long thisOffset;
-
-#ifdef q_works
-    sscanf(value, "%qi", thisOffset);
-#else
-    unsigned int smallOffset;
-
-    sscanf(value, "%i", &smallOffset);
-    thisOffset = smallOffset;
-#endif
-
-    return init(thisOffset, numberOfBits);
+    return init((unsigned long long)strtoul(value, NULL, 0), numberOfBits);
 }
 
 void OSNumber::free() { super::free(); }

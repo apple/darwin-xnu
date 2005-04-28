@@ -40,7 +40,10 @@
 #include <kern/mach_loader.h>
 #include <architecture/byte_order.h>
 
-#define CPU_TYPE_NATIVE		(machine_slot[cpu_number()].cpu_type)
+/* XXX should be in common header */
+extern int grade_binary(cpu_type_t exectype, cpu_subtype_t execsubtype);
+
+#define CPU_TYPE_NATIVE		(cpu_type())
 #define CPU_TYPE_CLASSIC	CPU_TYPE_POWERPC
 
 /**********************************************************************
@@ -51,7 +54,9 @@
  *
  * Args:	vp:		The vnode for the fat file.
  *		header:		A pointer to the fat file header.
- *		cpu_type:	The required cpu type.
+ *		req_cpu_type:	The required cpu type.
+ *		mask_bits:	Bits to mask from the sub-image type when
+ *				grading it vs. the req_cpu_type
  *		archret (out):	Pointer to fat_arch structure to hold
  *				the results.
  *
@@ -60,15 +65,19 @@
  **********************************************************************/
 static load_return_t
 fatfile_getarch2(
+#if 0
 	struct vnode	*vp,
+#else
+	__unused struct vnode	*vp,
+#endif
 	vm_offset_t	data_ptr,
-	cpu_type_t	cpu_type,
+	cpu_type_t	req_cpu_type,
+	cpu_type_t	mask_bits,
 	struct fat_arch	*archret)
 {
 	/* vm_pager_t		pager; */
 	vm_offset_t		addr;
 	vm_size_t		size;
-	kern_return_t		kret;
 	load_return_t		lret;
 	struct fat_arch		*arch;
 	struct fat_arch		*best_arch;
@@ -77,7 +86,9 @@ fatfile_getarch2(
 	int			nfat_arch;
 	int			end_of_archs;
 	struct fat_header	*header;
+#if 0
 	off_t filesize;
+#endif
 
 	/*
 	 * 	Get the pager for the file.
@@ -108,7 +119,7 @@ fatfile_getarch2(
 	 * 	Round size of fat_arch structures up to page boundry.
 	 */
 	size = round_page_32(end_of_archs);
-	if (size <= 0)
+	if (size == 0)
 		return(LOAD_BADMACHO);
 
 	/*
@@ -123,13 +134,14 @@ fatfile_getarch2(
 		/*
 		 *	Check to see if right cpu type.
 		 */
-		if(NXSwapBigIntToHost(arch->cputype) != cpu_type)
+		if(((cpu_type_t)NXSwapBigIntToHost(arch->cputype) & ~mask_bits) != req_cpu_type)
 			continue;
 
 		/*
 		 * 	Get the grade of the cpu subtype.
 		 */
-		grade = grade_cpu_subtype(
+		grade = grade_binary(
+			    NXSwapBigIntToHost(arch->cputype),
 			    NXSwapBigIntToHost(arch->cpusubtype));
 
 		/*
@@ -187,10 +199,14 @@ fatfile_getarch_affinity(
 				primary_type = CPU_TYPE_NATIVE;
 				fallback_type = CPU_TYPE_CLASSIC;
 		}
-		lret = fatfile_getarch2(vp, data_ptr, primary_type, archret);
+		/*
+		 * Ignore the architectural bits when determining if an image
+		 * in a fat file should be skipped or graded.
+		 */
+		lret = fatfile_getarch2(vp, data_ptr, primary_type, CPU_ARCH_MASK, archret);
 		if ((lret != 0) && handler) {
 			lret = fatfile_getarch2(vp, data_ptr, fallback_type,
-						archret);
+						0, archret);
 		}
 		return lret;
 }
@@ -215,6 +231,31 @@ fatfile_getarch(
 	vm_offset_t 	data_ptr,
 	struct fat_arch		*archret)
 {
-	return fatfile_getarch2(vp, data_ptr, CPU_TYPE_NATIVE, archret);
+	return fatfile_getarch2(vp, data_ptr, CPU_TYPE_NATIVE, 0, archret);
+}
+
+/**********************************************************************
+ * Routine:	fatfile_getarch_with_bits()
+ *
+ * Function:	Locate the architecture-dependant contents of a fat
+ *		file that match this CPU.
+ *
+ * Args:	vp:		The vnode for the fat file.
+ *		archbits:	Architecture specific feature bits
+ *		header:		A pointer to the fat file header.
+ *		archret (out):	Pointer to fat_arch structure to hold
+ *				the results.
+ *
+ * Returns:	KERN_SUCCESS:	Valid architecture found.
+ *		KERN_FAILURE:	No valid architecture found.
+ **********************************************************************/
+load_return_t
+fatfile_getarch_with_bits(
+	struct vnode		*vp,
+	integer_t		archbits,
+	vm_offset_t 	data_ptr,
+	struct fat_arch		*archret)
+{
+	return fatfile_getarch2(vp, data_ptr, archbits | CPU_TYPE_NATIVE, 0, archret);
 }
 

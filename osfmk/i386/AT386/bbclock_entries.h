@@ -27,5 +27,6 @@ extern kern_return_t	bbc_gettime(
 				mach_timespec_t		* curtime);
 extern kern_return_t	bbc_settime(
 				mach_timespec_t		* curtime);
+extern int		bbc_config(void);
 
 #define	NO_SETALRM	(void (*) (mach_timespec_t * alarm_time))0

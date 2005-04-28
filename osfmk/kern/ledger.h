@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -22,23 +22,17 @@
 /*
  * @OSF_COPYRIGHT@
  */
+
+#ifdef	MACH_KERNEL_PRIVATE
+
 #ifndef _KERN_LEDGER_H_
 #define _KERN_LEDGER_H_
 
-
 #include <mach/mach_types.h>
-#include <ipc/ipc_port.h>
 
-#include <sys/appleapiopts.h>
-
-#ifdef	__APPLE_API_PRIVATE
-
-#ifdef MACH_KERNEL_PRIVATE
-
+#include <kern/kern_types.h>
 #include <kern/lock.h>
-#include <mach/etap_events.h>
-
-#define LEDGER_ITEM_INFINITY	(~0)
+#include <ipc/ipc_types.h>
 
 struct ledger {
         ipc_port_t	ledger_self;
@@ -55,7 +49,7 @@ typedef struct ledger ledger_data_t;
 #define ledger_lock(ledger)	simple_lock(&(ledger)->lock)
 #define ledger_unlock(ledger)	simple_unlock(&(ledger)->lock)
 #define	ledger_lock_init(ledger) \
-	simple_lock_init(&(ledger)->lock, ETAP_MISC_LEDGER)
+	simple_lock_init(&(ledger)->lock, 0)
 
 extern ledger_t	root_wired_ledger;
 extern ledger_t	root_paged_ledger;
@@ -69,12 +63,10 @@ extern ipc_port_t ledger_copy(ledger_t);
 
 extern kern_return_t ledger_enter(ledger_t, ledger_item_t);
 
-#endif /* MACH_KERNEL_PRIVATE */
-
-#endif	/* __APPLE_API_PRIVATE */
-
 extern ledger_t convert_port_to_ledger(ipc_port_t);
 
 extern ipc_port_t convert_ledger_to_port(ledger_t);
 
 #endif	/* _KERN_LEDGER_H_ */
+
+#endif /* MACH_KERNEL_PRIVATE */

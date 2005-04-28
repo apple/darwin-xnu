@@ -68,11 +68,11 @@
 
 /*
  * Round p (pointer or byte index) up to a correctly-aligned value for all
- * data types (int, long, ...).   The result is u_int and must be cast to
- * any desired pointer type.
+ * data types (int, long, ...).   The result is unsigned int and must be
+ * cast to any desired pointer type.
  */
 #define	ALIGNBYTES	3
-#define	ALIGN(p)	(((u_int)(p) + ALIGNBYTES) &~ ALIGNBYTES)
+#define	ALIGN(p)	(((unsigned int)(p) + ALIGNBYTES) &~ ALIGNBYTES)
 
 #define	NBPG		4096		/* bytes/page */
 #define	PGOFSET		(NBPG-1)	/* byte offset into page */
@@ -82,8 +82,6 @@
 #define	DEV_BSHIFT	9		/* log2(DEV_BSIZE) */
 #define BLKDEV_IOSIZE	2048
 #define	MAXPHYS		(64 * 1024)	/* max raw I/O transfer size */
-
-#define	STACK_GROWS_UP	0		/* stack grows to lower addresses */
 
 #define	CLSIZE		1
 #define	CLSIZELOG2	0

@@ -81,22 +81,14 @@ struct i386_kernel_state ddb_null_kregs;
 extern vm_offset_t vm_min_inks_addr;	/* set by db_clone_symtabXXX */
 #define INKSERVER(va)	(((vm_offset_t)(va)) >= vm_min_inks_addr)
 
-#if	NCPUS > 1
 extern vm_offset_t interrupt_stack[];
 #define	ININTSTACK(va)						\
 	(((vm_offset_t)(va)) >= interrupt_stack[cpu_number()] &&\
 	 (((vm_offset_t)(va)) < interrupt_stack[cpu_number()] +	\
 	                        INTSTACK_SIZE))
-#else	/* NCPUS > 1 */
-extern  char intstack[];
-#define	ININTSTACK(va)						\
-	(((vm_offset_t)(va)) >= (vm_offset_t)intstack &&	\
-	 (((vm_offset_t)(va)) < ((vm_offset_t)&intstack) +	\
-	                        INTSTACK_SIZE))
-#endif	/* NCPUS > 1 */
 
 #define	INKERNELSTACK(va, th)					\
-	(th == THR_ACT_NULL ||				\
+	(th == THREAD_NULL ||				\
 	 (((vm_offset_t)(va)) >= th->thread->kernel_stack &&	\
 	  (((vm_offset_t)(va)) < th->thread->kernel_stack +	\
 	                         KERNEL_STACK_SIZE)) ||		\
@@ -151,7 +143,7 @@ extern void	db_nextframe(
 			struct i386_frame	**fp,
 			db_addr_t		*ip,
 			int			frame_type,
-			thread_act_t		thr_act);
+			thread_t		thr_act);
 extern int	_setjmp(
 			jmp_buf_t		* jb);
 
@@ -202,23 +194,23 @@ db_i386_reg_value(
 	extern char		etext;
 	int			*dp = 0;
 	db_expr_t		null_reg = 0;
-	register thread_act_t	thr_act = ap->thr_act;
+	register thread_t	thr_act = ap->thr_act;
 	extern unsigned		int_stack_high;
 	int			cpu;
 
 	if (db_option(ap->modif, 'u')) {
-	    if (thr_act == THR_ACT_NULL) {
-		if ((thr_act = current_act()) == THR_ACT_NULL)
+	    if (thr_act == THREAD_NULL) {
+		if ((thr_act = current_thread()) == THREAD_NULL)
 		    db_error("no user registers\n");
 	    }
-	    if (thr_act == current_act()) {
+	    if (thr_act == current_thread()) {
 		if (IS_USER_TRAP(&ddb_regs, &etext))
 		    dp = vp->valuep;
 		else if (ddb_regs.ebp < int_stack_high)
 		    db_error("cannot get/set user registers in nested interrupt\n");
 	    }
 	} else {
-	    if (thr_act == THR_ACT_NULL || thr_act == current_act()) {
+	    if (thr_act == THREAD_NULL || thr_act == current_thread()) {
 		dp = vp->valuep;
 	    } else {
 	      if (thr_act->thread &&
@@ -226,9 +218,9 @@ db_i386_reg_value(
 			thr_act->thread->kernel_stack) {
 		int cpu;
 
-		for (cpu = 0; cpu < NCPUS; cpu++) {
-		    if (machine_slot[cpu].running == TRUE &&
-			cpu_data[cpu].active_thread == thr_act->thread && saved_state[cpu]) {
+		for (cpu = 0; cpu < real_ncpus; cpu++) {
+		    if (cpu_datap(cpu)->cpu_running == TRUE &&
+			cpu_datap(cpu)->cpu_active_thread == thr_act->thread && saved_state[cpu]) {
 			dp = (int *) (((int)saved_state[cpu]) +
 				      (((int) vp->valuep) -
 				       (int) &ddb_regs));
@@ -255,9 +247,9 @@ db_i386_reg_value(
 	    int cpu;
 
 	    if (!db_option(ap->modif, 'u')) {
-		for (cpu = 0; cpu < NCPUS; cpu++) {
-		    if (machine_slot[cpu].running == TRUE &&
-		    	cpu_data[cpu].active_thread == thr_act->thread && saved_state[cpu]) {
+		for (cpu = 0; cpu < real_ncpus; cpu++) {
+		    if (cpu_datap(cpu)->cpu_running == TRUE &&
+		    	cpu_datap(cpu)->cpu_active_thread == thr_act->thread && saved_state[cpu]) {
 		    	    dp = (int *) (((int)saved_state[cpu]) +
 					  (((int) vp->valuep) -
 					   (int) &ddb_regs));
@@ -266,9 +258,9 @@ db_i386_reg_value(
 		}
 	    }
 	    if (dp == 0) {
-		if (!thr_act || thr_act->mact.pcb == 0)
+		if (!thr_act || thr_act->machine.pcb == 0)
 		    db_error("no pcb\n");
-		dp = (int *)((int)(&thr_act->mact.pcb->iss) + 
+		dp = (int *)((int)(&thr_act->machine.pcb->iss) + 
 			     ((int)vp->valuep - (int)&ddb_regs));
 	    }
 	}
@@ -372,7 +364,7 @@ db_nextframe(
 	struct i386_frame	**fp,		/* in/out */
 	db_addr_t		*ip,		/* out */
 	int			frame_type,	/* in */
-	thread_act_t		thr_act)	/* in */
+	thread_t		thr_act)	/* in */
 {
 	extern char *	trap_type[];
 	extern int	TRAP_TYPES;
@@ -380,7 +372,7 @@ db_nextframe(
 	struct i386_saved_state *saved_regs;
 	struct interrupt_frame *ifp;
 	struct i386_interrupt_state *isp;
-	task_t task = (thr_act != THR_ACT_NULL)? thr_act->task: TASK_NULL;
+	task_t task = (thr_act != THREAD_NULL)? thr_act->task: TASK_NULL;
 
 	switch(frame_type) {
 	case TRAP:
@@ -418,9 +410,9 @@ db_nextframe(
 	    db_printf(" <<<<<\n");
 	    break;
 	case SYSCALL:
-	    if (thr_act != THR_ACT_NULL && thr_act->mact.pcb) {
-		*ip = (db_addr_t) thr_act->mact.pcb->iss.eip;
-		*fp = (struct i386_frame *) thr_act->mact.pcb->iss.ebp;
+	    if (thr_act != THREAD_NULL && thr_act->machine.pcb) {
+		*ip = (db_addr_t) thr_act->machine.pcb->iss.eip;
+		*fp = (struct i386_frame *) thr_act->machine.pcb->iss.ebp;
 		break;
 	    }
 	    /* falling down for unknown case */
@@ -453,7 +445,7 @@ db_stack_trace_cmd(
 	char		*filename;
 	int		linenum;
 	task_t		task;
-	thread_act_t	th, top_act;
+	thread_t	th, top_act;
 	int		user_frame;
 	int		frame_count;
 	jmp_buf_t	*prev;
@@ -487,21 +479,21 @@ db_stack_trace_cmd(
 		addr = (db_expr_t) queue_first(act_list);
 	    } else if (trace_thread) {
 		if (have_addr) {
-		    if (!db_check_act_address_valid((thread_act_t)addr)) {
+		    if (!db_check_act_address_valid((thread_t)addr)) {
 			if (db_lookup_task((task_t)addr) == -1)
 			    return;
 			act_list = &(((task_t)addr)->thr_acts);
 			addr = (db_expr_t) queue_first(act_list);
 		    } else {
-			act_list = &(((thread_act_t)addr)->task->thr_acts);
-			thcount = db_lookup_task_act(((thread_act_t)addr)->task,
-							(thread_act_t)addr);
+			act_list = &(((thread_t)addr)->task->thr_acts);
+			thcount = db_lookup_task_act(((thread_t)addr)->task,
+							(thread_t)addr);
 		    }
 		} else {
 		    th = db_default_act;
-		    if (th == THR_ACT_NULL)
-			th = current_act();
-		    if (th == THR_ACT_NULL) {
+		    if (th == THREAD_NULL)
+			th = current_thread();
+		    if (th == THREAD_NULL) {
 			db_printf("no active thr_act\n");
 			return;
 		    }
@@ -516,7 +508,7 @@ db_stack_trace_cmd(
 	    count = 65535;
 
     next_thread:
-	top_act = THR_ACT_NULL;
+	top_act = THREAD_NULL;
 
 	user_frame = 0;
 	frame_count = count;
@@ -524,18 +516,18 @@ db_stack_trace_cmd(
 	if (!have_addr && !trace_thread) {
 	    frame = (struct i386_frame *)ddb_regs.ebp;
 	    callpc = (db_addr_t)ddb_regs.eip;
-	    th = current_act();
-	    task = (th != THR_ACT_NULL)? th->task: TASK_NULL;
+	    th = current_thread();
+	    task = (th != THREAD_NULL)? th->task: TASK_NULL;
 	} else if (trace_thread) {
 	    if (have_addr) {
-		th = (thread_act_t) addr;
+		th = (thread_t) addr;
 		if (!db_check_act_address_valid(th))
 		    return;
 	    } else {
 		th = db_default_act;
-		if (th == THR_ACT_NULL)
-		   th = current_act();
-		if (th == THR_ACT_NULL) {
+		if (th == THREAD_NULL)
+		   th = current_thread();
+		if (th == THREAD_NULL) {
 		   db_printf("no active thread\n");
 		   return;
 		}
@@ -548,17 +540,17 @@ db_stack_trace_cmd(
 	    user_frame = 0;
 
 	    task = th->task;
-	    if (th == current_act()) {
+	    if (th == current_thread()) {
 	        frame = (struct i386_frame *)ddb_regs.ebp;
 	        callpc = (db_addr_t)ddb_regs.eip;
 	    } else {
-		if (th->mact.pcb == 0) {
+		if (th->machine.pcb == 0) {
 		    db_printf("thread has no pcb\n");
 		    return;
 		}
 		if (!th->thread) {
 		    register struct i386_saved_state *iss =
-						&th->mact.pcb->iss;
+						&th->machine.pcb->iss;
 
 		    db_printf("thread has no shuttle\n");
 #if 0
@@ -571,7 +563,7 @@ db_stack_trace_cmd(
 		else if ((th->thread->state & TH_STACK_HANDOFF) ||
 			  th->thread->kernel_stack == 0) {
 		    register struct i386_saved_state *iss =
-						&th->mact.pcb->iss;
+						&th->machine.pcb->iss;
 
 		    db_printf("Continuation ");
 		    db_task_printsym((db_expr_t)th->thread->continuation,
@@ -582,21 +574,21 @@ db_stack_trace_cmd(
 		} else {
 		    int cpu;
 
-		    for (cpu = 0; cpu < NCPUS; cpu++) {
-			if (machine_slot[cpu].running == TRUE &&
-			    cpu_data[cpu].active_thread == th->thread &&
+		    for (cpu = 0; cpu < real_ncpus; cpu++) {
+			if (cpu_datap(cpu)->cpu_running == TRUE &&
+			    cpu_datap(cpu)->cpu_active_thread == th->thread &&
 			    saved_state[cpu]) {
 			    break;
 			}
 		    }
-		    if (top_act != THR_ACT_NULL) {
+		    if (top_act != THREAD_NULL) {
 			    /*
 			     * Trying to get the backtrace of an activation
 			     * which is not the top_most one in the RPC chain:
 			     * use the activation's pcb.
 			     */
 			    register struct i386_saved_state *iss =
-				&th->mact.pcb->iss;
+				&th->machine.pcb->iss;
 			    frame = (struct i386_frame *) (iss->ebp);
 			    callpc = (db_addr_t) (iss->eip);
 		    } else {
@@ -635,8 +627,8 @@ db_stack_trace_cmd(
 	    }
 	} else {
 	    frame = (struct i386_frame *)addr;
-	    th = (db_default_act)? db_default_act: current_act();
-	    task = (th != THR_ACT_NULL)? th->task: TASK_NULL;
+	    th = (db_default_act)? db_default_act: current_thread();
+	    task = (th != THREAD_NULL)? th->task: TASK_NULL;
 	    callpc = (db_addr_t)db_get_task_value((int)&frame->f_retaddr,
 						  4, 
 						  FALSE, 
@@ -764,11 +756,11 @@ db_stack_trace_cmd(
 	next_frame:
 	    lastcallpc = callpc;
 	    db_nextframe(&lastframe, &frame, &callpc, frame_type,
-			 (user_frame) ? th : THR_ACT_NULL);
+			 (user_frame) ? th : THREAD_NULL);
 
 	    if (frame == 0) {
-		if (th->lower != THR_ACT_NULL) {
-		    if (top_act == THR_ACT_NULL)
+		if (th->lower != THREAD_NULL) {
+		    if (top_act == THREAD_NULL)
 			top_act = th;
 		    th = th->lower;
 		    db_printf(">>>>> next activation 0x%x ($task%d.%d) <<<<<\n",
@@ -803,9 +795,9 @@ db_stack_trace_cmd(
 
     thread_done:
 	if (trace_all_threads) {
-	    if (top_act != THR_ACT_NULL)
+	    if (top_act != THREAD_NULL)
 		th = top_act;
-	    th = (thread_act_t) queue_next(&th->thr_acts);
+	    th = (thread_t) queue_next(&th->thr_acts);
 	    if (! queue_end(act_list, (queue_entry_t) th)) {
 		db_printf("\n");
 		addr = (db_expr_t) th;

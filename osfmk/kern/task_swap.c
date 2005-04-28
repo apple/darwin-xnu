@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -37,7 +37,6 @@
 #include <kern/task.h>
 #include <kern/task_swap.h>
 #include <kern/thread.h>
-#include <kern/thread_swap.h>
 #include <kern/host_statistics.h>
 #include <kern/misc_protos.h>
 #include <kern/assert.h>
@@ -55,7 +54,7 @@ kern_return_t
 task_swappable(
 	host_priv_t host_priv,
 	task_t task,
-	boolean_t make_swappable)
+	__unused boolean_t make_swappable)
 {
 	if (host_priv == HOST_PRIV_NULL)
 		return (KERN_INVALID_ARGUMENT);

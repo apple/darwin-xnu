@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -62,14 +62,13 @@
 
 
 #include <sys/param.h>
-#include <sys/mount.h>
+#include <sys/mount_internal.h>
 #include <sys/time.h>
 #include <sys/vm.h>
-#include <sys/vnode.h>
+#include <sys/vnode_internal.h>
 #include <sys/stat.h>
 #include <sys/namei.h>
 #include <sys/ucred.h>
-#include <sys/buf.h>
 #include <sys/errno.h>
 #include <sys/malloc.h>
 
@@ -106,7 +105,7 @@ int
 vn_default_error()
 {
 
-	return (EOPNOTSUPP);
+	return (ENOTSUP);
 }
 
 /*
@@ -172,7 +171,7 @@ vfs_opv_init()
 			 */
 			if (opve_descp->opve_op->vdesc_offset == 0 &&
 				    opve_descp->opve_op->vdesc_offset !=
-				    	VOFFSET(vop_default)) {
+				    	VOFFSET(vnop_default)) {
 				printf("operation %s not listed in %s.\n",
 				    opve_descp->opve_op->vdesc_name,
 				    "vfs_op_descs");
@@ -195,13 +194,13 @@ vfs_opv_init()
 		/*
 		 * Force every operations vector to have a default routine.
 		 */
-		if (opv_desc_vector[VOFFSET(vop_default)]==NULL) {
+		if (opv_desc_vector[VOFFSET(vnop_default)]==NULL) {
 			panic("vfs_opv_init: operation vector without default routine.");
 		}
 		for (k = 0; k<vfs_opv_numops; k++)
 			if (opv_desc_vector[k] == NULL)
 				opv_desc_vector[k] = 
-					opv_desc_vector[VOFFSET(vop_default)];
+					opv_desc_vector[VOFFSET(vnop_default)];
 	}
 }
 
@@ -235,15 +234,115 @@ vfs_op_init()
  */
 extern struct vnodeops dead_vnodeops;
 extern struct vnodeops spec_vnodeops;
-struct vattr va_null;
 
+/* vars for vnode lock */
+lck_grp_t * vnode_lck_grp;
+lck_grp_attr_t * vnode_lck_grp_attr;
+lck_attr_t * vnode_lck_attr;
+
+
+/* vars for vnode list lock */
+lck_grp_t * vnode_list_lck_grp;
+lck_grp_attr_t * vnode_list_lck_grp_attr;
+lck_attr_t * vnode_list_lck_attr;
+lck_mtx_t * vnode_list_mtx_lock;
+lck_mtx_t * spechash_mtx_lock;
+/* Routine to lock and unlock the  vnode lists */
+void vnode_list_lock(void);
+void vnode_list_unlock(void);
+
+/* vars for vfsconf lock */
+lck_grp_t * fsconf_lck_grp;
+lck_grp_attr_t * fsconf_lck_grp_attr;
+lck_attr_t * fsconf_lck_attr;
+
+
+/* vars for mount lock */
+lck_grp_t * mnt_lck_grp;
+lck_grp_attr_t * mnt_lck_grp_attr;
+lck_attr_t * mnt_lck_attr;
+
+/* vars for mount list lock */
+lck_grp_t * mnt_list_lck_grp;
+lck_grp_attr_t * mnt_list_lck_grp_attr;
+lck_attr_t * mnt_list_lck_attr;
+lck_mtx_t * mnt_list_mtx_lock;
+
+extern void journal_init();
+
+struct mount * dead_mountp;
 /*
  * Initialize the vnode structures and initialize each file system type.
  */
+void
 vfsinit()
 {
-	struct vfsconf *vfsp;
+	struct vfstable *vfsp;
 	int i, maxtypenum;
+	struct mount * mp;
+	
+	/* Allocate vnode list lock group attribute and group */
+	vnode_list_lck_grp_attr= lck_grp_attr_alloc_init();
+	lck_grp_attr_setstat(vnode_list_lck_grp_attr);
+
+	vnode_list_lck_grp = lck_grp_alloc_init("vnode list",  vnode_list_lck_grp_attr);
+	
+	/* Allocate vnode list lock attribute */
+	vnode_list_lck_attr = lck_attr_alloc_init();
+	//lck_attr_setdebug(vnode_list_lck_attr);
+
+	/* Allocate vnode list lock */
+	vnode_list_mtx_lock = lck_mtx_alloc_init(vnode_list_lck_grp, vnode_list_lck_attr);
+
+	/* Allocate spec hash list lock */
+	spechash_mtx_lock = lck_mtx_alloc_init(vnode_list_lck_grp, vnode_list_lck_attr);
+
+	/* allocate vnode lock group attribute and group */
+	vnode_lck_grp_attr= lck_grp_attr_alloc_init();
+	lck_grp_attr_setstat(vnode_lck_grp_attr);
+
+	vnode_lck_grp = lck_grp_alloc_init("vnode",  vnode_lck_grp_attr);
+
+	/* Allocate vnode lock attribute */
+	vnode_lck_attr = lck_attr_alloc_init();
+	//lck_attr_setdebug(vnode_lck_attr);
+
+	/* Allocate fs config lock group attribute and group */
+	fsconf_lck_grp_attr= lck_grp_attr_alloc_init();
+	lck_grp_attr_setstat(fsconf_lck_grp_attr);
+
+	fsconf_lck_grp = lck_grp_alloc_init("fs conf",  fsconf_lck_grp_attr);
+	
+	/* Allocate fs config lock attribute */
+	fsconf_lck_attr = lck_attr_alloc_init();
+	//lck_attr_setdebug(fsconf_lck_attr);
+
+
+	/* Allocate mount point related lock structures  */
+
+	/* Allocate mount list lock group attribute and group */
+	mnt_list_lck_grp_attr= lck_grp_attr_alloc_init();
+	lck_grp_attr_setstat(mnt_list_lck_grp_attr);
+
+	mnt_list_lck_grp = lck_grp_alloc_init("mount list",  mnt_list_lck_grp_attr);
+	
+	/* Allocate mount list lock attribute */
+	mnt_list_lck_attr = lck_attr_alloc_init();
+	//lck_attr_setdebug(mnt_list_lck_attr);
+
+	/* Allocate mount list lock */
+	mnt_list_mtx_lock = lck_mtx_alloc_init(mnt_list_lck_grp, mnt_list_lck_attr);
+
+
+	/* allocate mount lock group attribute and group */
+	mnt_lck_grp_attr= lck_grp_attr_alloc_init();
+	lck_grp_attr_setstat(mnt_lck_grp_attr);
+
+	mnt_lck_grp = lck_grp_alloc_init("mount",  mnt_lck_grp_attr);
+
+	/* Allocate mount lock attribute */
+	mnt_lck_attr = lck_attr_alloc_init();
+	//lck_attr_setdebug(mnt_lck_attr);
 
 	/*
 	 * Initialize the "console user" for access purposes:
@@ -263,6 +362,10 @@ vfsinit()
 	 */
 	nchinit();
 	/*
+	 * Initialize the journaling locks
+	 */
+	journal_init();
+	/*
 	 * Build vnode operation vectors.
 	 */
 	vfs_op_init();
@@ -271,7 +374,6 @@ vfsinit()
 	 * Initialize each file system type in the static list,
 	 * until the first NULL ->vfs_vfsops is encountered.
 	 */
-	vattr_null(&va_null);
 	numused_vfsslots = maxtypenum = 0;
 	for (vfsp = vfsconf, i = 0; i < maxvfsconf; i++, vfsp++) {
 		if (vfsp->vfc_vfsops == (struct	vfsops *)0)
@@ -280,14 +382,84 @@ vfsinit()
 		if (maxtypenum <= vfsp->vfc_typenum)
 			maxtypenum = vfsp->vfc_typenum + 1;
 		(*vfsp->vfc_vfsops->vfs_init)(vfsp);
+		
+		lck_mtx_init(&vfsp->vfc_lock, fsconf_lck_grp, fsconf_lck_attr);
+		
 		numused_vfsslots++;
 	}
 	/* next vfc_typenum to be used */
 	maxvfsconf = maxtypenum;
+
+	/*
+	 * Initialize the vnop authorization scope.
+	 */
+	vnode_authorize_init();
+	
+	/* 
+	 * create a mount point for dead vnodes
+	 */
+	MALLOC_ZONE(mp, struct mount *, (u_long)sizeof(struct mount),
+		M_MOUNT, M_WAITOK);
+	bzero((char *)mp, (u_long)sizeof(struct mount));
+	/* Initialize the default IO constraints */
+	mp->mnt_maxreadcnt = mp->mnt_maxwritecnt = MAXPHYS;
+	mp->mnt_segreadcnt = mp->mnt_segwritecnt = 32;
+	mp->mnt_maxsegreadsize = mp->mnt_maxreadcnt;
+	mp->mnt_maxsegwritesize = mp->mnt_maxwritecnt;
+	mp->mnt_devblocksize = DEV_BSIZE;
+    
+	TAILQ_INIT(&mp->mnt_vnodelist);
+	TAILQ_INIT(&mp->mnt_workerqueue);
+	TAILQ_INIT(&mp->mnt_newvnodes);
+	mp->mnt_flag = MNT_LOCAL;
+	mp->mnt_lflag = MNT_LDEAD;
+	mount_lock_init(mp);
+	dead_mountp = mp;
 }
 
+void
+vnode_list_lock()
+{
+	lck_mtx_lock(vnode_list_mtx_lock);
+}
+
+void
+vnode_list_unlock()
+{
+	lck_mtx_unlock(vnode_list_mtx_lock);
+}
+
+void
+mount_list_lock()
+{
+	lck_mtx_lock(mnt_list_mtx_lock);
+}
+
+void
+mount_list_unlock()
+{
+	lck_mtx_unlock(mnt_list_mtx_lock);
+}
+
+void
+mount_lock_init(mount_t mp)
+{
+	lck_mtx_init(&mp->mnt_mlock, mnt_lck_grp, mnt_lck_attr);
+	lck_mtx_init(&mp->mnt_renamelock, mnt_lck_grp, mnt_lck_attr);
+	lck_rw_init(&mp->mnt_rwlock, mnt_lck_grp, mnt_lck_attr);
+}
+
+void
+mount_lock_destroy(mount_t mp)
+{
+	lck_mtx_destroy(&mp->mnt_mlock, mnt_lck_grp);
+	lck_mtx_destroy(&mp->mnt_renamelock, mnt_lck_grp);
+	lck_rw_destroy(&mp->mnt_rwlock, mnt_lck_grp);
+}
+
+
 /*
- * Name:	vfsconf_add
+ * Name:	vfstable_add
  *
  * Description:	Add a filesystem to the vfsconf list at the first
  *		unused slot.  If no slots are available, return an
@@ -305,15 +477,12 @@ vfsinit()
  *
  * Warning:	This code assumes that vfsconf[0] is non-empty.
  */
-int
-vfsconf_add(struct vfsconf *nvfsp)
+struct vfstable *
+vfstable_add(struct vfstable  *nvfsp)
 {
 	int slot;
-	struct vfsconf *slotp;
+	struct vfstable *slotp;
 
-	if (nvfsp == NULL)	/* overkill */
-		return (-1);
-	
 	/*
 	 * Find the next empty slot; we recognize an empty slot by a
 	 * NULL-valued ->vfc_vfsops, so if we delete a VFS, we must
@@ -325,7 +494,7 @@ vfsconf_add(struct vfsconf *nvfsp)
 	}
 	if (slot == maxvfsslots) {
 		/* out of static slots; allocate one instead */
-		MALLOC(slotp, struct vfsconf *, sizeof(struct vfsconf),
+		MALLOC(slotp, struct vfstable *, sizeof(struct vfstable),
 							M_TEMP, M_WAITOK);
 	} else {
 		slotp = &vfsconf[slot];
@@ -338,7 +507,8 @@ vfsconf_add(struct vfsconf *nvfsp)
 	 * Note; Takes advantage of the fact that 'slot' was left
 	 * with the value of 'maxvfslots' in the allocation case.
 	 */
-	bcopy(nvfsp, slotp, sizeof(struct vfsconf));
+	bcopy(nvfsp, slotp, sizeof(struct vfstable));
+	lck_mtx_init(&slotp->vfc_lock, fsconf_lck_grp, fsconf_lck_attr);
 	if (slot != 0) {
 		slotp->vfc_next = vfsconf[slot - 1].vfc_next;
 		vfsconf[slot - 1].vfc_next = slotp;
@@ -347,22 +517,11 @@ vfsconf_add(struct vfsconf *nvfsp)
 	}
 	numused_vfsslots++;
 
-	/*
-	 * Call through the ->vfs_init(); use slotp instead of nvfsp,
-	 * so that if the FS cares where it's instance record is, it
-	 * can find it later.
-	 *
-	 * XXX All code that calls ->vfs_init treats it as if it
-	 * XXX returns a "void', and can never fail.
-	 */
-	if (nvfsp->vfc_vfsops->vfs_init)
-		(*nvfsp->vfc_vfsops->vfs_init)(slotp);
-
-	return(0);
+	return(slotp);
 }
 
 /*
- * Name:	vfsconf_del
+ * Name:	vfstable_del
  *
  * Description:	Remove a filesystem from the vfsconf list by name.
  *		If no such filesystem exists, return an error.
@@ -375,29 +534,29 @@ vfsconf_add(struct vfsconf *nvfsp)
  * Notes:	Hopefully all filesystems have unique names.
  */
 int
-vfsconf_del(char * fs_name)
+vfstable_del(struct vfstable  * vtbl)
 {
-	struct vfsconf **vcpp;
-	struct vfsconf *vcdelp;
+	struct vfstable **vcpp;
+	struct vfstable *vcdelp;
 
 	/*
-	 * Traverse the list looking for fs_name; if found, *vcpp
+	 * Traverse the list looking for vtbl; if found, *vcpp
 	 * will contain the address of the pointer to the entry to
 	 * be removed.
 	 */
 	for( vcpp = &vfsconf; *vcpp; vcpp = &(*vcpp)->vfc_next) {
-		if (strcmp( (*vcpp)->vfc_name, fs_name) == 0)
+		if (*vcpp == vtbl)
             break;
         }
 
-	if (*vcpp == NULL) {
-	   /* XXX need real error code for entry not found */
-	   return(-1);
-	}
+	if (*vcpp == NULL)
+	   return(ESRCH);	/* vtbl not on vfsconf list */
 
 	/* Unlink entry */
 	vcdelp = *vcpp;
 	*vcpp = (*vcpp)->vfc_next;
+
+	lck_mtx_destroy(&vcdelp->vfc_lock, fsconf_lck_grp);
 
 	/*
 	 * Is this an entry from our static table?  We find out by
@@ -406,7 +565,7 @@ vfsconf_del(char * fs_name)
 	 */
 	if (vcdelp >= vfsconf && vcdelp < (vfsconf + maxvfsslots)) {	/* Y */
 		/* Mark as empty for vfscon_add() */
-		bzero(vcdelp, sizeof(struct vfsconf));
+		bzero(vcdelp, sizeof(struct vfstable));
 		numused_vfsslots--;
 	} else {							/* N */
 		/*
@@ -420,3 +579,16 @@ vfsconf_del(char * fs_name)
 
 	return(0);
 }
+
+void
+SPECHASH_LOCK(void)
+{
+	lck_mtx_lock(spechash_mtx_lock);
+}
+
+void
+SPECHASH_UNLOCK(void)
+{
+	lck_mtx_unlock(spechash_mtx_lock);
+}
+

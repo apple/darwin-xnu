@@ -20,29 +20,37 @@ EXPINC_SUBDIRS_PPC = \
 EXPINC_SUBDIRS_I386 = \
 
 DATAFILES= \
-	bpf.h bpf_compat.h bpfdesc.h dlil.h dlil_pvt.h \
-	etherdefs.h ethernet.h if.h if_arp.h \
+	bpf.h dlil.h \
+	ethernet.h if.h if_arp.h \
 	if_dl.h if_llc.h if_media.h if_mib.h \
-	if_slvar.h \
-	if_types.h if_var.h iso88025.h \
-	kext_net.h ndrv.h net_osdep.h netisr.h pfkeyv2.h \
-	radix.h raw_cb.h route.h slcompress.h slip.h
+	if_types.h if_var.h \
+	kext_net.h ndrv.h pfkeyv2.h \
+	route.h
+
+KERNELFILES= \
+	kpi_interface.h kpi_interfacefilter.h kpi_protocol.h \
+	if_ether.h init.h
 
 PRIVATE_DATAFILES = \
-	ndrv_var.h zlib.h if_pppvar.h if_sppp.h ppp_comp.h if_atm.h \
-	if_tun.h if_vlan_var.h if_ppp.h firewire.h ppp_defs.h
+	if_atm.h if_vlan_var.h if_ppp.h firewire.h \
+	ppp_defs.h radix.h if_bond_var.h lacp.h ndrv_var.h \
+	raw_cb.h etherdefs.h iso88025.h
+
+PRIVATE_KERNELFILES = ${KERNELFILES} \
+	bpfdesc.h dlil_pvt.h if_faith.h ppp_comp.h \
+	zlib.h bpf_compat.h net_osdep.h
 
 INSTALL_MI_LIST	= ${DATAFILES}
 
 INSTALL_MI_DIR = net
 
-EXPORT_MI_LIST	= ${INSTALL_MI_LIST}
+EXPORT_MI_LIST	= ${INSTALL_MI_LIST} ${KERNELFILES}
 
 EXPORT_MI_DIR = ${INSTALL_MI_DIR}
 
 INSTALL_MI_LCL_LIST = ${DATAFILES} ${PRIVATE_DATAFILES}
 
-INSTALL_MI_LCL_KERN_LIST = ${PRIVATE_DATAFILES}
+INSTALL_KF_MI_LCL_LIST = ${INSTALL_MI_LCL_LIST} ${PRIVATE_KERNELFILES}
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)

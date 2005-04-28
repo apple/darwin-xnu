@@ -97,12 +97,12 @@ bool IOInterruptEventSource::init(OSObject *inOwner,
 
             autoDisable = (intType == kIOInterruptTypeLevel);
             if (autoDisable) {
-                intHandler = (IOInterruptAction)
-                &IOInterruptEventSource::disableInterruptOccurred;
+                intHandler = OSMemberFunctionCast(IOInterruptAction,
+		    this, &IOInterruptEventSource::disableInterruptOccurred);
             }
             else
-                intHandler = (IOInterruptAction)
-                    &IOInterruptEventSource::normalInterruptOccurred;
+                intHandler = OSMemberFunctionCast(IOInterruptAction,
+		    this, &IOInterruptEventSource::normalInterruptOccurred);
 
             res = (kIOReturnSuccess == inProvider->registerInterrupt
                                         (inIntIndex, this, intHandler));

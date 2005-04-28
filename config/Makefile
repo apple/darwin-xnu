@@ -27,6 +27,7 @@ INST_SUBDIRS =
 
 
 INSTALL_DATA_LIST= \
+	IPFirewall.kext/Info.plist \
 	System.kext/Info.plist \
 	System.kext/PlugIns/Libkern.kext/Info.plist \
 	System.kext/PlugIns/Mach.kext/Info.plist \
@@ -36,13 +37,13 @@ INSTALL_DATA_LIST= \
 	System.kext/PlugIns/ApplePlatformFamily.kext/Info.plist \
 	System.kext/PlugIns/IONVRAMFamily.kext/Info.plist \
 	System.kext/PlugIns/IOSystemManagement.kext/Info.plist \
+	System.kext/PlugIns/Unsupported.kext/Info.plist \
 	\
 	System.kext/PlugIns/System6.0.kext/Info.plist \
 	System.kext/PlugIns/Libkern6.0.kext/Info.plist \
 	System.kext/PlugIns/Mach6.0.kext/Info.plist \
 	System.kext/PlugIns/BSDKernel6.0.kext/Info.plist \
 	System.kext/PlugIns/IOKit6.0.kext/Info.plist \
-	
 
 INSTALL_DATA_DIR= \
 	/System/Library/Extensions/
@@ -52,13 +53,15 @@ INSTMAN_SUBDIRS =
 #
 
 KEXT_CREATE_SYMBOL_SET = /usr/local/bin/kextsymboltool
+NEWVERS = $(SRCROOT)/config/newvers.pl
 
 SYMBOL_COMPONENT_LIST =	\
         System6.0	\
         BSDKernel	\
         IOKit		\
         Libkern	\
-        Mach
+        Mach	\
+	Unsupported
 
 SYMBOL_SET_BUILD = $(foreach set, $(SYMBOL_COMPONENT_LIST), $(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(set).symbolset)
 SYMBOL_SET_FAT = $(foreach set, $(SYMBOL_COMPONENT_LIST), $(OBJROOT)/$(set).symbolset)
@@ -81,13 +84,38 @@ $(SYMBOL_SET_FAT): $(OBJROOT)/%.symbolset : $(foreach arch, $(INSTALL_ARCHS), $(
 
 
 build_symbol_sets:	$(SYMBOL_SET_BUILD)
+	$(KEXT_CREATE_SYMBOL_SET) \
+		-arch $(ARCH_CONFIG_LC) \
+		-import $(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/allsymbols \
+		-export $(SRCROOT)/$(COMPONENT)/Libkern.exports \
+		-export $(SRCROOT)/$(COMPONENT)/Libkern.$(ARCH_CONFIG_LC).exports \
+		-export $(SRCROOT)/$(COMPONENT)/Mach.exports \
+		-export $(SRCROOT)/$(COMPONENT)/Mach.$(ARCH_CONFIG_LC).exports \
+		-export $(SRCROOT)/$(COMPONENT)/IOKit.exports \
+		-export $(SRCROOT)/$(COMPONENT)/IOKit.$(ARCH_CONFIG_LC).exports \
+		-export $(SRCROOT)/$(COMPONENT)/BSDKernel.exports \
+		-export $(SRCROOT)/$(COMPONENT)/BSDKernel.$(ARCH_CONFIG_LC).exports \
+		-export $(SRCROOT)/$(COMPONENT)/Unsupported.exports \
+		-export $(SRCROOT)/$(COMPONENT)/Unsupported.$(ARCH_CONFIG_LC).exports \
+		-output /dev/null;
 
-install_symbol_sets:	$(SYMBOL_SET_FAT)
+install_symbol_sets:	$(SYMBOL_SET_FAT) $(SRCROOT)/config/MasterVersion
 	install $(INSTALL_FLAGS) $(OBJROOT)/System6.0.symbolset $(DSTROOT)/$(INSTALL_DATA_DIR)/System.kext/PlugIns/System6.0.kext/kernel.6.0;
 	install $(INSTALL_FLAGS) $(OBJROOT)/BSDKernel.symbolset $(DSTROOT)/$(INSTALL_DATA_DIR)/System.kext/PlugIns/BSDKernel.kext/BSDKernel;
 	install $(INSTALL_FLAGS) $(OBJROOT)/IOKit.symbolset     $(DSTROOT)/$(INSTALL_DATA_DIR)/System.kext/PlugIns/IOKit.kext/IOKit;
 	install $(INSTALL_FLAGS) $(OBJROOT)/Libkern.symbolset   $(DSTROOT)/$(INSTALL_DATA_DIR)/System.kext/PlugIns/Libkern.kext/Libkern;
 	install $(INSTALL_FLAGS) $(OBJROOT)/Mach.symbolset      $(DSTROOT)/$(INSTALL_DATA_DIR)/System.kext/PlugIns/Mach.kext/Mach;
+	install $(INSTALL_FLAGS) $(OBJROOT)/Unsupported.symbolset      $(DSTROOT)/$(INSTALL_DATA_DIR)/System.kext/PlugIns/Unsupported.kext/Unsupported;
+	$(NEWVERS) $(DSTROOT)/$(INSTALL_DATA_DIR)/System.kext/Info.plist \
+		$(DSTROOT)/$(INSTALL_DATA_DIR)/System.kext/PlugIns/AppleNMI.kext/Info.plist \
+		$(DSTROOT)/$(INSTALL_DATA_DIR)/System.kext/PlugIns/ApplePlatformFamily.kext/Info.plist \
+		$(DSTROOT)/$(INSTALL_DATA_DIR)/System.kext/PlugIns/BSDKernel.kext/Info.plist \
+		$(DSTROOT)/$(INSTALL_DATA_DIR)/System.kext/PlugIns/IOKit.kext/Info.plist \
+		$(DSTROOT)/$(INSTALL_DATA_DIR)/System.kext/PlugIns/IONVRAMFamily.kext/Info.plist \
+		$(DSTROOT)/$(INSTALL_DATA_DIR)/System.kext/PlugIns/IOSystemManagement.kext/Info.plist \
+		$(DSTROOT)/$(INSTALL_DATA_DIR)/System.kext/PlugIns/Libkern.kext/Info.plist \
+		$(DSTROOT)/$(INSTALL_DATA_DIR)/System.kext/PlugIns/Mach.kext/Info.plist \
+		$(DSTROOT)/$(INSTALL_DATA_DIR)/System.kext/PlugIns/Unsupported.kext/Info.plist
 
 do_build_all:	build_symbol_sets
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -28,33 +28,41 @@
 #include <stdlib.h>
 #endif /* KERNEL */
 
+#define BASE 65521L /* largest prime smaller than 65536 */
+#define NMAX 5000  
+// NMAX (was 5521) the largest n such that 255n(n+1)/2 + (n+1)(BASE-1) <= 2^32-1
+
+#define DO1(buf,i)  {s1 += buf[i]; s2 += s1;}
+#define DO2(buf,i)  DO1(buf,i); DO1(buf,i+1);
+#define DO4(buf,i)  DO2(buf,i); DO2(buf,i+2);
+#define DO8(buf,i)  DO4(buf,i); DO4(buf,i+4);
+#define DO16(buf)   DO8(buf,0); DO8(buf,8);
 
 __private_extern__ u_int32_t
-adler32(u_int8_t *buffer, int32_t length)
+adler32(uint8_t *buf, int32_t len)
 {
-    int32_t cnt;
-    u_int32_t  result, lowHalf, highHalf;
-    
-    lowHalf = 1;
-    highHalf = 0;
-    
-    for (cnt = 0; cnt < length; cnt++) {
-        if ((cnt % 5000) == 0) {
-            lowHalf  %= 65521L;
-            highHalf %= 65521L;
+    unsigned long s1 = 1; // adler & 0xffff;
+    unsigned long s2 = 0; // (adler >> 16) & 0xffff;
+    int k;
+
+    while (len > 0) {
+        k = len < NMAX ? len : NMAX;
+        len -= k;
+        while (k >= 16) {
+            DO16(buf);
+	    buf += 16;
+            k -= 16;
         }
-        
-        lowHalf += buffer[cnt];
-        highHalf += lowHalf;
+        if (k != 0) do {
+            s1 += *buf++;
+	    s2 += s1;
+        } while (--k);
+        s1 %= BASE;
+        s2 %= BASE;
     }
-    
-    lowHalf  %= 65521L;
-    highHalf %= 65521L;
-    
-    result = (highHalf << 16) | lowHalf;
-    
-    return result;
+    return (s2 << 16) | s1;
 }
+
 
 /**************************************************************
  LZSS.C -- A Data Compression Program

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1996-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1996-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -36,7 +36,6 @@
 
 // amount of time we are allowed to process a catalog search (in µ secs)
 // NOTE - code assumes kMaxMicroSecsInKernel is less than 1,000,000
-// jertodo - what should we set this to?
 enum { kMaxMicroSecsInKernel = (1000 * 100) };	// 1 tenth of a second
 
 // btree node scanner buffer size.  at 32K we get 8 nodes.  this is the size used

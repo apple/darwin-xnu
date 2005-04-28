@@ -59,13 +59,13 @@
  */
 #include <sys/appleapiopts.h>
 
-#ifdef __APPLE_API_PRIVATE
+#ifdef KERNEL_PRIVATE
 struct atm_pseudohdr;
 struct mbuf;
 struct rtentry;
 struct sockaddr;
 
-void atm_rtrequest __P((int, struct rtentry *, struct sockaddr *));
-int atmresolve __P((struct rtentry *, struct mbuf *, struct sockaddr *, 
-		struct atm_pseudohdr *));
-#endif /* __APPLE_API_PRIVATE */
+void atm_rtrequest(int, struct rtentry *, struct sockaddr *);
+int atmresolve(struct rtentry *, struct mbuf *, struct sockaddr *, 
+		struct atm_pseudohdr *);
+#endif /* KERNEL_PRIVATE */

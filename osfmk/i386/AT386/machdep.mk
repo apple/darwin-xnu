@@ -32,8 +32,7 @@
 
 AT386_DATAFILES =	disk.h kd.h
 
-#AT386_DATAFILES =	asm_startup.h		\
-#			atbus.h			\
+#AT386_DATAFILES =	atbus.h			\
 #			blitreg.h		\
 #			blituser.h		\
 #			blitvar.h		\

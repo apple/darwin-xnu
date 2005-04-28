@@ -87,7 +87,6 @@ extern struct bdg_softc *ifp2sc;
 #define BDG_MUTE(ifp) ifp2sc[ifp->if_index].flags |= IFF_MUTE
 #define BDG_UNMUTE(ifp) ifp2sc[ifp->if_index].flags &= ~IFF_MUTE
 #define BDG_CLUSTER(ifp) (ifp2sc[ifp->if_index].cluster_id)
-#define BDG_EH(ifp)	((struct arpcom *)ifp)->ac_enaddr
 
 #define BDG_SAMECLUSTER(ifp,src) \
 	(src == NULL || BDG_CLUSTER(ifp) == BDG_CLUSTER(src) )

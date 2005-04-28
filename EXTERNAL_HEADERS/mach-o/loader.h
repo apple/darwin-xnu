@@ -46,21 +46,46 @@
 #include <architecture/byte_order.h>
 
 /*
- * The mach header appears at the very beginning of the object file.
+ * The mach header appears at the very beginning of the object file; it
+ * is the same for both 32-bit and 64-bit architectures.
  */
 struct mach_header {
-	unsigned long	magic;		/* mach magic number identifier */
+	uint32_t	magic;		/* mach magic number identifier */
 	cpu_type_t	cputype;	/* cpu specifier */
 	cpu_subtype_t	cpusubtype;	/* machine specifier */
-	unsigned long	filetype;	/* type of file */
-	unsigned long	ncmds;		/* number of load commands */
-	unsigned long	sizeofcmds;	/* the size of all the load commands */
-	unsigned long	flags;		/* flags */
+	uint32_t	filetype;	/* type of file */
+	uint32_t	ncmds;		/* number of load commands */
+	uint32_t	sizeofcmds;	/* the size of all the load commands */
+	uint32_t	flags;		/* flags */
 };
 
-/* Constant for the magic field of the mach_header */
+/*
+ * The 64-bit mach header appears at the very beginning of object files for
+ * 64-bit architectures.
+ */
+struct mach_header_64 {
+	uint32_t	magic;		/* mach magic number identifier */
+	cpu_type_t	cputype;	/* cpu specifier */
+	cpu_subtype_t	cpusubtype;	/* machine specifier */
+	uint32_t	filetype;	/* type of file */
+	uint32_t	ncmds;		/* number of load commands */
+	uint32_t	sizeofcmds;	/* the size of all the load commands */
+	uint32_t	flags;		/* flags */
+	uint32_t	reserved;	/* reserved */
+};
+
+/* Constant for the magic field of the mach_header (32-bit architectures) */
 #define	MH_MAGIC	0xfeedface	/* the mach magic number */
 #define MH_CIGAM	NXSwapInt(MH_MAGIC)
+
+/* Constant for the magic field of the mach_header_64 (64-bit architectures) */
+#define MH_MAGIC_64	0xfeedfacf	/* the 64-bit mach magic number */
+#define MH_CIGAM_64	NXSwapInt(MH_MAGIC_64)
+
+/* Constants for the cmd field of new load commands, the type */
+#define LC_SEGMENT_64	0x19	/* 64-bit segment of this file to be mapped */
+#define LC_ROUTINES_64	0x1a	/* 64-bit image routines */
+
 
 /*
  * The layout of the file depends on the filetype.  For all but the MH_OBJECT
@@ -118,7 +143,9 @@ struct mach_header {
  * of the particular load command structure plus anything that follows it that
  * is a part of the load command (i.e. section structures, strings, etc.).  To
  * advance to the next load command the cmdsize can be added to the offset or
- * pointer of the current load command.  The cmdsize MUST be a multiple of
+ * pointer of the current load command.  The cmdsize for 32-bit architectures
+ * MUST be a multiple of 4 bytes and for 64-bit architectures MUST be a multiple
+ * of 8 bytes (these are forever the maximum alignment of any load commands).
  * sizeof(long) (this is forever the maximum alignment of any load commands).
  * The padded bytes must be zero.  All tables in the object file must also
  * follow these rules so the file can be memory mapped.  Otherwise the pointers
@@ -174,7 +201,7 @@ union lc_str {
  * section structures directly follow the segment command and their size is
  * reflected in cmdsize.
  */
-struct segment_command {
+struct segment_command {	/* for 32-bit architectures */
 	unsigned long	cmd;		/* LC_SEGMENT */
 	unsigned long	cmdsize;	/* includes sizeof section structs */
 	char		segname[16];	/* segment name */
@@ -187,6 +214,27 @@ struct segment_command {
 	unsigned long	nsects;		/* number of sections in segment */
 	unsigned long	flags;		/* flags */
 };
+
+/*
+ * The 64-bit segment load command indicates that a part of this file is to be
+ * mapped into a 64-bit task's address space.  If the 64-bit segment has
+ * sections then section_64 structures directly follow the 64-bit segment
+ * command and their size is reflected in cmdsize.
+ */
+struct segment_command_64 {	/* for 64-bit architectures */
+	uint32_t	cmd;		/* LC_SEGMENT_64 */
+	uint32_t	cmdsize;	/* includes sizeof section_64 structs */
+	char		segname[16];	/* segment name */
+	uint64_t	vmaddr;		/* memory address of this segment */
+	uint64_t	vmsize;		/* memory size of this segment */
+	uint64_t	fileoff;	/* file offset of this segment */
+	uint64_t	filesize;	/* amount to map from the file */
+	vm_prot_t	maxprot;	/* maximum VM protection */
+	vm_prot_t	initprot;	/* initial VM protection */
+	uint32_t	nsects;		/* number of sections in segment */
+	uint32_t	flags;		/* flags */
+};
+
 
 /* Constants for the flags field of the segment_command */
 #define	SG_HIGHVM	0x1	/* the file contents for this segment is for
@@ -207,7 +255,9 @@ struct segment_command {
  * and load commands of the object file before it's first section.  The zero
  * fill sections are always last in their segment (in all formats).  This
  * allows the zeroed segment padding to be mapped into memory where zero fill
- * sections might be.
+ * sections might be. The gigabyte zero fill sections, those with the section
+ * type S_GB_ZEROFILL, can only be in a segment with sections of this type.
+ * These segments are then placed after all other segments.
  *
  * The MH_OBJECT format has all of it's sections in one segment for
  * compactness.  There is no padding to a specified segment boundary and the
@@ -224,7 +274,7 @@ struct segment_command {
  * fields of the section structure for mach object files is described in the
  * header file <reloc.h>.
  */
-struct section {
+struct section {		/* for 32-bit architectures */
 	char		sectname[16];	/* name of this section */
 	char		segname[16];	/* segment this section goes in */
 	unsigned long	addr;		/* memory address of this section */
@@ -237,6 +287,22 @@ struct section {
 	unsigned long	reserved1;	/* reserved */
 	unsigned long	reserved2;	/* reserved */
 };
+
+struct section_64 { /* for 64-bit architectures */
+	char		sectname[16];	/* name of this section */
+	char		segname[16];	/* segment this section goes in */
+	uint64_t	addr;		/* memory address of this section */
+	uint64_t	size;		/* size in bytes of this section */
+	uint32_t	offset;		/* file offset of this section */
+	uint32_t	align;		/* section alignment (power of 2) */
+	uint32_t	reloff;		/* file offset of relocation entries */
+	uint32_t	nreloc;		/* number of relocation entries */
+	uint32_t	flags;		/* flags (section type and attributes)*/
+	uint32_t	reserved1;	/* reserved (for offset or index) */
+	uint32_t	reserved2;	/* reserved (for count or sizeof) */
+	uint32_t	reserved3;	/* reserved */
+};
+
 
 /*
  * The flags field of a section structure is separated into two parts a section
@@ -666,6 +732,34 @@ struct dylib_module {
     unsigned long		/* for this module size of */
 	objc_module_info_size;	/*  the (__OBJC,__module_info) section */
 };	
+
+/* a 64-bit module table entry */
+struct dylib_module_64 {
+	uint32_t module_name;	/* the module name (index into string table) */
+
+	uint32_t iextdefsym;	/* index into externally defined symbols */
+	uint32_t nextdefsym;	/* number of externally defined symbols */
+	uint32_t irefsym;	/* index into reference symbol table */
+	uint32_t nrefsym;	/* number of reference symbol table entries */
+	uint32_t ilocalsym;	/* index into symbols for local symbols */
+	uint32_t nlocalsym;	/* number of local symbols */
+
+	uint32_t iextrel;	/* index into external relocation entries */
+	uint32_t nextrel;	/* number of external relocation entries */
+
+	uint32_t iinit_iterm;	/* low 16 bits are the index into the init
+				   section, high 16 bits are the index into
+				   the term section */
+	uint32_t ninit_nterm;	/* low 16 bits are the number of init section
+				   entries, high 16 bits are the number of
+				   term section entries */
+
+	uint32_t		/* for this module size of the */
+		objc_module_info_size;	/* (__OBJC,__module_info) section */
+	uint64_t		/* for this module address of the start of */
+		objc_module_info_addr;	/* the (__OBJC,__module_info) section */
+};
+
 
 /* 
  * The entries in the reference symbol table are used when loading the module

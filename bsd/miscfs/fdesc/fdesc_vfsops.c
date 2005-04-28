@@ -67,11 +67,11 @@
 #include <sys/systm.h>
 #include <sys/time.h>
 #include <sys/types.h>
-#include <sys/proc.h>
+#include <sys/proc_internal.h>
 #include <sys/resourcevar.h>
 #include <sys/filedesc.h>
 #include <sys/vnode.h>
-#include <sys/mount.h>
+#include <sys/mount_internal.h>
 #include <sys/namei.h>
 #include <sys/malloc.h>
 #include <miscfs/fdesc/fdesc.h>
@@ -80,15 +80,9 @@
  * Mount the per-process file descriptors (/dev/fd)
  */
 int
-fdesc_mount(mp, path, data, ndp, p)
-	struct mount *mp;
-	char *path;
-	caddr_t data;
-	struct nameidata *ndp;
-	struct proc *p;
+fdesc_mount(struct mount *mp, vnode_t devvp, __unused user_addr_t data, vfs_context_t context)
 {
 	int error = 0;
-	size_t size;
 	struct fdescmount *fmp;
 	struct vnode *rvp;
 
@@ -96,67 +90,68 @@ fdesc_mount(mp, path, data, ndp, p)
 	 * Update is a no-op
 	 */
 	if (mp->mnt_flag & MNT_UPDATE)
-		return (EOPNOTSUPP);
+		return (ENOTSUP);
 
-	error = fdesc_allocvp(Froot, FD_ROOT, mp, &rvp);
+	error = fdesc_allocvp(Froot, FD_ROOT, mp, &rvp, VDIR);
 	if (error)
 		return (error);
 
 	MALLOC(fmp, struct fdescmount *, sizeof(struct fdescmount),
 				M_UFSMNT, M_WAITOK);	/* XXX */
-	rvp->v_type = VDIR;
-	rvp->v_flag |= VROOT;
+
+	vnode_setnoflush(rvp);
+	vnode_ref(rvp);
+	vnode_put(rvp);
+
 	fmp->f_root = rvp;
 	/* XXX -- don't mark as local to work around fts() problems */
 	/*mp->mnt_flag |= MNT_LOCAL;*/
 	mp->mnt_data = (qaddr_t) fmp;
 	vfs_getnewfsid(mp);
 
-	(void) copyinstr(path, mp->mnt_stat.f_mntonname, MNAMELEN - 1, &size);
-	bzero(mp->mnt_stat.f_mntonname + size, MNAMELEN - size);
-	bzero(mp->mnt_stat.f_mntfromname, MNAMELEN);
-	bcopy("fdesc", mp->mnt_stat.f_mntfromname, sizeof("fdesc"));
+	bzero(mp->mnt_vfsstat.f_mntfromname, MAXPATHLEN);
+	bcopy("fdesc", mp->mnt_vfsstat.f_mntfromname, sizeof("fdesc"));
 	return (0);
 }
 
 int
-fdesc_start(mp, flags, p)
+fdesc_start(mp, flags, context)
 	struct mount *mp;
 	int flags;
-	struct proc *p;
+	vfs_context_t context;
 {
 	return (0);
 }
 
 int
-fdesc_unmount(mp, mntflags, p)
+fdesc_unmount(mp, mntflags, context)
 	struct mount *mp;
 	int mntflags;
-	struct proc *p;
+	vfs_context_t context;
 {
 	int error;
 	int flags = 0;
 	int force = 0;
-	struct vnode *rootvp = VFSTOFDESC(mp)->f_root;
+	struct vnode *rvp = VFSTOFDESC(mp)->f_root;
 
 	if (mntflags & MNT_FORCE) {
 		flags |= FORCECLOSE;
 		force = 1;
 	}
 
-	if ( (rootvp->v_usecount > 1) && !force )
+	if ( vnode_isinuse(rvp, 1) && !force )
 		return (EBUSY);
-	if ( (error = vflush(mp, rootvp, flags)) && !force )
+	if ( (error = vflush(mp, rvp, flags|SKIPSYSTEM)) && !force )
 		return (error);
 
 	/*
+	 * And mark for recycle after we drop its reference; it away for future re-use
+	 */
+	vnode_recycle(rvp);
+	/*
 	 * Release reference on underlying root vnode
 	 */
-	vrele(rootvp);
-	/*
-	 * And blow it away for future re-use
-	 */
-	vgone(rootvp);
+	vnode_rele(rvp);
 	/*
 	 * Finally, throw away the fdescmount structure
 	 */
@@ -167,29 +162,29 @@ fdesc_unmount(mp, mntflags, p)
 }
 
 int
-fdesc_root(mp, vpp)
+fdesc_root(mp, vpp, context)
 	struct mount *mp;
 	struct vnode **vpp;
+	vfs_context_t context;
 {
-	struct proc *p = current_proc();	/* XXX */
 	struct vnode *vp;
 
 	/*
 	 * Return locked reference to root.
 	 */
 	vp = VFSTOFDESC(mp)->f_root;
-	VREF(vp);
-	vn_lock(vp, LK_EXCLUSIVE | LK_RETRY, p);
+	vnode_get(vp);
 	*vpp = vp;
 	return (0);
 }
 
 int
-fdesc_statfs(mp, sbp, p)
+fdesc_statfs(mp, sbp, context)
 	struct mount *mp;
-	struct statfs *sbp;
-	struct proc *p;
+	struct vfsstatfs *sbp;
+	vfs_context_t context;
 {
+	struct proc *p = vfs_context_proc(context);
 	struct filedesc *fdp;
 	int lim;
 	int i;
@@ -221,50 +216,94 @@ fdesc_statfs(mp, sbp, p)
 	sbp->f_flags = 0;
 	sbp->f_bsize = DEV_BSIZE;
 	sbp->f_iosize = DEV_BSIZE;
-	sbp->f_blocks = 2;		/* 1K to keep df happy */
+	sbp->f_blocks = (uint64_t)2;		/* 1K to keep df happy */
 	sbp->f_bfree = 0;
 	sbp->f_bavail = 0;
-	sbp->f_files = lim + 1;		/* Allow for "." */
-	sbp->f_ffree = freefd;		/* See comments above */
-	if (sbp != &mp->mnt_stat) {
-		sbp->f_type = mp->mnt_vfc->vfc_typenum;
-		bcopy(&mp->mnt_stat.f_fsid, &sbp->f_fsid, sizeof(sbp->f_fsid));
-		bcopy(mp->mnt_stat.f_mntonname, sbp->f_mntonname, MNAMELEN);
-		bcopy(mp->mnt_stat.f_mntfromname, sbp->f_mntfromname, MNAMELEN);
-	}
+	sbp->f_files = (uint64_t)((unsigned long)(lim + 1));		/* Allow for "." */
+	sbp->f_ffree = (uint64_t)((unsigned long)freefd);		/* See comments above */
+
 	return (0);
 }
 
+static int
+fdesc_vfs_getattr(mount_t mp, struct vfs_attr *fsap, vfs_context_t context)
+{
+	VFSATTR_RETURN(fsap, f_bsize, DEV_BSIZE);
+	VFSATTR_RETURN(fsap, f_iosize, DEV_BSIZE);
+	VFSATTR_RETURN(fsap, f_blocks, 2);
+	VFSATTR_RETURN(fsap, f_bfree, 0);
+	VFSATTR_RETURN(fsap, f_bavail, 0);
+	VFSATTR_RETURN(fsap, f_fssubtype, 0);
+	
+	if (VFSATTR_IS_ACTIVE(fsap, f_objcount) ||
+	    VFSATTR_IS_ACTIVE(fsap, f_maxobjcount) ||
+	    VFSATTR_IS_ACTIVE(fsap, f_files) ||
+	    VFSATTR_IS_ACTIVE(fsap, f_ffree))
+	{
+		struct proc *p = vfs_context_proc(context);
+		struct filedesc *fdp;
+		int lim;
+		int i;
+		int last;
+		int freefd;
+	
+		/*
+		 * Compute number of free file descriptors.
+		 * [ Strange results will ensue if the open file
+		 * limit is ever reduced below the current number
+		 * of open files... ]
+		 */
+		lim = p->p_rlimit[RLIMIT_NOFILE].rlim_cur;
+		fdp = p->p_fd;
+		last = min(fdp->fd_nfiles, lim);
+		freefd = 0;
+		for (i = fdp->fd_freefile; i < last; i++)
+			if (fdp->fd_ofiles[i] == NULL &&
+					!(fdp->fd_ofileflags[i] & UF_RESERVED))
+				freefd++;
+	
+		/*
+		 * Adjust for the fact that the fdesc array may not
+		 * have been fully allocated yet.
+		 */
+		if (fdp->fd_nfiles < lim)
+			freefd += (lim - fdp->fd_nfiles);
+		
+		VFSATTR_RETURN(fsap, f_objcount, lim+1);
+		VFSATTR_RETURN(fsap, f_maxobjcount, lim+1);
+		VFSATTR_RETURN(fsap, f_files, lim+1);
+		VFSATTR_RETURN(fsap, f_ffree, freefd);
+	}
+	
+	return 0;
+}
+
 int
-fdesc_sync(mp, waitfor)
+fdesc_sync(mp, waitfor, context)
 	struct mount *mp;
 	int waitfor;
+	vfs_context_t context;
 {
 
 	return (0);
 }
 
-#define fdesc_fhtovp ((int (*) __P((struct mount *, struct fid *, \
-	    struct mbuf *, struct vnode **, int *, struct ucred **)))eopnotsupp)
-#define fdesc_quotactl ((int (*) __P((struct mount *, int, uid_t, caddr_t, \
-	    struct proc *)))eopnotsupp)
-#define fdesc_sysctl ((int (*) __P((int *, u_int, void *, size_t *, void *, \
-	    size_t, struct proc *)))eopnotsupp)
-#define fdesc_vget ((int (*) __P((struct mount *, void *, struct vnode **))) \
-	    eopnotsupp)
-#define fdesc_vptofh ((int (*) __P((struct vnode *, struct fid *)))eopnotsupp)
+#define fdesc_fhtovp (int (*) (mount_t, int, unsigned char *, vnode_t *, vfs_context_t))eopnotsupp
+#define fdesc_sysctl (int (*) (int *, u_int, user_addr_t, size_t *, user_addr_t, size_t, vfs_context_t))eopnotsupp
+#define fdesc_vget (int (*) (mount_t, ino64_t, vnode_t *, vfs_context_t))eopnotsupp
+#define fdesc_vptofh (int (*) (vnode_t, int *, unsigned char *, vfs_context_t))eopnotsupp
 
 struct vfsops fdesc_vfsops = {
 	fdesc_mount,
 	fdesc_start,
 	fdesc_unmount,
 	fdesc_root,
-	fdesc_quotactl,
-	fdesc_statfs,
+	NULL, 			/* quotactl */
+	fdesc_vfs_getattr,
 	fdesc_sync,
 	fdesc_vget,
 	fdesc_fhtovp,
 	fdesc_vptofh,
 	fdesc_init,
-	fdesc_sysctl,
+	fdesc_sysctl
 };

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -30,7 +30,7 @@
 #define _BSD_MACHINE_PROFILE_H_
 
 
-#if defined (__ppc__)
+#if defined (__ppc__) || defined (__ppc64__)
 #include "ppc/profile.h"
 #elif defined (__i386__)
 #include "i386/profile.h"

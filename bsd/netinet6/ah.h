@@ -55,8 +55,7 @@ struct newah {
 	/* variable size, 32bit bound*/	/* Authentication data */
 };
 
-#ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
+#ifdef KERNEL_PRIVATE
 struct secasvar;
 
 struct ah_algorithm_state {
@@ -65,29 +64,28 @@ struct ah_algorithm_state {
 };
 
 struct ah_algorithm {
-	int (*sumsiz) __P((struct secasvar *));
-	int (*mature) __P((struct secasvar *));
+	int (*sumsiz)(struct secasvar *);
+	int (*mature)(struct secasvar *);
 	int keymin;	/* in bits */
 	int keymax;	/* in bits */
 	const char *name;
-	int (*init) __P((struct ah_algorithm_state *, struct secasvar *));
-	void (*update) __P((struct ah_algorithm_state *, caddr_t, size_t));
-	void (*result) __P((struct ah_algorithm_state *, caddr_t));
+	int (*init)(struct ah_algorithm_state *, struct secasvar *);
+	void (*update)(struct ah_algorithm_state *, caddr_t, size_t);
+	void (*result)(struct ah_algorithm_state *, caddr_t);
 };
 
 #define	AH_MAXSUMSIZE	16
 
-extern const struct ah_algorithm *ah_algorithm_lookup __P((int));
+extern const struct ah_algorithm *ah_algorithm_lookup(int);
 
 /* cksum routines */
-extern int ah_hdrlen __P((struct secasvar *));
+extern int ah_hdrlen(struct secasvar *);
 
-extern size_t ah_hdrsiz __P((struct ipsecrequest *));
-extern void ah4_input __P((struct mbuf *, int));
-extern int ah4_output __P((struct mbuf *, struct ipsecrequest *));
-extern int ah4_calccksum __P((struct mbuf *, caddr_t, size_t,
-	const struct ah_algorithm *, struct secasvar *));
-#endif /* __APPLE_API_PRIVATE */
-#endif /*KERNEL*/
+extern size_t ah_hdrsiz(struct ipsecrequest *);
+extern void ah4_input(struct mbuf *, int);
+extern int ah4_output(struct mbuf *, struct ipsecrequest *);
+extern int ah4_calccksum(struct mbuf *, caddr_t, size_t,
+	const struct ah_algorithm *, struct secasvar *);
+#endif KERNEL_PRIVATE
 
-#endif /*_NETINET6_AH_H_*/
+#endif _NETINET6_AH_H_

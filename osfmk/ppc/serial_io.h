@@ -62,9 +62,9 @@ typedef struct scc_tty	*scc_tty_t;
  *    cnputc, cngetc, cnmaygetc
  */
 
-void initialize_serial(caddr_t scc_phys_base);
+void initialize_serial(caddr_t scc_phys_base, int32_t serial_baud);
 
-extern int		scc_probe(void);
+extern int		scc_probe(int32_t serial_baud);
 
 #if 0
 extern int		scc_open(

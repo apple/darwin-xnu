@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -58,18 +58,19 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
-#include <sys/vnode.h>
+#include <sys/vnode_internal.h>
 #include <sys/proc.h>
-#include <sys/mount.h>
+#include <sys/kauth.h>
+#include <sys/mount_internal.h>
 #include <sys/malloc.h>
 
 #include "devfs.h"
 #include "devfsdefs.h"
 
-static int devfs_statfs( struct mount *mp, struct statfs *sbp, struct proc *p);
+static int devfs_statfs( struct mount *mp, struct vfsstatfs *sbp, vfs_context_t context);
+static int devfs_vfs_getattr(mount_t mp, struct vfs_attr *fsap, vfs_context_t context);
 
-static struct vfsconf * devfs_vfsp = 0;
-static int 		kernel_mount = 0;
+static struct vfstable * devfs_vfsp = 0;
 
 
 /*-
@@ -83,10 +84,10 @@ static int 		kernel_mount = 0;
 static int
 devfs_init(struct vfsconf *vfsp)
 {
-    devfs_vfsp = vfsp; /* remember this for devfs_kernel_mount below */
+    devfs_vfsp = (struct vfstable *)vfsp; /* remember this for devfs_kernel_mount below */
 
     if (devfs_sinit())
-	return (EOPNOTSUPP);
+	return (ENOTSUP);
     devfs_make_node(makedev(0, 0), DEVFS_CHAR, 
 		    UID_ROOT, GID_WHEEL, 0622, "console");
     devfs_make_node(makedev(2, 0), DEVFS_CHAR, 
@@ -119,12 +120,10 @@ devfs_init(struct vfsconf *vfsp)
  */
 /*proto*/
 int
-devfs_mount(struct mount *mp, char *path, caddr_t data,
-	    struct nameidata *ndp, struct proc *p)
+devfs_mount(struct mount *mp, __unused vnode_t devvp, __unused user_addr_t data, vfs_context_t context)
 {
 	struct devfsmount *devfs_mp_p;	/* devfs specific mount info */
 	int error;
-	size_t size;
 
 	/*-
 	 *  If they just want to update, we don't need to do anything.
@@ -133,6 +132,9 @@ devfs_mount(struct mount *mp, char *path, caddr_t data,
 	{
 		return 0;
 	}
+
+	/* Advisory locking should be handled at the VFS layer */
+	vfs_setlocklocal(mp);
 
 	/*-
 	 *  Well, it's not an update, it's a real mount request.
@@ -151,19 +153,20 @@ devfs_mount(struct mount *mp, char *path, caddr_t data,
 	 *  Fill out some fields
 	 */
 	mp->mnt_data = (qaddr_t)devfs_mp_p;
-	mp->mnt_stat.f_type = mp->mnt_vfc->vfc_typenum;
-	mp->mnt_stat.f_fsid.val[0] = (int32_t)(void *)devfs_mp_p;
-	mp->mnt_stat.f_fsid.val[1] = mp->mnt_stat.f_type;
+	mp->mnt_vfsstat.f_fsid.val[0] = (int32_t)(void *)devfs_mp_p;
+	mp->mnt_vfsstat.f_fsid.val[1] = vfs_typenum(mp);
 	mp->mnt_flag |= MNT_LOCAL;
 
-	DEVFS_LOCK(p);
+	DEVFS_LOCK();
 	error = dev_dup_plane(devfs_mp_p);
-	DEVFS_UNLOCK(p);
+	DEVFS_UNLOCK();
+
 	if (error) {
 		mp->mnt_data = (qaddr_t)0;
 		FREE((caddr_t)devfs_mp_p, M_DEVFSMNT);
 		return (error);
-	}
+	} else
+	        DEVFS_INCR_MOUNTS();
 
 	/*-
 	 *  Copy in the name of the directory the filesystem
@@ -172,22 +175,16 @@ devfs_mount(struct mount *mp, char *path, caddr_t data,
 	 *  to be tidy.
 	 */
 	
-	if (!kernel_mount) {
-		copyinstr(path, (caddr_t)mp->mnt_stat.f_mntonname,
-			sizeof(mp->mnt_stat.f_mntonname)-1, &size);
-		bzero(mp->mnt_stat.f_mntonname + size,
-			sizeof(mp->mnt_stat.f_mntonname) - size);
-	}
-	bzero(mp->mnt_stat.f_mntfromname, MNAMELEN);
-	bcopy("devfs",mp->mnt_stat.f_mntfromname, 5);
-	DEVFS_INCR_MOUNTS();
-	(void)devfs_statfs(mp, &mp->mnt_stat, p);
+	bzero(mp->mnt_vfsstat.f_mntfromname, MAXPATHLEN);
+	bcopy("devfs",mp->mnt_vfsstat.f_mntfromname, 5);
+	(void)devfs_statfs(mp, &mp->mnt_vfsstat, context);
+
 	return 0;
 }
 
 
 static int
-devfs_start(struct mount *mp, int flags, struct proc *p)
+devfs_start(__unused struct mount *mp, __unused int flags, __unused vfs_context_t context)
 {
 	return 0;
 }
@@ -196,7 +193,7 @@ devfs_start(struct mount *mp, int flags, struct proc *p)
  *  Unmount the filesystem described by mp.
  */
 static int
-devfs_unmount( struct mount *mp, int mntflags, struct proc *p)
+devfs_unmount( struct mount *mp, int mntflags, __unused vfs_context_t context)
 {
 	struct devfsmount *devfs_mp_p = (struct devfsmount *)mp->mnt_data;
 	int flags = 0;
@@ -211,11 +208,13 @@ devfs_unmount( struct mount *mp, int mntflags, struct proc *p)
 	if (error && !force)
 		return error;
 
-	DEVFS_LOCK(p);
+	DEVFS_LOCK();
 	devfs_free_plane(devfs_mp_p);
-	DEVFS_UNLOCK(p);
-	FREE((caddr_t)devfs_mp_p, M_DEVFSMNT);
+	DEVFS_UNLOCK();
+
 	DEVFS_DECR_MOUNTS();
+
+	FREE((caddr_t)devfs_mp_p, M_DEVFSMNT);
 	mp->mnt_data = (qaddr_t)0;
 	mp->mnt_flag &= ~MNT_LOCAL;
 
@@ -224,32 +223,27 @@ devfs_unmount( struct mount *mp, int mntflags, struct proc *p)
 
 /* return the address of the root vnode  in *vpp */
 static int
-devfs_root(struct mount *mp, struct vnode **vpp)
+devfs_root(struct mount *mp, struct vnode **vpp, vfs_context_t context)
 {
 	struct devfsmount *devfs_mp_p = (struct devfsmount *)(mp->mnt_data);
 	int error;
 
-	error = devfs_dntovn(devfs_mp_p->plane_root->de_dnp,vpp, 
-			     current_proc());
+	DEVFS_LOCK();
+	error = devfs_dntovn(devfs_mp_p->plane_root->de_dnp, vpp, context->vc_proc);
+	DEVFS_UNLOCK();
+
 	return error;
 }
 
 static int
-devfs_quotactl(struct mount *mp, int cmds, uid_t uid, caddr_t arg,
-	       struct proc *p)
-{
-	return EOPNOTSUPP;
-}
-
-static int
-devfs_statfs( struct mount *mp, struct statfs *sbp, struct proc *p)
+devfs_statfs( struct mount *mp, struct vfsstatfs *sbp, __unused vfs_context_t context)
 {
 	struct devfsmount *devfs_mp_p = (struct devfsmount *)mp->mnt_data;
 
 	/*-
 	 *  Fill in the stat block.
 	 */
-	sbp->f_type   = mp->mnt_stat.f_type;
+	//sbp->f_type   = mp->mnt_vfsstat.f_type;
 	sbp->f_flags  = 0;		/* XXX */
 	sbp->f_bsize  = 512;
 	sbp->f_iosize = 512;
@@ -263,33 +257,48 @@ devfs_statfs( struct mount *mp, struct statfs *sbp, struct proc *p)
 	sbp->f_files  = devfs_stats.nodes;
 	sbp->f_ffree  = 0;
 	sbp->f_fsid.val[0] = (int32_t)(void *)devfs_mp_p;
-	sbp->f_fsid.val[1] = mp->mnt_stat.f_type;
+	sbp->f_fsid.val[1] = vfs_typenum(mp);
 
-	/*-
-	 *  Copy the mounted on and mounted from names into
-	 *  the passed in stat block, if it is not the one
-	 *  in the mount structure.
-	 */
-	if (sbp != &mp->mnt_stat) {
-		bcopy((caddr_t)mp->mnt_stat.f_mntonname,
-			(caddr_t)&sbp->f_mntonname[0], MNAMELEN);
-		bcopy((caddr_t)mp->mnt_stat.f_mntfromname,
-			(caddr_t)&sbp->f_mntfromname[0], MNAMELEN);
-	}
 	return 0;
 }
 
 static int
-devfs_sync(struct mount *mp, int waitfor,struct ucred *cred,struct proc *p)
+devfs_vfs_getattr(mount_t mp, struct vfs_attr *fsap, vfs_context_t context)
+{
+	VFSATTR_RETURN(fsap, f_objcount, devfs_stats.nodes);
+	VFSATTR_RETURN(fsap, f_maxobjcount, devfs_stats.nodes);
+	VFSATTR_RETURN(fsap, f_bsize, 512);
+	VFSATTR_RETURN(fsap, f_iosize, 512);
+	if (VFSATTR_IS_ACTIVE(fsap, f_blocks) || VFSATTR_IS_ACTIVE(fsap, f_bused)) {
+		fsap->f_blocks = (devfs_stats.mounts * sizeof(struct devfsmount)
+			 + devfs_stats.nodes * sizeof(devnode_t)
+			 + devfs_stats.entries * sizeof(devdirent_t)
+			 + devfs_stats.stringspace
+			 ) / fsap->f_bsize;
+		fsap->f_bused = fsap->f_blocks;
+		VFSATTR_SET_SUPPORTED(fsap, f_blocks);
+		VFSATTR_SET_SUPPORTED(fsap, f_bused);
+	}
+	VFSATTR_RETURN(fsap, f_bfree, 0);
+	VFSATTR_RETURN(fsap, f_bavail, 0);
+	VFSATTR_RETURN(fsap, f_files, devfs_stats.nodes);
+	VFSATTR_RETURN(fsap, f_ffree, 0);
+	VFSATTR_RETURN(fsap, f_fssubtype, 0);
+	
+	return 0;
+}
+
+static int
+devfs_sync(__unused struct mount *mp, __unused int waitfor, __unused vfs_context_t context)
 {
     return (0);
 }
 
 
 static int
-devfs_vget(struct mount *mp, void * ino,struct vnode **vpp)
+devfs_vget(__unused struct mount *mp, __unused ino64_t ino, __unused struct vnode **vpp, __unused vfs_context_t context)
 {
-	return EOPNOTSUPP;
+	return ENOTSUP;
 }
 
 /*************************************************************
@@ -298,30 +307,24 @@ devfs_vget(struct mount *mp, void * ino,struct vnode **vpp)
  */
 
 static int
-devfs_fhtovp (struct mount *mp, struct fid *fhp, struct mbuf *nam,
-	      struct vnode **vpp, int *exflagsp, struct ucred **credanonp)
+devfs_fhtovp (__unused struct mount *mp, __unused int fhlen, __unused unsigned char *fhp, __unused struct vnode **vpp, __unused vfs_context_t context)
 {
 	return (EINVAL);
 }
 
 
 static int
-devfs_vptofh (struct vnode *vp, struct fid *fhp)
+devfs_vptofh (__unused struct vnode *vp, __unused int *fhlenp, __unused unsigned char *fhp, __unused vfs_context_t context)
 {
 	return (EINVAL);
 }
 
 static int
-devfs_sysctl(name, namelen, oldp, oldlenp, newp, newlen, p)
-	int *name;
-	u_int namelen;
-	void *oldp;
-	size_t *oldlenp;
-	void *newp;
-	size_t newlen;
-	struct proc *p;
+devfs_sysctl(__unused int *name, __unused u_int namelen, __unused user_addr_t oldp, 
+             __unused size_t *oldlenp, __unused user_addr_t newp, 
+             __unused size_t newlen, __unused vfs_context_t context)
 {
-    return (EOPNOTSUPP);
+    return (ENOTSUP);
 }
 
 #include <sys/namei.h>
@@ -336,39 +339,47 @@ devfs_kernel_mount(char * mntname)
 {
 	struct mount *mp;
 	int error;
-	struct proc *procp;
 	struct nameidata nd;
 	struct vnode  * vp;
+	struct vfs_context context;
 
 	if (devfs_vfsp == NULL) {
 	    printf("devfs_kernel_mount: devfs_vfsp is NULL\n");
 	    return (EINVAL);
 	}
-	procp = current_proc();
+	context.vc_proc = current_proc();
+	context.vc_ucred = kauth_cred_get();
 
 	/*
 	 * Get vnode to be covered
 	 */
-	NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF, UIO_SYSSPACE,
-	    mntname, procp);
+	NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF, UIO_SYSSPACE32,
+	    CAST_USER_ADDR_T(mntname), &context);
 	if ((error = namei(&nd))) {
 	    printf("devfs_kernel_mount: failed to find directory '%s', %d", 
 		   mntname, error);
 	    return (error);
 	}
+	nameidone(&nd);
 	vp = nd.ni_vp;
-	if ((error = vinvalbuf(vp, V_SAVE, procp->p_ucred, procp, 0, 0))) {
-	    printf("devfs_kernel_mount: vinval failed: %d\n", error);
-	    vput(vp);
+
+	if ((error = VNOP_FSYNC(vp, MNT_WAIT, &context))) {
+	    printf("devfs_kernel_mount: vnop_fsync failed: %d\n", error);
+	    vnode_put(vp);
 	    return (error);
 	}
-	if (vp->v_type != VDIR) {
+	if ((error = buf_invalidateblks(vp, BUF_WRITE_DATA, 0, 0))) {
+	    printf("devfs_kernel_mount: buf_invalidateblks failed: %d\n", error);
+	    vnode_put(vp);
+	    return (error);
+	}
+	if (vnode_isdir(vp) == 0) {
 	    printf("devfs_kernel_mount: '%s' is not a directory\n", mntname);
-	    vput(vp);
+	    vnode_put(vp);
 	    return (ENOTDIR);
 	}
-	if (vp->v_mountedhere != NULL) {
-	    vput(vp);
+	if ((vnode_mountedhere(vp))) {
+	    vnode_put(vp);
 	    return (EBUSY);
 	}
 
@@ -379,44 +390,46 @@ devfs_kernel_mount(char * mntname)
 		M_MOUNT, M_WAITOK);
 	bzero((char *)mp, (u_long)sizeof(struct mount));
 
-    /* Initialize the default IO constraints */
-    mp->mnt_maxreadcnt = mp->mnt_maxwritecnt = MAXPHYS;
-    mp->mnt_segreadcnt = mp->mnt_segwritecnt = 32;
+	/* Initialize the default IO constraints */
+	mp->mnt_maxreadcnt = mp->mnt_maxwritecnt = MAXPHYS;
+	mp->mnt_segreadcnt = mp->mnt_segwritecnt = 32;
 
-	lockinit(&mp->mnt_lock, PVFS, "vfslock", 0, 0);
-	(void)vfs_busy(mp, LK_NOWAIT, 0, procp);
-	LIST_INIT(&mp->mnt_vnodelist);
+	mount_lock_init(mp);
+	TAILQ_INIT(&mp->mnt_vnodelist);
+	TAILQ_INIT(&mp->mnt_workerqueue);
+	TAILQ_INIT(&mp->mnt_newvnodes);
+
+	(void)vfs_busy(mp, LK_NOWAIT);
 	mp->mnt_op = devfs_vfsp->vfc_vfsops;
-	mp->mnt_vfc = devfs_vfsp;
+	mp->mnt_vtable = devfs_vfsp;
 	devfs_vfsp->vfc_refcount++;
+	devfs_vfsp->vfc_threadsafe = TRUE;
+	devfs_vfsp->vfc_64bitready = TRUE;
 	mp->mnt_flag = 0;
 	mp->mnt_flag |= devfs_vfsp->vfc_flags & MNT_VISFLAGMASK;
-	strncpy(mp->mnt_stat.f_fstypename, devfs_vfsp->vfc_name, MFSNAMELEN);
+	strncpy(mp->mnt_vfsstat.f_fstypename, devfs_vfsp->vfc_name, MFSTYPENAMELEN);
 	vp->v_mountedhere = mp;
 	mp->mnt_vnodecovered = vp;
-	mp->mnt_stat.f_owner = procp->p_ucred->cr_uid;
-	(void) copystr(mntname, mp->mnt_stat.f_mntonname, MNAMELEN - 1, 0);
+	mp->mnt_vfsstat.f_owner = kauth_cred_getuid(kauth_cred_get());
+	(void) copystr(mntname, mp->mnt_vfsstat.f_mntonname, MAXPATHLEN - 1, 0);
 
-	kernel_mount = 1;
-	error = devfs_mount(mp, mntname, NULL, NULL, procp);
-	kernel_mount = 0;
+	error = devfs_mount(mp, NULL, NULL, &context);
+
 	if (error) {
 	    printf("devfs_kernel_mount: mount %s failed: %d", mntname, error);
-	    mp->mnt_vfc->vfc_refcount--;
+	    mp->mnt_vtable->vfc_refcount--;
 
-	    if (mp->mnt_kern_flag & MNTK_IO_XINFO)
-	            FREE(mp->mnt_xinfo_ptr, M_TEMP);
-	    vfs_unbusy(mp, procp);
+	    vfs_unbusy(mp);
 
+	    mount_lock_destroy(mp);
 	    FREE_ZONE(mp, sizeof (struct mount), M_MOUNT);
-	    vput(vp);
+	    vnode_put(vp);
 	    return (error);
 	}
-	simple_lock(&mountlist_slock);
-	CIRCLEQ_INSERT_TAIL(&mountlist, mp, mnt_list);
-	simple_unlock(&mountlist_slock);
-	VOP_UNLOCK(vp, 0, procp);
-	vfs_unbusy(mp, procp);
+	vnode_ref(vp);
+	vnode_put(vp);
+	vfs_unbusy(mp);
+	mount_list_add(mp);
 	return (0);
 }
 
@@ -425,12 +438,12 @@ struct vfsops devfs_vfsops = {
 	devfs_start,
 	devfs_unmount,
 	devfs_root,
-	devfs_quotactl,
-	devfs_statfs,
+	NULL,				/* quotactl */
+	devfs_vfs_getattr,
 	devfs_sync,
 	devfs_vget,
 	devfs_fhtovp,
 	devfs_vptofh,
 	devfs_init,
-	devfs_sysctl,
+	devfs_sysctl
 };

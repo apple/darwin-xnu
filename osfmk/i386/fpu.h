@@ -59,7 +59,6 @@
  * floating-point processor.
  */
 
-#include <cpus.h>
 #include <i386/proc_reg.h>
 #include <i386/thread.h>
 #include <kern/kern_types.h>
@@ -114,11 +113,10 @@ extern __inline__ unsigned short fnstsw(void)
  * NOTE: in order to provide backwards compatible support in the kernel. When saving SSE2 state, we also save the
  * FP state in it's old location. Otherwise fpu_get_state() and fpu_set_state() will stop working
  */
-#if	NCPUS > 1
 #define	fpu_save_context(thread) \
     { \
 	register struct i386_fpsave_state *ifps; \
-	ifps = (thread)->top_act->mact.pcb->ims.ifps; \
+	ifps = (thread)->machine.pcb->ims.ifps; \
 	if (ifps != 0 && !ifps->fp_valid) { \
 	    /* registers are in FPU - save to memory */ \
 	    ifps->fp_valid = TRUE; \
@@ -132,38 +130,31 @@ extern __inline__ unsigned short fnstsw(void)
 	set_ts(); \
     }
 	    
-#else	/* NCPUS == 1 */
-#define	fpu_save_context(thread) \
-    { \
-	    set_ts(); \
-    }
-
-#endif	/* NCPUS == 1 */
 
 
 extern int	fp_kind;
 
 extern void		init_fpu(void);
 extern void		fpu_module_init(void);
-extern void		fp_free(
+extern void		fpu_free(
 				struct i386_fpsave_state	* fps);
 extern kern_return_t	fpu_set_state(
-				thread_act_t			thr_act,
+				thread_t			thr_act,
 				struct i386_float_state		* st);
 extern kern_return_t	fpu_get_state(
-				thread_act_t			thr_act,
+				thread_t			thr_act,
 				struct i386_float_state		* st);
-/* extern kern_return_t	fpu_set_fxstate(
-				thread_act_t			thr_act,
+extern kern_return_t	fpu_set_fxstate(
+				thread_t			thr_act,
 				struct i386_float_state		* st);
 extern kern_return_t	fpu_get_fxstate(
-				thread_act_t			thr_act,
-				struct i386_float_state		* st); */
+				thread_t			thr_act,
+				struct i386_float_state		* st);
 extern void		fpnoextflt(void);
 extern void		fpextovrflt(void);
 extern void		fpexterrflt(void);
 extern void		fp_state_alloc(void);
 extern void		fpintr(void);
-extern void		fpflush(thread_act_t);
+extern void		fpflush(thread_t);
 
 #endif	/* _I386_FPU_H_ */

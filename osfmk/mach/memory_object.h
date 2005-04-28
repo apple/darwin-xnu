@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -65,6 +65,7 @@
  */
 
 #include <mach/port.h>
+#include <mach/message.h>
 #include <mach/machine/vm_types.h>
 
 typedef	mach_port_t	memory_object_t;
@@ -160,8 +161,8 @@ struct old_memory_object_behave_info {
 };
 
 struct memory_object_perf_info {
-	vm_size_t			cluster_size;
-	boolean_t			may_cache;
+	memory_object_cluster_size_t	cluster_size;
+	boolean_t						may_cache;
 };
 
 struct old_memory_object_attr_info {			/* old attr list */
@@ -172,7 +173,7 @@ struct old_memory_object_attr_info {			/* old attr list */
 
 struct memory_object_attr_info {
 	memory_object_copy_strategy_t	copy_strategy;
-	vm_offset_t			cluster_size;
+	memory_object_cluster_size_t	cluster_size;
 	boolean_t			may_cache_object;
 	boolean_t			temporary;
 };
@@ -200,16 +201,16 @@ typedef struct old_memory_object_attr_info old_memory_object_attr_info_data_t;
 typedef struct memory_object_attr_info	*memory_object_attr_info_t;
 typedef struct memory_object_attr_info	memory_object_attr_info_data_t;
 
-#define OLD_MEMORY_OBJECT_BEHAVE_INFO_COUNT   	\
-                (sizeof(old_memory_object_behave_info_data_t)/sizeof(int))
-#define MEMORY_OBJECT_BEHAVE_INFO_COUNT   	\
-                (sizeof(memory_object_behave_info_data_t)/sizeof(int))
-#define MEMORY_OBJECT_PERF_INFO_COUNT		\
-		(sizeof(memory_object_perf_info_data_t)/sizeof(int))
-#define OLD_MEMORY_OBJECT_ATTR_INFO_COUNT		\
-		(sizeof(old_memory_object_attr_info_data_t)/sizeof(int))
-#define MEMORY_OBJECT_ATTR_INFO_COUNT		\
-		(sizeof(memory_object_attr_info_data_t)/sizeof(int))
+#define OLD_MEMORY_OBJECT_BEHAVE_INFO_COUNT   	((mach_msg_type_number_t) \
+                (sizeof(old_memory_object_behave_info_data_t)/sizeof(int)))
+#define MEMORY_OBJECT_BEHAVE_INFO_COUNT   	((mach_msg_type_number_t) \
+                (sizeof(memory_object_behave_info_data_t)/sizeof(int)))
+#define MEMORY_OBJECT_PERF_INFO_COUNT		((mach_msg_type_number_t) \
+		(sizeof(memory_object_perf_info_data_t)/sizeof(int)))
+#define OLD_MEMORY_OBJECT_ATTR_INFO_COUNT	((mach_msg_type_number_t) \
+		(sizeof(old_memory_object_attr_info_data_t)/sizeof(int)))
+#define MEMORY_OBJECT_ATTR_INFO_COUNT		((mach_msg_type_number_t) \
+		(sizeof(memory_object_attr_info_data_t)/sizeof(int)))
 
 #define invalid_memory_object_flavor(f)					\
 	(f != MEMORY_OBJECT_ATTRIBUTE_INFO && 				\

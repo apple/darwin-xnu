@@ -42,6 +42,8 @@
 #include <kdp/kdp_core.h>
 
 #include <vm/vm_map.h>
+#include <vm/vm_protos.h>
+
 #include <mach/memory_object_types.h>
 
 #include <string.h>
@@ -125,15 +127,18 @@ static char router_ip_str[20];
 
 static unsigned int panic_block = 0;
 static volatile unsigned int kdp_trigger_core_dump = 0;
+static volatile unsigned int flag_kdp_trigger_reboot = 0;
 
 extern unsigned int not_in_kdp;
+
+extern int kdp_vm_read( caddr_t, caddr_t, unsigned int);
 
 void
 kdp_register_send_receive(
 	kdp_send_t	send, 
 	kdp_receive_t	receive)
 {
-	unsigned int	debug;
+	unsigned int	debug=0;
 
 	kdp_en_send_pkt = send;
 	kdp_en_recv_pkt = receive;
@@ -366,8 +371,6 @@ kdp_set_ip_and_mac_addresses(
 	struct in_addr		*ipaddr, 
 	struct ether_addr	*macaddr)
 {
-	unsigned int debug = 0;
-
 	kdp_current_ip_address = ipaddr->s_addr;
 	kdp_current_mac_address = *macaddr;
 }
@@ -376,6 +379,7 @@ void
 kdp_set_gateway_mac(void *gatewaymac)
 {
   router_mac = *(struct ether_addr *)gatewaymac;
+  flag_router_mac_initialized = 1;
 } 
 
 struct ether_addr 
@@ -750,8 +754,7 @@ kdp_raise_exception(
 {
     int			index;
 
-    extern unsigned int disableDebugOuput;
-    extern unsigned int disableConsoleOutput;
+    extern unsigned int	disableConsoleOutput;
 
     disable_preemption();
 
@@ -820,17 +823,30 @@ kdp_raise_exception(
      * Continuing after setting kdp_trigger_core_dump should do the
      * trick.
      */
+
     if (1 == kdp_trigger_core_dump) {
 	kdp_flag &= ~PANIC_LOG_DUMP;
 	kdp_flag |= KDP_PANIC_DUMP_ENABLED;
 	kdp_panic_dump();
       }
 
+/* Trigger a reboot if the user has set this flag through the
+ * debugger.Ideally, this would be done through the HOSTREBOOT packet
+ * in the protocol,but that will need gdb support,and when it's
+ * available, it should work automatically.
+ */
+    if (1 == flag_kdp_trigger_reboot) {
+	    kdp_reboot();
+	    /* If we're still around, reset the flag */
+	    flag_kdp_trigger_reboot = 0;
+    }
+	    
     kdp_sync_cache();
 
     if (reattach_wait == 1)
       goto again;
- exit_raise_exception:
+
+exit_raise_exception:
     enable_preemption();
 }
 
@@ -952,6 +968,7 @@ int kdp_send_panic_packets (unsigned int request, char *corename,
 	kdp_send_panic_pkt(request, corename, (txend - txstart), (caddr_t) txstart);
       }
     }
+  return 0;
 }
 
 int 
@@ -1118,6 +1135,7 @@ kdp_get_xnu_version(char *versionbuf)
    strcpy(versionbuf, vstr);
    return retval;
 }
+
 /* Primary dispatch routine for the system dump */
 void 
 kdp_panic_dump()
@@ -1125,13 +1143,11 @@ kdp_panic_dump()
   char corename[50];
   char coreprefix[10];
   int panic_error;
-  extern char *debug_buf;
+
   extern vm_map_t kernel_map;
 
   extern char *inet_aton(const char *cp, struct in_addr *pin);
 
-  extern char *debug_buf;
-  extern char *debug_buf_ptr;
   uint64_t abstime;
 
   printf ("Entering system dump routine\n");
@@ -1186,7 +1202,7 @@ kdp_panic_dump()
 	   */
 	}
     }
-  /* These & 0xffs aren't necessary,but cut&paste is ever so convenient */
+
   printf("Routing via router MAC address: %02x:%02x:%02x:%02x:%02x:%02x\n",
 	  router_mac.ether_addr_octet[0] & 0xff,
 	  router_mac.ether_addr_octet[1] & 0xff,
@@ -1195,10 +1211,10 @@ kdp_panic_dump()
 	  router_mac.ether_addr_octet[4] & 0xff,
 	  router_mac.ether_addr_octet[5] & 0xff);
 
-  printf("Kernel map size is %d\n", get_vmmap_size(kernel_map));
+  printf("Kernel map size is %llu\n", (unsigned long long) get_vmmap_size(kernel_map));
   printf ("Sending write request for %s\n", corename);  
 
-  if ((panic_error = kdp_send_panic_pkt (KDP_WRQ, corename, 0 , NULL) < 0)) {
+  if ((panic_error = kdp_send_panic_pkt (KDP_WRQ, corename, 0 , NULL)) < 0) {
       printf ("kdp_send_panic_pkt failed with error %d\n", panic_error);
       goto panic_dump_exit;
     }

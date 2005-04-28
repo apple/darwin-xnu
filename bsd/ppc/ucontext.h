@@ -24,27 +24,44 @@
 #define _PPC_UCONTEXT_H_
 
 
-#include <mach/thread_status.h>
+#include <mach/ppc/_types.h>
 
+#ifndef _POSIX_C_SOURCE
 struct mcontext {
-	ppc_exception_state_t	es;
-	ppc_thread_state_t	ss;
-	ppc_float_state_t	fs;
-	ppc_vector_state_t	vs;
+	struct ppc_exception_state	es;
+	struct ppc_thread_state		ss;
+	struct ppc_float_state		fs;
+	struct ppc_vector_state		vs;
 };
-
 #define PPC_MCONTEXT_SIZE	(PPC_THREAD_STATE_COUNT + PPC_FLOAT_STATE_COUNT + PPC_EXCEPTION_STATE_COUNT + PPC_VECTOR_STATE_COUNT) * sizeof(int)
+#else /* _POSIX_C_SOURCE */
+struct __darwin_mcontext {
+	struct __darwin_ppc_exception_state	es;
+	struct __darwin_ppc_thread_state	ss;
+	struct __darwin_ppc_float_state		fs;
+	struct __darwin_ppc_vector_state	vs;
+};
+#endif /* _POSIX_C_SOURCE */
 
-typedef struct mcontext  * mcontext_t;
+#ifndef _MCONTEXT_T
+#define _MCONTEXT_T
+typedef __darwin_mcontext_t		mcontext_t;
+#endif
 
+#ifndef _POSIX_C_SOURCE
 struct mcontext64 {
-	ppc_exception_state_t	es;
-	ppc_thread_state64_t	ss;
-	ppc_float_state_t	fs;
-	ppc_vector_state_t	vs;
+	struct ppc_exception_state64	es;
+	struct ppc_thread_state64	ss;
+	struct ppc_float_state		fs;
+	struct ppc_vector_state		vs;
 };
 #define PPC_MCONTEXT64_SIZE	(PPC_THREAD_STATE64_COUNT + PPC_FLOAT_STATE_COUNT + PPC_EXCEPTION_STATE_COUNT + PPC_VECTOR_STATE_COUNT) * sizeof(int)
 
+#ifndef _MCONTEXT64_T
+#define _MCONTEXT64_T
 typedef struct mcontext64  * mcontext64_t;
+#endif
+
+#endif /* _POSIX_C_SOURCE */
 
 #endif /* _PPC_UCONTEXT_H_ */

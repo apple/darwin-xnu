@@ -98,7 +98,7 @@
 
 #define MP_BOOT		0x1000		/* address where slave boots load */
 #define MP_BOOTSEG	0x100	
-#define MP_GDT		0x1100		/* temporary gdt address for boot */
+#define MP_BOOTGDT	0x1100		/* temporary gdt address for boot */
 #define MP_BOOTSTACK	0x800		/* stack for boot */
 #define MP_MACH_START	MP_BOOTSTACK	/* contains address where to jump
 					   after boot */

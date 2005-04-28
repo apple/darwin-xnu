@@ -53,7 +53,6 @@
 /*
  * Interface to new debugger.
  */
-#include <cpus.h>
 #include <platforms.h>
 #include <time_stamp.h>
 #include <mach_mp_debug.h>
@@ -88,14 +87,13 @@
 #include <ddb/db_watch.h>
 
 int	 db_active = 0;
-int	 db_pass_thru[NCPUS];
 struct	 i386_saved_state *i386_last_saved_statep;
 struct	 i386_saved_state i386_nested_saved_state;
 unsigned i386_last_kdb_sp;
 
-vm_offset_t db_stacks[NCPUS];
-
-extern	thread_act_t db_default_act;
+extern	thread_t db_default_act;
+extern pt_entry_t *DMAP1;
+extern caddr_t DADDR1;
 
 #if	MACH_MP_DEBUG
 extern int masked_state_cnt[];
@@ -155,8 +153,6 @@ extern void	unlock_kdb(void);
 
 
 extern jmp_buf_t *db_recover;
-spl_t	saved_ipl[NCPUS];	/* just to know what IPL was before trap */
-struct i386_saved_state *saved_state[NCPUS];
 
 /*
  * Translate the state saved in a task state segment into an
@@ -173,11 +169,7 @@ db_tss_to_frame(
 	int mycpu = cpu_number();
 	struct i386_tss *tss;
 
-#if	NCPUS == 1
-	tss = &ktss;	/* XXX */
-#else	/* NCPUS > 1 */
-	tss = mp_ktss[mycpu];	/* XXX */
-#endif	/* NCPUS > 1 */
+	tss = cpu_datap(mycpu)->cpu_desc_index.cdi_ktss;	/* XXX */
 
 	/*
 	 * ddb will overwrite whatever's in esp, so put esp0 elsewhere, too.
@@ -267,20 +259,16 @@ kdb_trap(
 		kdbprinttrap(type, code, (int *)&regs->eip, regs->uesp);
 	}
 
-#if	NCPUS > 1
 	disable_preemption();
-#endif	/* NCPUS > 1 */
 
-	saved_ipl[cpu_number()] = s;
-	saved_state[cpu_number()] = regs;
+	current_cpu_datap()->cpu_kdb_saved_ipl = s;
+	current_cpu_datap()->cpu_kdb_saved_state = regs;
 
 	i386_last_saved_statep = regs;
 	i386_last_kdb_sp = (unsigned) &type;
 
-#if	NCPUS > 1
 	if (!kdb_enter(regs->eip))
 		goto kdb_exit;
-#endif	/* NCPUS > 1 */
 
 	/*  Should switch to kdb's own stack here. */
 
@@ -332,25 +320,21 @@ kdb_trap(
 	    (db_get_task_value(regs->eip,
 			       BKPT_SIZE,
 			       FALSE,
-			       db_target_space(current_act(),
+			       db_target_space(current_thread(),
 					       trap_from_user))
 	                      == BKPT_INST))
 	    regs->eip += BKPT_SIZE;
 
-#if	NCPUS > 1
 kdb_exit:
 	kdb_leave();
-#endif	/* NCPUS > 1 */
 
-	saved_state[cpu_number()] = 0;
+	current_cpu_datap()->cpu_kdb_saved_state = 0;
 
 #if	MACH_MP_DEBUG
-	masked_state_cnt[cpu_number()] = 0;
+	current_cpu_datap()->cpu_masked_state_cnt = 0;
 #endif	/* MACH_MP_DEBUG */
 
-#if	NCPUS > 1
 	enable_preemption();
-#endif	/* NCPUS > 1 */
 
 	splx(s);
 
@@ -410,16 +394,12 @@ kdb_kentry(
 	regs.fs  = int_regs->fs;
 	regs.gs  = int_regs->gs;
 
-#if	NCPUS > 1
 	disable_preemption();
-#endif	/* NCPUS > 1 */
 
-	saved_state[cpu_number()] = &regs;
+	current_cpu_datap()->cpu_kdb_saved_state = &regs;
 
-#if	NCPUS > 1
 	if (!kdb_enter(regs.eip))
 		goto kdb_exit;
-#endif	/* NCPUS > 1 */
 
 	bcopy((char *)&regs, (char *)&ddb_regs, sizeof (ddb_regs));
 	trap_from_user = IS_USER_TRAP(&ddb_regs, &etext);
@@ -447,15 +427,11 @@ kdb_kentry(
 	int_regs->fs = ddb_regs.fs & 0xffff;
 	int_regs->gs = ddb_regs.gs & 0xffff;
 
-#if	NCPUS > 1
 kdb_exit:
 	kdb_leave();
-#endif	/* NCPUS > 1 */
-	saved_state[cpu_number()] = 0;
+	current_cpu_datap()->cpu_kdb_saved_state = 0;
 
-#if	NCPUS > 1
 	enable_preemption();
-#endif	/* NCPUS > 1 */
 
 	splx(s);
 }
@@ -499,7 +475,21 @@ db_user_to_kernel_address(
 	    }
 	    return(-1);
 	}
-	*kaddr = (unsigned)ptetokv(*ptp) + (addr & (INTEL_PGBYTES-1));
+
+	src = (vm_offset_t)pte_to_pa(*ptp);
+	*(int *) DMAP1 = INTEL_PTE_VALID | INTEL_PTE_RW | (src & PG_FRAME) | 
+	  INTEL_PTE_REF | INTEL_PTE_MOD;
+#if defined(I386_CPU)
+	if (cpu_class == CPUCLASS_386) {
+		invltlb();
+	} else
+#endif
+	{
+		invlpg((u_int)DADDR1);
+	}
+
+	*kaddr = (unsigned)DADDR1 + (addr & PAGE_MASK);
+
 	return(0);
 }
 	
@@ -652,9 +642,9 @@ db_check_access(
 	        return(TRUE);
 	    task = kernel_task;
 	} else if (task == TASK_NULL) {
-	    if (current_act() == THR_ACT_NULL)
+	    if (current_thread() == THREAD_NULL)
 		return(FALSE);
-	    task = current_act()->task;
+	    task = current_thread()->task;
 	}
 	while (size > 0) {
 	    if (db_user_to_kernel_address(task, addr, &kern_addr, 0) < 0)
@@ -680,9 +670,9 @@ db_phys_eq(
 	if ((addr1 & (INTEL_PGBYTES-1)) != (addr2 & (INTEL_PGBYTES-1)))
 	    return(FALSE);
 	if (task1 == TASK_NULL) {
-	    if (current_act() == THR_ACT_NULL)
+	    if (current_thread() == THREAD_NULL)
 		return(FALSE);
-	    task1 = current_act()->task;
+	    task1 = current_thread()->task;
 	}
 	if (db_user_to_kernel_address(task1, addr1, &kern_addr1, 0) < 0 ||
 		db_user_to_kernel_address(task2, addr2, &kern_addr2, 0) < 0)
@@ -764,21 +754,6 @@ db_task_name(
 	    db_printf(" ");
 }
 
-#if NCPUS == 1
-
-void
-db_machdep_init(void)
-{
-	db_stacks[0] = (vm_offset_t)(db_stack_store +
-		INTSTACK_SIZE - sizeof (natural_t));
-	dbtss.esp0 = (int)(db_task_stack_store +
-		INTSTACK_SIZE - sizeof (natural_t));
-	dbtss.esp = dbtss.esp0;
-	dbtss.eip = (int)&db_task_start;
-}
-
-#else /* NCPUS > 1 */
-
 /*
  * Code used to synchronize kdb among all cpus, one active at a time, switch
  * from on to another using kdb_on! #cpu or cpu #cpu
@@ -792,8 +767,6 @@ decl_simple_lock_data(, kdb_lock)	/* kdb lock			*/
 
 int			kdb_cpu = -1;	/* current cpu running kdb	*/
 int			kdb_debug = 0;
-int			kdb_is_slave[NCPUS];
-int			kdb_active[NCPUS];
 volatile unsigned int	cpus_holding_bkpts;	/* counter for number of cpus holding
 						   breakpoints (ie: cpus that did not
 						   insert back breakpoints) */
@@ -804,8 +777,8 @@ db_machdep_init(void)
 {
 	int c;
 
-	db_simple_lock_init(&kdb_lock, ETAP_MISC_KDB);
-	for (c = 0; c < NCPUS; ++c) {
+	db_simple_lock_init(&kdb_lock, 0);
+	for (c = 0; c < real_ncpus; ++c) {
 		db_stacks[c] = (vm_offset_t) (db_stack_store +
 			(INTSTACK_SIZE * (c + 1)) - sizeof (natural_t));
 		if (c == master_cpu) {
@@ -832,30 +805,28 @@ db_machdep_init(void)
 int
 kdb_enter(int pc)
 {
-	int my_cpu;
+	int mycpu;
 	int retval;
 
-#if	NCPUS > 1
 	disable_preemption();
-#endif	/* NCPUS > 1 */
 
-	my_cpu = cpu_number();
+	mycpu = cpu_number();
 
-	if (db_pass_thru[my_cpu]) {
+	if (current_cpu_datap()->cpu_db_pass_thru) {
 		retval = 0;
 		goto kdb_exit;
 	}
 
-	kdb_active[my_cpu]++;
+	current_cpu_datap()->cpu_kdb_active++;
 	lock_kdb();
 
 	if (kdb_debug)
 		db_printf("kdb_enter: cpu %d, is_slave %d, kdb_cpu %d, run mode %d pc %x (%x) holds %d\n",
-			  my_cpu, kdb_is_slave[my_cpu], kdb_cpu,
+			  my_cpu, current_cpu_datap()->cpu_kdb_is_slave, kdb_cpu,
 			  db_run_mode, pc, *(int *)pc, cpus_holding_bkpts);
 	if (db_breakpoints_inserted)
 		cpus_holding_bkpts++;
-	if (kdb_cpu == -1 && !kdb_is_slave[my_cpu]) {
+	if (kdb_cpu == -1 && !current_cpu_datap()->cpu_kdb_is_slave) {
 		kdb_cpu = my_cpu;
 		remote_kdb();	/* stop other cpus */
 		retval = 1;
@@ -865,9 +836,7 @@ kdb_enter(int pc)
 		retval = 0;
 
 kdb_exit:
-#if	NCPUS > 1
 	enable_preemption();
-#endif	/* NCPUS > 1 */
 
 	return (retval);
 }
@@ -878,9 +847,7 @@ kdb_leave(void)
 	int my_cpu;
 	boolean_t	wait = FALSE;
 
-#if	NCPUS > 1
 	disable_preemption();
-#endif	/* NCPUS > 1 */
 
 	my_cpu = cpu_number();
 
@@ -890,8 +857,8 @@ kdb_leave(void)
 	}
 	if (db_breakpoints_inserted)
 		cpus_holding_bkpts--;
-	if (kdb_is_slave[my_cpu])
-		kdb_is_slave[my_cpu]--;
+	if (current_cpu_datap()->cpu_kdb_is_slave)
+		current_cpu_datap()->cpu_kdb_is_slave--;
 	if (kdb_debug)
 		db_printf("kdb_leave: cpu %d, kdb_cpu %d, run_mode %d pc %x (%x) holds %d\n",
 			  my_cpu, kdb_cpu, db_run_mode,
@@ -899,11 +866,9 @@ kdb_leave(void)
 			  cpus_holding_bkpts);
 	clear_kdb_intr();
 	unlock_kdb();
-	kdb_active[my_cpu]--;
+	current_cpu_datap()->cpu_kdb_active--;
 
-#if	NCPUS > 1
 	enable_preemption();
-#endif	/* NCPUS > 1 */
 
 	if (wait) {
 		while(cpus_holding_bkpts);
@@ -917,9 +882,7 @@ lock_kdb(void)
 	register	i;
 	extern void	kdb_console(void);
 
-#if	NCPUS > 1
 	disable_preemption();
-#endif	/* NCPUS > 1 */
 
 	my_cpu = cpu_number();
 
@@ -935,9 +898,7 @@ lock_kdb(void)
 		}
 	} 
 
-#if	NCPUS > 1
 	enable_preemption();
-#endif	/* NCPUS > 1 */
 }
 
 #if	TIME_STAMP
@@ -1005,7 +966,7 @@ kdb_on(
 	int		cpu)
 {
 	KDB_SAVE_CTXT();
-	if (cpu < 0 || cpu >= NCPUS || !kdb_active[cpu])
+	if (cpu < 0 || cpu >= real_ncpus || !cpu_datap(cpu)->cpu_kdb_active)
 		return;
 	db_set_breakpoints();
 	db_set_watchpoints();
@@ -1020,8 +981,6 @@ kdb_on(
 		db_continue_cmd(0, 0, 0, "");
 	}
 }
-
-#endif	/* NCPUS > 1 */
 
 void db_reboot(
 	db_expr_t	addr,

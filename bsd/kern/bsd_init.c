@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -70,23 +70,25 @@
 #include <sys/param.h>
 #include <sys/filedesc.h>
 #include <sys/kernel.h>
-#include <sys/mount.h>
-#include <sys/proc.h>
+#include <sys/mount_internal.h>
+#include <sys/proc_internal.h>
+#include <sys/kauth.h>
 #include <sys/systm.h>
-#include <sys/vnode.h>
+#include <sys/vnode_internal.h>
 #include <sys/conf.h>
-#include <sys/buf.h>
+#include <sys/buf_internal.h>
 #include <sys/clist.h>
 #include <sys/user.h>
 #include <sys/time.h>
 #include <sys/systm.h>
+#include <sys/mman.h>
 
 #include <bsm/audit_kernel.h>
 
 #include <sys/malloc.h>
 #include <sys/dkstat.h>
 
-#include <machine/spl.h>
+#include <kern/startup.h>
 #include <kern/thread.h>
 #include <kern/task.h>
 #include <kern/ast.h>
@@ -113,6 +115,8 @@
 #include <mach/shared_memory_server.h>
 #include <vm/vm_shared_memory_server.h>
 
+#include <net/init.h>
+
 extern int app_profile;		/* on/off switch for pre-heat cache */
 
 char    copyright[] =
@@ -126,7 +130,6 @@ extern void	ux_handler();
 struct	proc proc0;
 struct	session session0;
 struct	pgrp pgrp0;
-struct	pcred cred0;
 struct	filedesc filedesc0;
 struct	plimit limit0;
 struct	pstats pstats0;
@@ -138,6 +141,7 @@ long tk_nin;
 long tk_nout;
 long tk_rawcc;
 
+int lock_trace = 0;
 /* Global variables to make pstat happy. We do swapping differently */
 int nswdev, nswap;
 int nswapmap;
@@ -153,11 +157,10 @@ int		hostnamelen;
 char	domainname[MAXDOMNAMELEN];
 int		domainnamelen;
 char	classichandler[32] = {0};  
-long	classichandler_fsid = -1L;
+uint32_t	classichandler_fsid = -1L;
 long	classichandler_fileid = -1L;
 
 char rootdevice[16]; 	/* hfs device names have at least 9 chars */
-struct	timeval boottime;		/* GRODY!  This has to go... */
 
 #ifdef  KMEMSTATS
 struct	kmemstats kmemstats[M_LAST];
@@ -179,11 +182,17 @@ extern int bsd_hardclockinit;
 extern task_t bsd_init_task;
 extern char    init_task_failure_data[];
 extern void time_zone_slock_init(void);
+static void process_name(char *, struct proc *);
+
+static void setconf(void);
 
 funnel_t *kernel_flock;
-funnel_t *network_flock;
-int disable_funnel = 0;		/* disables split funnel */
-int enable_funnel = 0;		/* disables split funnel */
+
+extern void sysv_shm_lock_init(void);
+extern void sysv_sem_lock_init(void);
+extern void sysv_msg_lock_init(void);
+extern void pshm_lock_init();
+extern void psem_lock_init();
 
 /*
  * Initialization code.
@@ -200,8 +209,8 @@ int enable_funnel = 0;		/* disables split funnel */
 /*
  *	Sets the name for the given task.
  */
-void
-proc_name(s, p)
+static void
+process_name(s, p)
 	char		*s;
 	struct proc *p;
 {
@@ -218,31 +227,47 @@ struct rlimit vm_initial_limit_stack = { DFLSSIZ, MAXSSIZ };
 struct rlimit vm_initial_limit_data = { DFLDSIZ, MAXDSIZ };
 struct rlimit vm_initial_limit_core = { DFLCSIZ, MAXCSIZ };
 
-extern thread_t first_thread;
-extern thread_act_t	cloneproc(struct proc *, int);
-extern int 	(*mountroot) __P((void));
+extern thread_t	cloneproc(struct proc *, int);
+extern int 	(*mountroot)(void);
 extern int 	netboot_mountroot(); 	/* netboot.c */
 extern int	netboot_setup(struct proc * p);
+
+lck_grp_t * proc_lck_grp;
+lck_grp_attr_t * proc_lck_grp_attr;
+lck_attr_t * proc_lck_attr;
 
 /* hook called after root is mounted XXX temporary hack */
 void (*mountroot_post_hook)(void);
 
+/*
+ * This function is called very early on in the Mach startup, from the
+ * function start_kernel_threads() in osfmk/kern/startup.c.  It's called
+ * in the context of the current (startup) task using a call to the
+ * function kernel_thread_create() to jump into start_kernel_threads().
+ * Internally, kernel_thread_create() calls thread_create_internal(),
+ * which calls uthread_alloc().  The function of uthread_alloc() is
+ * normally to allocate a uthread structure, and fill out the uu_sigmask,
+ * uu_act, and uu_ucred fields.  It skips filling these out in the case
+ * of the "task" being "kernel_task", because the order of operation is
+ * inverted.  To account for that, we need to manually fill in at least
+ * the uu_cred field so that the uthread structure can be used like any
+ * other.
+ */
 void
 bsd_init()
 {
 	register struct proc *p;
-	extern struct ucred *rootcred;
+	struct uthread *ut;
+	extern kauth_cred_t rootcred;
 	register int i;
 	int s;
 	thread_t	th;
+	struct vfs_context context;
 	void		lightning_bolt(void );
 	kern_return_t	ret;
 	boolean_t funnel_state;
-	extern void uthread_zone_init();
-
-
-	/* split funnel is enabled by default */
-	PE_parse_boot_arg("dfnl", &disable_funnel);
+	struct ucred temp_cred;
+	extern void file_lock_init(void);
 
 	kernel_flock = funnel_alloc(KERNEL_FUNNEL);
 	if (kernel_flock == (funnel_t *)0 ) {
@@ -251,29 +276,19 @@ bsd_init()
         
 	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 
-	if (!disable_funnel) {
-		network_flock = funnel_alloc(NETWORK_FUNNEL);
-		if (network_flock == (funnel_t *)0 ) {
-			panic("bsd_init: Failed to allocate network funnel");
-		}
-	} else {
-		network_flock = kernel_flock;
-	}
-
 	printf(copyright);
-
+	
 	kmeminit();
 	
 	parse_bsd_args();
 
-	bsd_bufferinit();
-
 	/* Initialize the uthread zone */
-	uthread_zone_init();
+	//uthread_zone_init();	/* XXX redundant: previous uthread_alloc() */
 
-	/*
-	 * Initialize process and pgrp structures.
-	 */
+	/* Initialize kauth subsystem before instancing the first credential */
+	kauth_init();
+
+	/* Initialize process and pgrp structures. */
 	procinit();
 
 	kernproc = &proc0;
@@ -285,12 +300,29 @@ bsd_init()
 	p->p_pid = 0;
 
 	/* give kernproc a name */
-	proc_name("kernel_task", p);
+	process_name("kernel_task", p);
+
+
+	/* allocate proc lock group attribute and group */
+	proc_lck_grp_attr= lck_grp_attr_alloc_init();
+	lck_grp_attr_setstat(proc_lck_grp_attr);
+
+	proc_lck_grp = lck_grp_alloc_init("proc",  proc_lck_grp_attr);
+
+
+	/* Allocate proc lock attribute */
+	proc_lck_attr = lck_attr_alloc_init();
+	//lck_attr_setdebug(proc_lck_attr);
+
+	lck_mtx_init(&p->p_mlock, proc_lck_grp, proc_lck_attr);
+	lck_mtx_init(&p->p_fdmlock, proc_lck_grp, proc_lck_attr);
 
 	if (current_task() != kernel_task)
 		printf("bsd_init: We have a problem, "
 				"current task is not kernel task\n");
 	
+	ut = (uthread_t)get_bsdthread_info(current_thread());
+
 	/*
 	 * Create process 0.
 	 */
@@ -307,7 +339,7 @@ bsd_init()
 	p->task = kernel_task;
 	
 	p->p_stat = SRUN;
-	p->p_flag = P_INMEM|P_SYSTEM;
+	p->p_flag = P_SYSTEM;
 	p->p_nice = NZERO;
 	p->p_pptr = p;
 	lockinit(&p->signal_lock, PVM, "signal", 0, 0);
@@ -316,20 +348,26 @@ bsd_init()
 	p->sigwait_thread = THREAD_NULL;
 	p->exit_thread = THREAD_NULL;
 
-	/* Create credentials. */
-	lockinit(&cred0.pc_lock, PLOCK, "proc0 cred", 0, 0);
-	cred0.p_refcnt = 1;
-	p->p_cred = &cred0;
-	p->p_ucred = crget();
-	p->p_ucred->cr_ngroups = 1;	/* group 0 */
+	/*
+	 * Create credential.  This also Initializes the audit information.
+	 * XXX It is not clear what the initial values should be for audit ID,
+	 * XXX session ID, etc..
+	 */
+	bzero(&temp_cred, sizeof(temp_cred));
+	temp_cred.cr_ngroups = 1;
+
+	p->p_ucred = kauth_cred_create(&temp_cred); 
+
+	/* give the (already exisiting) initial thread a reference on it */
+	kauth_cred_ref(p->p_ucred);
+	ut->uu_ucred = p->p_ucred;
 	
 	TAILQ_INIT(&p->aio_activeq);
 	TAILQ_INIT(&p->aio_doneq);
 	p->aio_active_count = 0;
 	p->aio_done_count = 0;
 
-	/* Set the audit info for this process */
-	audit_proc_init(p);
+	file_lock_init();
 
 	/* Create the file descriptor table. */
 	filedesc0.fd_refcnt = 1+1;	/* +1 so shutdown will not _FREE_ZONE */
@@ -357,7 +395,7 @@ bsd_init()
 	p->p_sigacts = &sigacts0;
 
 	/*
-	 * Charge root for one process.
+	 * Charge root for two  processes: init and mach_init.
 	 */
 	(void)chgproccnt(0, 1);
 
@@ -372,11 +410,20 @@ bsd_init()
 				&min,
 				(vm_size_t)BSD_PAGABLE_MAP_SIZE,
 				TRUE,
-				TRUE,
+				VM_FLAGS_ANYWHERE,
 				&bsd_pageable_map);
 		if (ret != KERN_SUCCESS) 
 			panic("bsd_init: Failed to allocate bsd pageable map");
 	}
+
+	/*
+	 * Initialize buffers and hash links for buffers
+	 *
+	 * SIDE EFFECT: Starts a thread for bcleanbuf_thread(), so must
+	 *		happen after a credential has been associated with
+	 *		the kernel task.
+	 */
+	bsd_bufferinit();
 
 	/* Initialize the execve() semaphore */
 	ret = semaphore_create(kernel_task, &execve_semaphore,
@@ -397,9 +444,6 @@ bsd_init()
 	/* Initialize mbuf's. */
 	mbinit();
 
-	/* Initialize syslog */
-	log_init();
-
 	/*
 	 * Initializes security event auditing.
 	 * XXX: Should/could this occur later?
@@ -412,6 +456,18 @@ bsd_init()
 	/* Initialize for async IO */
 	aio_init();
 
+	/* Initialize pipes */
+	pipeinit();
+
+	/* Initialize SysV shm subsystem locks; the subsystem proper is
+	 * initialized through a sysctl.
+	 */
+	sysv_shm_lock_init();
+	sysv_sem_lock_init();
+	sysv_msg_lock_init();
+	pshm_lock_init();
+	psem_lock_init();
+
 	/* POSIX Shm and Sem */
 	pshm_cache_init();
 	psem_cache_init();
@@ -421,13 +477,12 @@ bsd_init()
 	 * Initialize protocols.  Block reception of incoming packets
 	 * until everything is ready.
 	 */
-	s = splimp();
 	sysctl_register_fixed(); 
 	sysctl_mib_init();
 	dlil_init();
+	proto_kpi_init();
 	socketinit();
 	domaininit();
-	splx(s);
 
 	p->p_fd->fd_cdir = NULL;
 	p->p_fd->fd_rdir = NULL;
@@ -456,42 +511,53 @@ bsd_init()
         /* Register the built-in dlil ethernet interface family */
 	ether_family_init();
 
+	/* Call any kext code that wants to run just after network init */
+	net_init_run();
+
 	vnode_pager_bootstrap();
+#if 0
+	/* XXX Hack for early debug stop */
+	printf("\nabout to sleep for 10 seconds\n");
+	IOSleep( 10 * 1000 );
+	/* Debugger("hello"); */
+#endif
+
+	inittodr(0);
 
 	/* Mount the root file system. */
 	while( TRUE) {
 		int err;
 
 		setconf();
-		/*
-		 * read the time after clock_initialize_calendar()
-		 * and before nfs mount
-		 */
-		microtime((struct timeval  *)&time);
-
 		bsd_hardclockinit = -1;	/* start ticking */
 
 		if (0 == (err = vfs_mountroot()))
 			break;
+#if NFSCLIENT
 		if (mountroot == netboot_mountroot) {
 			printf("cannot mount network root, errno = %d\n", err);
 			mountroot = NULL;
 			if (0 == (err = vfs_mountroot()))
 				break;
 		}
+#endif
 		printf("cannot mount root, errno = %d\n", err);
 		boothowto |= RB_ASKNAME;
 	}
 
-	mountlist.cqh_first->mnt_flag |= MNT_ROOTFS;
+	context.vc_proc = p;
+	context.vc_ucred = p->p_ucred;
+	mountlist.tqh_first->mnt_flag |= MNT_ROOTFS;
 
 	/* Get the vnode for '/'.  Set fdp->fd_fd.fd_cdir to reference it. */
-	if (VFS_ROOT(mountlist.cqh_first, &rootvnode))
+	if (VFS_ROOT(mountlist.tqh_first, &rootvnode, &context))
 		panic("bsd_init: cannot find root vnode");
-	VREF(rootvnode);
+	rootvnode->v_flag |= VROOT;
+	(void)vnode_ref(rootvnode);
+	(void)vnode_put(rootvnode);
 	filedesc0.fd_cdir = rootvnode;
-	VOP_UNLOCK(rootvnode, 0, p);
 
+#if NFSCLIENT
 	if (mountroot == netboot_mountroot) {
 		int err;
 		/* post mount setup */
@@ -499,14 +565,10 @@ bsd_init()
 			panic("bsd_init: NetBoot could not find root, %d", err);
 		}
 	}
+#endif
 	
 
-	/*
-	 * Now can look at time, having had a chance to verify the time
-	 * from the file system.  Reset p->p_rtime as it may have been
-	 * munched in mi_switch() after the time got set.
-	 */
-	p->p_stats->p_start = boottime = time;
+	microtime(&p->p_stats->p_start);
 	p->p_rtime.tv_sec = p->p_rtime.tv_usec = 0;
 
 #if DEVFS
@@ -536,14 +598,14 @@ bsdinit_task(void)
 	struct proc *p = current_proc();
 	struct uthread *ut;
 	kern_return_t	kr;
-	thread_act_t th_act;
+	thread_t th_act;
 	shared_region_mapping_t system_region;
 
-	proc_name("init", p);
+	process_name("init", p);
 
 	ux_handler_init();
 
-	th_act = current_act();
+	th_act = current_thread();
 	(void) host_set_exception_ports(host_priv_self(),
 					EXC_MASK_ALL & ~(EXC_MASK_SYSCALL |
 							 EXC_MASK_MACH_SYSCALL |
@@ -567,17 +629,16 @@ bsdinit_task(void)
 	bsd_hardclockinit = 1;	/* Start bsd hardclock */
 	bsd_init_task = get_threadtask(th_act);
 	init_task_failure_data[0] = 0;
-	system_region = lookup_default_shared_region(ENV_DEFAULT_ROOT,
-				machine_slot[cpu_number()].cpu_type);
+	system_region = lookup_default_shared_region(ENV_DEFAULT_ROOT, cpu_type());
         if (system_region == NULL) {
-		shared_file_boot_time_init(ENV_DEFAULT_ROOT,
-				machine_slot[cpu_number()].cpu_type);
+		shared_file_boot_time_init(ENV_DEFAULT_ROOT, cpu_type());
 	} else {
 		vm_set_shared_region(get_threadtask(th_act), system_region);
 	}
 	load_init_program(p);
 	/* turn on app-profiling i.e. pre-heating */
 	app_profile = 1;
+	lock_trace = 1;
 }
 
 void
@@ -617,7 +678,8 @@ bsd_autoconf()
 
 #include <sys/disklabel.h>  /* for MAXPARTITIONS */
 
-setconf()
+static void
+setconf(void)
 {	
 	extern kern_return_t IOFindBSDRoot( char * rootName,
 				dev_t * root, u_int32_t * flags );
@@ -640,25 +702,29 @@ setconf()
 		flags = 0;
 	}
 
+#if NFSCLIENT
 	if( flags & 1 ) {
 		/* network device */
 		mountroot = netboot_mountroot;
 	} else {
+#endif
 		/* otherwise have vfs determine root filesystem */
 		mountroot = NULL;
+#if NFSCLIENT
 	}
+#endif
 
 }
 
 bsd_utaskbootstrap()
 {
-	thread_act_t th_act;
+	thread_t th_act;
 	struct uthread *ut;
 
 	th_act = cloneproc(kernproc, 0);
 	initproc = pfind(1);				
 	/* Set the launch time for init */
-	initproc->p_stats->p_start = time;
+	microtime(&initproc->p_stats->p_start);
 
 	ut = (struct uthread *)get_bsdthread_info(th_act);
 	ut->uu_sigmask = 0;
@@ -733,56 +799,10 @@ parse_bsd_args()
 	return 0;
 }
 
-boolean_t
-thread_funnel_switch(
-        int	oldfnl,
-	int	newfnl)
+#if !NFSCLIENT
+int 
+netboot_root(void)
 {
-	boolean_t	funnel_state_prev;
-	int curfnl;
-	funnel_t * curflock;
-	funnel_t * oldflock;
-	funnel_t * newflock;
-	funnel_t * exist_funnel;
-	extern int disable_funnel;
-       
-        
-		if (disable_funnel)
-			return(TRUE);
-
-        if(oldfnl == newfnl) {
-            panic("thread_funnel_switch: can't switch to same funnel");
-        }
-        
-        if ((oldfnl != NETWORK_FUNNEL) && (oldfnl != KERNEL_FUNNEL)) {
-            panic("thread_funnel_switch: invalid oldfunnel");
-        }
-        if ((newfnl != NETWORK_FUNNEL) && (newfnl != KERNEL_FUNNEL)) {
-            panic("thread_funnel_switch: invalid newfunnel");
-        }
-        
-	if((curflock = thread_funnel_get()) == THR_FUNNEL_NULL) {
-            panic("thread_funnel_switch: no funnel held");
-	}
-        
-        if ((oldfnl == NETWORK_FUNNEL) && (curflock != network_flock))
-            panic("thread_funnel_switch: network funnel not held");
-            
-        if ((oldfnl == KERNEL_FUNNEL) && (curflock != kernel_flock))
-            panic("thread_funnel_switch: kernel funnel not held");
-
-        if(oldfnl == NETWORK_FUNNEL) {
-            oldflock = network_flock;
-            newflock = kernel_flock;
-        } else {
-            oldflock = kernel_flock;
-            newflock = network_flock;
-        }
-		KERNEL_DEBUG(0x603242c | DBG_FUNC_NONE, oldflock, 1, 0, 0, 0);
-        thread_funnel_set(oldflock, FALSE);
-		KERNEL_DEBUG(0x6032428 | DBG_FUNC_NONE, newflock, 1, 0, 0, 0);
-        thread_funnel_set(newflock, TRUE);
-		KERNEL_DEBUG(0x6032434 | DBG_FUNC_NONE, newflock, 1, 0, 0, 0);
-
-        return(TRUE);        
+	return(0);
 }
+#endif

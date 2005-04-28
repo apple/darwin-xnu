@@ -8,16 +8,22 @@ include $(MakeInc_cmd)
 include $(MakeInc_def)
 
 DATAFILES = \
-	cpu.h disklabel.h endian.h exec.h label_t.h param.h \
-	profile.h psl.h ptrace.h  reboot.h setjmp.h signal.h \
-	spl.h table.h types.h ucontext.h user.h vmparam.h
+	endian.h param.h \
+	profile.h setjmp.h signal.h \
+	types.h ucontext.h  vmparam.h _types.h
+
+KERNELFILES = \
+	endian.h param.h \
+	profile.h setjmp.h signal.h \
+	types.h vmparam.h _types.h
 
 
 INSTALL_MD_LIST = ${DATAFILES}
+INSTALL_MD_LCL_LIST = ${DATAFILES} disklabel.h
 
 INSTALL_MD_DIR = i386
 
-EXPORT_MD_LIST = ${DATAFILES}
+EXPORT_MD_LIST = ${KERNELFILES}
 
 EXPORT_MD_DIR = i386
 

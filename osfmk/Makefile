@@ -9,30 +9,29 @@ include $(MakeInc_def)
 
 INSTINC_SUBDIRS = \
 	mach	\
-	machine	\
-	default_pager \
 	device \
+	default_pager \
 	mach_debug \
-	profiling \
-	UserNotification
+	kern \
+	ipc \
+	machine \
+	UserNotification \
+	vm \
+	libsa
 
 INSTINC_SUBDIRS_PPC = \
 	mach \
-	ppc	\
-	profiling 
+	ppc
 
 INSTINC_SUBDIRS_I386 = \
 	mach	\
-	i386	\
-	profiling
+	i386
 
 EXPINC_SUBDIRS = \
 	mach	\
 	device \
 	default_pager \
 	mach_debug \
-	profiling \
-	ddb \
 	kern \
 	kdp \
 	ipc \
@@ -43,13 +42,11 @@ EXPINC_SUBDIRS = \
 
 EXPINC_SUBDIRS_PPC = \
 	mach \
-	ppc \
-	profiling 
+	ppc
 
 EXPINC_SUBDIRS_I386 = \
 	mach	\
-	i386 \
-	profiling
+	i386
 
 SETUP_SUBDIRS = 	\
 	conf

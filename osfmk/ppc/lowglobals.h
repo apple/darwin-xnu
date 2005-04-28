@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -25,8 +25,6 @@
 #ifndef	_LOW_MEMORY_GLOBALS_H_
 #define	_LOW_MEMORY_GLOBALS_H_
 
-#include <cpus.h>
-
 #include <mach/mach_types.h>
 #include <mach/vm_types.h>
 #include <mach/machine/vm_types.h>
@@ -35,6 +33,7 @@
 #include <ppc/savearea.h>
 #include <ppc/low_trace.h>
 #include <ppc/Diagnostics.h>
+#include <ppc/mappings.h>
 
 /*
  * Don't change these structures unless you change the corresponding assembly code
@@ -56,7 +55,12 @@ typedef struct lowglo {
 	unsigned long long lgZero;				/* 5008 Double constant 0 */
 	unsigned int	lgPPStart;				/* 5010 Start of per_proc blocks */
 	unsigned int    lgCHUDXNUfnStart;		/* 5014 CHUD XNU function glue table */
-	unsigned int	lgRsv018[26];			/* 5018 reserved */
+	unsigned int	lgMckFlags;				/* 5018 Machine check flags */
+	unsigned int    lgVersion;				/* 501C Pointer to kernel version string */
+	uint64_t		lgPMWvaddr;				/* 5020 physical memory window virtual address */
+	uint64_t		lgUMWvaddr;				/* 5028 user memory window virtual address */
+	unsigned int	lgVMMforcedFeats;		/* 5030 VMM boot-args forced feature flags */
+	unsigned int	lgRsv034[19];			/* 5034 reserved */
 	traceWork		lgTrcWork;				/* 5080 Tracing control block - trcWork */
 	unsigned int	lgRsv0A0[24];			/* 50A0 reserved */
 	struct Saveanchor	lgSaveanchor;		/* 5100 Savearea anchor - saveanchor */
@@ -64,8 +68,10 @@ typedef struct lowglo {
 	unsigned int	lgTlbieLck;				/* 5180 TLBIE lock */
 	unsigned int	lgRsv184[31];			/* 5184 reserved - push to next line */
 	struct diagWork	lgdgWork;				/* 5200 Start of diagnostic work area */
-	unsigned int	lgRsv220[24];			/* 5220 reserved */
-	unsigned int	lgRsv280[32];			/* 5280 reserved */
+	unsigned int	lglcksWork;				/* 5220 lcks option */
+	unsigned int	lgRsv224[23];			/* 5224 reserved */
+	pcfg 			lgpPcfg[8];				/* 5280 Page configurations */
+	unsigned int	lgRst2A0[24];			/* 52A0 reserved */
 	unsigned int	lgKillResv;				/* 5300 line used to kill reservations */
 	unsigned int	lgKillResvpad[31];		/* 5304 pad reservation kill line */
 

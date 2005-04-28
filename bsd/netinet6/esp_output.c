@@ -87,8 +87,8 @@
 #define DBG_FNC_ESPOUT		NETDBG_CODE(DBG_NETIPSEC, (4 << 8))
 #define DBG_FNC_ENCRYPT		NETDBG_CODE(DBG_NETIPSEC, (5 << 8))
 
-static int esp_output __P((struct mbuf *, u_char *, struct mbuf *,
-	struct ipsecrequest *, int));
+static int esp_output(struct mbuf *, u_char *, struct mbuf *,
+	struct ipsecrequest *, int);
 
 extern int	esp_udp_encap_port;
 extern u_int32_t natt_now;

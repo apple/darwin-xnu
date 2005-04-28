@@ -5,6 +5,7 @@ OPTIONS/kdebug						optional kdebug
 
 # libIOKit
 
+
 iokit/Kernel/IOLib.c					optional iokitcpp
 iokit/Kernel/IOLocks.cpp				optional iokitcpp
 iokit/Kernel/IOConditionLock.cpp			optional iokitcpp
@@ -25,7 +26,6 @@ iokit/Kernel/IOPMPowerStateQueue.cpp			optional iokitcpp
 iokit/Kernel/IOCatalogue.cpp				optional iokitcpp
 iokit/Kernel/IOPMPowerSource.cpp                        optional iokitcpp
 iokit/Kernel/IOPMPowerSourceList.cpp                    optional iokitcpp
-iokit/Kernel/IOPMPagingPlexus.cpp           	        optional iokitcpp
 
 iokit/Kernel/IOWorkLoop.cpp				optional iokitcpp
 iokit/Kernel/IOEventSource.cpp				optional iokitcpp

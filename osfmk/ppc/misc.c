@@ -22,6 +22,7 @@
 /*
  * @OSF_COPYRIGHT@
  */
+#if 0  // dead code
 #include <debug.h>
 #include <mach_debug.h>
 
@@ -67,14 +68,14 @@ boolean_t copyin_multiple(const char *src,
 	midpoint = (const char*) ((vm_offset_t)(src + count) & 0xF0000000);
 	first_count = (midpoint - src);
 
-	first_result = copyin(src, dst, first_count);
+	first_result = copyin(CAST_USER_ADDR_T(src), dst, first_count);
 	
 	/* If there was an error, stop now and return error */
 	if (first_result != 0)
 		return first_result;
 
 	/* otherwise finish the job and return result */
-	return copyin(midpoint, dst + first_count, count-first_count);
+	return copyin(CAST_USER_ADDR_T(midpoint), dst + first_count, count-first_count);
 }
 
 extern int copyout_multiple(const char *src, char *dst, vm_size_t count);
@@ -99,7 +100,7 @@ int copyout_multiple(const char *src, char *dst, vm_size_t count)
 	midpoint = (char *) ((vm_offset_t)(dst + count) & 0xF0000000);
 	first_count = (midpoint - dst);
 
-	first_result = copyout(src, dst, first_count);
+	first_result = copyout(src, CAST_USER_ADDR_T(dst), first_count);
 	
 	/* If there was an error, stop now and return error */
 	if (first_result != 0)
@@ -107,6 +108,7 @@ int copyout_multiple(const char *src, char *dst, vm_size_t count)
 
 	/* otherwise finish the job and return result */
 
-	return copyout(src + first_count, midpoint, count-first_count);
+	return copyout(src + first_count, CAST_USER_ADDR_T(midpoint), count-first_count);
 }
+#endif // dead code
 

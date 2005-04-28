@@ -80,7 +80,12 @@ struct OSNotificationHeader {
     vm_size_t		size;		/* content size */
     natural_t		type;
     OSAsyncReference	reference;
+
+#if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 199901L)
+    unsigned char	content[];
+#else
     unsigned char	content[0];
+#endif
 };
 
 struct IOServiceInterestContent {
@@ -90,7 +95,11 @@ struct IOServiceInterestContent {
 
 struct IOAsyncCompletionContent {
     IOReturn result;
+#if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 199901L)
+    void * args[];
+#else
     void * args[0];
+#endif
 };
 
 #ifndef __cplusplus

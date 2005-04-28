@@ -33,14 +33,16 @@
 #include <machine/spl.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
-#include <sys/proc.h>
+#include <sys/proc_internal.h>	/* for p_fd in fdflags */
 #include <sys/filedesc.h>
 #include <sys/fcntl.h>
 #include <sys/mbuf.h>
 #include <sys/malloc.h>
-#include <sys/file.h>
+#include <sys/file_internal.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
+#include <sys/sysproto.h>
+#include <sys/kdebug.h>
 #include <net/if_var.h>
 
 #include <netat/sysglue.h>
@@ -59,17 +61,23 @@ int (*sys_ATPgetrsp)() = 0;
 
 extern at_state_t at_state;	/* global state of AT network */
 extern at_ifaddr_t *ifID_home;	/* default interface */
+extern lck_mtx_t * atalk_mutex;
 
-struct ATsocket_args {
-    int proto;
-};
+#define f_flag f_fglob->fg_flag
+#define f_type f_fglob->fg_type
+#define f_msgcount f_fglob->fg_msgcount
+#define f_cred f_fglob->fg_cred
+#define f_ops f_fglob->fg_ops
+#define f_offset f_fglob->fg_offset
+#define f_data f_fglob->fg_data
+
 int ATsocket(proc, uap, retval)
-	void *proc;
+	struct proc *proc;
 	struct ATsocket_args *uap;
 	int *retval;
 {
 	int err;
-
+	atalk_lock();
 	if (sys_ATsocket) {
 		/* required check for all AppleTalk system calls */
 		if (!(at_state.flags & AT_ST_STARTED) || !ifID_home) {
@@ -82,22 +90,18 @@ int ATsocket(proc, uap, retval)
 		*retval = -1;
 		err = ENXIO;
 	}
+	atalk_unlock();
 	return err;
 }
 
-struct ATgetmsg_args {
-    int fd;
-    void *ctlptr;
-    void *datptr;
-    int *flags;
-};
 int ATgetmsg(proc, uap, retval)
-	void *proc;
+	struct proc *proc;
 	struct ATgetmsg_args *uap;
 	int *retval;
 {
 	int err;
 
+	atalk_lock();
 	if (sys_ATgetmsg) {
 		/* required check for all AppleTalk system calls */
 		if (!(at_state.flags & AT_ST_STARTED) || !ifID_home) {
@@ -112,22 +116,18 @@ int ATgetmsg(proc, uap, retval)
 		*retval = -1;
 		err = ENXIO;
 	}
+	atalk_unlock();
 	return err;
 }
 
-struct ATputmsg_args {
-	int fd;
-	void *ctlptr;
-	void *datptr;
-	int flags;
-};
 int ATputmsg(proc, uap, retval)
-	void *proc;
+	struct proc *proc;
 	struct ATputmsg_args *uap;
 	int *retval;
 {
 	int err;
 
+	atalk_lock();
 	if (sys_ATputmsg) {
 		/* required check for all AppleTalk system calls */
 		if (!(at_state.flags & AT_ST_STARTED) || !ifID_home) {
@@ -142,22 +142,18 @@ int ATputmsg(proc, uap, retval)
 		*retval = -1;
 		err = ENXIO;
 	}
+	atalk_unlock();
 	return err;
 }
 
-struct ATPsndreq_args {
-    int fd;
-    unsigned char *buf;
-    int len;
-    int nowait;
-};
 int ATPsndreq(proc, uap, retval)
-	void *proc;
+	struct proc *proc;
 	struct ATPsndreq_args *uap;
 	int *retval;
 {
 	int err;
 
+	atalk_lock();
 	if (sys_ATPsndreq) {
 		/* required check for all AppleTalk system calls */
 		if (!(at_state.flags & AT_ST_STARTED) || !ifID_home) {
@@ -172,22 +168,18 @@ int ATPsndreq(proc, uap, retval)
 		*retval = -1;
 		err= ENXIO;
 	}
+	atalk_unlock();
 	return err;
 }
 
-struct ATPsndrsp_args {
-	  int fd;
-	  unsigned char *respbuff;
-	  int resplen;
-	  int datalen;
-};
 int ATPsndrsp(proc, uap, retval)
-	void *proc;
+	struct proc *proc;
 	struct ATPsndrsp_args *uap;
 	int *retval;
 {
 	int err;
 
+	atalk_lock();
 	if (sys_ATPsndrsp) {
 		/* required check for all AppleTalk system calls */
 		if (!(at_state.flags & AT_ST_STARTED) || !ifID_home) {
@@ -202,21 +194,18 @@ int ATPsndrsp(proc, uap, retval)
 		*retval = -1;
 		err = ENXIO;
 	}
+	atalk_unlock();
 	return err;
 }
 
-struct ATPgetreq_args {
-	  int fd;
-	  unsigned char *buf;
-	  int buflen;
-};
 int ATPgetreq(proc, uap, retval)
-	void *proc;
+	struct proc *proc;
 	struct ATPgetreq_args *uap;
 	int *retval;
 {
 	int err;
 
+	atalk_lock();
 	if (sys_ATPgetreq) {
 		/* required check for all AppleTalk system calls */
 		if (!(at_state.flags & AT_ST_STARTED) || !ifID_home) {
@@ -231,20 +220,18 @@ int ATPgetreq(proc, uap, retval)
 		*retval = -1;
 		err = ENXIO;
 	}
+	atalk_unlock();
 	return err;
 }
 
-struct ATPgetrsp_args {
-	  int fd;
-	  unsigned char *bdsp;
-};
 int ATPgetrsp(proc, uap, retval)
-	void *proc;
+	struct proc *proc;
 	struct ATPgetrsp_args *uap;
 	int *retval;
 {
 	int err = 0;
 
+	atalk_lock();
 	if (sys_ATPgetrsp) {
 		/* required check for all AppleTalk system calls */
 		if (!(at_state.flags & AT_ST_STARTED) || !ifID_home) {
@@ -258,19 +245,16 @@ int ATPgetrsp(proc, uap, retval)
 		*retval = -1;
 		err = ENXIO;
 	}
+	atalk_unlock();
 	return err;
 }
 
-int atalk_closeref(fp, grefp)
-	struct file *fp;
+int atalk_closeref(fg, grefp)
+	struct fileglob *fg;
 	gref_t **grefp;
 {
-	if ((*grefp = (gref_t *)fp->f_data)) {
-		fp->f_data = 0;
-/*
-		kprintf("atalk_closeref: fp = 0x%x, gref = 0x%x\n", (u_int)fp, 
-			(u_int)*grefp);
-*/
+	if ((*grefp = (gref_t *)fg->fg_data)) {
+		fg->fg_data = 0;
 		return(0);
 	}
 	return(EBADF);
@@ -283,14 +267,15 @@ int atalk_openref(gref, retfd, proc)
 {
 	extern int _ATread(), _ATwrite(),_ATioctl(), _ATselect(), _ATclose(), _ATkqfilter();
 	static struct fileops fileops = 
-		{_ATread, _ATwrite, _ATioctl, _ATselect, _ATclose, _ATkqfilter};
+		{_ATread, _ATwrite, _ATioctl, _ATselect, _ATclose, _ATkqfilter, 0};
 	int err, fd;
-	struct file *fp;
-
-	thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
-
-	if ((err = falloc(proc, &fp, &fd)) != 0) {
-	     thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
+	struct fileproc *fp;
+	
+	lck_mtx_assert(atalk_mutex, LCK_MTX_ASSERT_OWNED);
+	
+	proc_fdlock(proc);
+	if ((err = falloc_locked(proc, &fp, &fd, 1)) != 0) {
+		proc_fdunlock(proc);
 		return err;
 	}
 
@@ -300,45 +285,69 @@ int atalk_openref(gref, retfd, proc)
 	 */
 	fp->f_type = DTYPE_ATALK+1;
 	fp->f_ops = &fileops;
+	fp->f_data = (void *)gref;
+
 	*fdflags(proc, fd) &= ~UF_RESERVED;
 	*retfd = fd;
-	fp->f_data = (void *)gref;
+	fp_drop(proc, fd, fp, 1);
+	proc_fdunlock(proc);
 /*
 	kprintf("atalk_openref: fp = 0x%x, gref = 0x%x\n", (u_int)fp, (u_int)gref);
 */
-	thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
 	return 0;
 }
 
-/* go from file descriptor to gref, which has been saved in fp->f_data */
-int atalk_getref(fp, fd, grefp, proc)
-struct file *fp;
+/* 
+ * go from file descriptor to gref, which has been saved in fp->f_data 
+ *
+ * This routine returns with an iocount on the fileproc when the fp is null
+ * as it converts fd to fileproc. Callers of this api who pass fp as null
+ * need to drop the iocount when they are done with the fp
+ */
+int atalk_getref(fp, fd, grefp, proc, droponerr)
+struct fileproc *fp;
 int fd;
 gref_t **grefp;
 struct proc *proc;
+int droponerr;
 {
-     thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
-     if (fp == 0) {
-	  int error = fdgetf(proc, fd, &fp);
+	int error;
 
-	  if (error) {
-	       
-	       *grefp = (gref_t *) 0;
-	       thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
-	       return EBADF;
-	  }
-     }
-     *grefp = (gref_t *)fp->f_data;
-     if (*grefp == 0 || *grefp == (gref_t *)(-1)) {
-	  thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
-	  return EBADF;
-     }
+	proc_fdlock(proc);
+	error = atalk_getref_locked(fp, fd, grefp, proc, droponerr);
+	proc_fdunlock(proc);
+	return error;
+}
 
-     if ((*grefp)->errno) {
-	  thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
-	  return (int)(*grefp)->errno;
-     }
-
-     thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
-     return 0;
+int atalk_getref_locked(fp, fd, grefp, proc, droponerr)
+struct fileproc *fp;
+int fd;
+gref_t **grefp;
+struct proc *proc;
+int droponerr;
+{
+	lck_mtx_assert(atalk_mutex, LCK_MTX_ASSERT_OWNED);
+	if (fp == 0) {
+		int error = fp_lookup(proc, fd, &fp, 1);
+	
+		if (error) {
+		   
+			*grefp = (gref_t *) 0;
+		   return EBADF;
+		}
+	}
+	*grefp = (gref_t *)fp->f_data;
+	if (*grefp == 0 || *grefp == (gref_t *)(-1)) {
+		if (droponerr)
+			fp_drop(proc, fd, fp, 1);
+		printf("atalk_getref_locked EBADF f_data: %x\n", fp->f_data);
+		return EBADF;
+	}
+	
+	if ((*grefp)->errno) {
+		if (droponerr)
+			fp_drop(proc, fd, fp, 1);
+		return (int)(*grefp)->errno;
+	}
+	return 0;
 }

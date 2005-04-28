@@ -65,15 +65,12 @@
 
 #include <sys/ioccom.h>
 
-/* get size of mount info struct: */
-#define	FSGETMOUNTINFOSIZE		_IOR('m', 1, long)
-
 #ifndef KERNEL
 
 #include <sys/cdefs.h>
 
 __BEGIN_DECLS
-int	fsctl __P((const char *, unsigned long, void *, unsigned long));
+int	fsctl(const char *, unsigned long, void *, unsigned long);
 __END_DECLS
 
 #endif /* !KERNEL */

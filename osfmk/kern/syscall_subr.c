@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -55,7 +55,6 @@
 #include <ipc/ipc_port.h>
 #include <ipc/ipc_space.h>
 #include <kern/counters.h>
-#include <kern/etap_macros.h>
 #include <kern/ipc_kobject.h>
 #include <kern/processor.h>
 #include <kern/sched.h>
@@ -63,14 +62,11 @@
 #include <kern/spl.h>
 #include <kern/task.h>
 #include <kern/thread.h>
-#include <kern/ast.h>
 #include <mach/policy.h>
 
 #include <kern/syscall_subr.h>
 #include <mach/mach_host_server.h>
 #include <mach/mach_syscalls.h>
-
-#include <kern/mk_sp.h>
 
 /*
  *	swtch and swtch_pri both attempt to context switch (logic in
@@ -86,29 +82,30 @@
  *	lock and then be a good citizen and really suspend.
  */
 
-void
+static void
 swtch_continue(void)
 {
 	register processor_t	myprocessor;
     boolean_t				result;
 
-    mp_disable_preemption();
+    disable_preemption();
 	myprocessor = current_processor();
 	result =		myprocessor->runq.count > 0					||
 				myprocessor->processor_set->runq.count > 0;
-	mp_enable_preemption();
+	enable_preemption();
 
 	thread_syscall_return(result);
 	/*NOTREACHED*/
 }
 
 boolean_t
-swtch(void)
+swtch(
+	__unused struct swtch_args *args)
 {
 	register processor_t	myprocessor;
 	boolean_t				result;
 
-	mp_disable_preemption();
+	disable_preemption();
 	myprocessor = current_processor();
 	if (		myprocessor->runq.count == 0				&&
 			myprocessor->processor_set->runq.count == 0			) {
@@ -116,30 +113,30 @@ swtch(void)
 
 		return (FALSE);
 	}
-	mp_enable_preemption();
+	enable_preemption();
 
 	counter(c_swtch_block++);
 
-	thread_block_reason(swtch_continue, AST_YIELD);
+	thread_block_reason((thread_continue_t)swtch_continue, NULL, AST_YIELD);
 
-	mp_disable_preemption();
+	disable_preemption();
 	myprocessor = current_processor();
 	result =		myprocessor->runq.count > 0					||
 				myprocessor->processor_set->runq.count > 0;
-	mp_enable_preemption();
+	enable_preemption();
 
 	return (result);
 }
 
-void
+static void
 swtch_pri_continue(void)
 {
 	register processor_t	myprocessor;
     boolean_t				result;
 
-	_mk_sp_thread_depress_abort(current_thread(), FALSE);
+	thread_depress_abort_internal(current_thread());
 
-    mp_disable_preemption();
+    disable_preemption();
 	myprocessor = current_processor();
 	result =		myprocessor->runq.count > 0					||
 				myprocessor->processor_set->runq.count > 0;
@@ -151,12 +148,12 @@ swtch_pri_continue(void)
 
 boolean_t
 swtch_pri(
-	int				pri)
+__unused	struct swtch_pri_args *args)
 {
 	register processor_t	myprocessor;
 	boolean_t				result;
 
-	mp_disable_preemption();
+	disable_preemption();
 	myprocessor = current_processor();
 	if (	myprocessor->runq.count == 0					&&
 			myprocessor->processor_set->runq.count == 0			) {
@@ -164,23 +161,36 @@ swtch_pri(
 
 		return (FALSE);
 	}
-	mp_enable_preemption();
+	enable_preemption();
 
 	counter(c_swtch_pri_block++);
 
-	_mk_sp_thread_depress_abstime(std_quantum);
+	thread_depress_abstime(std_quantum);
 
-	thread_block_reason(swtch_pri_continue, AST_YIELD);
+	thread_block_reason((thread_continue_t)swtch_pri_continue, NULL, AST_YIELD);
 
-	_mk_sp_thread_depress_abort(current_thread(), FALSE);
+	thread_depress_abort_internal(current_thread());
 
-	mp_disable_preemption();
+	disable_preemption();
 	myprocessor = current_processor();
 	result =	myprocessor->runq.count > 0						||
 				myprocessor->processor_set->runq.count > 0;
-	mp_enable_preemption();
+	enable_preemption();
 
 	return (result);
+}
+
+static void
+thread_switch_continue(void)
+{
+	register thread_t	self = current_thread();
+	int					option = self->saved.swtch.option;
+
+	if (option == SWITCH_OPTION_DEPRESS)
+		thread_depress_abort_internal(self);
+
+	thread_syscall_return(KERN_SUCCESS);
+	/*NOTREACHED*/
 }
 
 /*
@@ -190,11 +200,12 @@ swtch_pri(
  */
 kern_return_t
 thread_switch(
-	mach_port_name_t		thread_name,
-	int						option,
-	mach_msg_timeout_t		option_time)
+	struct thread_switch_args *args)
 {
-    register thread_act_t 	hint_act = THR_ACT_NULL;
+	register thread_t		thread, self = current_thread();
+	mach_port_name_t		thread_name = args->thread_name;
+	int						option = args->option;
+	mach_msg_timeout_t		option_time = args->option_time;
 
     /*
      *	Process option.
@@ -210,18 +221,227 @@ thread_switch(
 	    return (KERN_INVALID_ARGUMENT);
     }
 
+	/*
+	 * Translate the port name if supplied.
+	 */
     if (thread_name != MACH_PORT_NULL) {
 		ipc_port_t			port;
 
-		if (ipc_port_translate_send(current_task()->itk_space,
+		if (ipc_port_translate_send(self->task->itk_space,
 									thread_name, &port) == KERN_SUCCESS) {
 			ip_reference(port);
 			ip_unlock(port);
 
-			hint_act = convert_port_to_act(port);
+			thread = convert_port_to_thread(port);
 			ipc_port_release(port);
+
+			if (thread == self) {
+				thread_deallocate_internal(thread);
+				thread = THREAD_NULL;
+			}
+		}
+		else
+			thread = THREAD_NULL;
+	}
+	else
+		thread = THREAD_NULL;
+
+	/*
+	 * Try to handoff if supplied.
+	 */
+	if (thread != THREAD_NULL) {
+		processor_t		processor;
+		spl_t			s;
+
+		s = splsched();
+		thread_lock(thread);
+
+		/*
+		 *	Check if the thread is in the right pset,
+		 *	is not bound to a different processor,
+		 *	and that realtime is not involved.
+		 *
+		 *	Next, pull it off its run queue.  If it
+		 *	doesn't come, it's not eligible.
+		 */
+		processor = current_processor();
+		if (processor->current_pri < BASEPRI_RTQUEUES			&&
+			thread->sched_pri < BASEPRI_RTQUEUES				&&
+			thread->processor_set == processor->processor_set	&&
+			(thread->bound_processor == PROCESSOR_NULL	||
+			 thread->bound_processor == processor)				&&
+			run_queue_remove(thread) != RUN_QUEUE_NULL			) {
+			/*
+			 *	Hah, got it!!
+			 */
+			thread_unlock(thread);
+
+			thread_deallocate_internal(thread);
+
+			if (option == SWITCH_OPTION_WAIT)
+				assert_wait_timeout((event_t)assert_wait_timeout, THREAD_ABORTSAFE,
+														option_time, 1000*NSEC_PER_USEC);
+			else
+			if (option == SWITCH_OPTION_DEPRESS)
+				thread_depress_ms(option_time);
+
+			self->saved.swtch.option = option;
+
+			thread_run(self, (thread_continue_t)thread_switch_continue, NULL, thread);
+			/* NOTREACHED */
+		}
+
+		thread_unlock(thread);
+		splx(s);
+
+		thread_deallocate(thread);
+	}
+		
+	if (option == SWITCH_OPTION_WAIT)
+		assert_wait_timeout((event_t)assert_wait_timeout, THREAD_ABORTSAFE, option_time, 1000*NSEC_PER_USEC);
+	else
+	if (option == SWITCH_OPTION_DEPRESS)
+		thread_depress_ms(option_time);
+	  
+	self->saved.swtch.option = option;
+
+	thread_block_reason((thread_continue_t)thread_switch_continue, NULL, AST_YIELD);
+
+	if (option == SWITCH_OPTION_DEPRESS)
+		thread_depress_abort_internal(self);
+
+    return (KERN_SUCCESS);
+}
+
+/*
+ * Depress thread's priority to lowest possible for the specified interval,
+ * with a value of zero resulting in no timeout being scheduled.
+ */
+void
+thread_depress_abstime(
+	uint64_t				interval)
+{
+	register thread_t		self = current_thread();
+	uint64_t				deadline;
+    spl_t					s;
+
+    s = splsched();
+    thread_lock(self);
+	if (!(self->sched_mode & TH_MODE_ISDEPRESSED)) {
+		processor_t		myprocessor = self->last_processor;
+
+		self->sched_pri = DEPRESSPRI;
+		myprocessor->current_pri = self->sched_pri;
+		self->sched_mode &= ~TH_MODE_PREEMPT;
+		self->sched_mode |= TH_MODE_DEPRESS;
+
+		if (interval != 0) {
+			clock_absolutetime_interval_to_deadline(interval, &deadline);
+			if (!timer_call_enter(&self->depress_timer, deadline))
+				self->depress_timer_active++;
 		}
 	}
+	thread_unlock(self);
+    splx(s);
+}
 
-    return _mk_sp_thread_switch(hint_act, option, option_time);
+void
+thread_depress_ms(
+	mach_msg_timeout_t		interval)
+{
+	uint64_t		abstime;
+
+	clock_interval_to_absolutetime_interval(
+							interval, 1000*NSEC_PER_USEC, &abstime);
+	thread_depress_abstime(abstime);
+}
+
+/*
+ *	Priority depression expiration.
+ */
+void
+thread_depress_expire(
+	void			*p0,
+	__unused void	*p1)
+{
+	thread_t		thread = p0;
+    spl_t			s;
+
+    s = splsched();
+    thread_lock(thread);
+	if (--thread->depress_timer_active == 0) {
+		thread->sched_mode &= ~TH_MODE_ISDEPRESSED;
+		compute_priority(thread, FALSE);
+	}
+    thread_unlock(thread);
+    splx(s);
+}
+
+/*
+ *	Prematurely abort priority depression if there is one.
+ */
+kern_return_t
+thread_depress_abort_internal(
+	thread_t				thread)
+{
+    kern_return_t 			result = KERN_NOT_DEPRESSED;
+    spl_t					s;
+
+    s = splsched();
+    thread_lock(thread);
+	if (!(thread->sched_mode & TH_MODE_POLLDEPRESS)) {
+		if (thread->sched_mode & TH_MODE_ISDEPRESSED) {
+			thread->sched_mode &= ~TH_MODE_ISDEPRESSED;
+			compute_priority(thread, FALSE);
+			result = KERN_SUCCESS;
+		}
+
+		if (timer_call_cancel(&thread->depress_timer))
+			thread->depress_timer_active--;
+	}
+	thread_unlock(thread);
+    splx(s);
+
+    return (result);
+}
+
+void
+thread_poll_yield(
+	thread_t		self)
+{
+	spl_t			s;
+
+	assert(self == current_thread());
+
+	s = splsched();
+	if (!(self->sched_mode & (TH_MODE_REALTIME|TH_MODE_TIMESHARE))) {
+		uint64_t			total_computation, abstime;
+
+		abstime = mach_absolute_time();
+		total_computation = abstime - self->computation_epoch;
+		total_computation += self->computation_metered;
+		if (total_computation >= max_poll_computation) {
+			processor_t		myprocessor = current_processor();
+			ast_t			preempt;
+
+			thread_lock(self);
+			if (!(self->sched_mode & TH_MODE_ISDEPRESSED)) {
+				self->sched_pri = DEPRESSPRI;
+				myprocessor->current_pri = self->sched_pri;
+				self->sched_mode &= ~TH_MODE_PREEMPT;
+			}
+			self->computation_epoch = abstime;
+			self->computation_metered = 0;
+			self->sched_mode |= TH_MODE_POLLDEPRESS;
+
+			abstime += (total_computation >> sched_poll_yield_shift);
+			if (!timer_call_enter(&self->depress_timer, abstime))
+				self->depress_timer_active++;
+			thread_unlock(self);
+
+			if ((preempt = csw_check(self, myprocessor)) != AST_NONE)
+				ast_on(preempt);
+		}
+	}
+	splx(s);
 }

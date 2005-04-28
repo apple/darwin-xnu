@@ -54,16 +54,15 @@
 #define	_NET_IF_MIB_H	1
 #include <sys/appleapiopts.h>
 
-#ifdef __APPLE_API_UNSTABLE
 struct ifmibdata {
-	char	ifmd_name[IFNAMSIZ]; /* name of interface */
-	int	ifmd_pcount;	/* number of promiscuous listeners */
-	int	ifmd_flags;	/* interface flags */
-	int	ifmd_snd_len;	/* instantaneous length of send queue */
-	int	ifmd_snd_maxlen; /* maximum length of send queue */
-	int	ifmd_snd_drops;	/* number of drops in send queue */
-	int	ifmd_filler[4];	/* for future expansion */
-	struct	if_data ifmd_data; /* generic information and statistics */
+	char				ifmd_name[IFNAMSIZ]; /* name of interface */
+	unsigned int		ifmd_pcount;	/* number of promiscuous listeners */
+	unsigned int		ifmd_flags;	/* interface flags */
+	unsigned int		ifmd_snd_len;	/* instantaneous length of send queue */
+	unsigned int		ifmd_snd_maxlen; /* maximum length of send queue */
+	unsigned int		ifmd_snd_drops;	/* number of drops in send queue */
+	unsigned int		ifmd_filler[4];	/* for future expansion */
+	struct if_data64	ifmd_data; /* generic information and statistics */
 };
 
 /*
@@ -71,12 +70,15 @@ struct ifmibdata {
  */
 #define	IFMIB_SYSTEM	1	/* non-interface-specific */
 #define	IFMIB_IFDATA	2	/* per-interface data table */
+#define IFMIB_IFALLDATA	3	/* all interfaces data at once */
 
 /*
  * MIB tags for the various net.link.generic.ifdata tables
  */
-#define	IFDATA_GENERAL	1	/* generic stats for all kinds of ifaces */
-#define	IFDATA_LINKSPECIFIC	2 /* specific to the type of interface */
+#define	IFDATA_GENERAL		1	/* generic stats for all kinds of ifaces */
+#define	IFDATA_LINKSPECIFIC	2	/* specific to the type of interface */
+#define	IFDATA_ADDRS		3	/* addresses assigned to interface */
+#define	IFDATA_MULTIADDRS	4	/* multicast addresses assigned to interface */
 
 /*
  * MIB tags at the net.link.generic.system level
@@ -105,7 +107,7 @@ struct ifmibdata {
  */
 
 /* For IFT_ETHER, IFT_ISO88023, and IFT_STARLAN, as used by RFC 1650 */
-struct ifmib_iso_8802_3 {
+struct ifs_iso_8802_3 {
 	u_int32_t	dot3StatsAlignmentErrors;
 	u_int32_t	dot3StatsFCSErrors;
 	u_int32_t	dot3StatsSingleCollisionFrames;
@@ -190,5 +192,4 @@ enum {
  * Put other types of interface MIBs here, or in interface-specific
  * header files if convenient ones already exist.
  */
-#endif /* __APPLE_API_UNSTABLE */
 #endif /* _NET_IF_MIB_H */

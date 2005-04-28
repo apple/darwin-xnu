@@ -58,7 +58,6 @@
 #ifndef _NETINET_ICMP_VAR_H_
 #define _NETINET_ICMP_VAR_H_
 #include <sys/appleapiopts.h>
-#ifdef __APPLE_API_UNSTABLE
 
 /*
  * Variables related to this implementation
@@ -90,6 +89,7 @@ struct	icmpstat {
 #define ICMPCTL_TIMESTAMP	4	/* allow replies to time stamp requests */
 #define ICMPCTL_MAXID		5
 
+#ifdef KERNEL_PRIVATE
 #define ICMPCTL_NAMES { \
 	{ 0, 0 }, \
 	{ "maskrepl", CTLTYPE_INT }, \
@@ -97,13 +97,10 @@ struct	icmpstat {
 	{ "icmplim", CTLTYPE_INT }, \
 	{ "icmptimestamp", CTLTYPE_INT }, \
 }
-#endif /* __APPLE_API_UNSTABLE */
 
-#ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
 SYSCTL_DECL(_net_inet_icmp);
 #ifdef ICMP_BANDLIM
-extern int badport_bandlim __P((int));
+extern int badport_bandlim(int);
 #endif
 #define BANDLIM_UNLIMITED -1
 #define BANDLIM_ICMP_UNREACH 0
@@ -112,6 +109,5 @@ extern int badport_bandlim __P((int));
 #define BANDLIM_RST_CLOSEDPORT 3 /* No connection, and no listeners */
 #define BANDLIM_RST_OPENPORT 4   /* No connection, listener */
 #define BANDLIM_MAX 4
-#endif /* __APPLE_API_PRIVATE */
-#endif
-#endif
+#endif KERNEL_PRIVATE
+#endif _NETINET_ICMP_VAR_H_

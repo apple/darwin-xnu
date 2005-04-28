@@ -29,8 +29,8 @@
 #include <bsm/audit.h>
 
 #include <sys/sysctl.h>
-#include <sys/eventvar.h>
 #include <sys/user.h>
+#include <sys/ipc.h>
 
 /*
  * Audit subsystem condition flags.  The audit_enabled flag is set and
@@ -211,8 +211,8 @@ struct audit_record {
 	int				ar_arg_svipc_id;
 	void *				ar_arg_svipc_addr;
 	struct posix_ipc_perm		ar_arg_pipc_perm;
-	mach_port_t			ar_arg_mach_port1;
-	mach_port_t			ar_arg_mach_port2;
+	mach_port_name_t		ar_arg_mach_port1;
+	mach_port_name_t		ar_arg_mach_port2;
 	union auditon_udata		ar_arg_auditon;
 };
 
@@ -265,12 +265,12 @@ int			kau_close(struct au_record *rec,
 				 struct timespec *endtime, short event);
 void			kau_free(struct au_record *rec);
 void			kau_init(void);
-token_t			*kau_to_file(char *file, struct timeval *tv);
-token_t			*kau_to_header(struct timespec *ctime, int rec_size, 
+token_t			*kau_to_file(const char *file, const struct timeval *tv);
+token_t			*kau_to_header(const struct timespec *ctime, int rec_size, 
 					au_event_t e_type, au_emod_t e_mod);
-token_t			*kau_to_header32(struct timespec *ctime, int rec_size, 
+token_t			*kau_to_header32(const struct timespec *ctime, int rec_size, 
 					au_event_t e_type, au_emod_t e_mod);
-token_t			*kau_to_header64(struct timespec *ctime, int rec_size,
+token_t			*kau_to_header64(const struct timespec *ctime, int rec_size,
 					 au_event_t e_type, au_emod_t e_mod);
 /*
  * The remaining kernel functions are conditionally compiled in as they
@@ -278,17 +278,17 @@ token_t			*kau_to_header64(struct timespec *ctime, int rec_size,
  * the source tree where these functions are referenced.
  */
 #ifdef AUDIT
-void			 audit_arg_addr(void * addr);
-void			 audit_arg_len(int len);
+void			 audit_arg_addr(user_addr_t addr);
+void			 audit_arg_len(user_size_t len);
 void			 audit_arg_fd(int fd);
 void			 audit_arg_fflags(int fflags);
 void			 audit_arg_gid(gid_t gid, gid_t egid, gid_t rgid, 
 					gid_t sgid);
 void			 audit_arg_uid(uid_t uid, uid_t euid, uid_t ruid, 
 					uid_t suid);
-void			 audit_arg_groupset(gid_t *gidset, u_int gidset_size);
-void			 audit_arg_login(char *login);
-void			 audit_arg_ctlname(int *name, int namelen);
+void			 audit_arg_groupset(const gid_t *gidset, u_int gidset_size);
+void			 audit_arg_login(const char *login);
+void			 audit_arg_ctlname(const int *name, int namelen);
 void			 audit_arg_mask(int mask);
 void			 audit_arg_mode(mode_t mode);
 void			 audit_arg_dev(int dev);
@@ -302,22 +302,23 @@ void			 audit_arg_socket(int sodomain, int sotype,
 void			 audit_arg_sockaddr(struct proc *p, 
 						struct sockaddr *so);
 void			 audit_arg_auid(uid_t auid);
-void			 audit_arg_auditinfo(struct auditinfo *au_info);
+void			 audit_arg_auditinfo(const struct auditinfo *au_info);
 void			 audit_arg_upath(struct proc *p, char *upath, 
 					 u_int64_t flags);
 void			 audit_arg_vnpath(struct vnode *vp, u_int64_t flags);
-void			 audit_arg_text(char *text);
+void			 audit_arg_vnpath_withref(struct vnode *vp, u_int64_t flags);
+void			 audit_arg_text(const char *text);
 void			 audit_arg_cmd(int cmd);
 void			 audit_arg_svipc_cmd(int cmd);
-void			 audit_arg_svipc_perm(struct ipc_perm *perm);
+void			 audit_arg_svipc_perm(const struct ipc_perm *perm);
 void			 audit_arg_svipc_id(int id);
 void			 audit_arg_svipc_addr(void *addr);
 void			 audit_arg_posix_ipc_perm(uid_t uid, gid_t gid, 
 						 mode_t mode);
-void			 audit_arg_auditon(union auditon_udata *udata);
-void			 audit_arg_file(struct proc *p, struct file *fp);
-void			 audit_arg_mach_port1(mach_port_t port);
-void			 audit_arg_mach_port2(mach_port_t port);
+void			 audit_arg_auditon(const union auditon_udata *udata);
+void			 audit_arg_file(struct proc *p, const struct fileproc *fp);
+void			 audit_arg_mach_port1(mach_port_name_t port);
+void			 audit_arg_mach_port2(mach_port_name_t port);
 
 void			 audit_sysclose(struct proc *p, int fd);
 
@@ -347,7 +348,7 @@ void			 audit_proc_free(struct proc *p);
  * possible that an audit record was begun before auditing was turned off.
  */
 #define AUDIT_SYSCALL_EXIT(error, proc, uthread)	do {		\
-	if (audit_enabled | (uthread->uu_ar != NULL)) {			\
+	if (audit_enabled || (uthread->uu_ar != NULL)) {			\
 		audit_syscall_exit(error, proc, uthread);		\
 	}								\
 	} while (0)
@@ -363,9 +364,9 @@ void			 audit_proc_free(struct proc *p);
 	} while (0)
 
 #define AUDIT_MACH_SYSCALL_EXIT(retval) 	do {			\
-	struct uthread *uthread = get_bsdthread_info(current_act());	\
-	if (audit_enabled | (uthread->uu_ar != NULL)) {			\
-		audit_mach_syscall_exit(retval, uthread);		\
+	struct uthread *__uthread = get_bsdthread_info(current_thread());	\
+	if (audit_enabled || (__uthread->uu_ar != NULL)) {			\
+		audit_mach_syscall_exit(retval, __uthread);		\
 	}								\
 	} while (0)
 

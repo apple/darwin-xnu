@@ -68,79 +68,55 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/filedesc.h>
-#include <sys/proc.h>
+#include <sys/proc_internal.h>
+#include <sys/kauth.h>
 #include <sys/resourcevar.h>
-#include <sys/buf.h>
-#include <sys/vnode.h>
+#include <sys/vnode_internal.h>
 #include <sys/acct.h>
 #include <sys/wait.h>
-#include <sys/file.h>
+#include <sys/file_internal.h>
 #include <sys/vadvise.h>
 #include <sys/trace.h>
 #include <sys/mman.h>
 #include <sys/conf.h>
 #include <sys/stat.h>
 #include <sys/ubc.h>
+#include <sys/sysproto.h>
 
 #include <bsm/audit_kernel.h>
 #include <bsm/audit_kevents.h>
 
 #include <mach/mach_types.h>
+#include <mach/mach_traps.h>
+#include <mach/vm_sync.h>
+#include <mach/vm_behavior.h>
+#include <mach/vm_inherit.h>
+#include <mach/vm_statistics.h>
+#include <mach/mach_vm.h>
+#include <mach/vm_map.h>
+#include <mach/host_priv.h>
 
 #include <kern/cpu_number.h>
+#include <kern/host.h>
 
 #include <vm/vm_map.h>
 #include <vm/vm_kern.h>
 #include <vm/vm_pager.h>
 
-#include <mach/vm_sync.h>
-#include <mach/vm_behavior.h>
-#include <mach/vm_inherit.h>
-#include <mach/vm_statistics.h>
-
-struct sbrk_args {
-		int	incr;
-};
-
-/* ARGSUSED */
 int
-sbrk(p, uap, retval)
-	struct proc *p;
-	struct sbrk_args *uap;
-	register_t *retval;
+sbrk(__unused struct proc *p, __unused struct sbrk_args *uap, __unused register_t *retval)
 {
 	/* Not yet implemented */
-	return (EOPNOTSUPP);
+	return (ENOTSUP);
 }
 
-struct sstk_args {
-	int	incr;
-} *uap;
-
-/* ARGSUSED */
 int
-sstk(p, uap, retval)
-	struct proc *p;
-	struct sstk_args *uap;
-	register_t *retval;
+sstk(__unused struct proc *p, __unused struct sstk_args *uap, __unused register_t *retval)
 {
 	/* Not yet implemented */
-	return (EOPNOTSUPP);
+	return (ENOTSUP);
 }
 
-#if COMPAT_43
-/* ARGSUSED */
-int
-ogetpagesize(p, uap, retval)
-	struct proc *p;
-	void *uap;
-	register_t *retval;
-{
-
-	*retval = PAGE_SIZE;
-	return (0);
-}
-#endif /* COMPAT_43 */
 
 struct osmmap_args {
 		caddr_t	addr;
@@ -152,80 +128,68 @@ struct osmmap_args {
 };
 
 int
-osmmap(curp, uap, retval)
-	struct proc *curp;
-	register struct osmmap_args *uap;
-	register_t *retval;
+osmmap(
+	struct proc *curp,
+	register struct osmmap_args *uap,
+	register_t *retval)
 {
-struct mmap_args {
-		caddr_t addr;
-		size_t len;
-		int prot;
-		int flags;
-		int fd;
-#ifdef DOUBLE_ALIGN_PARAMS
-		long pad;
-#endif
-		off_t pos;
-} newargs;
+	struct mmap_args newargs;
+	user_addr_t addr;
+	int ret;
 
 	if ((uap->share ==  MAP_SHARED )|| (uap->share ==  MAP_PRIVATE )) {
-		newargs.addr = uap->addr;
-		newargs.len = (size_t)uap->len;
+		newargs.addr = CAST_USER_ADDR_T(uap->addr);
+		newargs.len = CAST_USER_ADDR_T(uap->len);
 		newargs.prot = uap->prot;
 		newargs.flags = uap->share;
 		newargs.fd = uap->fd;
 		newargs.pos = (off_t)uap->pos;
-		return(mmap(curp,&newargs, retval));
+		ret = mmap(curp, &newargs, &addr);
+		if (ret == 0)
+			*retval = CAST_DOWN(register_t, addr);
 	} else
-		return(EINVAL);	
+		ret = EINVAL;
+	return ret;
 }
 
-struct mmap_args {
-		caddr_t addr;
-		size_t len;
-		int prot;
-		int flags;
-		int fd;
-#ifdef DOUBLE_ALIGN_PARAMS
-		long pad;
-#endif
-		off_t pos;
-};
+
 int
-mmap(p, uap, retval)
-	struct proc *p;
-	struct mmap_args *uap;
-	register_t *retval;
+mmap(struct proc *p, struct mmap_args *uap, user_addr_t *retval)
 {
 	/*
 	 *	Map in special device (must be SHARED) or file
 	 */
-	struct file *fp;
+	struct fileproc *fp;
 	register struct		vnode *vp;
 	int			flags;
 	int			prot;
 	int			err=0;
 	vm_map_t		user_map;
 	kern_return_t		result;
-	vm_offset_t		user_addr;
-	vm_size_t		user_size;
-	vm_offset_t		pageoff;
+	mach_vm_offset_t	user_addr;
+	mach_vm_size_t		user_size;
+	vm_object_offset_t	pageoff;
 	vm_object_offset_t	file_pos;
-	boolean_t		find_space, docow;
+	int			alloc_flags;
+	boolean_t		docow;
 	vm_prot_t		maxprot;
 	void 			*handle;
 	vm_pager_t		pager;
 	int 			mapanon=0;
+	int 			fpref=0;
+	int error =0;
+	int fd = uap->fd;
 
-	user_addr = (vm_offset_t)uap->addr;
-	user_size = (vm_size_t) uap->len;
-	AUDIT_ARG(addr, (void *)user_addr);
-	AUDIT_ARG(len, (int) user_size);
+	user_addr = (mach_vm_offset_t)uap->addr;
+	user_size = (mach_vm_size_t) uap->len;
+
+	AUDIT_ARG(addr, user_addr);
+	AUDIT_ARG(len, user_size);
 	AUDIT_ARG(fd, uap->fd);
 
 	prot = (uap->prot & VM_PROT_ALL);
 	flags = uap->flags;
+	vp = NULLVP;
 
 	/*
 	 * The vm code does not have prototypes & compiler doesn't do the'
@@ -237,21 +201,20 @@ mmap(p, uap, retval)
 
 	/* make sure mapping fits into numeric range etc */
 	if ((file_pos + user_size > (vm_object_offset_t)-PAGE_SIZE_64) ||
-	    ((ssize_t) uap->len < 0 )||
-	    ((flags & MAP_ANON) && uap->fd != -1))
+	    ((flags & MAP_ANON) && fd != -1))
 		return (EINVAL);
 
 	/*
 	 * Align the file position to a page boundary,
 	 * and save its page offset component.
 	 */
-	pageoff = ((vm_offset_t)file_pos & PAGE_MASK);
+	pageoff = (file_pos & PAGE_MASK);
 	file_pos -= (vm_object_offset_t)pageoff;
 
 
 	/* Adjust size for rounding (on both ends). */
 	user_size += pageoff;			/* low end... */
-	user_size = (vm_size_t) round_page_32(user_size);	/* hi end */
+	user_size = mach_vm_round_page(user_size);	/* hi end */
 
 
 	/*
@@ -267,13 +230,6 @@ mmap(p, uap, retval)
 		user_addr -= pageoff;
 		if (user_addr & PAGE_MASK)
 			return (EINVAL);
-		/* Address range must be all in user VM space. */
-		if (VM_MAX_ADDRESS > 0 && (user_addr + user_size > VM_MAX_ADDRESS))
-			return (EINVAL);
-		if (VM_MIN_ADDRESS > 0 && user_addr < VM_MIN_ADDRESS)
-			return (EINVAL);
-		if (user_addr + user_size < user_addr)
-			return (EINVAL);
 	}
 #ifdef notyet
 	/* DO not have apis to get this info, need to wait till then*/
@@ -285,8 +241,8 @@ mmap(p, uap, retval)
 	 * There should really be a pmap call to determine a reasonable
 	 * location.
 	 */
-	else if (addr < round_page_32(p->p_vmspace->vm_daddr + MAXDSIZ))
-		addr = round_page_32(p->p_vmspace->vm_daddr + MAXDSIZ);
+	else if (addr < mach_vm_round_page(p->p_vmspace->vm_daddr + MAXDSIZ))
+		addr = mach_vm_round_page(p->p_vmspace->vm_daddr + MAXDSIZ);
 
 #endif
 
@@ -300,37 +256,61 @@ mmap(p, uap, retval)
 		file_pos = 0;
 		mapanon = 1;
 	} else {
+		struct vnode_attr va;
+		struct vfs_context context;
 		/*
 		 * Mapping file, get fp for validation. Obtain vnode and make
 		 * sure it is of appropriate type.
 		 */
-		err = fdgetf(p, uap->fd, &fp);
+		err = fp_lookup(p, fd, &fp, 0);
 		if (err)
 			return(err);
-		if(fp->f_type == DTYPE_PSXSHM) {
-			uap->addr = (caddr_t)user_addr;
-			uap->len = user_size;
+		fpref = 1;
+		if(fp->f_fglob->fg_type == DTYPE_PSXSHM) {
+			uap->addr = (user_addr_t)user_addr;
+			uap->len = (user_size_t)user_size;
 			uap->prot = prot;
 			uap->flags = flags;
 			uap->pos = file_pos;
-			return(pshm_mmap(p, uap, retval, fp , pageoff));
+			error = pshm_mmap(p, uap, retval, fp, (off_t)pageoff);
+			goto bad;
 		}
 
-		if (fp->f_type != DTYPE_VNODE)
-			return(EINVAL);
-		vp = (struct vnode *)fp->f_data;
+		if (fp->f_fglob->fg_type != DTYPE_VNODE) {
+			error = EINVAL;
+			goto bad;
+		}
+		vp = (struct vnode *)fp->f_fglob->fg_data;
+		error = vnode_getwithref(vp);
+		if(error != 0)
+			goto bad;
 
-		if (vp->v_type != VREG && vp->v_type != VCHR)
-			return (EINVAL);
+		if (vp->v_type != VREG && vp->v_type != VCHR) {
+			(void)vnode_put(vp);
+			error = EINVAL;
+			goto bad;
+		}
 
 		AUDIT_ARG(vnpath, vp, ARG_VNODE1);
+		
+		/* conformance change - mmap needs to update access time for mapped
+		 * files
+		 */
+		VATTR_INIT(&va);
+		nanotime(&va.va_access_time);
+		VATTR_SET_ACTIVE(&va, va_access_time);
+		context.vc_proc = p;
+		context.vc_ucred = kauth_cred_get();
+		vnode_setattr(vp, &va, &context);
 
 		/*
 		 * XXX hack to handle use of /dev/zero to map anon memory (ala
 		 * SunOS).
 		 */
 		if (vp->v_type == VCHR || vp->v_type == VSTR) {
-			return(ENODEV);
+			(void)vnode_put(vp);
+			error = ENODEV;
+			goto bad;
 		} else {
 			/*
 			 * Ensure that file and memory protections are
@@ -342,10 +322,13 @@ mmap(p, uap, retval)
 			 * proc does a setuid?
 			 */
 			maxprot = VM_PROT_EXECUTE;	/* ??? */
-			if (fp->f_flag & FREAD)
+			if (fp->f_fglob->fg_flag & FREAD)
 				maxprot |= VM_PROT_READ;
-			else if (prot & PROT_READ)
-				return (EACCES);
+			else if (prot & PROT_READ) {
+				(void)vnode_put(vp);
+				error = EACCES;
+				goto bad;
+			}
 			/*
 			 * If we are sharing potential changes (either via
 			 * MAP_SHARED or via the implicit sharing of character
@@ -355,19 +338,30 @@ mmap(p, uap, retval)
 			 */
 
 			if ((flags & MAP_SHARED) != 0) {
-				if ((fp->f_flag & FWRITE) != 0) {
-					struct vattr va;
-					if ((err =
-					    VOP_GETATTR(vp, &va,
-						        p->p_ucred, p)))
-						return (err);
-					if ((va.va_flags &
-					    (IMMUTABLE|APPEND)) == 0)
-						maxprot |= VM_PROT_WRITE;
-					else if (prot & PROT_WRITE)
-						return (EPERM);
-				} else if ((prot & PROT_WRITE) != 0)
-					return (EACCES);
+				if ((fp->f_fglob->fg_flag & FWRITE) != 0) {
+ 					/*
+ 					 * check for write access
+ 					 *
+ 					 * Note that we already made this check when granting FWRITE
+ 					 * against the file, so it seems redundant here.
+ 					 */
+ 					error = vnode_authorize(vp, NULL, KAUTH_VNODE_CHECKIMMUTABLE, &context);
+ 
+ 					/* if not granted for any reason, but we wanted it, bad */
+ 					if ((prot & PROT_WRITE) && (error != 0)) {
+ 						vnode_put(vp);
+  						goto bad;
+  					}
+ 
+ 					/* if writable, remember */
+ 					if (error == 0)
+  						maxprot |= VM_PROT_WRITE;
+
+				} else if ((prot & PROT_WRITE) != 0) {
+					(void)vnode_put(vp);
+					error = EACCES;
+					goto bad;
+				}
 			} else
 				maxprot |= VM_PROT_WRITE;
 
@@ -375,42 +369,56 @@ mmap(p, uap, retval)
 		}
 	}
 
-	if (user_size == 0) 
-		return(0);
+	if (user_size == 0)  {
+		if (!mapanon)
+			(void)vnode_put(vp);
+		error = 0;
+		goto bad;
+	}
 
 	/*
 	 *	We bend a little - round the start and end addresses
 	 *	to the nearest page boundary.
 	 */
-	user_size = round_page_32(user_size);
+	user_size = mach_vm_round_page(user_size);
 
-	if (file_pos & PAGE_MASK_64)
-		return (EINVAL);
+	if (file_pos & PAGE_MASK_64) {
+		if (!mapanon)
+			(void)vnode_put(vp);
+		error = EINVAL;
+		goto bad;
+	}
 
 	user_map = current_map();
 
 	if ((flags & MAP_FIXED) == 0) {
-		find_space = TRUE;
-		user_addr = round_page_32(user_addr); 
+		alloc_flags = VM_FLAGS_ANYWHERE;
+		user_addr = mach_vm_round_page(user_addr);
 	} else {
-		if (user_addr != trunc_page_32(user_addr))
-			return (EINVAL);
-		find_space = FALSE;
-		(void) vm_deallocate(user_map, user_addr, user_size);
+		if (user_addr != mach_vm_trunc_page(user_addr)) {
+		        if (!mapanon)
+			        (void)vnode_put(vp);
+			error = EINVAL;
+			goto bad;
+		}
+		/*
+		 * mmap(MAP_FIXED) will replace any existing mappings in the
+		 * specified range, if the new mapping is successful.
+		 * If we just deallocate the specified address range here,
+		 * another thread might jump in and allocate memory in that
+		 * range before we get a chance to establish the new mapping,
+		 * and we won't have a chance to restore the old mappings.
+		 * So we use VM_FLAGS_OVERWRITE to let Mach VM know that it
+		 * has to deallocate the existing mappings and establish the
+		 * new ones atomically.
+		 */
+		alloc_flags = VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE;
 	}
 
 
 	/*
 	 * Lookup/allocate object.
 	 */
-	if (flags & MAP_ANON) {
-		/*
-		 * Unnamed anonymous regions always start at 0.
-		 */
-		if (handle == 0)
-			file_pos = 0;
-	}
-
 	if (handle == NULL) {
 		pager = NULL;
 #ifdef notyet
@@ -423,23 +431,22 @@ mmap(p, uap, retval)
 			maxprot |= VM_PROT_EXECUTE;
 #endif
 #endif
-		result = vm_allocate(user_map, &user_addr, user_size, find_space);
+		result = mach_vm_map(user_map, &user_addr, user_size, 0,
+				alloc_flags, IPC_PORT_NULL, 0,
+				FALSE, prot, maxprot,
+				(flags & MAP_SHARED) ? VM_INHERIT_SHARE : 
+				                       VM_INHERIT_DEFAULT);
 		if (result != KERN_SUCCESS) 
 				goto out;
-		
-		result = vm_protect(user_map, user_addr, user_size, TRUE, maxprot);
-		if (result != KERN_SUCCESS) 
-				goto out;
-		result = vm_protect(user_map, user_addr, user_size, FALSE, prot);
-		if (result != KERN_SUCCESS) 
-				goto out;
-
 	} else {
 		UBCINFOCHECK("mmap", vp);
 		pager = (vm_pager_t)ubc_getpager(vp);
 		
-		if (pager == NULL)
-			return (ENOMEM);
+		if (pager == NULL) {
+			(void)vnode_put(vp);
+			error = ENOMEM;
+			goto bad;
+		}
 
 		/*
 		 *  Set credentials:
@@ -465,80 +472,63 @@ mmap(p, uap, retval)
 #endif
 #endif /* notyet */
 
-		result = vm_map_64(user_map, &user_addr, user_size,
-				0, find_space, pager, file_pos, docow,
-      	                  prot, maxprot, 
-				VM_INHERIT_DEFAULT);
+		result = mach_vm_map(user_map, &user_addr, user_size,
+				0, alloc_flags, (ipc_port_t)pager, file_pos,
+				docow, prot, maxprot, 
+				(flags & MAP_SHARED) ? VM_INHERIT_SHARE : 
+				                       VM_INHERIT_DEFAULT);
 
-		if (result != KERN_SUCCESS) 
+		if (result != KERN_SUCCESS)  {
+				(void)vnode_put(vp);
 				goto out;
-
-		ubc_map(vp);
-	}
-
-	if (flags & MAP_SHARED) {
-		result = vm_inherit(user_map, user_addr, user_size,
-				VM_INHERIT_SHARE);
-		if (result != KERN_SUCCESS) {
-			(void) vm_deallocate(user_map, user_addr, user_size);
-			goto out;
 		}
+
+		(void)ubc_map(vp,(prot & ( PROT_EXEC | PROT_READ | PROT_WRITE | PROT_EXEC)));
 	}
+
+	if (!mapanon)
+		(void)vnode_put(vp);
 
 out:
 	switch (result) {
 	case KERN_SUCCESS:
-		if (!mapanon)
-			*fdflags(p, uap->fd) |= UF_MAPPED;
-		*retval = (register_t)(user_addr + pageoff);
-		return (0);
+		*retval = user_addr + pageoff;
+		error = 0;
+		break;
 	case KERN_INVALID_ADDRESS:
 	case KERN_NO_SPACE:
-		return (ENOMEM);
+		error =  ENOMEM;
+		break;
 	case KERN_PROTECTION_FAILURE:
-		return (EACCES);
+		error =  EACCES;
+		break;
 	default:
-		return (EINVAL);
+		error =  EINVAL;
+		break;
 	}
-	/*NOTREACHED*/
+bad:
+	if (fpref)
+		fp_drop(p, fd, fp, 0);
+	return(error);
 }
 
-struct msync_args {
-		caddr_t addr;
-		int len;
-		int flags;
-};
 int
-msync(p, uap, retval)
-	struct proc *p;
-	struct msync_args *uap;
-	register_t *retval;
+msync(__unused struct proc *p, struct msync_args *uap, __unused register_t *retval)
 {
-	vm_offset_t addr;
-	vm_size_t size, pageoff;
+	mach_vm_offset_t addr;
+	mach_vm_size_t size;
 	int flags;
 	vm_map_t user_map;
 	int rv;
 	vm_sync_t sync_flags=0;
 
-	addr = (vm_offset_t) uap->addr;
-	pageoff = (addr & PAGE_MASK);
-	addr -= pageoff;
-	size = uap->len;
-	size = (vm_size_t) round_page_32(size);
-	flags = uap->flags;
+	addr = (mach_vm_offset_t) uap->addr;
+	size = (mach_vm_size_t)uap->len;
 
-	if (addr + size < addr)
-		return(EINVAL);
-
-	user_map = current_map();
-
-	if ((flags & (MS_ASYNC|MS_SYNC)) == (MS_ASYNC|MS_SYNC))
-		return (EINVAL);
-
-	if ((flags & (MS_ASYNC|MS_INVALIDATE)) == (MS_ASYNC|MS_INVALIDATE))
-		return (EINVAL);
-
+	if (addr & PAGE_MASK_64) {
+		/* UNIX SPEC: user address is not page-aligned, return EINVAL */
+		return EINVAL;
+	}
 	if (size == 0) {
 		/*
 		 * We cannot support this properly without maintaining
@@ -549,6 +539,12 @@ msync(p, uap, retval)
 		 */
 		return (EINVAL); /* XXX breaks posix apps */
 	}
+
+	flags = uap->flags;
+	/* disallow contradictory flags */
+	if ((flags & (MS_SYNC|MS_ASYNC)) == (MS_SYNC|MS_ASYNC) ||
+	    (flags & (MS_ASYNC|MS_INVALIDATE)) == (MS_ASYNC|MS_INVALIDATE))
+		return (EINVAL);
 
 	if (flags & MS_KILLPAGES)
 	        sync_flags |= VM_SYNC_KILLPAGES;
@@ -563,111 +559,88 @@ msync(p, uap, retval)
 		else 
 		        sync_flags |= VM_SYNC_SYNCHRONOUS;
 	}
-	rv = vm_msync(user_map, addr, size, sync_flags);
+
+	sync_flags |= VM_SYNC_CONTIGUOUS;	/* complain if holes */
+
+	user_map = current_map();
+	rv = mach_vm_msync(user_map, addr, size, sync_flags);
 
 	switch (rv) {
 	case KERN_SUCCESS:
 		break;
-	case KERN_INVALID_ADDRESS:
-		return (EINVAL);	/* Sun returns ENOMEM? */
+	case KERN_INVALID_ADDRESS:	/* hole in region being sync'ed */
+		return (ENOMEM);
 	case KERN_FAILURE:
 		return (EIO);
 	default:
 		return (EINVAL);
 	}
-
 	return (0);
 }
 
 
 int
-mremap()
+mremap(void)
 {
 	/* Not yet implemented */
-	return (EOPNOTSUPP);
+	return (ENOTSUP);
 }
 
-struct munmap_args {
-		caddr_t	addr;
-		int	len;
-};
 int
-munmap(p, uap, retval)
-	struct proc *p;
-	struct munmap_args *uap;
-	register_t *retval;
-
+munmap(__unused struct proc *p, struct munmap_args *uap, __unused register_t *retval)
 {
-	vm_offset_t	user_addr;
-	vm_size_t	user_size, pageoff;
+	mach_vm_offset_t	user_addr;
+	mach_vm_size_t	user_size;
 	kern_return_t	result;
 
-	user_addr = (vm_offset_t) uap->addr;
-	user_size = (vm_size_t) uap->len;
+	user_addr = (mach_vm_offset_t) uap->addr;
+	user_size = (mach_vm_size_t) uap->len;
 
-	AUDIT_ARG(addr, (void *)user_addr);
-	AUDIT_ARG(len, (int) user_size);
+	AUDIT_ARG(addr, user_addr);
+	AUDIT_ARG(len, user_size);
 
-	pageoff = (user_addr & PAGE_MASK);
+	if (user_addr & PAGE_MASK_64) {
+		/* UNIX SPEC: user address is not page-aligned, return EINVAL */
+		return EINVAL;
+	}
 
-	user_addr -= pageoff;
-	user_size += pageoff;
-	user_size = round_page_32(user_size);
 	if (user_addr + user_size < user_addr)
 		return(EINVAL);
 
-	if (user_size == 0)
-		return (0);
+	if (user_size == 0) {
+		/* UNIX SPEC: size is 0, return EINVAL */
+		return EINVAL;
+	}
 
-	/* Address range must be all in user VM space. */
-	if (VM_MAX_ADDRESS > 0 && (user_addr + user_size > VM_MAX_ADDRESS))
-		return (EINVAL);
-	if (VM_MIN_ADDRESS > 0 && user_addr < VM_MIN_ADDRESS)
-		return (EINVAL);
-
-
-	result = vm_deallocate(current_map(), user_addr, user_size);
+	result = mach_vm_deallocate(current_map(), user_addr, user_size);
 	if (result != KERN_SUCCESS) {
 		return(EINVAL);
 	}
 	return(0);
 }
 
-void
-munmapfd(p, fd)
-	struct proc *p;
-	int fd;
-{
-	/*
-	 * XXX should vm_deallocate any regions mapped to this file
-	 */
-	*fdflags(p, fd) &= ~UF_MAPPED;
-}
-
-struct mprotect_args {
-		caddr_t addr;
-		int len;
-		int prot;
-};
 int
-mprotect(p, uap, retval)
-	struct proc *p;
-	struct mprotect_args *uap;
-	register_t *retval;
+mprotect(__unused struct proc *p, struct mprotect_args *uap, __unused register_t *retval)
 {
 	register vm_prot_t prot;
-	vm_offset_t	user_addr;
-	vm_size_t	user_size, pageoff;
+	mach_vm_offset_t	user_addr;
+	mach_vm_size_t	user_size;
 	kern_return_t	result;
 	vm_map_t	user_map;
 
 	AUDIT_ARG(addr, uap->addr);
 	AUDIT_ARG(len, uap->len);
 	AUDIT_ARG(value, uap->prot);
-	user_addr = (vm_offset_t) uap->addr;
-	user_size = (vm_size_t) uap->len;
+
+	user_addr = (mach_vm_offset_t) uap->addr;
+	user_size = (mach_vm_size_t) uap->len;
 	prot = (vm_prot_t)(uap->prot & VM_PROT_ALL);
 
+	if (user_addr & PAGE_MASK_64) {
+		/* UNIX SPEC: user address is not page-aligned, return EINVAL */
+		return EINVAL;
+	}
+		
 #ifdef notyet
 /* Hmm .. */
 #if defined(VM_PROT_READ_IS_EXEC)
@@ -676,41 +649,28 @@ mprotect(p, uap, retval)
 #endif
 #endif /* notyet */
 
-	pageoff = (user_addr & PAGE_MASK);
-	user_addr -= pageoff;
-	user_size += pageoff;
-	user_size = round_page_32(user_size);
-	if (user_addr + user_size < user_addr)
-		return(EINVAL);
-
 	user_map = current_map();
 
-	result = vm_map_protect(user_map, user_addr, user_addr+user_size, prot,
-	   				 FALSE);
+	result = mach_vm_protect(user_map, user_addr, user_size,
+				 FALSE, prot);
 	switch (result) {
 	case KERN_SUCCESS:
 		return (0);
 	case KERN_PROTECTION_FAILURE:
 		return (EACCES);
+	case KERN_INVALID_ADDRESS:
+		/* UNIX SPEC: for an invalid address range, return ENOMEM */
+		return ENOMEM;
 	}
 	return (EINVAL);
 }
 
 
-struct minherit_args {
-	void *addr;
-	size_t len;
-	int inherit;
-};
-
 int
-minherit(p, uap, retval)
-	struct proc *p;
-	struct minherit_args *uap;
-	register_t *retval;
+minherit(__unused struct proc *p, struct minherit_args *uap, __unused register_t *retval)
 {
-	vm_offset_t addr;
-	vm_size_t size, pageoff;
+	mach_vm_offset_t addr;
+	mach_vm_size_t size;
 	register vm_inherit_t inherit;
 	vm_map_t	user_map;
 	kern_return_t	result;
@@ -718,19 +678,13 @@ minherit(p, uap, retval)
 	AUDIT_ARG(addr, uap->addr);
 	AUDIT_ARG(len, uap->len);
 	AUDIT_ARG(value, uap->inherit);
-	addr = (vm_offset_t)uap->addr;
-	size = uap->len;
+
+	addr = (mach_vm_offset_t)uap->addr;
+	size = (mach_vm_size_t)uap->len;
 	inherit = uap->inherit;
 
-	pageoff = (addr & PAGE_MASK);
-	addr -= pageoff;
-	size += pageoff;
-	size = (vm_size_t) round_page_32(size);
-	if (addr + size < addr)
-		return(EINVAL);
-
 	user_map = current_map();
-	result = vm_inherit(user_map, addr, size,
+	result = mach_vm_inherit(user_map, addr, size,
 				inherit);
 	switch (result) {
 	case KERN_SUCCESS:
@@ -741,45 +695,19 @@ minherit(p, uap, retval)
 	return (EINVAL);
 }
 
-struct madvise_args {
-		caddr_t addr;
-		int len;
-		int behav;
-};
-/* ARGSUSED */
 int
-madvise(p, uap, retval)
-	struct proc *p;
-	struct madvise_args *uap;
-	register_t *retval;
+madvise(__unused struct proc *p, struct madvise_args *uap, __unused register_t *retval)
 {
 	vm_map_t user_map;
-	vm_offset_t start, end;
+	mach_vm_offset_t start;
+	mach_vm_size_t size;
 	vm_behavior_t new_behavior;
 	kern_return_t	result;
-
-	/*
-	 * Check for illegal addresses.  Watch out for address wrap... Note
-	 * that VM_*_ADDRESS are not constants due to casts (argh).
-	 */
-	if (VM_MAX_ADDRESS > 0 &&
-		((vm_offset_t) uap->addr + uap->len) > VM_MAX_ADDRESS)
-		return (ENOMEM);
-	if (VM_MIN_ADDRESS > 0 && uap->addr < VM_MIN_ADDRESS)
-		return (ENOMEM);
-
-	if (((vm_offset_t) uap->addr + uap->len) < (vm_offset_t) uap->addr)
-		return (ENOMEM);
 
 	/*
 	 * Since this routine is only advisory, we default to conservative
 	 * behavior.
 	 */
-	start = trunc_page_32((vm_offset_t) uap->addr);
-	end = round_page_32((vm_offset_t) uap->addr + uap->len);
-	
-	user_map = current_map();
-
 	switch (uap->behav) {
 		case MADV_RANDOM:
 			new_behavior = VM_BEHAVIOR_RANDOM;
@@ -800,33 +728,28 @@ madvise(p, uap, retval)
 			return(EINVAL);
 	}
 
-	result = vm_behavior_set(user_map, start, end, new_behavior);
+	start = (mach_vm_offset_t) uap->addr;
+	size = (mach_vm_size_t) uap->len;
+	
+	user_map = current_map();
+
+	result = mach_vm_behavior_set(user_map, start, size, new_behavior);
 	switch (result) {
 		case KERN_SUCCESS:
 			return (0);
 		case KERN_INVALID_ADDRESS:
-			return (EINVAL);
+			return (ENOMEM);
 	}
 
 	return (EINVAL);
 }
 
-struct mincore_args {
-	const void *addr;
-	size_t len;
-	char *vec;
-};
-/* ARGSUSED */
 int
-mincore(p, uap, retval)
-	struct proc *p;
-	struct mincore_args *uap;
-	register_t *retval;
+mincore(__unused struct proc *p, struct mincore_args *uap, __unused register_t *retval)
 {
-	vm_offset_t addr, first_addr;
-	vm_offset_t end;
+	mach_vm_offset_t addr, first_addr, end;
 	vm_map_t map;
-	char *vec;
+	user_addr_t vec;
 	int error;
 	int vecindex, lastvecindex;
 	int mincoreinfo=0;
@@ -834,17 +757,17 @@ mincore(p, uap, retval)
 	kern_return_t	ret;
 	int numref;
 
+	char c;
+
 	map = current_map();
 
 	/*
 	 * Make sure that the addresses presented are valid for user
 	 * mode.
 	 */
-	first_addr = addr = trunc_page_32((vm_offset_t) uap->addr);
-	end = addr + (vm_size_t)round_page_32(uap->len);
+	first_addr = addr = mach_vm_trunc_page(uap->addr);
+	end = addr + mach_vm_round_page(uap->len);
 
-	if (VM_MAX_ADDRESS > 0 && end > VM_MAX_ADDRESS)
-		return (EINVAL);
 	if (end < addr)
 		return (EINVAL);
 
@@ -861,7 +784,7 @@ mincore(p, uap, retval)
 	 * up the pages elsewhere.
 	 */
 	lastvecindex = -1;
-	for(addr; addr < end; addr += PAGE_SIZE) {
+	for( ; addr < end; addr += PAGE_SIZE ) {
 		pqueryinfo = 0;
 		ret = vm_map_page_query(map, addr, &pqueryinfo, &numref);
 		if (ret != KERN_SUCCESS) 
@@ -885,7 +808,8 @@ mincore(p, uap, retval)
 		 * the byte vector is zeroed for those skipped entries.
 		 */
 		while((lastvecindex + 1) < vecindex) {
-			error = subyte( vec + lastvecindex, 0);
+			c = 0;
+			error = copyout(&c, vec + lastvecindex, 1);
 			if (error) {
 				return (EFAULT);
 			}
@@ -895,7 +819,8 @@ mincore(p, uap, retval)
 		/*
 		 * Pass the page information to the user
 		 */
-		error = subyte( vec + vecindex, mincoreinfo);
+		c = (char)mincoreinfo;
+		error = copyout(&c, vec + vecindex, 1);
 		if (error) {
 			return (EFAULT);
 		}
@@ -908,7 +833,8 @@ mincore(p, uap, retval)
 	 */
 	vecindex = (end - first_addr) >> PAGE_SHIFT;
 	while((lastvecindex + 1) < vecindex) {
-		error = subyte( vec + lastvecindex, 0);
+		c = 0;
+		error = copyout(&c, vec + lastvecindex, 1);
 		if (error) {
 			return (EFAULT);
 		}
@@ -918,36 +844,31 @@ mincore(p, uap, retval)
 	return (0);
 }
 
-struct mlock_args {
-		caddr_t addr;
-		size_t len;
-};
-
 int
-mlock(p, uap, retval)
-	struct proc *p;
-	struct mlock_args *uap;
-	register_t *retval;
+mlock(__unused struct proc *p, struct mlock_args *uap, __unused register_t *retvalval)
 {
 	vm_map_t user_map;
-	vm_offset_t addr;
-	vm_size_t size, pageoff;
-	int error;
+	vm_map_offset_t addr;
+	vm_map_size_t size, pageoff;
 	kern_return_t	result;
 
 	AUDIT_ARG(addr, uap->addr);
 	AUDIT_ARG(len, uap->len);
-	addr = (vm_offset_t) uap->addr;
-	size = uap->len;
 
-	pageoff = (addr & PAGE_MASK);
-	addr -= pageoff;
-	size += pageoff;
-	size = (vm_size_t) round_page_32(size);
+	addr = (vm_map_offset_t) uap->addr;
+	size = (vm_map_size_t)uap->len;
 
 	/* disable wrap around */
 	if (addr + size < addr)
 		return (EINVAL);
+
+	if (size == 0)
+		return (0);
+
+	pageoff = (addr & PAGE_MASK);
+	addr -= pageoff;
+	size = vm_map_round_page(size+pageoff);
+
 #ifdef notyet 
 /* Hmm.. What am I going to do with this? */
 	if (atop(size) + cnt.v_wire_count > vm_page_max_wired)
@@ -957,7 +878,7 @@ mlock(p, uap, retval)
 	    p->p_rlimit[RLIMIT_MEMLOCK].rlim_cur)
 		return (ENOMEM);
 #else
-	error = suser(p->p_ucred, &p->p_acflag);
+	error = suser(kauth_cred_get(), &p->p_acflag);
 	if (error)
 		return (error);
 #endif
@@ -965,45 +886,30 @@ mlock(p, uap, retval)
 
 	user_map = current_map();
 
-	/* vm_wire */
-	result = vm_map_wire(user_map, addr, (vm_offset_t)(addr+size), VM_PROT_NONE, TRUE);
+	/* have to call vm_map_wire directly to pass "I don't know" protections */
+	result = vm_map_wire(user_map, addr, addr+size, VM_PROT_NONE, TRUE);
 	return (result == KERN_SUCCESS ? 0 : ENOMEM);
 }
 
-struct munlock_args {
-		caddr_t addr;
-		size_t len;
-};
 int
-munlock(p, uap, retval)
-	struct proc *p;
-	struct munlock_args *uap;
-	register_t *retval;
+munlock(__unused struct proc *p, struct munlock_args *uap, __unused register_t *retval)
 {
-	vm_offset_t addr;
-	vm_size_t size, pageoff;
-	int error;
+	mach_vm_offset_t addr;
+	mach_vm_size_t size;
 	vm_map_t user_map;
 	kern_return_t	result;
 
 	AUDIT_ARG(addr, uap->addr);
-	AUDIT_ARG(len, uap->len);
-	addr = (vm_offset_t) uap->addr;
-	size = uap->len;
+	AUDIT_ARG(addr, uap->len);
 
-	pageoff = (addr & PAGE_MASK);
-	addr -= pageoff;
-	size += pageoff;
-	size = (vm_size_t) round_page_32(size);
+	addr = (mach_vm_offset_t) uap->addr;
+	size = (mach_vm_size_t)uap->len;
 
-	/* disable wrap around */
-	if (addr + size < addr)
-		return (EINVAL);
 
 #ifdef notyet 
 /* Hmm.. What am I going to do with this? */
 #ifndef pmap_wired_count
-	error = suser(p->p_ucred, &p->p_acflag);
+	error = suser(kauth_cred_get(), &p->p_acflag);
 	if (error)
 		return (error);
 #endif
@@ -1011,46 +917,28 @@ munlock(p, uap, retval)
 
 	user_map = current_map();
 
-	/* vm_wire */
-	result = vm_wire(host_priv_self(), user_map, addr, size, VM_PROT_NONE);
+	/* JMM - need to remove all wirings by spec - this just removes one */
+	result = mach_vm_wire(host_priv_self(), user_map, addr, size, VM_PROT_NONE);
 	return (result == KERN_SUCCESS ? 0 : ENOMEM);
 }
 
 
-struct mlockall_args {
-	int	how;
-};
-
 int
-mlockall(p, uap)
-	struct proc *p;
-	struct mlockall_args *uap;
+mlockall(__unused struct proc *p, __unused struct mlockall_args *uap, __unused register_t *retval)
 {
 	return (ENOSYS);
 }
 
-struct munlockall_args {
-	int	how;
-};
-
 int
-munlockall(p, uap)
-	struct proc *p;
-	struct munlockall_args *uap;
+munlockall(__unused struct proc *p, __unused struct munlockall_args *uap, __unused register_t *retval)
 {
 	return(ENOSYS);
 }
 
 
 /* BEGIN DEFUNCT */
-struct obreak_args {
-	char *nsiz;
-};
 int
-obreak(p, uap, retval)
-	struct proc *p;
-	struct obreak_args *uap;
-	register_t *retval;
+obreak(__unused struct proc *p, __unused struct obreak_args *uap, __unused register_t *retval)
 {
 	/* Not implemented, obsolete */
 	return (ENOMEM);
@@ -1059,38 +947,32 @@ obreak(p, uap, retval)
 int	both;
 
 int
-ovadvise()
+ovadvise(__unused struct proc *p, __unused struct ovadvise_args *uap, __unused register_t *retval)
 {
 
 #ifdef lint
 	both = 0;
 #endif
+	return( 0 );
 }
 /* END DEFUNCT */
 
-/* CDY need to fix interface to allow user to map above 32 bits */
 /* USV: No! need to obsolete map_fd()! mmap() already supports 64 bits */
 kern_return_t
-map_fd(
-	int		fd,
-	vm_offset_t	offset,
-	vm_offset_t	*va,
-	boolean_t	findspace,
-	vm_size_t	size)
+map_fd(struct map_fd_args *args)
 {
+	int		fd = args->fd;
+	vm_offset_t	offset = args->offset;
+	vm_offset_t	*va = args->va;
+	boolean_t	findspace = args->findspace;
+	vm_size_t	size = args->size;
 	kern_return_t ret;
-	boolean_t funnel_state;
 
 	AUDIT_MACH_SYSCALL_ENTER(AUE_MAPFD);
-	AUDIT_ARG(addr, va);
+	AUDIT_ARG(addr, CAST_DOWN(user_addr_t, va));
 	AUDIT_ARG(fd, fd);
 
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
-
-	ret = map_fd_funneled( fd, (vm_object_offset_t)offset, 
-							va, findspace, size);
-
-	(void) thread_funnel_set(kernel_flock, FALSE);
+	ret = map_fd_funneled( fd, (vm_object_offset_t)offset, va, findspace, size);
 
 	AUDIT_MACH_SYSCALL_EXIT(ret);
 	return ret;
@@ -1105,114 +987,153 @@ map_fd_funneled(
 	vm_size_t		size)
 {
 	kern_return_t	result;
-	struct file	*fp;
+	struct fileproc	*fp;
 	struct vnode	*vp;
 	void *	pager;
 	vm_offset_t	map_addr=0;
 	vm_size_t	map_size;
-	vm_map_copy_t	tmp;
 	int		err=0;
 	vm_map_t	my_map;
 	struct proc	*p =(struct proc *)current_proc();
+	struct vnode_attr vattr;
+	struct vfs_context context;
 
 	/*
 	 *	Find the inode; verify that it's a regular file.
 	 */
 
-	err = fdgetf(p, fd, &fp);
+	err = fp_lookup(p, fd, &fp, 0);
 	if (err)
 		return(err);
 	
-	if (fp->f_type != DTYPE_VNODE)
-		return(KERN_INVALID_ARGUMENT);
+	if (fp->f_fglob->fg_type != DTYPE_VNODE){
+		err = KERN_INVALID_ARGUMENT;
+		goto bad;
+	}
 
-	if (!(fp->f_flag & FREAD))
-		return (KERN_PROTECTION_FAILURE);
+	if (!(fp->f_fglob->fg_flag & FREAD)) {
+		err = KERN_PROTECTION_FAILURE;
+		goto bad;
+	}
 
-	vp = (struct vnode *)fp->f_data;
+	vp = (struct vnode *)fp->f_fglob->fg_data;
+	err = vnode_getwithref(vp);
+	if(err != 0) 
+		goto bad;
 
-	if (vp->v_type != VREG)
-		return (KERN_INVALID_ARGUMENT);
+	if (vp->v_type != VREG) {
+		(void)vnode_put(vp);
+		err = KERN_INVALID_ARGUMENT;
+		goto bad;
+	}
 
 	AUDIT_ARG(vnpath, vp, ARG_VNODE1);
 
+	/* conformance change - mmap needs to update access time for mapped
+	 * files
+	 */
+	VATTR_INIT(&vattr);
+	nanotime(&vattr.va_access_time);
+	VATTR_SET_ACTIVE(&vattr, va_access_time);
+	context.vc_proc = p;
+	context.vc_ucred = kauth_cred_get();
+	vnode_setattr(vp, &vattr, &context);
+
 	if (offset & PAGE_MASK_64) {
 		printf("map_fd: file offset not page aligned(%d : %s)\n",p->p_pid, p->p_comm);
-		return (KERN_INVALID_ARGUMENT);
+		(void)vnode_put(vp);
+		err = KERN_INVALID_ARGUMENT;
+		goto bad;
 	}
-	map_size = round_page_32(size);
+	map_size = round_page(size);
 
 	/*
 	 * Allow user to map in a zero length file.
 	 */
-	if (size == 0)
-		return (KERN_SUCCESS);
+	if (size == 0) {
+		(void)vnode_put(vp);
+		err = KERN_SUCCESS;
+		goto bad;
+	}
 	/*
 	 *	Map in the file.
 	 */
 	UBCINFOCHECK("map_fd_funneled", vp);
 	pager = (void *) ubc_getpager(vp);
-	if (pager == NULL)
-		return (KERN_FAILURE);
+	if (pager == NULL) {
+		(void)vnode_put(vp);
+		err = KERN_FAILURE;
+		goto bad;
+	}
 
 
 	my_map = current_map();
 
 	result = vm_map_64(
 			my_map,
-			&map_addr, map_size, (vm_offset_t)0, TRUE,
-			pager, offset, TRUE,
+			&map_addr, map_size, (vm_offset_t)0, 
+			VM_FLAGS_ANYWHERE, pager, offset, TRUE,
 			VM_PROT_DEFAULT, VM_PROT_ALL,
 			VM_INHERIT_DEFAULT);
-	if (result != KERN_SUCCESS)
-		return (result);
+	if (result != KERN_SUCCESS) {
+		(void)vnode_put(vp);
+		err = result;
+		goto bad;
+	}
 
 
 	if (!findspace) {
 		vm_offset_t	dst_addr;
 		vm_map_copy_t	tmp;
 
-		if (copyin(va, &dst_addr, sizeof (dst_addr))	||
+		if (copyin(CAST_USER_ADDR_T(va), &dst_addr, sizeof (dst_addr))	||
 					trunc_page_32(dst_addr) != dst_addr) {
 			(void) vm_map_remove(
 					my_map,
 					map_addr, map_addr + map_size,
 					VM_MAP_NO_FLAGS);
-			return (KERN_INVALID_ADDRESS);
+			(void)vnode_put(vp);
+			err = KERN_INVALID_ADDRESS;
+			goto bad;
 		}
 
-		result = vm_map_copyin(
-				my_map,
-				map_addr, map_size, TRUE,
-				&tmp);
+		result = vm_map_copyin(my_map, (vm_map_address_t)map_addr,
+				       (vm_map_size_t)map_size, TRUE, &tmp);
 		if (result != KERN_SUCCESS) {
 			
-			(void) vm_map_remove(
-					my_map,
-					map_addr, map_addr + map_size,
+			(void) vm_map_remove(my_map, vm_map_trunc_page(map_addr),
+					vm_map_round_page(map_addr + map_size),
 					VM_MAP_NO_FLAGS);
-			return (result);
+			(void)vnode_put(vp);
+			err = result;
+			goto bad;
 		}
 
-		result = vm_map_copy_overwrite(
-					my_map,
-					dst_addr, tmp, FALSE);
+		result = vm_map_copy_overwrite(my_map,
+					(vm_map_address_t)dst_addr, tmp, FALSE);
 		if (result != KERN_SUCCESS) {
 			vm_map_copy_discard(tmp);
-			return (result);
+			(void)vnode_put(vp);
+			err = result;
+			goto bad;
 		}
 	} else {
-		if (copyout(&map_addr, va, sizeof (map_addr))) {
-			(void) vm_map_remove(
-					my_map,
-					map_addr, map_addr + map_size,
+		if (copyout(&map_addr, CAST_USER_ADDR_T(va), sizeof (map_addr))) {
+			(void) vm_map_remove(my_map, vm_map_trunc_page(map_addr),
+					vm_map_round_page(map_addr + map_size),
 					VM_MAP_NO_FLAGS);
-			return (KERN_INVALID_ADDRESS);
+			(void)vnode_put(vp);
+			err = KERN_INVALID_ADDRESS;
+			goto bad;
 		}
 	}
 
 	ubc_setcred(vp, current_proc());
-	ubc_map(vp);
-
-	return (KERN_SUCCESS);
+	(void)ubc_map(vp, (PROT_READ | PROT_WRITE | PROT_EXEC));
+	(void)vnode_put(vp);
+	err = 0;
+bad:
+	fp_drop(p, fd, fp, 0);
+	return (err);
 }
+

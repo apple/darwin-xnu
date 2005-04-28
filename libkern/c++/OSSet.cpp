@@ -21,9 +21,10 @@
  */
 /* IOSet.m created by rsulack on Thu 11-Jun-1998 */
 
-#include <libkern/c++/OSSet.h>
+#include <libkern/c++/OSDictionary.h>
 #include <libkern/c++/OSArray.h>
 #include <libkern/c++/OSSerialize.h>
+#include <libkern/c++/OSSet.h>
 
 #define super OSCollection
 
@@ -36,6 +37,9 @@ OSMetaClassDefineReservedUnused(OSSet, 4);
 OSMetaClassDefineReservedUnused(OSSet, 5);
 OSMetaClassDefineReservedUnused(OSSet, 6);
 OSMetaClassDefineReservedUnused(OSSet, 7);
+
+#define EXT_CAST(obj) \
+    reinterpret_cast<OSObject *>(const_cast<OSMetaClassBase *>(obj))
 
 bool OSSet::initWithCapacity(unsigned int inCapacity)
 {
@@ -145,6 +149,7 @@ OSSet *OSSet::withSet(const OSSet *set,
 
 void OSSet::free()
 {
+    (void) members->super::setOptions(0, kImmutable);
     if (members)
         members->release();
 
@@ -206,7 +211,7 @@ bool OSSet::merge(const OSArray *array)
 
 bool OSSet::merge(const OSSet *set)
 {
-    return setObject(set->members);
+    return merge(set->members);
 }
 
 void OSSet::removeObject(const OSMetaClassBase *anObject)
@@ -320,4 +325,72 @@ bool OSSet::serialize(OSSerialize *s) const
     }   
 
     return s->addXMLEndTag("set");
+}
+
+unsigned OSSet::setOptions(unsigned options, unsigned mask, void *)
+{
+    unsigned old = super::setOptions(options, mask);
+    if ((old ^ options) & mask)
+	members->setOptions(options, mask);
+
+    return old;
+}
+
+OSCollection * OSSet::copyCollection(OSDictionary *cycleDict)
+{
+    bool allocDict = !cycleDict;
+    OSCollection *ret = 0;
+    OSSet *newSet = 0;
+
+    if (allocDict) {
+	cycleDict = OSDictionary::withCapacity(16);
+	if (!cycleDict)
+	    return 0;
+    }
+
+    do {
+	// Check for a cycle
+	ret = super::copyCollection(cycleDict);
+	if (ret)
+	    continue;	// Found it
+
+	newSet = OSSet::withCapacity(members->capacity);
+	if (!newSet)
+	    continue;	// Couldn't create new set abort
+
+	// Insert object into cycle Dictionary
+	cycleDict->setObject((const OSSymbol *) this, newSet);
+
+	OSArray *newMembers = newSet->members;
+	newMembers->capacityIncrement = members->capacityIncrement;
+
+	// Now copy over the contents into the new duplicate
+	for (unsigned int i = 0; i < members->count; i++) {
+	    OSObject *obj = EXT_CAST(members->array[i]);
+	    OSCollection *coll = OSDynamicCast(OSCollection, obj);
+	    if (coll) {
+		OSCollection *newColl = coll->copyCollection(cycleDict);
+		if (newColl) {
+		    obj = newColl;	// Rely on cycleDict ref for a bit
+		    newColl->release();
+		}
+		else
+		    goto abortCopy;
+	    };
+	    newMembers->setObject(obj);
+	};
+
+	ret = newSet;
+	newSet = 0;
+
+    } while(false);
+
+abortCopy:
+    if (newSet)
+	newSet->release();
+
+    if (allocDict)
+	cycleDict->release();
+
+    return ret;
 }

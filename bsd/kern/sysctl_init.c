@@ -21,18 +21,19 @@
  */
 
 #include <sys/param.h>
-#include <sys/buf.h>
 #include <sys/kernel.h>
 #include <sys/sysctl.h>
 
 extern struct sysctl_oid sysctl__debug_bpf_bufsize;
 extern struct sysctl_oid sysctl__debug_bpf_maxbufsize;
+extern struct sysctl_oid sysctl__debug_bpf_maxdevices;
+extern struct sysctl_oid sysctl__debug_iokit;
 
 #if TUN
 extern struct sysctl_oid sysctl__debug_if_tun_debug;
 #endif
 
-#if COMPAT_43
+#if COMPAT_43_TTY
 #ifndef NeXT
 extern struct sysctl_oid sysctl__debug_ttydebug;
 #endif
@@ -42,6 +43,10 @@ extern struct sysctl_oid sysctl__hw_machine;
 extern struct sysctl_oid sysctl__hw_model;
 extern struct sysctl_oid sysctl__hw_ncpu;
 extern struct sysctl_oid sysctl__hw_activecpu;
+extern struct sysctl_oid sysctl__hw_physicalcpu;
+extern struct sysctl_oid sysctl__hw_physicalcpu_max;
+extern struct sysctl_oid sysctl__hw_logicalcpu;
+extern struct sysctl_oid sysctl__hw_logicalcpu_max;
 extern struct sysctl_oid sysctl__hw_byteorder;
 extern struct sysctl_oid sysctl__hw_cputype;
 extern struct sysctl_oid sysctl__hw_cpusubtype;
@@ -84,6 +89,10 @@ extern struct sysctl_oid sysctl__kern_sysv_shmmin;
 extern struct sysctl_oid sysctl__kern_sysv_shmmni;
 extern struct sysctl_oid sysctl__kern_sysv_shmseg;
 extern struct sysctl_oid sysctl__kern_sysv_shmall;
+extern struct sysctl_oid sysctl__kern_sysv_ipcs;
+extern struct sysctl_oid sysctl__kern_sysv_ipcs_shm;
+extern struct sysctl_oid sysctl__kern_sysv_ipcs_sem;
+extern struct sysctl_oid sysctl__kern_sysv_ipcs_msg;
 
 extern struct sysctl_oid sysctl__kern_sysv_semmni;
 extern struct sysctl_oid sysctl__kern_sysv_semmns;
@@ -93,12 +102,16 @@ extern struct sysctl_oid sysctl__kern_sysv_semume;
 
 extern struct sysctl_oid sysctl__kern_dummy;
 extern struct sysctl_oid sysctl__kern_ipc_maxsockbuf;
+extern struct sysctl_oid sysctl__kern_ipc_mbstat;
 extern struct sysctl_oid sysctl__kern_ipc_nmbclusters;
 extern struct sysctl_oid sysctl__kern_ipc_sockbuf_waste_factor;
 extern struct sysctl_oid sysctl__kern_ipc_somaxconn;
 extern struct sysctl_oid sysctl__kern_ipc_sosendminchain;
 extern struct sysctl_oid sysctl__kern_ipc_sorecvmincopy;
 extern struct sysctl_oid sysctl__kern_ipc_maxsockets;
+extern struct sysctl_oid sysctl__kern_posix;
+extern struct sysctl_oid sysctl__kern_posix_sem;
+extern struct sysctl_oid sysctl__kern_posix_sem_max;
 extern struct sysctl_oid sysctl__kern_sugid_scripts;
 extern struct sysctl_oid sysctl__net_inet_icmp_icmplim;
 extern struct sysctl_oid sysctl__net_inet_icmp_maskrepl;
@@ -126,6 +139,7 @@ extern struct sysctl_oid sysctl__net_inet_ip_subnets_are_local;
 extern struct sysctl_oid sysctl__net_inet_ip_keepfaith;
 extern struct sysctl_oid sysctl__net_inet_ip_maxfragpackets;
 extern struct sysctl_oid sysctl__net_inet_ip_maxfragsperpacket;
+extern struct sysctl_oid sysctl__net_inet_ip_maxfrags;
 extern struct sysctl_oid sysctl__net_inet_ip_check_interface;
 extern struct sysctl_oid sysctl__net_inet_ip_check_route_selfref;
 extern struct sysctl_oid sysctl__net_inet_ip_use_route_genid;
@@ -134,17 +148,39 @@ extern struct sysctl_oid sysctl__net_inet_ip_gifttl;
 #endif
 
 #if DUMMYNET
-extern struct sysctl_oid sysctl__net_inet_ip_dummynet_calls;
-extern struct sysctl_oid sysctl__net_inet_ip_dummynet_debug;
-extern struct sysctl_oid sysctl__net_inet_ip_dummynet_idle;
+extern struct sysctl_oid sysctl__net_inet_ip_dummynet_hash_size;
+extern struct sysctl_oid sysctl__net_inet_ip_dummynet_curr_time;
+extern struct sysctl_oid sysctl__net_inet_ip_dummynet_ready_heap;
+extern struct sysctl_oid sysctl__net_inet_ip_dummynet_extract_heap;
+extern struct sysctl_oid sysctl__net_inet_ip_dummynet_searches;
+extern struct sysctl_oid sysctl__net_inet_ip_dummynet_search_steps;
+extern struct sysctl_oid sysctl__net_inet_ip_dummynet_expire;
+extern struct sysctl_oid sysctl__net_inet_ip_dummynet_max_chain_len;
+extern struct sysctl_oid sysctl__net_inet_ip_dummynet_red_lookup_depth;
+extern struct sysctl_oid sysctl__net_inet_ip_dummynet_red_avg_pkt_size;
+extern struct sysctl_oid sysctl__net_inet_ip_dummynet_red_max_pkt_size;
 extern struct sysctl_oid sysctl__net_inet_ip_dummynet;
 #endif
 
 #if IPFIREWALL && !IPFIREWALL_KEXT
+extern struct sysctl_oid sysctl__net_inet_ip_fw_enable;
 extern struct sysctl_oid sysctl__net_inet_ip_fw_debug;
 extern struct sysctl_oid sysctl__net_inet_ip_fw_verbose;
 extern struct sysctl_oid sysctl__net_inet_ip_fw_verbose_limit;
 extern struct sysctl_oid sysctl__net_inet_ip_fw_one_pass;
+extern struct sysctl_oid sysctl__net_inet_ip_fw_autoinc_step;
+extern struct sysctl_oid sysctl__net_inet_ip_fw_dyn_buckets;
+extern struct sysctl_oid sysctl__net_inet_ip_fw_curr_dyn_buckets;
+extern struct sysctl_oid sysctl__net_inet_ip_fw_dyn_count;
+extern struct sysctl_oid sysctl__net_inet_ip_fw_dyn_max;
+extern struct sysctl_oid sysctl__net_inet_ip_fw_static_count;
+extern struct sysctl_oid sysctl__net_inet_ip_fw_dyn_ack_lifetime;
+extern struct sysctl_oid sysctl__net_inet_ip_fw_dyn_syn_lifetime;
+extern struct sysctl_oid sysctl__net_inet_ip_fw_dyn_fin_lifetime;
+extern struct sysctl_oid sysctl__net_inet_ip_fw_dyn_rst_lifetime;
+extern struct sysctl_oid sysctl__net_inet_ip_fw_dyn_udp_lifetime;
+extern struct sysctl_oid sysctl__net_inet_ip_fw_dyn_short_lifetime;
+extern struct sysctl_oid sysctl__net_inet_ip_fw_dyn_keepalive;
 extern struct sysctl_oid sysctl__net_inet_ip_fw;
 #endif
 
@@ -152,6 +188,7 @@ extern struct sysctl_oid sysctl__net_inet_ip_linklocal;
 extern struct sysctl_oid sysctl__net_inet_ip_linklocal_stat;
 extern struct sysctl_oid sysctl__net_inet_ip_linklocal_in;
 extern struct sysctl_oid sysctl__net_inet_ip_linklocal_in_allowbadttl;
+extern struct sysctl_oid sysctl__net_inet_ip_maxchainsent;
 
 extern struct sysctl_oid sysctl__net_inet_raw_maxdgram;
 extern struct sysctl_oid sysctl__net_inet_raw_recvspace;
@@ -166,6 +203,7 @@ extern struct sysctl_oid sysctl__net_inet_tcp_keepinit;
 extern struct sysctl_oid sysctl__net_inet_tcp_keepintvl;
 extern struct sysctl_oid sysctl__net_inet_tcp_mssdflt;
 extern struct sysctl_oid sysctl__net_inet_tcp_minmss;
+extern struct sysctl_oid sysctl__net_inet_tcp_minmssoverload;
 extern struct sysctl_oid sysctl__net_inet_tcp_recvspace;
 extern struct sysctl_oid sysctl__net_inet_tcp_sendspace;
 extern struct sysctl_oid sysctl__net_inet_tcp_slowlink_wsize;
@@ -175,6 +213,7 @@ extern struct sysctl_oid sysctl__net_inet_tcp_path_mtu_discovery;
 extern struct sysctl_oid sysctl__net_inet_tcp_slowstart_flightsize;
 extern struct sysctl_oid sysctl__net_inet_tcp_local_slowstart_flightsize;
 extern struct sysctl_oid sysctl__net_inet_tcp_newreno;
+extern struct sysctl_oid sysctl__net_inet_tcp_packetchain;
 extern struct sysctl_oid sysctl__net_inet_tcp_tcbhashsize;
 extern struct sysctl_oid sysctl__net_inet_tcp_do_tcpdrain;
 extern struct sysctl_oid sysctl__net_inet_tcp_icmp_may_rst;
@@ -199,6 +238,7 @@ extern struct sysctl_oid sysctl__net_inet_udp_checksum;
 extern struct sysctl_oid sysctl__net_inet_udp_maxdgram;
 extern struct sysctl_oid sysctl__net_inet_udp_recvspace;
 extern struct sysctl_oid sysctl__net_inet_udp_blackhole;
+extern struct sysctl_oid sysctl__net_inet_udp_pcbcount;
 
 #if NETAT
 extern struct sysctl_oid sysctl__net_appletalk_debug;
@@ -221,7 +261,7 @@ extern struct sysctl_oid sysctl__net_link_ether_inet_maxtries;
 extern struct sysctl_oid sysctl__net_link_ether_inet_proxyall;
 extern struct sysctl_oid sysctl__net_link_ether_inet_prune_intvl;
 extern struct sysctl_oid sysctl__net_link_ether_inet_useloopback;
-extern struct sysctl_oid sysctl__net_link_ether_inet_log_arp_wrong_iface;
+extern struct sysctl_oid sysctl__net_link_ether_inet_log_arp_warnings;
 extern struct sysctl_oid sysctl__net_link_ether_inet_apple_hwcksum_tx;
 extern struct sysctl_oid sysctl__net_link_ether_inet_apple_hwcksum_rx;
 
@@ -229,6 +269,7 @@ extern struct sysctl_oid sysctl__net_link_ether_inet_apple_hwcksum_rx;
 extern struct sysctl_oid sysctl__net_link_generic_system_ifcount;
 extern struct sysctl_oid sysctl__net_link_generic;
 extern struct sysctl_oid sysctl__net_link_generic_ifdata;
+extern struct sysctl_oid sysctl__net_link_generic_ifalldata;
 extern struct sysctl_oid sysctl__net_link_generic_system;
 #endif
 
@@ -259,10 +300,12 @@ extern struct sysctl_oid sysctl__vfs_nfs_diskless_rootpath;
 extern struct sysctl_oid sysctl__vfs_nfs_diskless_swappath;
 extern struct sysctl_oid sysctl__vfs_nfs_nfsstats;
 #endif
+#if NFSCLIENT
 extern struct sysctl_oid sysctl__vfs_generic_nfs_client_initialdowndelay;
 extern struct sysctl_oid sysctl__vfs_generic_nfs_client_nextdowndelay;
 extern struct sysctl_oid sysctl__vfs_generic_nfs_client;
 extern struct sysctl_oid sysctl__vfs_generic_nfs;
+#endif
 
 extern struct sysctl_oid sysctl__vfs_generic;
 extern struct sysctl_oid sysctl__vfs_generic_vfsidlist;
@@ -339,6 +382,7 @@ extern struct sysctl_oid sysctl__net_inet6_ip6_forwarding;
 extern struct sysctl_oid sysctl__net_inet6_ip6_redirect;
 extern struct sysctl_oid sysctl__net_inet6_ip6_hlim;
 extern struct sysctl_oid sysctl__net_inet6_ip6_maxfragpackets;
+extern struct sysctl_oid sysctl__net_inet6_ip6_maxfrags;
 extern struct sysctl_oid sysctl__net_inet6_ip6_accept_rtadv;
 extern struct sysctl_oid sysctl__net_inet6_ip6_keepfaith;
 extern struct sysctl_oid sysctl__net_inet6_ip6_log_interval;
@@ -354,6 +398,7 @@ extern struct sysctl_oid sysctl__net_inet6_ip6_use_tempaddr;
 extern struct sysctl_oid sysctl__net_inet6_ip6_v6only;
 extern struct sysctl_oid sysctl__net_inet6_ip6_auto_linklocal;
 extern struct sysctl_oid sysctl__net_inet6_ip6_rip6stats;
+extern struct sysctl_oid sysctl__net_inet6_ip6_mrt6stat;
 extern struct sysctl_oid sysctl__net_inet6_ip6_rtexpire;
 extern struct sysctl_oid sysctl__net_inet6_ip6_rtminexpire;
 extern struct sysctl_oid sysctl__net_inet6_ip6_rtmaxcache;
@@ -421,6 +466,7 @@ extern struct sysctl_oid sysctl__net_key_esp_keymin;
 extern struct sysctl_oid sysctl__net_key_esp_auth;
 extern struct sysctl_oid sysctl__net_key_ah_keymin;
 extern struct sysctl_oid sysctl__net_key_natt_keepalive_interval;
+extern struct sysctl_oid sysctl__net_key_pfkeystat;
 #endif
 
 
@@ -434,41 +480,58 @@ struct sysctl_oid *newsysctl_list[] =
     &sysctl__vfs,
     &sysctl__sysctl,
     &sysctl__debug_bpf_bufsize,
-    &sysctl__debug_bpf_maxbufsize
+    &sysctl__debug_bpf_maxbufsize,
+    &sysctl__debug_bpf_maxdevices,
+    &sysctl__debug_iokit
 #if TUN
     ,&sysctl__debug_if_tun_debug
 #endif
 
-#if COMPAT_43
+#if COMPAT_43_TTY
 #ifndef NeXT
     ,&sysctl__debug_ttydebug
 #endif
 #endif
+
+    ,&sysctl__kern_posix
+    ,&sysctl__kern_posix_sem
+    ,&sysctl__kern_posix_sem_max
 
     ,&sysctl__kern_sysv_shmmax
     ,&sysctl__kern_sysv_shmmin
     ,&sysctl__kern_sysv_shmmni
     ,&sysctl__kern_sysv_shmseg
     ,&sysctl__kern_sysv_shmall
+    ,&sysctl__kern_sysv_ipcs
+    ,&sysctl__kern_sysv_ipcs_shm
+    ,&sysctl__kern_sysv_ipcs_sem
+    ,&sysctl__kern_sysv_ipcs_msg
     ,&sysctl__kern_sysv_semmni
     ,&sysctl__kern_sysv_semmns
     ,&sysctl__kern_sysv_semmnu
     ,&sysctl__kern_sysv_semmsl
     ,&sysctl__kern_sysv_semume
     ,&sysctl__kern_dummy
+
     ,&sysctl__kern_ipc_maxsockbuf
+    ,&sysctl__kern_ipc_mbstat
     ,&sysctl__kern_ipc_nmbclusters
     ,&sysctl__kern_ipc_sockbuf_waste_factor
     ,&sysctl__kern_ipc_somaxconn
     ,&sysctl__kern_ipc_sosendminchain
     ,&sysctl__kern_ipc_sorecvmincopy
     ,&sysctl__kern_ipc_maxsockets
+
     ,&sysctl__kern_sugid_scripts
 
     ,&sysctl__hw_machine
     ,&sysctl__hw_model
     ,&sysctl__hw_ncpu
     ,&sysctl__hw_activecpu
+    ,&sysctl__hw_physicalcpu
+    ,&sysctl__hw_physicalcpu_max
+    ,&sysctl__hw_logicalcpu
+    ,&sysctl__hw_logicalcpu_max
     ,&sysctl__hw_byteorder
     ,&sysctl__hw_cputype
     ,&sysctl__hw_cpusubtype
@@ -529,6 +592,7 @@ struct sysctl_oid *newsysctl_list[] =
     ,&sysctl__net_inet_ip_keepfaith
     ,&sysctl__net_inet_ip_maxfragpackets
     ,&sysctl__net_inet_ip_maxfragsperpacket
+    ,&sysctl__net_inet_ip_maxfrags
     ,&sysctl__net_inet_ip_check_interface
     ,&sysctl__net_inet_ip_check_route_selfref
     ,&sysctl__net_inet_ip_use_route_genid
@@ -536,23 +600,46 @@ struct sysctl_oid *newsysctl_list[] =
     ,&sysctl__net_inet_ip_gifttl
 #endif
 #if DUMMYNET
-    ,&sysctl__net_inet_ip_dummynet_calls
-    ,&sysctl__net_inet_ip_dummynet_debug
-    ,&sysctl__net_inet_ip_dummynet_idle
+    ,&sysctl__net_inet_ip_dummynet_hash_size
+    ,&sysctl__net_inet_ip_dummynet_curr_time
+    ,&sysctl__net_inet_ip_dummynet_ready_heap
+    ,&sysctl__net_inet_ip_dummynet_extract_heap
+    ,&sysctl__net_inet_ip_dummynet_searches
+    ,&sysctl__net_inet_ip_dummynet_search_steps
+    ,&sysctl__net_inet_ip_dummynet_expire
+    ,&sysctl__net_inet_ip_dummynet_max_chain_len
+    ,&sysctl__net_inet_ip_dummynet_red_lookup_depth
+    ,&sysctl__net_inet_ip_dummynet_red_avg_pkt_size
+    ,&sysctl__net_inet_ip_dummynet_red_max_pkt_size
     ,&sysctl__net_inet_ip_dummynet
 #endif
 
 #if IPFIREWALL && !IPFIREWALL_KEXT
+    ,&sysctl__net_inet_ip_fw_enable
     ,&sysctl__net_inet_ip_fw_debug
     ,&sysctl__net_inet_ip_fw_verbose
     ,&sysctl__net_inet_ip_fw_verbose_limit
     ,&sysctl__net_inet_ip_fw_one_pass
+    ,&sysctl__net_inet_ip_fw_autoinc_step
+    ,&sysctl__net_inet_ip_fw_dyn_buckets
+    ,&sysctl__net_inet_ip_fw_curr_dyn_buckets
+    ,&sysctl__net_inet_ip_fw_dyn_count
+    ,&sysctl__net_inet_ip_fw_dyn_max
+    ,&sysctl__net_inet_ip_fw_static_count
+    ,&sysctl__net_inet_ip_fw_dyn_ack_lifetime
+    ,&sysctl__net_inet_ip_fw_dyn_syn_lifetime
+    ,&sysctl__net_inet_ip_fw_dyn_fin_lifetime
+    ,&sysctl__net_inet_ip_fw_dyn_rst_lifetime
+    ,&sysctl__net_inet_ip_fw_dyn_udp_lifetime
+    ,&sysctl__net_inet_ip_fw_dyn_short_lifetime
+    ,&sysctl__net_inet_ip_fw_dyn_keepalive
     ,&sysctl__net_inet_ip_fw
 #endif
     ,&sysctl__net_inet_ip_linklocal
     ,&sysctl__net_inet_ip_linklocal_stat
     ,&sysctl__net_inet_ip_linklocal_in
     ,&sysctl__net_inet_ip_linklocal_in_allowbadttl
+    ,&sysctl__net_inet_ip_maxchainsent
     ,&sysctl__net_inet_raw_maxdgram
     ,&sysctl__net_inet_raw_recvspace
     ,&sysctl__net_inet_tcp_always_keepalive
@@ -566,6 +653,7 @@ struct sysctl_oid *newsysctl_list[] =
     ,&sysctl__net_inet_tcp_keepintvl
     ,&sysctl__net_inet_tcp_mssdflt
     ,&sysctl__net_inet_tcp_minmss
+    ,&sysctl__net_inet_tcp_minmssoverload
     ,&sysctl__net_inet_tcp_recvspace
     ,&sysctl__net_inet_tcp_sendspace
     ,&sysctl__net_inet_tcp_slowlink_wsize
@@ -575,6 +663,7 @@ struct sysctl_oid *newsysctl_list[] =
     ,&sysctl__net_inet_tcp_slowstart_flightsize
     ,&sysctl__net_inet_tcp_local_slowstart_flightsize
     ,&sysctl__net_inet_tcp_newreno
+    ,&sysctl__net_inet_tcp_packetchain
     ,&sysctl__net_inet_tcp_tcbhashsize
     ,&sysctl__net_inet_tcp_do_tcpdrain
     ,&sysctl__net_inet_tcp_icmp_may_rst
@@ -599,6 +688,7 @@ struct sysctl_oid *newsysctl_list[] =
     ,&sysctl__net_inet_udp_maxdgram
     ,&sysctl__net_inet_udp_recvspace
     ,&sysctl__net_inet_udp_blackhole
+    ,&sysctl__net_inet_udp_pcbcount
 
 #if NETAT
     ,&sysctl__net_appletalk_debug
@@ -622,13 +712,14 @@ struct sysctl_oid *newsysctl_list[] =
     ,&sysctl__net_link_ether_inet_proxyall
     ,&sysctl__net_link_ether_inet_prune_intvl
     ,&sysctl__net_link_ether_inet_useloopback
-    ,&sysctl__net_link_ether_inet_log_arp_wrong_iface
+    ,&sysctl__net_link_ether_inet_log_arp_warnings
     ,&sysctl__net_link_ether_inet_apple_hwcksum_tx
     ,&sysctl__net_link_ether_inet_apple_hwcksum_rx
 #if NETMIBS
     ,&sysctl__net_link_generic_system_ifcount
     ,&sysctl__net_link_generic
     ,&sysctl__net_link_generic_ifdata
+    ,&sysctl__net_link_generic_ifalldata
     ,&sysctl__net_link_generic_system
 #endif
 
@@ -664,10 +755,12 @@ struct sysctl_oid *newsysctl_list[] =
     ,&sysctl__vfs_generic_vfsidlist
     ,&sysctl__vfs_generic_ctlbyfsid
     ,&sysctl__vfs_generic_noremotehang
+#if NFSCLIENT
     ,&sysctl__vfs_generic_nfs
     ,&sysctl__vfs_generic_nfs_client
     ,&sysctl__vfs_generic_nfs_client_initialdowndelay
     ,&sysctl__vfs_generic_nfs_client_nextdowndelay
+#endif
     ,&sysctl__kern_ipc
     ,&sysctl__kern_sysv
     ,&sysctl__net_inet
@@ -721,6 +814,7 @@ struct sysctl_oid *newsysctl_list[] =
     ,&sysctl__net_inet6_ip6_redirect
     ,&sysctl__net_inet6_ip6_hlim
     ,&sysctl__net_inet6_ip6_maxfragpackets
+    ,&sysctl__net_inet6_ip6_maxfrags
     ,&sysctl__net_inet6_ip6_accept_rtadv
     ,&sysctl__net_inet6_ip6_keepfaith
     ,&sysctl__net_inet6_ip6_log_interval
@@ -736,6 +830,7 @@ struct sysctl_oid *newsysctl_list[] =
     ,&sysctl__net_inet6_ip6_v6only
     ,&sysctl__net_inet6_ip6_auto_linklocal
     ,&sysctl__net_inet6_ip6_rip6stats
+    ,&sysctl__net_inet6_ip6_mrt6stat
     ,&sysctl__net_inet6_ip6_rtexpire
     ,&sysctl__net_inet6_ip6_rtminexpire
     ,&sysctl__net_inet6_ip6_rtmaxcache
@@ -788,6 +883,7 @@ struct sysctl_oid *newsysctl_list[] =
    ,&sysctl__net_key_esp_auth
    ,&sysctl__net_key_ah_keymin
    ,&sysctl__net_key_natt_keepalive_interval
+   ,&sysctl__net_key_pfkeystat
    ,&sysctl__net_inet_ipsec
    ,&sysctl__net_inet_ipsec_stats
    ,&sysctl__net_inet_ipsec_def_policy

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -103,7 +103,9 @@ LEXT(vmm_dispatch_table)
 			.long	1												; Valid in Fam
 			.long	EXT(vmm_fam_reserved)							; Set guest register from Fam
 			.long	1												; Valid in Fam
-			.long	EXT(vmm_set_XA)									; Set extended architecture features for a VM 
+			.long	EXT(vmm_activate_XA)							; Activate extended architecture features for a VM 
+			.long	0												; Not valid in Fam
+			.long	EXT(vmm_deactivate_XA)							; Deactivate extended architecture features for a VM 
 			.long	0												; Not valid in Fam
 			.long	EXT(vmm_get_XA)									; Get extended architecture features from a VM 
 			.long	1												; Valid in Fam
@@ -127,8 +129,12 @@ LEXT(vmm_dispatch_table)
 			.long	1												; Valid in Fam
 			.long	EXT(vmm_max_addr)								; Returns the maximum virtual address 
 			.long	1												; Valid in Fam
-
-
+#if 0
+			.long	EXT(vmm_set_guest_memory)						; Set guest memory extent
+			.long	0												; Not valid in FAM
+			.long	EXT(vmm_purge_local)							; Purge all local guest mappings */
+			.long	1												; Valid in FAM
+#endif
 			.set	vmm_count,(.-EXT(vmm_dispatch_table))/8			; Get the top number
 
 
@@ -148,7 +154,8 @@ LEXT(vmm_dispatch)
 			rlwinm	r11,r11,3,0,28				; Index into table
 			bge-	cr1,vmmBogus				; It is a bogus entry
 			add		r12,r10,r11					; Get the vmm dispatch syscall entry
-			mfsprg	r10,0						; Get the per_proc
+			mfsprg	r10,1						; Get the current activation
+			lwz		r10,ACT_PER_PROC(r10)		; Get the per_proc block
 			lwz		r13,0(r12)					; Get address of routine
 			lwz		r12,4(r12)					; Get validity flag
 			lwz		r5,spcFlags(r10)			; Get per_proc special flags
@@ -178,8 +185,8 @@ vmmRetPt:	li		r0,0						; Clear this out
 			b		EXT(ppcscret)				; Go back to handler...
 			
 vmmBogus:	
-			mfsprg	r10,0						; Get the per_proc
-			mfsprg	r3,1						; Load current activation
+			mfsprg	r3,1						; Get the current activation
+			lwz		r10,ACT_PER_PROC(r3)		; Get the per_proc block
 			lwz		r5,spcFlags(r10)			; Get per_proc special flags
 			rlwinm.	r5,r5,0,FamVMmodebit,FamVMmodebit	; Test FamVMmodebit
 			bne		vmmexitcall					; Do it to it		
@@ -349,7 +356,8 @@ LEXT(vmm_execute_vm)
  			.globl	EXT(switchIntoVM)
 
 LEXT(switchIntoVM)
-			mfsprg	r10,0						; Get the per_proc
+			mfsprg	r10,1						; Get the current activation
+			lwz		r10,ACT_PER_PROC(r10)		; Get the per_proc block
 			rlwinm	r31,r4,24,24,31				; Get the address space
 			rlwinm	r4,r4,0,24,31				; Isolate the context id
 			lwz		r28,vmmControl(r3)			; Pick up the control table address
@@ -518,7 +526,8 @@ swvmNoMap:	lwz		r20,vmmContextKern(r27)		; Get the comm area
 			lwz		r17,vmmContextKern(r27)		; Get the comm area back
 			la		r25,vmmFacCtx(r27)			; Point to the facility context
 			lwz		r15,vmmCntrl(r17)			; Get the control flags again
-			mfsprg	r29,0						; Get the per_proc
+			mfsprg	r29,1						; Get the current activation
+			lwz		r29,ACT_PER_PROC(r29)		; Get the per_proc block
 			
 ;
 ;			Check if there is new floating point context to load
@@ -536,11 +545,12 @@ swvmNoMap:	lwz		r20,vmmContextKern(r27)		; Get the comm area
 			
 			eieio								; Make sure this stays in order
 			
-			lis		r18,hi16(EXT(per_proc_info))	; Set base per_proc
-			mulli	r19,r19,ppSize				; Find offset to the owner per_proc			
-			ori		r18,r18,lo16(EXT(per_proc_info))	; Set base per_proc
+			lis		r18,hi16(EXT(PerProcTable))	; Set base PerProcTable
+			mulli	r19,r19,ppeSize				; Find offset to the owner per_proc_entry
+			ori		r18,r18,lo16(EXT(PerProcTable))	; Set base PerProcTable
 			li		r16,FPUowner				; Displacement to float owner
-			add		r19,r18,r19					; Point to the owner per_proc
+			add		r19,r18,r19					; Point to the owner per_proc_entry
+			lwz		r19,ppe_vaddr(r19)			; Point to the owner per_proc
 			
 swvminvfpu:	lwarx	r18,r16,r19					; Get the owner
 
@@ -580,7 +590,8 @@ swvmGotFloat:
 			stw		r15,vmmCntrl(r17)			; Save the control flags sans vmmFloatLoad
 			rlwinm	r11,r11,0,floatCngbit+1,floatCngbit-1	; Clear the changed bit here
 			lwz		r14,vmmStat(r17)			; Get the status flags
-			mfsprg	r10,0						; Get the per_proc
+			mfsprg	r10,1						; Get the current activation
+			lwz		r10,ACT_PER_PROC(r10)		; Get the per_proc block
 			stw		r11,ACT_MACT_SPF(r26)		; Get the special flags
 			rlwinm	r14,r14,0,vmmFloatCngdb+1,vmmFloatCngdb-1	; Clear the changed flag
 			stw		r11,spcFlags(r10)			; Set per_proc copy of the special flags
@@ -602,11 +613,12 @@ swvmNoNewFloats:
 			
 			eieio								; Make sure this stays in order
 			
-			lis		r18,hi16(EXT(per_proc_info))	; Set base per_proc
-			mulli	r19,r19,ppSize				; Find offset to the owner per_proc			
-			ori		r18,r18,lo16(EXT(per_proc_info))	; Set base per_proc
+			lis		r18,hi16(EXT(PerProcTable))	; Set base PerProcTable
+			mulli	r19,r19,ppeSize				; Find offset to the owner per_proc_entry
+			ori		r18,r18,lo16(EXT(PerProcTable))	; Set base PerProcTable
 			li		r16,VMXowner				; Displacement to vector owner
-			add		r19,r18,r19					; Point to the owner per_proc	
+			add		r19,r18,r19					; Point to the owner per_proc_entry
+			lwz		r19,ppe_vaddr(r19)			; Point to the owner per_proc
 			
 swvminvvec:	lwarx	r18,r16,r19					; Get the owner
 
@@ -649,7 +661,8 @@ swvmGotVect:
 			rlwinm	r11,r11,0,vectorCngbit+1,vectorCngbit-1	; Clear the changed bit here
 			stw		r8,savevrvalid(r21)			; Set the current VRSave as valid saved
 			lwz		r14,vmmStat(r17)			; Get the status flags
-			mfsprg	r10,0						; Get the per_proc
+			mfsprg	r10,1						; Get the current activation
+			lwz		r10,ACT_PER_PROC(r10)		; Get the per_proc block
 			stw		r11,ACT_MACT_SPF(r26)		; Get the special flags
 			rlwinm	r14,r14,0,vmmVectCngdb+1,vmmVectCngdb-1	; Clear the changed flag
 			stw		r11,spcFlags(r10)			; Set per_proc copy of the special flags
@@ -657,7 +670,7 @@ swvmGotVect:
 			
 swvmNoNewVects:			
 			li		r3,1						; Show normal exit with check for AST
-			lwz		r16,ACT_THREAD(r26)			; Restore the thread pointer
+			mr		r16,r26			; Restore the thread pointer
 			b		EXT(ppcscret)				; Go back to handler...
 
 			.align	5
@@ -762,7 +775,8 @@ vmmexitcall:
 			stw		r0,vmmCEntry(r16)			; Clear pointer to active context
 			stw		r19,vmmFlags(r2)			; Set the status flags
 			rlwinm	r11,r11,0,userProtKeybit+1,userProtKeybit-1	; Set back to normal protection key
-			mfsprg	r10,0						; Get the per_proc block
+			mfsprg	r10,1						; Get the current activation
+			lwz		r10,ACT_PER_PROC(r10)		; Get the per_proc block
 			rlwinm	r11,r11,0,FamVMenabit+1,FamVMenabit-1	; Clear FamVMEnable
 			lwz		r18,spcFlags(r10)			; Get per_proc copy of the special flags
 			lwz		r5,vmmContextKern(r2)		; Get the state page kernel addr 
@@ -828,7 +842,8 @@ LEXT(vmm_force_exit)
 			beq-	vfeNotRun					; We were not in a vm....
 			rlwinm	r9,r9,0,userProtKeybit+1,userProtKeybit-1	; Set back to normal protection key
 			stw		r0,vmmCEntry(r26)			; Clear pointer to active context
-			mfsprg	r10,0						; Get the per_proc block
+			mfsprg	r10,1						; Get the current activation
+			lwz		r10,ACT_PER_PROC(r10)		; Get the per_proc block
 			lwz		r18,spcFlags(r10)			; Get per_proc copy of the special flags
 			rlwinm	r9,r9,0,FamVMenabit+1,FamVMenabit-1	; Clear Fam Enable
 			rlwinm	r9,r9,0,FamVMmodebit+1,FamVMmodebit-1	; Clear Fam Enable
@@ -1640,7 +1655,8 @@ sw64SC:		ld		r10,vmmppcXr6(r5)			; Get the fourth paramter
 ;
 
 vmmFamGuestResume:
-			mfsprg	r10,0							; Get the per_proc
+			mfsprg	r10,1							; Get the current activation
+			lwz		r10,ACT_PER_PROC(r10)			; Get the per_proc block
 			lwz		r27,vmmCEntry(r3)				; Get the context that is active
 			lwz		r4,VMMXAFlgs(r10)				; Get the eXtended Architecture flags			
 			rlwinm.	r4,r4,0,0,0						; Are we doing a 64-bit virtual machine?		
@@ -1738,7 +1754,7 @@ fgrXNoMap:
 			std		r7,saver7(r30)					; Set savearea r7
 fgrret:
 			li		r3,1							; Show normal exit with check for AST
-			lwz		r16,ACT_THREAD(r26)				; Restore the thread pointer
+			mr		r16,r26				; Restore the thread pointer
 			b		EXT(ppcscret)					; Go back to handler...
 
 ;
@@ -2005,18 +2021,29 @@ fpfXret:
 			std		r2,savesrr0(r13)				; Store famhandler in srr0
 			blr
 
-;
-;			Ultra Fast Path FAM syscalls
-;
+/*
+ *	Ultra Fast Path FAM syscalls
+ *
+ *	The UFT FAMs are those from kvmmResumeGuest to kvmmSetGuestRegister, inclusive.
+ *	We get here directly from the syscall vector, with interrupts and translation off,
+ *	64-bit mode on if supported, and all registers live except:
+ *
+ *	r13   = holds caller's cr
+ *	sprg2 = holds caller's r13
+ *	sprg3 = holds caller's r11
+ *	cr2   = set on (r3==kvmmSetGuestRegister)
+ *	cr5   = set on (r3==kvmmResumeGuest)
+ */
 
 			.align	5
 			.globl	EXT(vmm_ufp)
 
 LEXT(vmm_ufp)
 			mfsprg	r3,0							; Get the per_proc area
-			mr		r11,r13							; Saved cr in r11
+			mr		r11,r13							; Move saved cr to r11
 			lwz		r13,VMMXAFlgs(r3)				; Get the eXtended Architecture flags			
-			rlwinm.	r13,r13,0,0,0						; Are we doing a 64-bit virtual machine?		
+			rlwinm.	r13,r13,0,0,0					; Are we doing a 64-bit virtual machine?		
+
 			lwz		r13,pfAvailable(r3)				; Get feature flags
 			mtcrf	0x02,r13						; Put pf64Bitb etc in cr6
 			lwz		r13,VMMareaPhys(r3)				; Load fast assist area
@@ -2026,12 +2053,11 @@ LEXT(vmm_ufp)
 ufpVMareaPhys64:
 			sldi	r13,r13,12						; Change ppnum to physical address
 ufpVMareaPhysret:
-			bne		ufpX
+			bne		ufpX							; go handle a 64-bit virtual machine
+
 			bt		cr5_eq,ufpResumeGuest			; if kvmmResumeGuest, branch to ResumeGuest
-			cmpwi	cr7,r4,0						; Compare first arg with 0
-			cmpwi	cr5,r4,7						; Compare first arg with 7
-			cror	cr1_eq,cr7_lt,cr5_gt			; Is it in 0 to 7 range
-			beq		cr1,ufpVMret					; Return if not in the range
+			cmplwi	cr5,r4,7						; First argument in range? (ie, 0-7)
+			bgt		cr5,ufpVMret					; Return if not in the range
 			slwi	r4,r4,2							; multiply index by 4
 			la		r3,famguestr0(r13)				; Load the base address
 			bt		cr2_eq,ufpSetGuestReg			; Set/get selector
@@ -2213,12 +2239,10 @@ ufpVMrfi64:
 			mfsprg	r11,3							; Restore R11
 			rfid
 
-ufpX:
+ufpX:                                               ; here if virtual machine is 64-bit
 			bt		cr5_eq,ufpXResumeGuest			; if kvmmResumeGuest, branch to ResumeGuest
-			cmpwi	cr7,r4,0						; Compare first arg with 0
-			cmpwi	cr5,r4,7						; Compare first arg with 7
-			cror	cr1_eq,cr7_lt,cr5_gt			; Is it in 0 to 7 range
-			beq		cr1,ufpXVMret					; Return if not in the range
+			cmplwi	cr5,r4,7						; Is first arg in range 0-7?
+			bgt		cr5,ufpXVMret					; Return if not in the range
 			slwi	r4,r4,3							; multiply index by 8
 			la		r3,famguestXr0(r13)				; Load the base address
 			bt		cr2_eq,ufpXSetGuestReg			; Set/get selector

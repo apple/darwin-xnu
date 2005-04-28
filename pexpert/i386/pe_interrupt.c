@@ -22,9 +22,12 @@
 #include <pexpert/pexpert.h>
 #include <pexpert/protos.h>
 #include <machine/machine_routines.h>
-#include <i386/machine_cpu.h>
 #include <i386/mp.h>
 #include <sys/kdebug.h>
+
+
+void PE_incoming_interrupt(int, void *);
+
 
 struct i386_interrupt_handler {
 	IOInterruptHandler	handler;
@@ -37,10 +40,6 @@ typedef struct i386_interrupt_handler i386_interrupt_handler_t;
 
 i386_interrupt_handler_t	PE_interrupt_handler;
 
-void PE_platform_interrupt_initialize(void)
-{
-}
-
 
 
 void
@@ -49,17 +48,11 @@ PE_incoming_interrupt(int interrupt, void *state)
 	i386_interrupt_handler_t	*vector;
 
 	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_INTR, 0) | DBG_FUNC_START,
-			      0, ((unsigned int *)state)[5], 0, 0, 0);
+			      0, ((unsigned int *)state)[7], 0, 0, 0);
 
 	vector = &PE_interrupt_handler;
 
-	switch (interrupt) {
-	case APIC_ERROR_INTERRUPT:
-	case SPURIOUS_INTERRUPT:
-	case INTERPROCESS_INTERRUPT:
-		lapic_interrupt(interrupt, state);
-		break;
-	default:
+	if (!lapic_interrupt(interrupt, state)) {
 		vector->handler(vector->target, state, vector->nub, interrupt);
 	}
 
@@ -67,7 +60,8 @@ PE_incoming_interrupt(int interrupt, void *state)
 	   0, 0, 0, 0, 0);
 }
 
-void PE_install_interrupt_handler(void *nub, int source,
+void PE_install_interrupt_handler(void *nub,
+				  __unused int source,
 				  void *target,
 				  IOInterruptHandler handler,
 				  void *refCon)

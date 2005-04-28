@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -25,7 +25,6 @@
 
 #include <ppc/asm.h>
 #include <ppc/proc_reg.h>
-#include <cpus.h>
 #include <assym.s>
 #include <debug.h>
 #include <mach/ppc/vm_param.h>
@@ -48,10 +47,11 @@
 			.globl	EXT(machine_load_context)
 
 LEXT(machine_load_context)
-			mfsprg	r6,0
+			mfsprg	r6,1							; Get the current activation
+			lwz		r6,ACT_PER_PROC(r6)				; Get the per_proc block
 			lwz		r0,PP_INTSTACK_TOP_SS(r6)
 			stw		r0,PP_ISTACKPTR(r6)
-			lwz		r9,THREAD_TOP_ACT(r3)			/* Set up the current thread */
+			mr		r9,r3							/* Set up the current thread */
 			mtsprg	1,r9
 			li		r0,0							/* Clear a register */
 			lwz		r3,ACT_MACT_PCB(r9)				/* Get the savearea used */
@@ -78,17 +78,20 @@ LEXT(machine_load_context)
  *
  */
 
-/* void Call_continuation( void (*continuation)(void),  vm_offset_t stack_ptr)
+/* void Call_continuation( void (*continuation)(void),  void *param, wait_result_t wresult, vm_offset_t stack_ptr)
  */
 
 			.align	5
 			.globl	EXT(Call_continuation)
 
 LEXT(Call_continuation)
-
-			mtlr	r3
-			mr		r1, r4							/* Load new stack pointer */
-			blr										/* Jump to the continuation */
+			mtlr	r3								/* continuation */
+			mr		r3,r4							/* parameter */
+			mr		r4,r5							/* wait result */
+			mr		r1,r6							/* Load new stack pointer */
+			blrl									/* Jump to the continuation */
+			mfsprg	r3,1
+			b		EXT(thread_terminate)
 
 /*
  * Get the old kernel stack, and store into the thread structure.
@@ -116,7 +119,7 @@ LEXT(Call_continuation)
 
 LEXT(Switch_context)
 
-			mfsprg	r12,0							; Get the per_proc block
+			lwz		r12,ACT_PER_PROC(r3)			; Get the per_proc block
 #if DEBUG
 			lwz		r0,PP_ISTACKPTR(r12)			; (DEBUG/TRACE) make sure we are not
 			mr.		r0,r0							; (DEBUG/TRACE) on the interrupt
@@ -124,23 +127,25 @@ LEXT(Switch_context)
 			BREAKPOINT_TRAP
 notonintstack:
 #endif	
-			lwz		r5,THREAD_TOP_ACT(r5)			; Get the new activation
 			lwz		r8,ACT_MACT_PCB(r5)				; Get the PCB for the new guy
-			lwz		r9,cioSpace(r5)					; Get copyin/out address space
+			lwz		r9,umwSpace(r5)					; Get user memory window address space
 			cmpwi	cr1,r4,0						; Remeber if there is a continuation - used waaaay down below 
-			lwz		r7,CTHREAD_SELF(r5)				; Pick up the user assist word
+            lwz     r0,CTHREAD_SELF+0(r5)           ; Pick up the user assist "word" (actually a double)
+			lwz		r7,CTHREAD_SELF+4(r5)           ; both halves
 			lwz		r11,ACT_MACT_BTE(r5)			; Get BlueBox Task Environment
-			lwz		r6,cioRelo(r5)					; Get copyin/out relocation top
+			lwz		r6,umwRelo(r5)					; Get user memory window relocation top
+			stw		r12,ACT_PER_PROC(r5)			; Set per_proc in new activation
 			mtsprg	1,r5
-			lwz		r2,cioRelo+4(r5)				; Get copyin/out relocation bottom
+			lwz		r2,umwRelo+4(r5)				; Get user memory window relocation bottom
 			
-			stw		r7,UAW(r12)						; Save the assist word for the "ultra fast path"
+            stw     r0,UAW+0(r12)                   ; Save the assist word for the "ultra fast path"
+			stw		r7,UAW+4(r12)
 
 			lwz		r7,ACT_MACT_SPF(r5)				; Get the special flags
 			
-			sth		r9,ppCIOmp+mpSpace(r12)			; Save the space
-			stw		r6,ppCIOmp+mpNestReloc(r12)		; Save top part of physical address
-			stw		r2,ppCIOmp+mpNestReloc+4(r12)	; Save bottom part of physical address
+			sth		r9,ppUMWmp+mpSpace(r12)			; Save the space
+			stw		r6,ppUMWmp+mpNestReloc(r12)		; Save top part of physical address
+			stw		r2,ppUMWmp+mpNestReloc+4(r12)	; Save bottom part of physical address
 			stw		r11,ppbbTaskEnv(r12)			; Save the bb task env
 			lwz		r2,traceMask(0)					; Get the enabled traces
 			stw		r7,spcFlags(r12)				; Set per_proc copy of the special flags
@@ -150,7 +155,7 @@ notonintstack:
 			ori		r0,r0,lo16(CutTrace)			; Trace FW call
 			beq++	cswNoTrc						; No trace today, dude...
 			mr		r10,r3							; Save across trace
-			lwz		r2,THREAD_TOP_ACT(r3)			; Trace old activation
+			mr		r2,r3							; Trace old activation
 			mr		r3,r11							; Trace prev savearea
 			sc										; Cut trace entry of context switch
 			mr		r3,r10							; Restore
@@ -158,7 +163,6 @@ notonintstack:
 cswNoTrc:	lwz		r2,curctx(r5)					; Grab our current context pointer
 			lwz		r10,FPUowner(r12)				; Grab the owner of the FPU			
 			lwz		r9,VMXowner(r12)				; Grab the owner of the vector
-			lhz		r0,PP_CPU_NUMBER(r12)			; Get our CPU number
 			mfmsr	r6								; Get the MSR because the switched to thread should inherit it 
 			stw		r11,ACT_MACT_PCB(r5)			; Dequeue the savearea we are switching to
 			li		r0,1							; Get set to hold off quickfret
@@ -173,6 +177,7 @@ cswNoTrc:	lwz		r2,curctx(r5)					; Grab our current context pointer
 			bne++	cswnofloat						; Float is not ours...
 			
 			cmplw	r10,r11							; Is the level the same?
+			lhz		r0,PP_CPU_NUMBER(r12)			; Get our CPU number
 			lwz		r5,FPUcpu(r2)					; Get the owning cpu
 			bne++	cswnofloat						; Level not the same, this is not live...
 			
@@ -220,6 +225,7 @@ cswnofloat:	bne++	cr5,cswnovect					; Vector is not ours...
 			lwz		r10,VMXlevel(r2)				; Get the live level
 			
 			cmplw	r10,r11							; Is the level the same?
+			lhz		r0,PP_CPU_NUMBER(r12)			; Get our CPU number
 			lwz		r5,VMXcpu(r2)					; Get the owning cpu
 			bne++	cswnovect						; Level not the same, this is not live...
 			
@@ -270,7 +276,7 @@ cswnovect:	li		r0,0							; Get set to release quickfret holdoff
 
 			lwz		r9,SAVflags(r8)					/* Get the flags */
 			lis		r0,hi16(SwitchContextCall)		/* Top part of switch context */
-			li		r10,MSR_SUPERVISOR_INT_OFF		/* Get the switcher's MSR */
+			li		r10,(MASK(MSR_ME)|MASK(MSR_DR)) /* Get the switcher's MSR */
 			ori		r0,r0,lo16(SwitchContextCall)	/* Bottom part of switch context */
 			stw		r10,savesrr1+4(r8)				/* Set up for switch in */
 			rlwinm	r9,r9,0,15,13					/* Reset the syscall flag */
@@ -313,6 +319,8 @@ swtchtocont:
  *			with translation on.  If we could, this should be done in lowmem_vectors
  *			before translation is turned on.  But we can't, dang it!
  *
+ *			switch_in() runs with DR on and IR off
+ *
  *			R3  = switcher's savearea (32-bit virtual)
  *			saver4  = old thread in switcher's save
  *			saver5  = new SRR0 in switcher's save
@@ -331,7 +339,7 @@ LEXT(switch_in)
 			lwz		r5,saver5+4(r3)					; Get the srr0 value 
 			
 	 		mfsprg	r0,2							; Get feature flags 
-			lwz		r9,THREAD_TOP_ACT(r4)			; Get the switched from ACT
+			mr		r9,r4							; Get the switched from ACT
 			lwz		r6,saver6+4(r3)					; Get the srr1 value 
 			rlwinm.	r0,r0,0,pf64Bitb,pf64Bitb		; Check for 64-bit
 			lwz		r10,ACT_MACT_PCB(r9)			; Get the top PCB on the old thread 
@@ -376,7 +384,8 @@ LEXT(fpu_save)
 			mtmsr	r2								; Set the MSR
 			isync
 
-			mfsprg	r6,0							; Get the per_processor block 
+			mfsprg	r6,1							; Get the current activation
+			lwz		r6,ACT_PER_PROC(r6)				; Get the per_proc block
 			lwz		r12,FPUowner(r6)				; Get the context ID for owner
 
 #if FPVECDBG
@@ -428,7 +437,8 @@ fsgoodcpu:	lwz		r3,FPUsave(r12)					; Get the current FPU savearea for the threa
 
 fsneedone:	bl		EXT(save_get)					; Get a savearea for the context
 
-			mfsprg	r6,0							; Get back per_processor block
+			mfsprg	r6,1							; Get the current activation
+			lwz		r6,ACT_PER_PROC(r6)				; Get the per_proc block
 			li		r4,SAVfloat						; Get floating point tag			
 			lwz		r12,FPUowner(r6)				; Get back our thread
 			stb		r4,SAVflags+2(r3)				; Mark this savearea as a float
@@ -485,9 +495,9 @@ LEXT(fpu_switch)
 			stw		r1,0(r3)
 #endif /* DEBUG */
 
-			mfsprg	r26,0							; Get the per_processor block
+			mfsprg	r17,1							; Get the current activation
+			lwz		r26,ACT_PER_PROC(r17)			; Get the per_proc block
 			mfmsr	r19								; Get the current MSR
-			mfsprg	r17,1							; Get the current thread
 			
 			mr		r25,r4							; Save the entry savearea
 			lwz		r22,FPUowner(r26)				; Get the thread that owns the FPU
@@ -578,7 +588,7 @@ fswsync:	lwarx	r19,0,r15						; Get the sync word
 			li		r0,1							; Get the lock
 			cmplwi	cr1,r19,0						; Is it unlocked?
 			stwcx.	r0,0,r15						; Store lock and test reservation
-			cror	cr0_eq,cr1_eq,cr0_eq			; Combine lost reservation and previously locked
+			crand	cr0_eq,cr1_eq,cr0_eq			; Combine lost reservation and previously locked
 			bne--	fswsync							; Try again if lost reservation or locked...
 
 			isync									; Toss speculation
@@ -649,11 +659,12 @@ fsnosave:	lwz		r15,ACT_MACT_PCB(r17)			; Get the current level of the "new" one
 			sc										; (TEST/DEBUG)
 #endif	
 			
-			lis		r18,hi16(EXT(per_proc_info))	; Set base per_proc
-			mulli	r19,r19,ppSize					; Find offset to the owner per_proc			
-			ori		r18,r18,lo16(EXT(per_proc_info))	; Set base per_proc
+			lis		r18,hi16(EXT(PerProcTable))		; Set base PerProcTable
+			mulli	r19,r19,ppeSize					; Find offset to the owner per_proc_entry			
+			ori		r18,r18,lo16(EXT(PerProcTable))	; Set base PerProcTable
 			li		r16,FPUowner					; Displacement to float owner
-			add		r19,r18,r19						; Point to the owner per_proc	
+			add		r19,r18,r19						; Point to the owner per_proc_entry	
+			lwz		r19,ppe_vaddr(r19)				; Point to the owner per_proc	
 			
 fsinvothr:	lwarx	r18,r16,r19						; Get the owner
 			sub		r0,r18,r29						; Subtract one from the other
@@ -866,7 +877,8 @@ LEXT(toss_live_fpu)
 			isync
 			beq+	tlfnotours						; Floats off, can not be live here...
 
-			mfsprg	r8,0							; Get the per proc
+			mfsprg	r8,1							; Get the current activation
+			lwz		r8,ACT_PER_PROC(r8)				; Get the per_proc block
 
 ;
 ;			Note that at this point, since floats are on, we are the owner
@@ -882,11 +894,12 @@ LEXT(toss_live_fpu)
 			mtfsf	0xFF,f1							; Clear it
 
 tlfnotours:	lwz		r11,FPUcpu(r3)					; Get the cpu on which we last loaded context
-			lis		r12,hi16(EXT(per_proc_info))	; Set base per_proc
-			mulli	r11,r11,ppSize					; Find offset to the owner per_proc			
-			ori		r12,r12,lo16(EXT(per_proc_info))	; Set base per_proc
+			lis		r12,hi16(EXT(PerProcTable))		; Set base PerProcTable
+			mulli	r11,r11,ppeSize					; Find offset to the owner per_proc_entry			
+			ori		r12,r12,lo16(EXT(PerProcTable))	; Set base PerProcTable
 			li		r10,FPUowner					; Displacement to float owner
-			add		r11,r12,r11						; Point to the owner per_proc	
+			add		r11,r12,r11						; Point to the owner per_proc_entry	
+			lwz		r11,ppe_vaddr(r11)				; Point to the owner per_proc	
 			
 tlfinvothr:	lwarx	r12,r10,r11						; Get the owner
 
@@ -942,7 +955,8 @@ LEXT(vec_save)
 			mtmsr	r2								; Set the MSR
 			isync
 		
-			mfsprg	r6,0							; Get the per_processor block 
+			mfsprg	r6,1							; Get the current activation
+			lwz		r6,ACT_PER_PROC(r6)				; Get the per_proc block
 			lwz		r12,VMXowner(r6)				; Get the context ID for owner
 
 #if FPVECDBG
@@ -1016,7 +1030,8 @@ vsneedone:	mr.		r10,r10							; Is VRsave set to 0?
 
 			bl		EXT(save_get)					; Get a savearea for the context
 			
-			mfsprg	r6,0							; Get back per_processor block
+			mfsprg	r6,1							; Get the current activation
+			lwz		r6,ACT_PER_PROC(r6)				; Get the per_proc block
 			li		r4,SAVvector					; Get vector tag			
 			lwz		r12,VMXowner(r6)				; Get back our context ID
 			stb		r4,SAVflags+2(r3)				; Mark this savearea as a vector
@@ -1074,9 +1089,9 @@ LEXT(vec_switch)
 			stw		r1,0(r3)
 #endif /* DEBUG */
 
-			mfsprg	r26,0							; Get the per_processor block
+			mfsprg	r17,1							; Get the current activation
+			lwz		r26,ACT_PER_PROC(r17)			; Get the per_proc block
 			mfmsr	r19								; Get the current MSR
-			mfsprg	r17,1							; Get the current thread
 			
 			mr		r25,r4							; Save the entry savearea
 			oris	r19,r19,hi16(MASK(MSR_VEC))		; Enable the vector feature
@@ -1189,7 +1204,7 @@ vswsync:	lwarx	r19,0,r15						; Get the sync word
 			li		r0,1							; Get the lock
 			cmplwi	cr1,r19,0						; Is it unlocked?
 			stwcx.	r0,0,r15						; Store lock and test reservation
-			cror	cr0_eq,cr1_eq,cr0_eq			; Combine lost reservation and previously locked
+			crand	cr0_eq,cr1_eq,cr0_eq			; Combine lost reservation and previously locked
 			bne--	vswsync							; Try again if lost reservation or locked...
 
 			isync									; Toss speculation
@@ -1271,14 +1286,15 @@ vsnosave:	vspltisb v31,-10						; Get 0xF6F6F6F6
 			sc										; (TEST/DEBUG)
 #endif	
 			
-			lis		r18,hi16(EXT(per_proc_info))	; Set base per_proc
+			lis		r18,hi16(EXT(PerProcTable))		; Set base PerProcTable
 			vspltisb v28,-2							; Get 0xFEFEFEFE		   
-			mulli	r19,r19,ppSize					; Find offset to the owner per_proc			
+			mulli	r19,r19,ppeSize					; Find offset to the owner per_proc_entry			
 			vsubuhm	v31,v31,v29						; Get 0xDEDADEDA
-			ori		r18,r18,lo16(EXT(per_proc_info))	; Set base per_proc
+			ori		r18,r18,lo16(EXT(PerProcTable))	; Set base PerProcTable
 			vpkpx	v30,v28,v3						; Get 0x7FFF7FFF
 			li		r16,VMXowner					; Displacement to vector owner
-			add		r19,r18,r19						; Point to the owner per_proc	
+			add		r19,r18,r19						; Point to the owner per_proc_entry	
+			lwz		r19,ppe_vaddr(r19)				; Point to the owner per_proc	
 			vrlb	v31,v31,v29						; Get 0xDEADDEAD	
 			
 vsinvothr:	lwarx	r18,r16,r19						; Get the owner
@@ -1444,7 +1460,8 @@ LEXT(toss_live_vec)
 			isync
 			beq+	tlvnotours						; Vector off, can not be live here...
 
-			mfsprg	r8,0							; Get the per proc
+			mfsprg	r8,1							; Get the current activation
+			lwz		r8,ACT_PER_PROC(r8)				; Get the per_proc block
 
 ;
 ;			Note that at this point, since vecs are on, we are the owner
@@ -1463,11 +1480,12 @@ LEXT(toss_live_vec)
 			mtvscr	v1								; Set the non-java, no saturate status
 
 tlvnotours:	lwz		r11,VMXcpu(r3)					; Get the cpu on which we last loaded context
-			lis		r12,hi16(EXT(per_proc_info))	; Set base per_proc
-			mulli	r11,r11,ppSize					; Find offset to the owner per_proc			
-			ori		r12,r12,lo16(EXT(per_proc_info))	; Set base per_proc
+			lis		r12,hi16(EXT(PerProcTable))		; Set base PerProcTable
+			mulli	r11,r11,ppeSize					; Find offset to the owner per_proc_entry			
+			ori		r12,r12,lo16(EXT(PerProcTable))	; Set base PerProcTable
 			li		r10,VMXowner					; Displacement to vector owner
-			add		r11,r12,r11						; Point to the owner per_proc	
+			add		r11,r12,r11						; Point to the owner per_proc_entry	
+			lwz		r11,ppe_vaddr(r11)				; Point to the owner per_proc	
 			li		r0,0							; Set a 0 to invalidate context
 			
 tlvinvothr:	lwarx	r12,r10,r11						; Get the owner
@@ -1505,11 +1523,12 @@ LEXT(vec_trash)
 			bnelr+									; No, we do nothing...			
 			
 			lwz		r11,VMXcpu(r3)					; Get the cpu on which we last loaded context
-			lis		r12,hi16(EXT(per_proc_info))	; Set base per_proc
-			mulli	r11,r11,ppSize					; Find offset to the owner per_proc			
-			ori		r12,r12,lo16(EXT(per_proc_info))	; Set base per_proc
+			lis		r12,hi16(EXT(PerProcTable))		; Set base PerProcTable
+			mulli	r11,r11,ppeSize					; Find offset to the owner per_proc_entry			
+			ori		r12,r12,lo16(EXT(PerProcTable))	; Set base PerProcTable
 			li		r10,VMXowner					; Displacement to vector owner
-			add		r11,r12,r11						; Point to the owner per_proc	
+			add		r11,r12,r11						; Point to the owner per_proc_entry	
+			lwz		r11,ppe_vaddr(r11)				; Point to the owner per_proc	
 			
 vtinvothr:	lwarx	r12,r10,r11						; Get the owner
 

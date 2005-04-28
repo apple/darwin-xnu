@@ -59,7 +59,6 @@
  *	Machine-independent exception definitions.
  */
 
-
 #define EXC_BAD_ACCESS		1	/* Could not access memory */
 		/* Code contains kern_return_t describing error. */
 		/* Subcode contains bad memory address. */
@@ -143,6 +142,7 @@
 #define	EXC_SOFT_SIGNAL		0x10003	/* Unix signal exceptions */
 
 #ifndef	ASSEMBLER
+
 #include <mach/port.h>
 #include <mach/thread_status.h>
 #include <mach/machine/vm_types.h>
@@ -161,4 +161,5 @@ typedef thread_state_flavor_t	*exception_flavor_array_t;
 typedef mach_port_t		*exception_port_array_t;
 
 #endif	/* ASSEMBLER */
+
 #endif	/* _MACH_EXCEPTION_TYPES_H_ */

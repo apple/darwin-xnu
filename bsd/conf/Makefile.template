@@ -1,4 +1,26 @@
 #
+# Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+#
+# @APPLE_LICENSE_HEADER_START@
+# 
+# The contents of this file constitute Original Code as defined in and
+# are subject to the Apple Public Source License Version 1.1 (the
+# "License").  You may not use this file except in compliance with the
+# License.  Please obtain a copy of the License at
+# http://www.apple.com/publicsource and read it before using this file.
+# 
+# This Original Code and all software distributed under the License are
+# distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+# EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+# INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+# License for the specific language governing rights and limitations
+# under the License.
+# 
+# @APPLE_LICENSE_HEADER_END@
+#
+
+#
 # Mach Operating System
 # Copyright (c) 1986 Carnegie-Mellon University
 # All rights reserved.  The CMU software License Agreement specifies
@@ -24,7 +46,7 @@ include $(MakeInc_def)
 CFLAGS+= -imacros meta_features.h -DARCH_PRIVATE -DKERNEL -DDRIVER_PRIVATE \
 	-D_KERNEL_BUILD -DKERNEL_BUILD -DMACH_KERNEL -DBSD_BUILD \
 	-DBSD_KERNEL_PRIVATE -DNCPUS=1 -Wno-four-char-constants -fpascal-strings \
-	-D__APPLE__  -I.
+	-D__APPLE__ -DLP64KERN=1 -DLP64_DEBUG=0  -I.
 
 # XXX: ld flags for bsd.o
 export LDFLAGS_COMPONENT += -keep_private_externs
@@ -39,14 +61,6 @@ COMP_SUBDIRS =
 #  time.
 #
 .PRECIOUS: Makefile
-
-VERSION_FILES= \
-	$(SOURCE_DIR)/$(COMPONENT)/conf/version.major  \
-	$(SOURCE_DIR)/$(COMPONENT)/conf/version.minor   \
-	$(SOURCE_DIR)/$(COMPONENT)/conf/version.variant 
-
-COPYRIGHT_FILES = \
-	$(SOURCE_DIR)/$(COMPONENT)/conf/copyright
 
 #
 #  Theses macros are filled in by the config program depending on the
@@ -90,12 +104,8 @@ LDOBJS = $(OBJS)
 
 $(COMPONENT).o: $(LDOBJS)
 	@echo "[ creating $(COMPONENT).o ]"
-	$(RM) $(RMFLAGS) vers.c
-	$(COMPOBJROOT)/newvers \
-	`$(CAT) ${VERSION_FILES}` ${COPYRIGHT_FILES}
-	${KCC} $(CFLAGS) $(INCLUDES) -c vers.c
 	@echo [ updating $(COMPONENT).o ${BSD_KERNEL_CONFIG} ]
-	$(LD)  $(LDFLAGS_COMPONENT) -o $(COMPONENT).o ${LDOBJS} vers.o 
+	$(LD)  $(LDFLAGS_COMPONENT) -o $(COMPONENT).o ${LDOBJS} 
 
 do_depend: do_all
 	${MD} -u Makedep -f -d `ls *.d`;

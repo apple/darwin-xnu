@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -29,14 +29,25 @@
 #ifndef _MACH_SHARED_MEMORY_SERVER_H_
 #define _MACH_SHARED_MEMORY_SERVER_H_
 
-#define	SHARED_LIBRARY_SERVER_SUPPORTED
-#define GLOBAL_SHARED_TEXT_SEGMENT 0x90000000
-#define GLOBAL_SHARED_DATA_SEGMENT 0xA0000000
-#define GLOBAL_SHARED_SEGMENT_MASK 0xF0000000
+#include <sys/cdefs.h>
+#include <mach/vm_prot.h>
+#include <mach/vm_types.h>
+#include <mach/mach_types.h>
 
-#define		SHARED_TEXT_REGION_SIZE 0x10000000
-#define		SHARED_DATA_REGION_SIZE 0x10000000
-#define		SHARED_ALTERNATE_LOAD_BASE 0x9000000
+#define VM_PROT_COW  0x8  /* must not interfere with normal prot assignments */
+#define VM_PROT_ZF  0x10  /* must not interfere with normal prot assignments */
+
+
+#if !defined(__LP64__)
+
+#define	SHARED_LIBRARY_SERVER_SUPPORTED
+#define GLOBAL_SHARED_TEXT_SEGMENT	0x90000000
+#define GLOBAL_SHARED_DATA_SEGMENT	0xA0000000
+#define GLOBAL_SHARED_SEGMENT_MASK	0xF0000000
+
+#define	SHARED_TEXT_REGION_SIZE		0x10000000
+#define	SHARED_DATA_REGION_SIZE		0x10000000
+#define	SHARED_ALTERNATE_LOAD_BASE	0x09000000
 
 /* 
  *  Note: the two masks below are useful because the assumption is 
@@ -44,12 +55,8 @@
  *  i.e. if the size is 0x10000000 the object can be mapped at 
  *  0x20000000, or 0x30000000, but not 0x1000000
  */
-#define		SHARED_TEXT_REGION_MASK 0xFFFFFFF
-#define		SHARED_DATA_REGION_MASK 0xFFFFFFF
-
-
-#include <mach/vm_prot.h>
-#include <mach/mach_types.h>
+#define	SHARED_TEXT_REGION_MASK		0x0FFFFFFF
+#define	SHARED_DATA_REGION_MASK		0x0FFFFFFF
 
 #define SHARED_LIB_ALIAS  0x10
 
@@ -66,12 +73,6 @@
 #define SYSTEM_REGION_BACKED 0x2
 
 
-#define load_file_hash(file_object, size) \
-		((((natural_t)file_object) & 0xffffff) % size)
-
-#define VM_PROT_COW  0x8  /* must not interfere with normal prot assignments */
-#define VM_PROT_ZF  0x10  /* must not interfere with normal prot assignments */
-
 struct sf_mapping {
 	vm_offset_t	mapping_offset;
 	vm_size_t	size;
@@ -79,7 +80,49 @@ struct sf_mapping {
 	vm_prot_t	protection;  /* read/write/execute/COW/ZF */
 	vm_offset_t	cksum;
 };
-
 typedef struct sf_mapping sf_mapping_t;
+
+#ifndef KERNEL
+/* load_shared_file and friends is deprecated */
+__BEGIN_DECLS
+int	load_shared_file(char *, caddr_t, u_long,
+		caddr_t *, int, sf_mapping_t *, int *);
+int	reset_shared_file(caddr_t *, int, sf_mapping_t *);
+int	new_system_shared_regions(void);
+__END_DECLS
+#endif /* !KERNEL */
+
+#endif  /* !defined(__LP64__) */
+
+/* 
+ * All shared_region_* declarations are a private interface
+ * between dyld and the kernel.
+ *
+ */
+struct shared_file_mapping_np {
+	mach_vm_address_t	sfm_address;
+	mach_vm_size_t		sfm_size;
+	mach_vm_offset_t	sfm_file_offset;
+	vm_prot_t		sfm_max_prot;
+	vm_prot_t		sfm_init_prot;
+};
+
+struct shared_region_range_np {
+	mach_vm_address_t	srr_address;
+	mach_vm_size_t		srr_size;
+};
+
+#ifndef KERNEL
+
+__BEGIN_DECLS
+int	shared_region_map_file_np(int fd,
+				  uint32_t mappingCount,
+				  const struct shared_file_mapping_np *mappings,
+				  int64_t *slide_p);
+int	shared_region_make_private_np(uint32_t rangeCount,
+				      const struct shared_region_range_np *ranges);
+__END_DECLS
+
+#endif /* !KERNEL */
 
 #endif /* _MACH_SHARED_MEMORY_SERVER_H_ */

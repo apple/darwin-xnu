@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2002-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -59,12 +59,22 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/vnode.h>
+#include <sys/kernel.h>
 #include <sys/malloc.h>
 #include <sys/proc.h>
 #include <sys/queue.h>
 
+
+#include "hfs.h"	/* XXX bringup */
 #include "hfs_cnode.h"
 
+extern lck_attr_t *  hfs_lock_attr;
+extern lck_grp_t *  hfs_mutex_group;
+extern lck_grp_t *  hfs_rwlock_group;
+
+lck_grp_t * chash_lck_grp;
+lck_grp_attr_t * chash_lck_grp_attr;
+lck_attr_t * chash_lck_attr;
 
 /*
  * Structures associated with cnode caching.
@@ -72,7 +82,9 @@
 LIST_HEAD(cnodehashhead, cnode) *cnodehashtbl;
 u_long	cnodehash;		/* size of hash table - 1 */
 #define CNODEHASH(device, inum) (&cnodehashtbl[((device) + (inum)) & cnodehash])
-struct slock hfs_chash_slock;
+
+lck_mtx_t  hfs_chash_mutex;
+
 
 /*
  * Initialize cnode hash table.
@@ -82,7 +94,15 @@ void
 hfs_chashinit()
 {
 	cnodehashtbl = hashinit(desiredvnodes, M_HFSMNT, &cnodehash);
-	simple_lock_init(&hfs_chash_slock);
+
+	chash_lck_grp_attr= lck_grp_attr_alloc_init();
+	lck_grp_attr_setstat(chash_lck_grp_attr);
+	chash_lck_grp  = lck_grp_alloc_init("cnode_hash", chash_lck_grp_attr);
+
+	chash_lck_attr = lck_attr_alloc_init();
+	//lck_attr_setdebug(chash_lck_attr);
+
+	lck_mtx_init(&hfs_chash_mutex, chash_lck_grp, chash_lck_attr);
 }
 
 
@@ -90,123 +110,288 @@ hfs_chashinit()
  * Use the device, inum pair to find the incore cnode.
  *
  * If it is in core, but locked, wait for it.
- *
- * If the requested vnode (fork) is not available, then
- * take a reference on the other vnode (fork) so that
- * the upcoming getnewvnode can not aquire it.
  */
 __private_extern__
-struct cnode *
-hfs_chashget(dev_t dev, ino_t inum, int wantrsrc,
-		struct vnode **vpp, struct vnode **rvpp)
+struct vnode *
+hfs_chash_getvnode(dev_t dev, ino_t inum, int wantrsrc, int skiplock)
 {
-	struct proc *p = current_proc();
 	struct cnode *cp;
 	struct vnode *vp;
 	int error;
+	uint32_t vid;
 
-	*vpp = NULLVP;
-	*rvpp = NULLVP;
 	/* 
 	 * Go through the hash list
 	 * If a cnode is in the process of being cleaned out or being
 	 * allocated, wait for it to be finished and then try again.
 	 */
 loop:
-	simple_lock(&hfs_chash_slock);
+	lck_mtx_lock(&hfs_chash_mutex);
 	for (cp = CNODEHASH(dev, inum)->lh_first; cp; cp = cp->c_hash.le_next) {
 		if ((cp->c_fileid != inum) || (cp->c_dev != dev))
 			continue;
-		if (ISSET(cp->c_flag, C_ALLOC)) {
-			/*
-			 * cnode is being created. Wait for it to finish.
-			 */
-			SET(cp->c_flag, C_WALLOC);
-			simple_unlock(&hfs_chash_slock);
-			(void) tsleep((caddr_t)cp, PINOD, "hfs_chashget-1", 0);
-			goto loop;
-		}	
-		if (ISSET(cp->c_flag, C_TRANSIT)) {
-			/*
-			 * cnode is getting reclaimed wait for
-			 * the operation to complete and return
-			 * error
-			 */
-			SET(cp->c_flag, C_WTRANSIT);
-			simple_unlock(&hfs_chash_slock);
-			(void)tsleep((caddr_t)cp, PINOD, "hfs_chashget-2", 0);
+		/* Wait if cnode is being created or reclaimed. */
+		if (ISSET(cp->c_hflag, H_ALLOC | H_TRANSIT | H_ATTACH)) {
+		        SET(cp->c_hflag, H_WAITING);
+
+			(void) msleep(cp, &hfs_chash_mutex, PDROP | PINOD,
+			              "hfs_chash_getvnode", 0);
 			goto loop;
 		}
-		if (cp->c_flag & (C_NOEXISTS | C_DELETED))
-			continue;
-
 		/*
-		 * Try getting the desired vnode first.  If
-		 * it isn't available then take a reference
-		 * on the other vnode.
+		 * Skip cnodes that are not in the name space anymore
+		 * note that this check is done outside of the proper
+		 * lock to catch nodes already in this state... this
+		 * state must be rechecked after we acquire the cnode lock
 		 */
+		if (cp->c_flag & (C_NOEXISTS | C_DELETED)) {
+			continue;
+		}
+		/* Obtain the desired vnode. */
 		vp = wantrsrc ? cp->c_rsrc_vp : cp->c_vp;
 		if (vp == NULLVP)
-			vp = wantrsrc ? cp->c_vp : cp->c_rsrc_vp;
-		if (vp == NULLVP)
-			panic("hfs_chashget: orphaned cnode in hash");
+			goto exit;
 
-		simple_lock(&vp->v_interlock);
-		simple_unlock(&hfs_chash_slock);
-		if (vget(vp, LK_EXCLUSIVE | LK_INTERLOCK, p))
-			goto loop;
-		else if (cp->c_flag & C_NOEXISTS) {
-			/*
-			 * While we were blocked the cnode got deleted.
+		vid = vnode_vid(vp);
+		lck_mtx_unlock(&hfs_chash_mutex);
+
+		if ((error = vnode_getwithvid(vp, vid))) {
+		        /*
+			 * If vnode is being reclaimed, or has
+			 * already changed identity, no need to wait
 			 */
-			vput(vp);
-			goto loop;
+		        return (NULL);
+		}
+		if (!skiplock && hfs_lock(cp, HFS_EXCLUSIVE_LOCK) != 0) {
+			vnode_put(vp);
+			return (NULL);
 		}
 
-		if (VNODE_IS_RSRC(vp))
-			*rvpp = vp;
-		else
-			*vpp = vp;
 		/*
-		 * Note that vget can block before aquiring the
-		 * cnode lock.  So we need to check if the vnode
-		 * we wanted was created while we blocked.
+		 * Skip cnodes that are not in the name space anymore
+		 * we need to check again with the cnode lock held
+		 * because we may have blocked acquiring the vnode ref
+		 * or the lock on the cnode which would allow the node
+		 * to be unlinked
 		 */
-		if (wantrsrc && *rvpp == NULL && cp->c_rsrc_vp) {
-			error = vget(cp->c_rsrc_vp, 0, p);
-			vrele(*vpp);	/* ref no longer needed */
-			*vpp = NULL;
-			if (error)
-				goto loop;
-			*rvpp = cp->c_rsrc_vp;
+		if (cp->c_flag & (C_NOEXISTS | C_DELETED)) {
+			if (!skiplock)
+		        	hfs_unlock(cp);
+			vnode_put(vp);
 
-		} else if (!wantrsrc && *vpp == NULL && cp->c_vp) {
-			error = vget(cp->c_vp, 0, p);
-			vrele(*rvpp);	/* ref no longer needed */
-			*rvpp = NULL;
-			if (error)
-				goto loop;
-			*vpp = cp->c_vp;
-		}
-		return (cp);
+			return (NULL);
+		}			
+		return (vp);
 	}
-	simple_unlock(&hfs_chash_slock);
+exit:
+	lck_mtx_unlock(&hfs_chash_mutex);
 	return (NULL);
 }
 
 
 /*
- * Insert a cnode into the hash table.
+ * Use the device, fileid pair to find the incore cnode.
+ * If no cnode if found one is created
+ *
+ * If it is in core, but locked, wait for it.
+ */
+__private_extern__
+int
+hfs_chash_snoop(dev_t dev, ino_t inum, int (*callout)(const struct cat_desc *,
+                const struct cat_attr *, void *), void * arg)
+{
+	struct cnode *cp;
+	int result = ENOENT;
+
+	/* 
+	 * Go through the hash list
+	 * If a cnode is in the process of being cleaned out or being
+	 * allocated, wait for it to be finished and then try again.
+	 */
+	lck_mtx_lock(&hfs_chash_mutex);
+	for (cp = CNODEHASH(dev, inum)->lh_first; cp; cp = cp->c_hash.le_next) {
+		if ((cp->c_fileid != inum) || (cp->c_dev != dev))
+			continue;
+		/* Skip cnodes being created or reclaimed. */
+		if (!ISSET(cp->c_hflag, H_ALLOC | H_TRANSIT | H_ATTACH)) {
+			result = callout(&cp->c_desc, &cp->c_attr, arg);
+		}
+		break;
+	}
+	lck_mtx_unlock(&hfs_chash_mutex);
+	return (result);
+}
+
+
+/*
+ * Use the device, fileid pair to find the incore cnode.
+ * If no cnode if found one is created
+ *
+ * If it is in core, but locked, wait for it.
+ */
+__private_extern__
+struct cnode *
+hfs_chash_getcnode(dev_t dev, ino_t inum, struct vnode **vpp, int wantrsrc, int skiplock)
+{
+	struct cnode	*cp;
+	struct cnode	*ncp = NULL;
+	vnode_t		vp;
+	uint32_t	vid;
+
+	/* 
+	 * Go through the hash list
+	 * If a cnode is in the process of being cleaned out or being
+	 * allocated, wait for it to be finished and then try again.
+	 */
+loop:
+	lck_mtx_lock(&hfs_chash_mutex);
+
+loop_with_lock:
+	for (cp = CNODEHASH(dev, inum)->lh_first; cp; cp = cp->c_hash.le_next) {
+		if ((cp->c_fileid != inum) || (cp->c_dev != dev))
+			continue;
+		/*
+		 * Wait if cnode is being created, attached to or reclaimed.
+		 */
+		if (ISSET(cp->c_hflag, H_ALLOC | H_ATTACH | H_TRANSIT)) {
+		        SET(cp->c_hflag, H_WAITING);
+
+			(void) msleep(cp, &hfs_chash_mutex, PINOD,
+			              "hfs_chash_getcnode", 0);
+			goto loop_with_lock;
+		}
+		/*
+		 * Skip cnodes that are not in the name space anymore
+		 * note that this check is done outside of the proper
+		 * lock to catch nodes already in this state... this
+		 * state must be rechecked after we acquire the cnode lock
+		 */
+		if (cp->c_flag & (C_NOEXISTS | C_DELETED)) {
+			continue;
+		}
+		vp = wantrsrc ? cp->c_rsrc_vp : cp->c_vp;
+		if (vp == NULL) {
+			/*
+			 * The desired vnode isn't there so tag the cnode.
+			 */
+			SET(cp->c_hflag, H_ATTACH);
+
+			lck_mtx_unlock(&hfs_chash_mutex);
+		} else {
+			vid = vnode_vid(vp);
+
+			lck_mtx_unlock(&hfs_chash_mutex);
+
+			if (vnode_getwithvid(vp, vid))
+		        	goto loop;
+		}
+		if (ncp) {
+		        /*
+			 * someone else won the race to create
+			 * this cnode and add it to the hash
+			 * just dump our allocation
+			 */
+		        FREE_ZONE(ncp, sizeof(struct cnode), M_HFSNODE);
+			ncp = NULL;
+		}
+		if (!skiplock && hfs_lock(cp, HFS_EXCLUSIVE_LOCK) != 0) {
+			if (vp != NULLVP)
+				vnode_put(vp);
+			lck_mtx_lock(&hfs_chash_mutex);
+
+			if (vp == NULLVP)
+			        CLR(cp->c_hflag, H_ATTACH);
+			goto loop_with_lock;
+		}
+		/*
+		 * Skip cnodes that are not in the name space anymore
+		 * we need to check again with the cnode lock held
+		 * because we may have blocked acquiring the vnode ref
+		 * or the lock on the cnode which would allow the node
+		 * to be unlinked
+		 */
+		if (cp->c_flag & (C_NOEXISTS | C_DELETED)) {
+			if (!skiplock)
+				hfs_unlock(cp);
+			if (vp != NULLVP)
+				vnode_put(vp);
+			lck_mtx_lock(&hfs_chash_mutex);
+
+			if (vp == NULLVP)
+			        CLR(cp->c_hflag, H_ATTACH);
+			goto loop_with_lock;
+		}
+		*vpp = vp;
+		return (cp);
+	}
+
+	/* 
+	 * Allocate a new cnode
+	 */
+	if (skiplock)
+		panic("%s - should never get here when skiplock is set \n", __FUNCTION__);
+
+	if (ncp == NULL) {
+		lck_mtx_unlock(&hfs_chash_mutex);
+
+	        MALLOC_ZONE(ncp, struct cnode *, sizeof(struct cnode), M_HFSNODE, M_WAITOK);
+		/*
+		 * since we dropped the chash lock, 
+		 * we need to go back and re-verify
+		 * that this node hasn't come into 
+		 * existence...
+		 */
+		goto loop;
+	}
+	bzero(ncp, sizeof(struct cnode));
+	SET(ncp->c_hflag, H_ALLOC);
+	ncp->c_fileid = inum;
+	ncp->c_dev = dev;
+
+	lck_rw_init(&ncp->c_rwlock, hfs_rwlock_group, hfs_lock_attr);
+	if (!skiplock)
+		(void) hfs_lock(ncp, HFS_EXCLUSIVE_LOCK);
+
+	/* Insert the new cnode with it's H_ALLOC flag set */
+	LIST_INSERT_HEAD(CNODEHASH(dev, inum), ncp, c_hash);
+	lck_mtx_unlock(&hfs_chash_mutex);
+
+	*vpp = NULL;
+	return (ncp);
+}
+
+
+__private_extern__
+void
+hfs_chashwakeup(struct cnode *cp, int hflags)
+{
+	lck_mtx_lock(&hfs_chash_mutex);
+
+	CLR(cp->c_hflag, hflags);
+
+	if (ISSET(cp->c_hflag, H_WAITING)) {
+	        CLR(cp->c_hflag, H_WAITING);
+		wakeup((caddr_t)cp);
+	}
+	lck_mtx_unlock(&hfs_chash_mutex);
+}
+
+
+/*
+ * Re-hash two cnodes in the hash table.
  */
 __private_extern__
 void
-hfs_chashinsert(struct cnode *cp)
+hfs_chash_rehash(struct cnode *cp1, struct cnode *cp2)
 {
-	if (cp->c_fileid != 0) {
-		simple_lock(&hfs_chash_slock);
-		LIST_INSERT_HEAD(CNODEHASH(cp->c_dev, cp->c_fileid), cp, c_hash);
-		simple_unlock(&hfs_chash_slock);
-	}
+	lck_mtx_lock(&hfs_chash_mutex);
+
+	LIST_REMOVE(cp1, c_hash);
+	LIST_REMOVE(cp2, c_hash);
+	LIST_INSERT_HEAD(CNODEHASH(cp1->c_dev, cp1->c_fileid), cp1, c_hash);
+	LIST_INSERT_HEAD(CNODEHASH(cp2->c_dev, cp2->c_fileid), cp2, c_hash);
+
+	lck_mtx_unlock(&hfs_chash_mutex);
 }
 
 
@@ -214,13 +399,56 @@ hfs_chashinsert(struct cnode *cp)
  * Remove a cnode from the hash table.
  */
 __private_extern__
-void
+int
 hfs_chashremove(struct cnode *cp)
 {
-	simple_lock(&hfs_chash_slock);
+	lck_mtx_lock(&hfs_chash_mutex);
+
+	/* Check if a vnode is getting attached */
+	if (ISSET(cp->c_hflag, H_ATTACH)) {
+		lck_mtx_unlock(&hfs_chash_mutex);
+		return (EBUSY);
+	}
 	LIST_REMOVE(cp, c_hash);
 	cp->c_hash.le_next = NULL;
 	cp->c_hash.le_prev = NULL;
-	simple_unlock(&hfs_chash_slock);
+	
+	lck_mtx_unlock(&hfs_chash_mutex);
+	return (0);
 }
 
+/*
+ * Remove a cnode from the hash table and wakeup any waiters.
+ */
+__private_extern__
+void
+hfs_chash_abort(struct cnode *cp)
+{
+	lck_mtx_lock(&hfs_chash_mutex);
+
+	LIST_REMOVE(cp, c_hash);
+	cp->c_hash.le_next = NULL;
+	cp->c_hash.le_prev = NULL;
+
+	CLR(cp->c_hflag, H_ATTACH | H_ALLOC);
+	if (ISSET(cp->c_hflag, H_WAITING)) {
+	        CLR(cp->c_hflag, H_WAITING);
+		wakeup((caddr_t)cp);
+	}
+	lck_mtx_unlock(&hfs_chash_mutex);
+}
+
+
+/*
+ * mark a cnode as in transistion
+ */
+__private_extern__
+void
+hfs_chash_mark_in_transit(struct cnode *cp)
+{
+	lck_mtx_lock(&hfs_chash_mutex);
+
+        SET(cp->c_hflag, H_TRANSIT);
+
+	lck_mtx_unlock(&hfs_chash_mutex);
+}

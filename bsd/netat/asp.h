@@ -32,6 +32,8 @@
 #define _NETAT_ASP_H_
 #include <sys/appleapiopts.h>
 
+#ifdef __APPLE_API_OBSOLETE
+
 #define ASP_Version           0x100
 
 #define ASPFUNC_CloseSess     1
@@ -125,8 +127,7 @@ union asp_primitives {
 	asp_command_ind_t CommandInd;
 };
 
-#ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
+#ifdef KERNEL_PRIVATE
 
 #define ASPSTATE_Close                      0
 #define ASPSTATE_Idle                       1
@@ -214,6 +215,6 @@ typedef struct asp_scb {
 	atevent_t delay_event;
 } asp_scb_t;
 
-#endif /* __APPLE_API_PRIVATE */
-#endif /* KERNEL */
+#endif /* KERNEL_PRIVATE */
+#endif /* __APPLE_API_OBSOLETE */
 #endif /* _NETAT_ASP_H_ */

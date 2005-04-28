@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -85,11 +85,17 @@
 #include <vc.h>
 
 #include <console/video_console.h>
+
+#include <kern/kern_types.h>
+#include <kern/kalloc.h>
 #include <kern/debug.h>
 #include <kern/lock.h>
 #include <kern/spl.h>
-#include <kern/time_out.h>
+#include <kern/thread_call.h>
+
+#include <vm/pmap.h>
 #include <vm/vm_kern.h>
+
 #include <pexpert/pexpert.h>
 
 #include "iso_font.c"
@@ -160,6 +166,8 @@ static int gc_par[MAXPARS], gc_numpars, gc_hanging_cursor, gc_attr, gc_saveattr;
 /* VT100 tab stops & scroll region */
 static char gc_tab_stops[255];
 static int  gc_scrreg_top, gc_scrreg_bottom;
+
+enum { kProgressAcquireDelay = 5 /* secs */ };
 
 enum vt100state_e {
 	ESnormal,		/* Nothing yet                             */
@@ -316,9 +324,9 @@ gc_enable( boolean_t enable )
 		simple_unlock( &gc_buffer_lock );
 		splx( s );
 
-		kfree( (vm_offset_t)buffer_attributes, buffer_size );
-		kfree( (vm_offset_t)buffer_characters, buffer_size );
-		kfree( (vm_offset_t)buffer_colorcodes, buffer_size );
+		kfree( buffer_attributes, buffer_size );
+		kfree( buffer_characters, buffer_size );
+		kfree( buffer_colorcodes, buffer_size );
 	}
 	else
 	{
@@ -344,9 +352,9 @@ gc_enable( boolean_t enable )
 				     buffer_characters == NULL ||
 				     buffer_colorcodes == NULL )
 				{
-					if ( buffer_attributes ) kfree( (vm_offset_t)buffer_attributes, buffer_size );
-					if ( buffer_characters ) kfree( (vm_offset_t)buffer_characters, buffer_size );
-					if ( buffer_colorcodes ) kfree( (vm_offset_t)buffer_colorcodes, buffer_size );
+					if ( buffer_attributes ) kfree( buffer_attributes, buffer_size );
+					if ( buffer_characters ) kfree( buffer_characters, buffer_size );
+					if ( buffer_colorcodes ) kfree( buffer_colorcodes, buffer_size );
 
 					buffer_columns = 0;
 					buffer_rows    = 0;
@@ -424,7 +432,7 @@ gc_initialize(struct vc_info * info)
 	if ( gc_initialized == FALSE )
 	{
 		/* Init our lock */
-		simple_lock_init(&gc_buffer_lock, ETAP_IO_TTY);
+		simple_lock_init(&gc_buffer_lock, 0);
 
 		gc_initialized = TRUE;
 	}
@@ -1550,7 +1558,7 @@ vc_render_font(short newdepth)
 		return;	/* nothing to do */
 	}
 	if (vc_rendered_font) {
-		kfree((vm_offset_t)vc_rendered_font, vc_rendered_font_size);
+		kfree(vc_rendered_font, vc_rendered_font_size);
 	}
 
 	vc_rendered_char_size = ISO_CHAR_HEIGHT * ((newdepth / 8) * ISO_CHAR_WIDTH);
@@ -1705,15 +1713,17 @@ static boolean_t		vc_progress_enable;
 static const unsigned char *    vc_clut;
 static const unsigned char *    vc_clut8;
 static unsigned char            vc_revclut8[256];
-static unsigned int		vc_progress_tick;
+static uint32_t            	vc_progress_interval;
+static uint64_t			vc_progress_deadline;
+static thread_call_data_t	vc_progress_call;
 static boolean_t		vc_needsave;
-static vm_address_t		vc_saveunder;
+static void *			vc_saveunder;
 static vm_size_t		vc_saveunder_len;
 decl_simple_lock_data(,vc_progress_lock)
 
 static void vc_blit_rect(    int x, int y, int width, int height,
                              const unsigned char * dataPtr, const unsigned char * alphaPtr,
-                             vm_address_t backBuffer, boolean_t save, boolean_t static_alpha );
+                             void * backBuffer, boolean_t save, boolean_t static_alpha );
 static void vc_blit_rect_8(  int x, int y, int width, int height,
                              const unsigned char * dataPtr, const unsigned char * alphaPtr,
                              unsigned char * backBuffer, boolean_t save, boolean_t static_alpha );
@@ -1725,14 +1735,14 @@ static void vc_blit_rect_32( int x, int y, int width, int height,
                              unsigned int * backBuffer, boolean_t save, boolean_t static_alpha );
 extern void vc_display_icon( vc_progress_element * desc, const unsigned char * data );
 extern void vc_progress_initialize( vc_progress_element * desc, const unsigned char * data, const unsigned char * clut );
-static void vc_progress_set( boolean_t enable, unsigned int initial_tick );
-static void vc_progress_task( void * arg );
+static void vc_progress_set( boolean_t enable, uint32_t delay );
+static void vc_progress_task( void * arg0, void * arg );
 
 static void vc_blit_rect(	int x, int y,
                                 int width, int height,
                                 const unsigned char * dataPtr,
                                 const unsigned char * alphaPtr,
-                                vm_address_t backBuffer,
+                                void * backBuffer,
                                 boolean_t save, boolean_t static_alpha )
 {
     if(!vinfo.v_depth)
@@ -1927,7 +1937,7 @@ void vc_display_icon( vc_progress_element * desc,
 	    x += ((vinfo.v_width - width) / 2);
 	    y += ((vinfo.v_height - height) / 2);
 	}
-	vc_blit_rect( x, y, width, height, data, NULL, (vm_address_t) NULL, FALSE, TRUE );
+	vc_blit_rect( x, y, width, height, data, NULL, NULL, FALSE, TRUE );
     }
 }
 
@@ -1936,6 +1946,8 @@ vc_progress_initialize( vc_progress_element * desc,
 			const unsigned char * data,
 			const unsigned char * clut )
 {
+	uint64_t	abstime;
+
     if( (!clut) || (!desc) || (!data))
 	return;
     vc_clut = clut;
@@ -1948,16 +1960,20 @@ vc_progress_initialize( vc_progress_element * desc,
                             + vc_progress->count * vc_progress->width * vc_progress->height;
     else
         vc_progress_alpha = NULL;
-    vc_progress_tick = vc_progress->time * hz / 1000;
 
-    simple_lock_init(&vc_progress_lock, ETAP_IO_TTY);
+    thread_call_setup(&vc_progress_call, vc_progress_task, NULL);
+
+    clock_interval_to_absolutetime_interval(vc_progress->time, 1000 * 1000, &abstime);
+    vc_progress_interval = abstime;
+
+    simple_lock_init(&vc_progress_lock, 0);
 }
 
 static void
-vc_progress_set( boolean_t enable, unsigned int initial_tick )
+vc_progress_set( boolean_t enable, uint32_t delay )
 {
     spl_t	     s;
-    vm_address_t     saveBuf = 0;
+    void             *saveBuf = 0;
     vm_size_t        saveLen = 0;
     unsigned int     count;
     unsigned int     index;
@@ -1988,7 +2004,7 @@ vc_progress_set( boolean_t enable, unsigned int initial_tick )
 			}
 		    }
 		}
-		memset( (void *) saveBuf, 0x01, saveLen );
+		memset( saveBuf, 0x01, saveLen );
 		break;
 
 	    case 16 :
@@ -2022,8 +2038,10 @@ vc_progress_set( boolean_t enable, unsigned int initial_tick )
             vc_saveunder_len = saveLen;
             saveBuf	     = 0;
             saveLen 	     = 0;
-            timeout(vc_progress_task, (void *) 0,
-                    initial_tick );
+
+            clock_interval_to_deadline(delay, 1000 * 1000 * 1000 /*second scale*/, &vc_progress_deadline);
+            thread_call_enter_delayed(&vc_progress_call, vc_progress_deadline);
+
         } else {
             if( vc_saveunder) {
                 saveBuf      = vc_saveunder;
@@ -2031,7 +2049,8 @@ vc_progress_set( boolean_t enable, unsigned int initial_tick )
                 vc_saveunder = 0;
                 vc_saveunder_len = 0;
             }
-            untimeout( vc_progress_task, (void *) 0 );
+
+            thread_call_cancel(&vc_progress_call);
         }
     }
 
@@ -2042,7 +2061,7 @@ vc_progress_set( boolean_t enable, unsigned int initial_tick )
         kfree( saveBuf, saveLen );
 }
 
-static void vc_progress_task( void * arg )
+static void vc_progress_task( void * arg0, void * arg )
 {
     spl_t		s;
     int			count = (int) arg;
@@ -2069,12 +2088,12 @@ static void vc_progress_task( void * arg )
 	    y += ((vinfo.v_height - height) / 2);
 	}
 	vc_blit_rect( x, y, width, height,
-			NULL, data, vc_saveunder,
+		      NULL, data, vc_saveunder,
 			vc_needsave, (0 == (4 & vc_progress->flags)) );
         vc_needsave = FALSE;
 
-        timeout( vc_progress_task, (void *) count,
-                 vc_progress_tick );
+        clock_deadline_for_periodic_event(vc_progress_interval, mach_absolute_time(), &vc_progress_deadline);
+        thread_call_enter1_delayed(&vc_progress_call, (void *)count, vc_progress_deadline);
     }
     simple_unlock(&vc_progress_lock);
     splx(s);
@@ -2096,109 +2115,6 @@ static unsigned int lastVideoPhys = 0;
 static unsigned int lastVideoVirt = 0;
 static unsigned int lastVideoSize = 0;
 
-#ifdef __i386__
-void
-initialize_screen(Boot_Video * boot_vinfo, unsigned int op)
-{
-	if ( boot_vinfo )
-	{
-		vinfo.v_name[0]  = 0;
-		vinfo.v_width    = boot_vinfo->v_width;
-		vinfo.v_height   = boot_vinfo->v_height;
-		vinfo.v_depth    = boot_vinfo->v_depth;
-		vinfo.v_rowbytes = boot_vinfo->v_rowBytes;
-		vinfo.v_physaddr = boot_vinfo->v_baseAddr;
-		vinfo.v_baseaddr = vinfo.v_physaddr;
-		vinfo.v_type     = boot_vinfo->v_display;
-
-		if ( (vinfo.v_type == TEXT_MODE) )
-		{
-			// Text mode setup by the booter.
-			gc_ops.initialize   = tc_initialize;
-			gc_ops.enable       = tc_enable;
-			gc_ops.paint_char   = tc_paint_char;
-			gc_ops.clear_screen = tc_clear_screen;
-			gc_ops.scroll_down  = tc_scroll_down;
-			gc_ops.scroll_up    = tc_scroll_up;
-			gc_ops.hide_cursor  = tc_hide_cursor;
-			gc_ops.show_cursor  = tc_show_cursor;
-			gc_ops.update_color = tc_update_color;
-		}
-		else
-
-		{
-			// Graphics mode setup by the booter.
-			gc_ops.initialize   = vc_initialize;
-			gc_ops.enable       = vc_enable;
-			gc_ops.paint_char   = vc_paint_char;
-			gc_ops.scroll_down  = vc_scroll_down;
-			gc_ops.scroll_up    = vc_scroll_up;
-			gc_ops.clear_screen = vc_clear_screen;
-			gc_ops.hide_cursor  = vc_reverse_cursor;
-			gc_ops.show_cursor  = vc_reverse_cursor;
-			gc_ops.update_color = vc_update_color;
-		}
-
-		gc_initialize(&vinfo);
-
-#ifdef GRATEFULDEBUGGER
-		GratefulDebInit((bootBumbleC *)boot_vinfo);	/* Re-initialize GratefulDeb */
-#endif /* GRATEFULDEBUGGER */
-	}
-
-	switch ( op )
-	{
-		case kPEGraphicsMode:
-			panicDialogDesired = TRUE;
-			gc_graphics_boot = TRUE;
-			break;
-
-		case kPETextMode:
-			panicDialogDesired = FALSE;
-			gc_graphics_boot = FALSE;
-			break;
-
-		case kPEAcquireScreen:
-			if ( gc_acquired ) break;
-
-			vc_progress_set( gc_graphics_boot, 2 * hz );
-			gc_enable( !gc_graphics_boot );
-			gc_acquired = TRUE;
-			break;
-
-		case kPEEnableScreen:
-			/* deprecated */
-			break;
-
-		case kPETextScreen:
-			panicDialogDesired = FALSE;
-			if ( gc_acquired      == FALSE ) break;
-			if ( gc_graphics_boot == FALSE ) break;
-
-			vc_progress_set( FALSE, 0 );
-			gc_enable( TRUE );
-			break;
-
-		case kPEDisableScreen:
-			/* deprecated */
-			/* skip break */
-
-		case kPEReleaseScreen:
-			gc_acquired = FALSE;
-			gc_enable( FALSE );
-			vc_progress_set( FALSE, 0 );
-
-			vc_clut8 = NULL;
-#ifdef GRATEFULDEBUGGER
-			GratefulDebInit(0);						/* Stop grateful debugger */
-#endif /* GRATEFULDEBUGGER */
-			break;
-	}
-#ifdef GRATEFULDEBUGGER
-	if ( boot_vinfo ) GratefulDebInit((bootBumbleC *)boot_vinfo);	/* Re initialize GratefulDeb */
-#endif /* GRATEFULDEBUGGER */
-}
-#else
 void
 initialize_screen(Boot_Video * boot_vinfo, unsigned int op)
 {
@@ -2249,7 +2165,11 @@ initialize_screen(Boot_Video * boot_vinfo, unsigned int op)
 			    vinfo.v_physaddr = (fbppage << 12) | (boot_vinfo->v_baseAddr & PAGE_MASK);			/* Get the physical address */
 		    }
     
+#ifdef __i386__
+		    vinfo.v_type     = boot_vinfo->v_display;
+#else
 		    vinfo.v_type = 0;
+#endif
     
 		    fbsize = round_page_32(vinfo.v_height * vinfo.v_rowbytes);			/* Remember size */
     
@@ -2329,7 +2249,7 @@ initialize_screen(Boot_Video * boot_vinfo, unsigned int op)
 		case kPEAcquireScreen:
 			if ( gc_acquired ) break;
 
-			vc_progress_set( gc_graphics_boot, 2 * hz );
+			vc_progress_set( gc_graphics_boot, kProgressAcquireDelay );
 			gc_enable( !gc_graphics_boot );
 			gc_acquired = TRUE;
 			break;
@@ -2366,7 +2286,6 @@ initialize_screen(Boot_Video * boot_vinfo, unsigned int op)
 	if ( boot_vinfo ) GratefulDebInit((bootBumbleC *)boot_vinfo);	/* Re initialize GratefulDeb */
 #endif /* GRATEFULDEBUGGER */
 }
-#endif
 
 void
 refresh_screen(void)

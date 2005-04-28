@@ -271,15 +271,15 @@ routine thread_sample(
 		reply		: mach_port_make_send_t);
 
 /*
- * JMM - Keep etap and processor_set related things at the end
- * because they are likely to be removed.
+ *	ETAP has been removed from the kernel.
  */
-/*
- *	Sets the ETAP trace status of the target thread.
- */
+#if KERNEL_SERVER
+skip;
+#else
 routine	etap_trace_thread(
 		target_act	: thread_act_t;
 		trace_status	: boolean_t);
+#endif
 
 /*
  *	Assign thread to processor set.

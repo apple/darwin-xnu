@@ -60,11 +60,9 @@
  *	Basic initialization for I386 - ISA bus machines.
  */
 
-#include <cpus.h>
 #include <platforms.h>
 #include <mach_kdb.h>
 #include <himem.h>
-#include <fast_idle.h>
 
 #include <mach/i386/vm_param.h>
 
@@ -79,31 +77,36 @@
 #include <kern/misc_protos.h>
 #include <kern/startup.h>
 #include <kern/clock.h>
-#include <kern/time_out.h>
 #include <kern/cpu_data.h>
+#include <kern/machine.h>
 #include <i386/fpu.h>
 #include <i386/ipl.h>
 #include <i386/pio.h>
 #include <i386/misc_protos.h>
-#include <i386/rtclock_entries.h>
 #include <i386/mp.h>
+#include <i386/mtrr.h>
+#include <i386/postcode.h>
 #include <pexpert/i386/boot.h>
 #if	MACH_KDB
 #include <ddb/db_aout.h>
 #endif /* MACH_KDB */
 
-#if	NCPUS > 1
 #include <i386/mp_desc.h>
-#endif	/* NCPUS */
-
-#if	NCPUS > 1
 #include <i386/mp.h>
-#endif	/* NCPUS > 1 */
 
 #include <IOKit/IOPlatformExpert.h>
 
+void	enable_bluebox(void);
+void	disable_bluebox(void);
+
 static void machine_conf(void);
 #include <i386/cpuid.h>
+
+extern int		default_preemption_rate;
+extern int		max_unsafe_quanta;
+extern int		max_poll_quanta;
+extern int		idlehalt;
+extern unsigned int	panic_is_inited;
 
 void
 machine_startup()
@@ -153,24 +156,19 @@ machine_startup()
 #endif /* MACH_KDB */
 
 	if (PE_parse_boot_arg("preempt", &boot_arg)) {
-		extern int default_preemption_rate;
-
 		default_preemption_rate = boot_arg;
 	}
 	if (PE_parse_boot_arg("unsafe", &boot_arg)) {
-		extern int max_unsafe_quanta;
-
 		max_unsafe_quanta = boot_arg;
 	}
 	if (PE_parse_boot_arg("poll", &boot_arg)) {
-		extern int max_poll_quanta;
-
 		max_poll_quanta = boot_arg;
 	}
 	if (PE_parse_boot_arg("yield", &boot_arg)) {
-		extern int sched_poll_yield_shift;
-
 		sched_poll_yield_shift = boot_arg;
+	}
+	if (PE_parse_boot_arg("idlehalt", &boot_arg)) {
+		idlehalt = boot_arg;
 	}
 
 	machine_conf();
@@ -182,17 +180,14 @@ machine_startup()
 	/*
 	 * Start the system.
 	 */
-	setup_main();
-
-	/* Should never return */
+	kernel_bootstrap();
+	/*NOTREACHED*/
 }
 
 
 static void
 machine_conf(void)
 {
-	machine_info.max_cpus = NCPUS;
-	machine_info.avail_cpus = 1;
 	machine_info.memory_size = mem_size;
 }
 
@@ -202,10 +197,6 @@ machine_conf(void)
 void
 machine_init(void)
 {
-	int unit;
-	const char *p;
-	int n;
-
 	/*
 	 * Display CPU identification
 	 */
@@ -213,9 +204,7 @@ machine_init(void)
 	cpuid_feature_display("CPU features", 0);
 
 
-#if	NCPUS > 1
 	smp_init();
-#endif
 
 	/*
 	 * Set up to use floating point.
@@ -226,6 +215,21 @@ machine_init(void)
 	 * Configure clock devices.
 	 */
 	clock_config();
+
+	/*
+	 * Initialize MTRR from boot processor.
+	 */
+	mtrr_init();
+
+	/*
+	 * Set up PAT for boot processor.
+	 */
+	pat_init();
+
+	/*
+	 * Free lowmem pages
+	 */
+	x86_lowmem_free();
 }
 
 /*
@@ -249,8 +253,10 @@ halt_all_cpus(boolean_t reboot)
 		/*
 		 * Tell the BIOS not to clear and test memory.
 		 */
+#if 0 /* XXX fixme */
 		if (!reset_mem_on_reboot)
 			*(unsigned short *)phystokv(0x472) = 0x1234;
+#endif
 
 		printf("MACH Reboot\n");
 		PEHaltRestart( kPERestartCPU );
@@ -264,7 +270,6 @@ halt_all_cpus(boolean_t reboot)
 /*XXX*/
 void fc_get(mach_timespec_t *ts);
 #include <kern/clock.h>
-#include <i386/rtclock_entries.h>
 extern kern_return_t	sysclk_gettime(
 			mach_timespec_t	*cur_time);
 void fc_get(mach_timespec_t *ts) {
@@ -275,7 +280,14 @@ void
 Debugger(
 	const char	*message)
 {
+
+	if (!panic_is_inited) {
+		postcode(PANIC_HLT);
+		asm("hlt");
+	}
+
 	printf("Debugger called: <%s>\n", message);
+	kprintf("Debugger called: <%s>\n", message);
 
 	draw_panic_dialog();
 
@@ -283,34 +295,16 @@ Debugger(
 }
 
 void
-display_syscall(int syscall)
-{
-	printf("System call happened %d\n", syscall);
-}
-
-#if	XPR_DEBUG && (NCPUS == 1)
-
-extern kern_return_t	sysclk_gettime_interrupts_disabled(
-				mach_timespec_t	*cur_time);
-
-int	xpr_time(void)
-{
-        mach_timespec_t	time;
-
-	sysclk_gettime_interrupts_disabled(&time);
-	return(time.tv_sec*1000000 + time.tv_nsec/1000);
-}
-#endif	/* XPR_DEBUG && (NCPUS == 1) */
-
-enable_bluebox()
+enable_bluebox(void)
 {
 }
-disable_bluebox()
+void
+disable_bluebox(void)
 {
 }
 
 char *
-machine_boot_info(char *buf, vm_size_t size)
+machine_boot_info(char *buf, __unused vm_size_t size)
 {
 	*buf ='\0';
 	return buf;

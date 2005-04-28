@@ -66,10 +66,10 @@
  * space.
  */
 #define db_current_task()						\
-		((current_act())? current_act()->task: TASK_NULL)
+		((current_thread())? current_thread()->task: TASK_NULL)
 #define db_current_space()						\
-		((current_act())?\
-			current_act()->task: TASK_NULL)
+		((current_thread())?\
+			current_thread()->task: TASK_NULL)
 #define db_target_space(thr_act, user_space)				\
 		((!(user_space) || ((thr_act)))?\
 			TASK_NULL:					\
@@ -79,24 +79,24 @@
 		((task) == TASK_NULL || (task) == db_current_space())
 
 extern task_t		db_default_task;	/* default target task */
-extern thread_act_t	db_default_act;		/* default target thr_act */
+extern thread_t	db_default_act;		/* default target thr_act */
 
 
 /* Prototypes for functions exported by this module.
  */
 
-int db_lookup_act(thread_act_t target_act);
+int db_lookup_act(thread_t target_act);
 
 int db_lookup_task(task_t target_task);
 
 int db_lookup_task_act(
 	task_t		task,
-	thread_act_t		target_act);
+	thread_t		target_act);
 
-boolean_t db_check_act_address_valid(thread_act_t thr_act);
+boolean_t db_check_act_address_valid(thread_t thr_act);
 
 boolean_t db_get_next_act(
-	thread_act_t		*actp,
+	thread_t		*actp,
 	int		position);
 
 void db_init_default_act(void);

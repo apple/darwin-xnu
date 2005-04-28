@@ -130,7 +130,7 @@ void ddp_brt_init()
 	bzero(at_ddp_brt, sizeof(at_ddp_brt));
 	ddp_brt_sweep_timer = 1;
 #ifdef NOT_USED
-	timeout(ddp_brt_sweep_funnel, (long)0, BRT_SWEEP_INT * SYS_HZ);
+	timeout(ddp_brt_sweep_locked, (long)0, BRT_SWEEP_INT * SYS_HZ);
 #endif
 }
 
@@ -139,17 +139,17 @@ void ddp_brt_shutdown()
 #ifdef NOT_USED
 	bzero(at_ddp_brt, sizeof(at_ddp_brt));
 	if (ddp_brt_sweep_timer)
-		untimeout(ddp_brt_sweep_funnel, 0);
+		untimeout(ddp_brt_sweep_locked, 0);
 #endif
 	ddp_brt_sweep_timer = 0;
 }
 
-/* funneled version */
-void ddp_brt_sweep_funnel()
+/* locked version */
+void ddp_brt_sweep_locked()
 {
-        thread_funnel_set(network_flock, TRUE);
+	atalk_lock();
 	ddp_brt_sweep();
-        thread_funnel_set(network_flock, FALSE);
+	atalk_unlock();
 }
 
 void ddp_brt_sweep()
@@ -182,7 +182,7 @@ void ddp_brt_sweep()
 	  }
 #ifdef NOT_USED
 	/* set up the next sweep... */
-	timeout(ddp_brt_sweep_funnel, (long)0, BRT_SWEEP_INT * SYS_HZ);
+	timeout(ddp_brt_sweep_locked, (long)0, BRT_SWEEP_INT * SYS_HZ);
 #endif
 
 }

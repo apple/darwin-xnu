@@ -35,7 +35,6 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/buf.h>
 #include <sys/ioctl.h>
 #include <sys/tty.h>
 #include <sys/conf.h>
@@ -96,7 +95,7 @@ extern int	kmopen(),kmclose(),kmread(),kmwrite(),kmioctl(),
 
 extern int	cttyopen(), cttyread(), cttywrite(), cttyioctl(), cttyselect();
 
-extern int 	mmread(),mmwrite();
+extern int 	mmread(),mmwrite(),mmioctl();
 #define	mmselect	seltrue
 
 #if 1
@@ -157,8 +156,8 @@ struct cdevsw	cdevsw[] =
     },
     {
 	nulldev,	nulldev,	mmread,		mmwrite,	/* 3*/
-	eno_ioctl,	nulldev,	nulldev,	0,		(select_fcn_t *)mmselect,
-	eno_mmap,		eno_strat,	eno_getc,	eno_putc,	0
+	mmioctl,	nulldev,	nulldev,	0,		(select_fcn_t *)mmselect,
+	eno_mmap,		eno_strat,	eno_getc,	eno_putc,	D_DISK
     },
     {
 	ptsopen,	ptsclose,	ptsread,	ptswrite,	/* 4*/

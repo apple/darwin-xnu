@@ -121,7 +121,14 @@ int     tcp_do_newreno = 0;
 SYSCTL_INT(_net_inet_tcp, OID_AUTO, newreno, CTLFLAG_RW, &tcp_do_newreno,
         0, "Enable NewReno Algorithms");
 
-struct	mbuf *m_copym_with_hdrs __P((struct mbuf*, int, int, int, struct mbuf**, int*));
+int	tcp_packet_chaining = 50;
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, packetchain, CTLFLAG_RW, &tcp_packet_chaining,
+        0, "Enable TCP output packet chaining");
+
+struct	mbuf *m_copym_with_hdrs(struct mbuf*, int, int, int, struct mbuf**, int*);
+static long packchain_newlist = 0;
+static long packchain_looped = 0;
+static long packchain_sent = 0;
 
 
 /* temporary: for testing */
@@ -131,7 +138,25 @@ extern int ipsec_bypass;
 
 extern int slowlink_wsize;	/* window correction for slow links */
 extern u_long  route_generation;
+extern int fw_enable; 		/* firewall is on: disable packet chaining */
+extern int ipsec_bypass;
 
+extern vm_size_t	so_cache_zone_element_size;
+
+static __inline__ u_int16_t
+get_socket_id(struct socket * s)
+{
+	u_int16_t 		val;
+
+	if (so_cache_zone_element_size == 0) {
+		return (0);
+	}
+	val = (u_int16_t)(((u_int32_t)s) / so_cache_zone_element_size);
+	if (val == 0) {
+		val = 0xffff;
+	}
+	return (val);
+}
 
 /*
  * Tcp output routine: figure out what should be sent and send it.
@@ -152,7 +177,7 @@ tcp_output(tp)
 	register struct tcphdr *th;
 	u_char opt[TCP_MAXOLEN];
 	unsigned ipoptlen, optlen, hdrlen;
-	int idle, sendalot;
+	int idle, sendalot, howmuchsent = 0;
 	int maxburst = TCP_MAXBURST;
 	struct rmxp_tao *taop;
 	struct rmxp_tao tao_noncached;
@@ -160,9 +185,13 @@ tcp_output(tp)
 	int    m_off;
 	struct mbuf *m_last = 0;
 	struct mbuf *m_head = 0;
+	struct mbuf *packetlist = 0;
+	struct mbuf *lastpacket = 0;
 #if INET6
 	int isipv6 = tp->t_inpcb->inp_vflag & INP_IPV6 ;
 #endif
+	short packchain_listadd = 0;
+	u_int16_t	socket_id = get_socket_id(so);
 
 
 	/*
@@ -172,11 +201,7 @@ tcp_output(tp)
 	 * to send, then transmit; otherwise, investigate further.
 	 */
 	idle = (tp->snd_max == tp->snd_una);
-#ifdef __APPLE__
 	if (idle && tp->t_rcvtime >= tp->t_rxtcur) {
-#else
-	if (idle && (ticks - tp->t_rcvtime) >= tp->t_rxtcur) {
-#endif
 		/*
 		 * We have been idle for "a while" and no acks are
 		 * expected to clock out any data we send --
@@ -231,7 +256,7 @@ again:
       if ((tp->t_inpcb->inp_route.ro_rt != NULL &&
            (tp->t_inpcb->inp_route.ro_rt->generation_id != route_generation)) || (tp->t_inpcb->inp_route.ro_rt == NULL)) {
 		/* check that the source address is still valid */
-		if (ifa_foraddr(tp->t_inpcb->inp_laddr.s_addr) == NULL) {
+		if (ifa_foraddr(tp->t_inpcb->inp_laddr.s_addr) == 0) {
 			if (tp->t_state >= TCPS_CLOSE_WAIT) {
 				tcp_close(tp);
 				return(EADDRNOTAVAIL);
@@ -250,6 +275,11 @@ again:
 				}
 			}
 
+			if (packetlist) {
+				error = ip_output_list(packetlist, packchain_listadd, tp->t_inpcb->inp_options, &tp->t_inpcb->inp_route,
+    					(so->so_options & SO_DONTROUTE), 0);
+				tp->t_lastchain = 0;
+			}
 			if (so->so_flags & SOF_NOADDRAVAIL)
 				return(EADDRNOTAVAIL);
 			else
@@ -323,6 +353,11 @@ again:
 		off--, len++;
 		if (len > 0 && tp->t_state == TCPS_SYN_SENT &&
 		    taop->tao_ccsent == 0) {
+			if (packetlist) {
+				error = ip_output_list(packetlist, packchain_listadd, tp->t_inpcb->inp_options, &tp->t_inpcb->inp_route,
+    				(so->so_options & SO_DONTROUTE), 0);
+				tp->t_lastchain = 0;
+			}
 		  KERNEL_DEBUG(DBG_FNC_TCP_OUTPUT | DBG_FUNC_END, 0,0,0,0,0);
 		  return 0;
 		}
@@ -363,6 +398,7 @@ again:
 	}
 	if (len > tp->t_maxseg) {
 		len = tp->t_maxseg;
+		howmuchsent += len;
 		sendalot = 1;
 	}
 	if (SEQ_LT(tp->snd_nxt + len, tp->snd_una + so->so_snd.sb_cc))
@@ -469,8 +505,13 @@ again:
 	}
 
 	/*
-	 * No reason to send a segment, just return.
+	 * If there is no reason to send a segment, just return.
+	 * but if there is some packets left in the packet list, send them now.
 	 */
+	if (packetlist) {
+		error = ip_output_list(packetlist, packchain_listadd, tp->t_inpcb->inp_options, &tp->t_inpcb->inp_route,
+    			(so->so_options & SO_DONTROUTE), 0);
+	}
 	KERNEL_DEBUG(DBG_FNC_TCP_OUTPUT | DBG_FUNC_END, 0,0,0,0,0);
 	return (0);
 
@@ -634,6 +675,7 @@ send:
 		 */
 		flags &= ~TH_FIN;
 		len = tp->t_maxopd - optlen - ipoptlen;
+		howmuchsent += len;
 		sendalot = 1;
 	}
 
@@ -798,7 +840,7 @@ send:
 		m->m_data += max_linkhdr;
 		m->m_len = hdrlen;
 	}
-	m->m_pkthdr.rcvif = (struct ifnet *)0;
+	m->m_pkthdr.rcvif = 0;
 #if INET6
 	if (isipv6) {
 		ip6 = mtod(m, struct ip6_hdr *);
@@ -864,6 +906,20 @@ send:
 		win = (long)TCP_MAXWIN << tp->rcv_scale;
 		th->th_win = htons((u_short) (win>>tp->rcv_scale));
 	}
+
+        /*
+         * Adjust the RXWIN0SENT flag - indicate that we have advertised   
+         * a 0 window.  This may cause the remote transmitter to stall.  This
+         * flag tells soreceive() to disable delayed acknowledgements when
+         * draining the buffer.  This can occur if the receiver is attempting
+         * to read more data then can be buffered prior to transmitting on   
+         * the connection.
+         */
+        if (win == 0)
+                tp->t_flags |= TF_RXWIN0SENT;
+        else
+                tp->t_flags &= ~TF_RXWIN0SENT;
+
 	if (SEQ_GT(tp->snd_up, tp->snd_nxt)) {
 		th->th_urp = htons((u_short)(tp->snd_up - tp->snd_nxt));
 		th->th_flags |= TH_URG;
@@ -994,10 +1050,11 @@ send:
 			goto out;
 		}
 #endif /*IPSEC*/
+		m->m_pkthdr.socket_id = socket_id;
 		error = ip6_output(m,
 			    tp->t_inpcb->in6p_outputopts,
 			    &tp->t_inpcb->in6p_route,
-			    (so->so_options & SO_DONTROUTE), NULL, NULL);
+			    (so->so_options & SO_DONTROUTE), NULL, NULL, 0);
 	} else
 #endif /* INET6 */
     {
@@ -1050,9 +1107,49 @@ send:
 	if (ipsec_bypass == 0)
  		ipsec_setsocket(m, so);
 #endif /*IPSEC*/
-	error = ip_output(m, tp->t_inpcb->inp_options, &tp->t_inpcb->inp_route,
-	    (so->so_options & SO_DONTROUTE), 0);
-    }
+
+	/*
+	 * The socket is kept locked while sending out packets in ip_output, even if packet chaining is not active.
+	 */
+
+	m->m_pkthdr.socket_id = socket_id;
+	if (packetlist) {
+		m->m_nextpkt = NULL;
+		lastpacket->m_nextpkt = m;
+		lastpacket = m;
+		packchain_listadd++;
+	}
+	else {
+		m->m_nextpkt = NULL;
+		packchain_newlist++;
+		packetlist = lastpacket = m;
+		packchain_listadd=0;
+	}
+
+       if ((ipsec_bypass == 0) || fw_enable || sendalot == 0 || (tp->t_state != TCPS_ESTABLISHED) || 
+		      (tp->snd_cwnd <= (tp->snd_wnd / 4)) || 
+		      (tp->t_flags & (TH_PUSH | TF_ACKNOW)) || tp->t_force != 0 ||
+		      packchain_listadd >= tcp_packet_chaining) {
+	       	lastpacket->m_nextpkt = 0;
+		error = ip_output_list(packetlist, packchain_listadd, tp->t_inpcb->inp_options, &tp->t_inpcb->inp_route,
+    			(so->so_options & SO_DONTROUTE), 0);
+		tp->t_lastchain = packchain_listadd;
+		packchain_sent++;
+		packetlist = NULL;
+		if (error == 0)
+			howmuchsent = 0;
+	}
+	else {
+		error = 0;
+		packchain_looped++;
+		tcpstat.tcps_sndtotal++;
+		if (win > 0 && SEQ_GT(tp->rcv_nxt+win, tp->rcv_adv))
+			tp->rcv_adv = tp->rcv_nxt + win;
+		tp->last_ack_sent = tp->rcv_nxt;
+		tp->t_flags &= ~(TF_ACKNOW|TF_DELACK);
+		goto again;
+	}
+   }
 	if (error) {
 
 		/*
@@ -1064,15 +1161,19 @@ send:
 			 * No need to check for TH_FIN here because
 			 * the TF_SENTFIN flag handles that case.
 			 */
-			if ((flags & TH_SYN) == 0)
-				tp->snd_nxt -= len;
+			if ((flags & TH_SYN) == 0) 
+				tp->snd_nxt -= howmuchsent;
 		}
+		howmuchsent = 0;
 out:
 		if (error == ENOBUFS) {
                         if (!tp->t_timer[TCPT_REXMT] &&
                              !tp->t_timer[TCPT_PERSIST])
                                 tp->t_timer[TCPT_REXMT] = tp->t_rxtcur;
 			tcp_quench(tp->t_inpcb, 0);
+			if (packetlist)
+				m_freem_list(packetlist);
+			tp->t_lastchain = 0;
 			KERNEL_DEBUG(DBG_FNC_TCP_OUTPUT | DBG_FUNC_END, 0,0,0,0,0);
 			return (0);
 		}
@@ -1084,18 +1185,28 @@ out:
 			 * not do so here.
 			 */
 			tcp_mtudisc(tp->t_inpcb, 0);
+			if (packetlist)
+				m_freem_list(packetlist);
+			tp->t_lastchain = 0;
 			KERNEL_DEBUG(DBG_FNC_TCP_OUTPUT | DBG_FUNC_END, 0,0,0,0,0);
 			return 0;
 		}
 		if ((error == EHOSTUNREACH || error == ENETDOWN)
 		    && TCPS_HAVERCVDSYN(tp->t_state)) {
 			tp->t_softerror = error;
+			if (packetlist)
+				m_freem_list(packetlist);
+			tp->t_lastchain = 0;
 			KERNEL_DEBUG(DBG_FNC_TCP_OUTPUT | DBG_FUNC_END, 0,0,0,0,0);
 			return (0);
 		}
+		if (packetlist)
+			m_freem_list(packetlist);
+		tp->t_lastchain = 0;
 		KERNEL_DEBUG(DBG_FNC_TCP_OUTPUT | DBG_FUNC_END, 0,0,0,0,0);
 		return (error);
 	}
+sentit:
 	tcpstat.tcps_sndtotal++;
 
 	/*
@@ -1109,8 +1220,8 @@ out:
 	tp->last_ack_sent = tp->rcv_nxt;
 	tp->t_flags &= ~(TF_ACKNOW|TF_DELACK);
 
-	KERNEL_DEBUG(DBG_FNC_TCP_OUTPUT | DBG_FUNC_END, 0,0,0,0,0);
-	if (sendalot)
+	KERNEL_DEBUG(DBG_FNC_TCP_OUTPUT | DBG_FUNC_END,0,0,0,0,0);
+	if (sendalot && (!tcp_do_newreno || --maxburst))
 		goto again;
 	return (0);
 }
@@ -1120,7 +1231,6 @@ tcp_setpersist(tp)
 	register struct tcpcb *tp;
 {
 	int t = ((tp->t_srtt >> 2) + tp->t_rttvar) >> 1;
-	int tt;
 
 	if (tp->t_timer[TCPT_REXMT])
 		panic("tcp_setpersist: retransmit pending");

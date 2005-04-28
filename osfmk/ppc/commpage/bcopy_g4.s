@@ -86,7 +86,6 @@
 #include <machine/commpage.h>
 
         .text
-        .globl 	EXT(bcopy_g4)
 
 #define	kMedium		32				// too long for inline loopless code
 #define	kLong		96				// long enough to justify use of Altivec
@@ -615,4 +614,4 @@ LReverseVecUnal:
         bne		cr6,LShortReverse16	// handle last 0-15 bytes iff any
         blr
 
-        COMMPAGE_DESCRIPTOR(bcopy_g4,_COMM_PAGE_BCOPY,kHasAltivec,k64Bit,kCommPageDCBA)
+	COMMPAGE_DESCRIPTOR(bcopy_g4,_COMM_PAGE_BCOPY,kHasAltivec,k64Bit,kCommPageDCBA+kCommPage32)

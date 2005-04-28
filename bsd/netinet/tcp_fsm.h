@@ -99,7 +99,7 @@
 #define	TCPS_HAVEESTABLISHED(s)	((s) >= TCPS_ESTABLISHED)
 #define	TCPS_HAVERCVDFIN(s)	((s) >= TCPS_TIME_WAIT)
 
-#ifdef __APPLE_API_UNSTABLE
+#ifdef KERNEL_PRIVATE
 #ifdef	TCPOUTFLAGS
 /*
  * Flags used when sending segments in tcp_output.
@@ -121,19 +121,19 @@ static u_char	tcp_outflags[TCP_NSTATES] = {
 	TH_ACK,			/* 10, TIME_WAIT */
 };	
 #endif
-#endif /* __APPLE_API_UNSTABLE */
+#endif KERNEL_PRIVATE
 
 #if KPROF
-#ifdef __APPLE_API_PRIVATE
+#ifdef KERNEL_PRIVATE
 int	tcp_acounts[TCP_NSTATES][PRU_NREQ];
-#endif /* __APPLE_API_PRIVATE */
+#endif KERNEL_PRIVATE
 #endif
 
 #ifdef	TCPSTATES
 char *tcpstates[] = {
 	"CLOSED",	"LISTEN",	"SYN_SENT",	"SYN_RCVD",
 	"ESTABLISHED",	"CLOSE_WAIT",	"FIN_WAIT_1",	"CLOSING",
-	"LAST_ACK",	"FIN_WAIT_2",	"TIME_WAIT",
+	"LAST_ACK",	"FIN_WAIT_2",	"TIME_WAIT"
 };
 #endif
 

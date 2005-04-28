@@ -33,8 +33,11 @@
 #include <ppc/pmap.h>
 #include <mach/vm_types.h>
 
-extern addr64_t hash_table_base;
-extern unsigned int hash_table_size;
+extern vm_offset_t	static_memory_end;
+
+extern addr64_t		hash_table_base;
+extern unsigned int	hash_table_size;
+extern int          hash_table_shift;   /* size adjustment: bigger if >0, smaller if <0 */
 
 void hash_table_init(vm_offset_t base, vm_offset_t size);
 

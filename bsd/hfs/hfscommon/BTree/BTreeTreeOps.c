@@ -537,7 +537,7 @@ ErrorExit:
 	(void) ReleaseNode (btreePtr, targetNode);
 	(void) ReleaseNode (btreePtr, &leftNode);
 
-	Panic ("\p InsertLevel: an error occured!");
+	Panic ("\p InsertLevel: an error occurred!");
 
 	return	err;
 

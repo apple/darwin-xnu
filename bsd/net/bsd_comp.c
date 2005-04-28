@@ -146,26 +146,27 @@ struct bsd_db {
 #define BSD_OVHD	2		/* BSD compress overhead/packet */
 #define BSD_INIT_BITS	BSD_MIN_BITS
 
-static void	bsd_clear __P((struct bsd_db *db));
-static int	bsd_check __P((struct bsd_db *db));
-static void	*bsd_alloc __P((u_char *options, int opt_len, int decomp));
-static int	bsd_init_comp_db __P((struct bsd_db *db, u_char *options, int opt_len,
+static void	bsd_clear(struct bsd_db *db);
+static int	bsd_check(struct bsd_db *db);
+static void	*bsd_alloc(u_char *options, int opt_len, int decomp);
+static int	bsd_init_comp_db(struct bsd_db *db, u_char *options,
+			      int opt_len,
 			      int unit, int hdrlen, int mru, int debug,
-			      int decomp));
-static void	*bsd_comp_alloc __P((u_char *options, int opt_len));
-static void	*bsd_decomp_alloc __P((u_char *options, int opt_len));
-static void	bsd_free __P((void *state));
-static int	bsd_comp_init __P((void *state, u_char *options, int opt_len,
-				   int unit, int hdrlen, int debug));
-static int	bsd_decomp_init __P((void *state, u_char *options, int opt_len,
-				     int unit, int hdrlen, int mru, int debug));
-static int	bsd_compress __P((void *state, struct mbuf **mret,
-				  struct mbuf *mp, int slen, int maxolen));
-static void	bsd_incomp __P((void *state, struct mbuf *dmsg));
-static int	bsd_decompress __P((void *state, struct mbuf *cmp,
-				    struct mbuf **dmpp));
-static void	bsd_reset __P((void *state));
-static void	bsd_comp_stats __P((void *state, struct compstat *stats));
+			      int decomp);
+static void	*bsd_comp_alloc(u_char *options, int opt_len);
+static void	*bsd_decomp_alloc(u_char *options, int opt_len);
+static void	bsd_free(void *state);
+static int	bsd_comp_init(void *state, u_char *options, int opt_len,
+				   int unit, int hdrlen, int debug);
+static int	bsd_decomp_init(void *state, u_char *options, int opt_len,
+				     int unit, int hdrlen, int mru, int debug);
+static int	bsd_compress(void *state, struct mbuf **mret,
+				  struct mbuf *mp, int slen, int maxolen);
+static void	bsd_incomp(void *state, struct mbuf *dmsg);
+static int	bsd_decompress(void *state, struct mbuf *cmp,
+				    struct mbuf **dmpp);
+static void	bsd_reset(void *state);
+static void	bsd_comp_stats(void *state, struct compstat *stats);
 
 /*
  * Procedures exported to if_ppp.c.

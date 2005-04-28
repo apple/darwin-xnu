@@ -91,8 +91,7 @@ struct	fddi_header {
 #define FDDIFC_LLC_SYNC         0xd0
 #define	FDDIFC_SMT		0x40
 
-#ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
+#ifdef KERNEL_PRIVATE
 #define	fddibroadcastaddr	etherbroadcastaddr
 #define	fddi_ipmulticast_min	ether_ipmulticast_min
 #define	fddi_ipmulticast_max	ether_ipmulticast_max
@@ -100,11 +99,10 @@ struct	fddi_header {
 #define	fddi_delmulti		ether_delmulti
 #define	fddi_sprintf		ether_sprintf
 
-void    fddi_ifattach __P((struct ifnet *));
-void    fddi_input __P((struct ifnet *, struct fddi_header *, struct mbuf *));
-int     fddi_output __P((struct ifnet *,
-           struct mbuf *, struct sockaddr *, struct rtentry *)); 
-#endif /* __APPLE_API_PRIVATE */
-#endif
+void    fddi_ifattach(struct ifnet *);
+void    fddi_input(struct ifnet *, struct fddi_header *, struct mbuf *);
+int     fddi_output(struct ifnet *,
+           struct mbuf *, struct sockaddr *, struct rtentry *); 
+#endif KERNEL_PRIVATE
 
-#endif
+#endif _NETINET_IF_FDDI_H_

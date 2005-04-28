@@ -66,7 +66,7 @@
 #include <sys/time.h>
 #include <sys/types.h>
 #include <sys/vnode.h>
-#include <sys/mount.h>
+#include <sys/mount_internal.h>
 #include <sys/namei.h>
 #include <sys/malloc.h>
 #include <sys/ubc.h>
@@ -79,8 +79,8 @@
  * Null layer cache:
  * Each cache entry holds a reference to the lower vnode
  * along with a pointer to the alias vnode.  When an
- * entry is added the lower vnode is VREF'd.  When the
- * alias is removed the lower vnode is vrele'd.
+ * entry is added the lower vnode is vnode_get'd.  When the
+ * alias is removed the lower vnode is vnode_put'd.
  */
 
 #define	NULL_NHASH(vp) \
@@ -101,7 +101,7 @@ nullfs_init()
 }
 
 /*
- * Return a VREF'ed alias for lower vnode if already exists, else 0.
+ * Return a vnode_get'ed alias for lower vnode if already exists, else 0.
  */
 static struct vnode *
 null_node_find(mp, lowervp)
@@ -117,19 +117,15 @@ null_node_find(mp, lowervp)
 	 * Find hash base, and then search the (two-way) linked
 	 * list looking for a null_node structure which is referencing
 	 * the lower vnode.  If found, the increment the null_node
-	 * reference count (but NOT the lower vnode's VREF counter).
+	 * reference count (but NOT the lower vnode's vnode_get counter).
 	 */
 	hd = NULL_NHASH(lowervp);
 loop:
 	for (a = hd->lh_first; a != 0; a = a->null_hash.le_next) {
 		if (a->null_lowervp == lowervp && NULLTOV(a)->v_mount == mp) {
 			vp = NULLTOV(a);
-			/*
-			 * We need vget for the VXLOCK
-			 * stuff, but we don't want to lock
-			 * the lower node.
-			 */
-			if (vget(vp, 0, p)) {
+
+			if (vnode_get(vp)) {
 				printf ("null_node_find: vget failed.\n");
 				goto loop;
 			};
@@ -182,7 +178,7 @@ null_node_alloc(mp, lowervp, vpp)
 	};
 	if (vp->v_type == VREG)
 		ubc_info_init(vp);
-	VREF(lowervp);   /* Extra VREF will be vrele'd in null_node_create */
+	vnode_get(lowervp);   /* Extra vnode_get will be vnode_put'd in null_node_create */
 	hd = NULL_NHASH(lowervp);
 	LIST_INSERT_HEAD(hd, xp, null_hash);
 	return 0;
@@ -210,7 +206,7 @@ null_node_create(mp, lowervp, newvpp)
 #ifdef NULLFS_DIAGNOSTIC
 		vprint("null_node_create: exists", NULLTOV(ap));
 #endif
-		/* VREF(aliasvp); --- done in null_node_find */
+		/* vnode_get(aliasvp); --- done in null_node_find */
 	} else {
 		int error;
 
@@ -228,11 +224,11 @@ null_node_create(mp, lowervp, newvpp)
 			return error;
 
 		/*
-		 * aliasvp is already VREF'd by getnewvnode()
+		 * aliasvp is already vnode_get'd by getnewvnode()
 		 */
 	}
 
-	vrele(lowervp);
+	vnode_put(lowervp);
 
 #if DIAGNOSTIC
 	if (lowervp->v_usecount < 1) {
@@ -261,7 +257,7 @@ null_checkvp(vp, fil, lno)
 	struct null_node *a = VTONULL(vp);
 #ifdef notyet
 	/*
-	 * Can't do this check because vop_reclaim runs
+	 * Can't do this check because vnop_reclaim runs
 	 * with a funny vop vector.
 	 */
 	if (vp->v_op != null_vnodeop_p) {

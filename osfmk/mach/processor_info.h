@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -61,6 +61,7 @@
 #ifndef	_MACH_PROCESSOR_INFO_H_
 #define _MACH_PROCESSOR_INFO_H_
 
+#include <mach/message.h>
 #include <mach/machine.h>
 #include <mach/machine/processor_info.h>
 
@@ -98,8 +99,8 @@ struct processor_basic_info {
 
 typedef	struct processor_basic_info	processor_basic_info_data_t;
 typedef struct processor_basic_info	*processor_basic_info_t;
-#define PROCESSOR_BASIC_INFO_COUNT \
-		(sizeof(processor_basic_info_data_t)/sizeof(natural_t))
+#define PROCESSOR_BASIC_INFO_COUNT	((mach_msg_type_number_t) \
+		(sizeof(processor_basic_info_data_t)/sizeof(natural_t)))
 
 struct processor_cpu_load_info {             /* number of ticks while running... */
         unsigned long   cpu_ticks[CPU_STATE_MAX]; /* ... in the given mode */
@@ -107,8 +108,8 @@ struct processor_cpu_load_info {             /* number of ticks while running...
 
 typedef	struct processor_cpu_load_info	processor_cpu_load_info_data_t;
 typedef struct processor_cpu_load_info	*processor_cpu_load_info_t;
-#define PROCESSOR_CPU_LOAD_INFO_COUNT \
-		(sizeof(processor_cpu_load_info_data_t)/sizeof(natural_t))
+#define PROCESSOR_CPU_LOAD_INFO_COUNT	((mach_msg_type_number_t) \
+		(sizeof(processor_cpu_load_info_data_t)/sizeof(natural_t)))
 
 /*
  *	Scaling factor for load_average, mach_factor.
@@ -125,8 +126,8 @@ struct processor_set_basic_info {
 
 typedef	struct processor_set_basic_info	processor_set_basic_info_data_t;
 typedef struct processor_set_basic_info	*processor_set_basic_info_t;
-#define PROCESSOR_SET_BASIC_INFO_COUNT \
-		(sizeof(processor_set_basic_info_data_t)/sizeof(natural_t))
+#define PROCESSOR_SET_BASIC_INFO_COUNT	((mach_msg_type_number_t) \
+		(sizeof(processor_set_basic_info_data_t)/sizeof(natural_t)))
 
 #define PROCESSOR_SET_LOAD_INFO		4	/* scheduling statistics */
 
@@ -139,16 +140,14 @@ struct processor_set_load_info {
 
 typedef struct processor_set_load_info processor_set_load_info_data_t;
 typedef struct processor_set_load_info *processor_set_load_info_t;
-#define PROCESSOR_SET_LOAD_INFO_COUNT	\
-                (sizeof(processor_set_load_info_data_t)/sizeof(natural_t))
+#define PROCESSOR_SET_LOAD_INFO_COUNT	((mach_msg_type_number_t) \
+                (sizeof(processor_set_load_info_data_t)/sizeof(natural_t)))
 
+#ifdef	PRIVATE
 
-/*
- *      New scheduling control interface
- */
 #define PROCESSOR_SET_ENABLED_POLICIES                   3
-#define PROCESSOR_SET_ENABLED_POLICIES_COUNT	\
-		(sizeof(policy_t)/sizeof(natural_t))
+#define PROCESSOR_SET_ENABLED_POLICIES_COUNT ((mach_msg_type_number_t) \
+		(sizeof(policy_t)/sizeof(natural_t)))
 
 #define PROCESSOR_SET_TIMESHARE_DEFAULT                 10
 #define PROCESSOR_SET_TIMESHARE_LIMITS                  11
@@ -158,5 +157,7 @@ typedef struct processor_set_load_info *processor_set_load_info_t;
 
 #define PROCESSOR_SET_FIFO_DEFAULT                      30
 #define PROCESSOR_SET_FIFO_LIMITS                       31
+
+#endif	/* PRIVATE */
 
 #endif	/* _MACH_PROCESSOR_INFO_H_ */

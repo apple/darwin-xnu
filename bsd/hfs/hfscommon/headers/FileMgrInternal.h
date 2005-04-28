@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -151,25 +151,6 @@ union ExtentRecord {
 	HFSPlusExtentRecord 			hfsPlus;
 };
 typedef union ExtentRecord				ExtentRecord;
-/* Universal catalog key */
-
-union CatalogKey {
-	HFSCatalogKey 					hfs;
-	HFSPlusCatalogKey 				hfsPlus;
-};
-typedef union CatalogKey				CatalogKey;
-/* Universal catalog data record */
-
-union CatalogRecord {
-	SInt16 							recordType;
-	HFSCatalogFolder 				hfsFolder;
-	HFSCatalogFile 					hfsFile;
-	HFSCatalogThread 				hfsThread;
-	HFSPlusCatalogFolder 			hfsPlusFolder;
-	HFSPlusCatalogFile 				hfsPlusFile;
-	HFSPlusCatalogThread 			hfsPlusThread;
-};
-typedef union CatalogRecord				CatalogRecord;
 
 
 enum {
@@ -205,10 +186,6 @@ EXTERN_API_C( Boolean )
 IsVCBDirty						(ExtendedVCB *vcb);
 
 
-#define VCB_LOCK_INIT(vcb)		simple_lock_init(&vcb->vcbSimpleLock)
-#define VCB_LOCK(vcb)			simple_lock(&vcb->vcbSimpleLock)
-#define VCB_UNLOCK(vcb)			simple_unlock(&vcb->vcbSimpleLock)
-
 #define	MarkVCBDirty(vcb)		{ ((vcb)->vcbFlags |= 0xFF00); }
 #define	MarkVCBClean(vcb)		{ ((vcb)->vcbFlags &= 0x00FF); }
 #define	IsVCBDirty(vcb)			((Boolean) ((vcb->vcbFlags & 0xFF00) != 0))
@@ -219,12 +196,7 @@ EXTERN_API_C( void )
 ReturnIfError					(OSErr 					result);
 
 #define	ReturnIfError(result)					if ( (result) != noErr ) return (result); else ;
-/*	Test for passed condition and return if true*/
-EXTERN_API_C( void )
-ReturnErrorIf					(Boolean 				condition,
-								 OSErr 					result);
 
-#define	ReturnErrorIf(condition, error)			if ( (condition) )	return( (error) );
 /*	Exit function on error*/
 EXTERN_API_C( void )
 ExitOnError						(OSErr 					result);
@@ -243,21 +215,6 @@ ExchangeFileIDs					(ExtendedVCB *			volume,
 								 HFSCatalogNodeID		destID,
 								 UInt32					srcHint,
 								 UInt32					destHint );
-
-EXTERN_API_C( SInt32 )
-CompareCatalogKeys				(HFSCatalogKey *		searchKey,
-								 HFSCatalogKey *		trialKey);
-
-EXTERN_API_C( SInt32 )
-CompareExtendedCatalogKeys		(HFSPlusCatalogKey *	searchKey,
-								 HFSPlusCatalogKey *	trialKey);
-
-EXTERN_API_C( OSErr )
-InitCatalogCache				(void);
-
-EXTERN_API_C( void )
-InvalidateCatalogCache			(ExtendedVCB *			volume);
-
 
 
 /* BTree Manager Routines*/
@@ -306,10 +263,6 @@ EXTERN_API_C( OSErr )
 BlockMarkFree( ExtendedVCB *vcb, UInt32 startingBlock, UInt32 numBlocks);
 
 EXTERN_API_C( UInt32 )
-FileBytesToBlocks				(SInt64 				numerator,
-								 UInt32 				denominator);
-
-EXTERN_API_C( UInt32 )
 MetaZoneFreeBlocks(ExtendedVCB *vcb);
 
 /*	File Extent Mapping routines*/
@@ -343,8 +296,10 @@ MapFileBlockC					(ExtendedVCB *			vcb,
 								 FCB *					fcb,
 								 size_t 				numberOfBytes,
 								 off_t 					offset,
-								 daddr_t *				startBlock,
+								 daddr64_t *				startBlock,
 								 size_t *				availableBytes);
+
+OSErr HeadTruncateFile(ExtendedVCB  *vcb, FCB  *fcb, UInt32  headblks);
 
 EXTERN_API_C( int )
 AddFileExtent (ExtendedVCB *vcb, FCB *fcb, UInt32 startBlock, UInt32 blockCount);
@@ -356,10 +311,6 @@ NodesAreContiguous				(ExtendedVCB *			vcb,
 								 UInt32					nodeSize);
 #endif
 
-/*	Utility routines*/
-
-EXTERN_API_C( OSErr )
-VolumeWritable					(ExtendedVCB *	vcb);
 
 
 /*	Get the current time in UTC (GMT)*/

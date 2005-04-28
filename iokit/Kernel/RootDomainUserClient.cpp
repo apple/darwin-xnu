@@ -38,6 +38,17 @@ OSDefineMetaClassAndStructors(RootDomainUserClient, IOUserClient)
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
+bool RootDomainUserClient::initWithTask(task_t owningTask, void *security_id, UInt32)
+{
+    if (!super::init())
+	return false;
+
+    fOwningTask = owningTask;
+    task_reference (fOwningTask);    
+    return true;
+}
+
+
 bool RootDomainUserClient::start( IOService * provider )
 {
     assert(OSDynamicCast(IOPMrootDomain, provider));
@@ -49,10 +60,63 @@ bool RootDomainUserClient::start( IOService * provider )
     return true;
 }
 
+IOReturn RootDomainUserClient::secureSleepSystem( int *return_code )
+{
+    int             local_priv = 0;
+    int             admin_priv = 0;
+    IOReturn        ret = kIOReturnNotPrivileged;
+
+    ret = clientHasPrivilege(fOwningTask, kIOClientPrivilegeLocalUser);
+    local_priv = (kIOReturnSuccess == ret);
+    
+    ret = clientHasPrivilege(fOwningTask, kIOClientPrivilegeAdministrator);
+    admin_priv = (kIOReturnSuccess == ret);
+
+    if((local_priv || admin_priv) && fOwner) {
+        *return_code = fOwner->sleepSystem();
+        return kIOReturnSuccess;
+    } else {
+        *return_code = kIOReturnNotPrivileged;
+        return kIOReturnSuccess;
+    }
+
+}
+
+IOReturn RootDomainUserClient::secureSetAggressiveness( 
+    unsigned long   type,
+    unsigned long   newLevel,
+    int             *return_code )
+{
+    int             local_priv = 0;
+    int             admin_priv = 0;
+    IOReturn        ret = kIOReturnNotPrivileged;
+
+    ret = clientHasPrivilege(fOwningTask, kIOClientPrivilegeLocalUser);
+    local_priv = (kIOReturnSuccess == ret);
+    
+    ret = clientHasPrivilege(fOwningTask, kIOClientPrivilegeAdministrator);
+    admin_priv = (kIOReturnSuccess == ret);
+
+    if((local_priv || admin_priv) && fOwner) {
+        *return_code = fOwner->setAggressiveness(type, newLevel);
+        return kIOReturnSuccess;
+    } else {
+        *return_code = kIOReturnNotPrivileged;
+        return kIOReturnSuccess;
+    }
+
+}
+
 
 IOReturn RootDomainUserClient::clientClose( void )
 {
     detach(fOwner);
+    
+    if(fOwningTask) {
+        task_deallocate(fOwningTask);
+        fOwningTask = 0;
+    }   
+    
     return kIOReturnSuccess;
 }
 
@@ -61,13 +125,13 @@ RootDomainUserClient::getTargetAndMethodForIndex( IOService ** targetP, UInt32 i
 {
     static IOExternalMethod sMethods[] = {
         { // kPMSetAggressiveness, 0
-            0, (IOMethod)&IOPMrootDomain::setAggressiveness, kIOUCScalarIScalarO, 2, 0
+            1, (IOMethod)&RootDomainUserClient::secureSetAggressiveness, kIOUCScalarIScalarO, 2, 1
         },
         { // kPMGetAggressiveness, 1
             0, (IOMethod)&IOPMrootDomain::getAggressiveness, kIOUCScalarIScalarO, 1, 1
         },
         { // kPMSleepSystem, 2
-            0, (IOMethod)&IOPMrootDomain::sleepSystem, kIOUCScalarIScalarO, 0, 0
+            1, (IOMethod)&RootDomainUserClient::secureSleepSystem, kIOUCScalarIScalarO, 0, 1
         },
         { // kPMAllowPowerChange, 3
             0, (IOMethod)&IOPMrootDomain::allowPowerChange, kIOUCScalarIScalarO, 1, 0
@@ -85,7 +149,7 @@ RootDomainUserClient::getTargetAndMethodForIndex( IOService ** targetP, UInt32 i
             1, (IOMethod) &RootDomainUserClient::setPreventative, kIOUCScalarIScalarO, 2, 0
         },
     };
-
+    
     if(index >= kNumPMMethods)
     	return NULL;
     else {

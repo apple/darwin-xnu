@@ -133,4 +133,8 @@ routine default_pager_triggers(
 	in	flags			: int;
 	in	trigger_port		: mach_port_t);
 		
+routine default_pager_info_64(
+		default_pager		: mach_port_t;
+	out	info			: default_pager_info_64_t);
+
 

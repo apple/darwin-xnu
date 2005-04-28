@@ -30,7 +30,17 @@
  *	Created.
  */
 
-typedef kern_return_t		(*machdep_call_routine_t)();
+typedef union {
+	kern_return_t		(*args_0)(void);
+	kern_return_t		(*args_1)(uint32_t);
+	kern_return_t		(*args_2)(uint32_t,uint32_t);
+	kern_return_t		(*args_3)(uint32_t,uint32_t,uint32_t);
+	kern_return_t		(*args_4)(uint32_t, uint32_t,uint32_t,uint32_t);
+	kern_return_t		(*args_var)(uint32_t,...);
+} machdep_call_routine_t;
+
+#define MACHDEP_CALL_ROUTINE(func,args)	\
+	{ { .args_ ## args = func }, args }
 
 typedef struct {
     machdep_call_routine_t	routine;
@@ -39,3 +49,11 @@ typedef struct {
 
 extern machdep_call_t		machdep_call_table[];
 extern int			machdep_call_count;
+
+extern kern_return_t		thread_get_cthread_self(void);
+extern kern_return_t		thread_set_cthread_self(uint32_t);
+extern kern_return_t		thread_fast_set_cthread_self(uint32_t);
+extern kern_return_t		thread_set_user_ldt(uint32_t,uint32_t,uint32_t);
+
+extern void			mach25_syscall(struct i386_saved_state *);
+extern void			machdep_syscall(struct i386_saved_state *);

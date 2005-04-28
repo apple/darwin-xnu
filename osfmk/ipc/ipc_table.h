@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -22,72 +22,6 @@
 /*
  * @OSF_COPYRIGHT@
  */
-/*
- * HISTORY
- * 
- * Revision 1.1.1.1  1998/09/22 21:05:28  wsanchez
- * Import of Mac OS X kernel (~semeria)
- *
- * Revision 1.2  1998/05/29 23:50:33  youngwor
- * Added infrastructure for shared port space support
- *
- * Revision 1.1.1.1  1998/03/07 02:26:16  wsanchez
- * Import of OSF Mach kernel (~mburg)
- *
- * Revision 1.1.8.3  1995/01/06  19:46:05  devrcs
- * 	mk6 CR668 - 1.3b26 merge
- * 	64bit cleanup
- * 	[1994/10/14  03:41:41  dwm]
- *
- * Revision 1.1.8.2  1994/09/23  02:12:26  ezf
- * 	change marker to not FREE
- * 	[1994/09/22  21:30:53  ezf]
- * 
- * Revision 1.1.8.1  1994/08/18  23:11:45  widyono
- * 	RT IPC from RT2_SHARED
- * 	[1994/08/18  15:49:24  widyono]
- * 
- * Revision 1.1.6.1  1994/07/29  07:33:22  widyono
- * 	Define default target size, ITS_SIZE_NONE
- * 	[1994/07/28  22:27:01  widyono]
- * 
- * Revision 1.1.2.4  1993/07/22  16:17:33  rod
- * 	Add ANSI prototypes.  CR #9523.
- * 	[1993/07/22  13:33:33  rod]
- * 
- * Revision 1.1.2.3  1993/06/07  22:11:46  jeffc
- * 	CR9176 - ANSI C violations: trailing tokens on CPP
- * 	directives, extra semicolons after decl_ ..., asm keywords
- * 	[1993/06/07  19:02:58  jeffc]
- * 
- * Revision 1.1.2.2  1993/06/02  23:34:02  jeffc
- * 	Added to OSF/1 R1.3 from NMK15.0.
- * 	[1993/06/02  21:11:17  jeffc]
- * 
- * Revision 1.1  1992/09/30  02:29:14  robert
- * 	Initial revision
- * 
- * $EndLog$
- */
-/* CMU_HIST */
-/*
- * Revision 2.5  91/05/14  16:37:52  mrt
- * 	Correcting copyright
- * 
- * Revision 2.4  91/03/16  14:49:01  rpd
- * 	Added ipc_table_realloc.
- * 	[91/03/04            rpd]
- * 
- * Revision 2.3  91/02/05  17:24:19  mrt
- * 	Changed to new Mach copyright
- * 	[91/02/01  15:52:19  mrt]
- * 
- * Revision 2.2  90/06/02  14:52:02  rpd
- * 	Created for new IPC.
- * 	[90/03/26  21:04:35  rpd]
- * 
- */
-/* CMU_ENDHIST */
 /* 
  * Mach Operating System
  * Copyright (c) 1991,1990,1989 Carnegie Mellon University
@@ -127,8 +61,11 @@
 #ifndef	_IPC_IPC_TABLE_H_
 #define	_IPC_IPC_TABLE_H_
 
+#include <mach/mach_types.h>
 #include <mach/boolean.h>
 #include <mach/vm_param.h>
+
+#include <ipc/ipc_types.h>
 
 /*
  *	The is_table_next field of an ipc_space_t points to
@@ -158,15 +95,9 @@
  *	The ipr_size field points to the currently used ipc_table_size.
  */
 
-typedef natural_t ipc_table_index_t;	/* index into tables */
-typedef natural_t ipc_table_elems_t;	/* size of tables */
-
-typedef struct ipc_table_size {
+struct ipc_table_size {
 	ipc_table_elems_t its_size;	/* number of elements in table */
-} *ipc_table_size_t;
-
-#define	ITS_NULL	((ipc_table_size_t) 0)
-#define ITS_SIZE_NONE	-1
+};
 
 extern ipc_table_size_t ipc_table_entries;
 extern ipc_table_size_t ipc_table_dnrequests;
@@ -185,19 +116,19 @@ extern void ipc_table_init(void);
  */
 
 /* Allocate a table */
-extern vm_offset_t ipc_table_alloc(
+extern void * ipc_table_alloc(
 	vm_size_t	size);
 
 /* Reallocate a big table */
-extern vm_offset_t ipc_table_realloc(
+extern void * ipc_table_realloc(
 	vm_size_t	old_size,
-	vm_offset_t	old_table,
+	void *		old_table,
 	vm_size_t	new_size);
 
 /* Free a table */
 extern void ipc_table_free(
 	vm_size_t	size,
-	vm_offset_t	table);
+	void *		table);
 
 #define it_entries_reallocable(its)					\
 	((its)->its_size * sizeof(struct ipc_entry) >= PAGE_SIZE)
@@ -205,23 +136,23 @@ extern void ipc_table_free(
 #define	it_entries_alloc(its)						\
 	((ipc_entry_t)							\
 	ipc_table_alloc(it_entries_reallocable(its) ?			\
-	    round_page_32((its)->its_size * sizeof(struct ipc_entry)) :	\
+	    round_page((its)->its_size * sizeof(struct ipc_entry)) :	\
 	    (its)->its_size * sizeof(struct ipc_entry)			\
 	))
 
 #define	it_entries_realloc(its, table, nits)				\
 	((ipc_entry_t)							\
 	ipc_table_realloc(						\
-	    round_page_32((its)->its_size * sizeof(struct ipc_entry)),	\
-	    (vm_offset_t)(table),					\
-	    round_page_32((nits)->its_size * sizeof(struct ipc_entry))	\
+	    round_page((its)->its_size * sizeof(struct ipc_entry)),	\
+	    (void *)(table),					\
+	    round_page((nits)->its_size * sizeof(struct ipc_entry))	\
 	))
 
 #define	it_entries_free(its, table)					\
 	ipc_table_free(it_entries_reallocable(its) ?			\
-	    round_page_32((its)->its_size * sizeof(struct ipc_entry)) :	\
+	    round_page((its)->its_size * sizeof(struct ipc_entry)) :	\
 	    (its)->its_size * sizeof(struct ipc_entry),			\
-	    (vm_offset_t)(table)					\
+	    (void *)(table)					\
 	)
 
 #define	it_dnrequests_alloc(its)					\
@@ -232,6 +163,6 @@ extern void ipc_table_free(
 #define	it_dnrequests_free(its, table)					\
 	ipc_table_free((its)->its_size *				\
 		       sizeof(struct ipc_port_request),			\
-		       (vm_offset_t)(table))
+		       (void *)(table))
 
 #endif	/* _IPC_IPC_TABLE_H_ */

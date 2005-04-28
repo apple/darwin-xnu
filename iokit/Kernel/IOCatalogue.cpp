@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -46,8 +46,8 @@ extern "C" {
 extern "C" {
 int IODTGetLoaderInfo( char *key, void **infoAddr, int *infoSize );
 extern void IODTFreeLoaderInfo( char *key, void *infoAddr, int infoSize );
-extern void OSRuntimeUnloadCPPForSegment(
-    struct segment_command * segment);
+/* operates on 32 bit segments */
+extern void OSRuntimeUnloadCPPForSegment(struct segment_command * segment);
 };
 
 
@@ -202,7 +202,7 @@ kern_return_t start_prelink_module(UInt32 moduleIndex)
 	    if (depInfo)
 	    {
 		kr = kmod_retain(KMOD_PACK_IDS(id, depInfo->id));
-		kfree((vm_offset_t) depInfo, sizeof(kmod_info_t));
+		kfree(depInfo, sizeof(kmod_info_t));
 	    } else
 		IOLog("%s: NO DEP %s\n", kmod_info->name, str->getCStringNoCopy());
 	}
@@ -275,7 +275,7 @@ extern "C" Boolean kmod_load_request(const char * moduleName, Boolean make_reque
 	// Is the module already loaded?
 	ret = (0 != (kmod_info = kmod_lookupbyname_locked((char *)moduleName)));
 	if (ret) {
-	    kfree((vm_offset_t) kmod_info, sizeof(kmod_info_t));
+	    kfree(kmod_info, sizeof(kmod_info_t));
 	    break;
 	}
 	sym = OSSymbol::withCString(moduleName);
@@ -295,6 +295,7 @@ extern "C" Boolean kmod_load_request(const char * moduleName, Boolean make_reque
             IOLog("IOCatalogue: %s cannot be loaded "
                 "(kmod load function not set).\n",
                 moduleName);
+	    ret = true;
 	    break;
 	}
 
@@ -453,7 +454,6 @@ void IOCatalogue::initialize( void )
 // Initialize the IOCatalog object.
 bool IOCatalogue::init(OSArray * initArray)
 {
-    IORegistryEntry      * entry;
     OSDictionary         * dict;
     
     if ( !super::init() )
@@ -484,10 +484,6 @@ bool IOCatalogue::init(OSArray * initArray)
     clock_interval_to_deadline( 1000, kMillisecondScale );
     thread_call_func_delayed( ping, this, deadline );
 #endif
-
-    entry = IORegistryEntry::getRegistryRoot();
-    if ( entry )
-        entry->setProperty(kIOCatalogueKey, this);
 
     return true;
 }
@@ -841,7 +837,7 @@ IOReturn IOCatalogue::unloadModule( OSString * moduleName ) const
             if ( k_info->stop &&
                  !((ret = k_info->stop(k_info, 0)) == kIOReturnSuccess) ) {
 
-                kfree((vm_offset_t) k_info, sizeof(kmod_info_t));
+                kfree(k_info, sizeof(kmod_info_t));
                 return ret;
            }
             
@@ -850,18 +846,16 @@ IOReturn IOCatalogue::unloadModule( OSString * moduleName ) const
     }
  
     if (k_info) {
-        kfree((vm_offset_t) k_info, sizeof(kmod_info_t));
+        kfree(k_info, sizeof(kmod_info_t));
     }
 
     return ret;
 }
 
-static IOReturn _terminateDrivers( OSArray * array, OSDictionary * matching )
+static IOReturn _terminateDrivers( OSDictionary * matching )
 {
-    OSCollectionIterator * tables;
     OSDictionary         * dict;
     OSIterator           * iter;
-    OSArray              * arrayCopy;
     IOService            * service;
     IOReturn               ret;
 
@@ -900,9 +894,17 @@ static IOReturn _terminateDrivers( OSArray * array, OSDictionary * matching )
     } while( !service && !iter->isValid());
     iter->release();
 
+    return ret;
+}
+
+static IOReturn _removeDrivers( OSArray * array, OSDictionary * matching )
+{
+    OSCollectionIterator * tables;
+    OSDictionary         * dict;
+    OSArray              * arrayCopy;
+    IOReturn               ret = kIOReturnSuccess;
+
     // remove configs from catalog.
-    if ( ret != kIOReturnSuccess ) 
-        return ret;
 
     arrayCopy = OSArray::withCapacity(100);
     if ( !arrayCopy )
@@ -938,9 +940,10 @@ IOReturn IOCatalogue::terminateDrivers( OSDictionary * matching )
 {
     IOReturn ret;
 
-    ret = kIOReturnSuccess;
+    ret = _terminateDrivers(matching);
     IOLockLock( lock );
-    ret = _terminateDrivers(array, matching);
+    if (kIOReturnSuccess == ret)
+	ret = _removeDrivers(array, matching);
     kernelTables->reset();
     IOLockUnlock( lock );
 
@@ -960,9 +963,10 @@ IOReturn IOCatalogue::terminateDriversForModule(
 
     dict->setObject(gIOModuleIdentifierKey, moduleName);
 
+    ret = _terminateDrivers(dict);
     IOLockLock( lock );
-
-    ret = _terminateDrivers(array, dict);
+    if (kIOReturnSuccess == ret)
+	ret = _removeDrivers(array, dict);
     kernelTables->reset();
 
     // Unload the module itself.
@@ -1039,18 +1043,10 @@ void IOCatalogue::reset(void)
 
 bool IOCatalogue::serialize(OSSerialize * s) const
 {
-    bool ret;
-    
     if ( !s )
         return false;
 
-    IOLockLock( lock );
-
-    ret = array->serialize(s);
-
-    IOLockUnlock( lock );
-
-    return ret;
+    return super::serialize(s);
 }
 
 bool IOCatalogue::serializeData(IOOptionBits kind, OSSerialize * s) const
@@ -1122,6 +1118,8 @@ bool IOCatalogue::recordStartupExtensions(void) {
 
 
 /*********************************************************************
+* This function operates on sections retrieved from the currently running
+* 32 bit mach kernel.
 *********************************************************************/
 bool IOCatalogue::addExtensionsFromArchive(OSData * mkext)
 {
@@ -1169,6 +1167,8 @@ bool IOCatalogue::addExtensionsFromArchive(OSData * mkext)
 * This function clears out all references to the in-kernel linker,
 * frees the list of startup extensions in extensionDict, and
 * deallocates the kernel's __KLD segment to reclaim that memory.
+*
+* The segments it operates on are strictly 32 bit segments.
 *********************************************************************/
 kern_return_t IOCatalogue::removeKernelLinker(void) {
     kern_return_t result = KERN_SUCCESS;
@@ -1261,3 +1261,20 @@ finish:
 
     return result;
 }
+
+/*********************************************************************
+* This function stops the catalogue from making kextd requests during
+* shutdown.
+*********************************************************************/
+void IOCatalogue::disableExternalLinker(void) {
+    IOLockLock(gIOKLDLock);
+   /* If kmod_load_extension (the kextd requester function) is in use,
+    * disable new module requests.
+    */
+    if (kmod_load_function == &kmod_load_extension) {
+	kmod_load_function = NULL;
+    }
+
+    IOLockUnlock(gIOKLDLock);
+}
+

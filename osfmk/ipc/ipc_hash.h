@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -60,10 +60,11 @@
 #ifndef	_IPC_IPC_HASH_H_
 #define _IPC_IPC_HASH_H_
 
+#include <mach/port.h>
+#include <mach/mach_types.h>
 #include <mach/boolean.h>
 #include <mach/kern_return.h>
-#include <mach_debug/hash_info.h>
-
+#include <ipc/ipc_types.h>
 /*
  * Exported interfaces
  */
@@ -122,6 +123,8 @@ extern void ipc_hash_init(void);
 #include <mach_ipc_debug.h>
 
 #if	MACH_IPC_DEBUG
+
+#include <mach_debug/hash_info.h>
 
 extern natural_t ipc_hash_info(
 	hash_info_bucket_t	*info,

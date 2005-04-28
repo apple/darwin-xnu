@@ -31,6 +31,8 @@
 #include <kern/processor.h>
 #include <kern/task.h>
 
+#include <ppc/cpu_internal.h>
+#include <ppc/exception.h>
 #include <machine/asm.h>
 #include <machine/db_machdep.h>
 #include <machine/setjmp.h>
@@ -44,7 +46,6 @@
 #include <ddb/db_output.h>
 
 extern jmp_buf_t *db_recover;
-extern struct savearea *saved_state[];
 
 struct savearea ddb_null_kregs;
 
@@ -53,10 +54,7 @@ extern vm_offset_t vm_min_inks_addr;	/* set by db_clone_symtabXXX */
 #define DB_NUMARGS_MAX	5
 
 
-extern  char FixedStackStart[], FixedStackEnd[];
-#define	INFIXEDSTACK(va)							\
-	((((vm_offset_t)(va)) >= (vm_offset_t)&FixedStackStart) &&	\
-	(((vm_offset_t)(va)) < ((vm_offset_t)&FixedStackEnd)))
+#define	INFIXEDSTACK(va)	0							\
 
 #define INKERNELSTACK(va, th) 1
 
@@ -169,31 +167,30 @@ db_ppc_reg_value(
 
 	if (db_option(ap->modif, 'u')) {
 	    if (thr_act == THR_ACT_NULL) {
-		if ((thr_act = current_act()) == THR_ACT_NULL)
+		if ((thr_act = current_thread()) == THR_ACT_NULL)
 		    db_error("no user registers\n");
 	    }
-	    if (thr_act == current_act()) {
+	    if (thr_act == current_thread()) {
 			if (IS_USER_TRAP((&ddb_regs))) dp = vp->valuep;
 			else if (INFIXEDSTACK(ddb_regs.save_r1))
 				db_error("cannot get/set user registers in nested interrupt\n");
 	    }
 	} 
 	else {
-		if (thr_act == THR_ACT_NULL || thr_act == current_act()) {
+		if (thr_act == THR_ACT_NULL || thr_act == current_thread()) {
 			dp = vp->valuep;
 		} 
 		else {
-			if (thr_act->thread &&
-				!(thr_act->thread->state & TH_STACK_HANDOFF) && 
-				thr_act->thread->kernel_stack) {
+			if (thr_act->kernel_stack) {
 				
 				int cpu;
 
-				for (cpu = 0; cpu < NCPUS; cpu++) {
+				for (cpu = 0; cpu < real_ncpus; cpu++) {
 					if (cpu_to_processor(cpu)->state == PROCESSOR_RUNNING &&
-						cpu_to_processor(cpu)->active_thread == thr_act->thread && saved_state[cpu]) {
+						cpu_to_processor(cpu)->active_thread == thr_act &&
+					    PerProcTable[cpu].ppe_vaddr->db_saved_state) {
 						
-						dp = (db_expr_t)(((uint32_t)saved_state[cpu]) +
+						dp = (db_expr_t)(((uint32_t)(PerProcTable[cpu].ppe_vaddr->db_saved_state)) +
 								  (((uint32_t) vp->valuep) -
 								   (uint32_t) &ddb_regs));
 						break;
@@ -202,10 +199,10 @@ db_ppc_reg_value(
 
 				if (dp == 0) dp = &null_reg;
 			} 
-			else if (thr_act->thread && (thr_act->thread->state & TH_STACK_HANDOFF)){
+			else {
 				/* only PC is valid */
 				if (vp->valuep == (int *) &ddb_regs.save_srr0) {
-					dp = (int *)(&thr_act->thread->continuation);
+					dp = (int *)(&thr_act->continuation);
 				} 
 				else {
 					dp = &null_reg;
@@ -216,18 +213,19 @@ db_ppc_reg_value(
 	if (dp == 0) {
 
 	    if (!db_option(ap->modif, 'u')) {
-			for (cpu = 0; cpu < NCPUS; cpu++) {
+			for (cpu = 0; cpu < real_ncpus; cpu++) {
 			    if (cpu_to_processor(cpu)->state == PROCESSOR_RUNNING &&
-			    	cpu_to_processor(cpu)->active_thread == thr_act->thread && saved_state[cpu]) {
-			    	    dp = (int *) (((int)saved_state[cpu]) +
+			    	cpu_to_processor(cpu)->active_thread == thr_act &&
+				    PerProcTable[cpu].ppe_vaddr->db_saved_state) {
+			    	    dp = (int *) (((int)(PerProcTable[cpu].ppe_vaddr->db_saved_state)) +
 						  (((int) vp->valuep) - (int) &ddb_regs));
 					break;
 				}
 			}
 	    }
 	    if (dp == 0) {
-			if (!thr_act || thr_act->mact.pcb == 0) db_error("no pcb\n");
-			dp = (int *)((int)thr_act->mact.pcb + ((int)vp->valuep - (int)&ddb_regs));
+			if (!thr_act || thr_act->machine.pcb == 0) db_error("no pcb\n");
+			dp = (int *)((int)thr_act->machine.pcb + ((int)vp->valuep - (int)&ddb_regs));
 	    }
 	}
 
@@ -301,7 +299,7 @@ db_find_arg(
 	int		inst;
 	char 		*name;
 
-#if	XXX_BS
+#if	0
 	db_find_task_sym_and_offset(calleepc, &name, &offset, task);
 	calleep = calleepc-offset;
 
@@ -362,9 +360,9 @@ db_nextframe(
 	    goto miss_frame;
 	    break;
 	case SYSCALL:
-	    if (thr_act != THR_ACT_NULL && thr_act->mact.pcb) {
-		*ip = (db_addr_t) thr_act->mact.pcb->save_srr0;
-		*fp = (struct db_ppc_frame *) (thr_act->mact.pcb->save_r1);
+	    if (thr_act != THR_ACT_NULL && thr_act->machine.pcb) {
+		*ip = (db_addr_t) thr_act->machine.pcb->save_srr0;
+		*fp = (struct db_ppc_frame *) (thr_act->machine.pcb->save_r1);
 		break;
 	    }
 	    /* falling down for unknown case */
@@ -459,7 +457,7 @@ db_stack_trace_cmd(
 			else {
 				th = db_default_act;
 				if (th == THR_ACT_NULL)
-					th = current_act();
+					th = current_thread();
 				if (th == THR_ACT_NULL) {
 					db_printf("no active thr_act\n");
 					return;
@@ -484,7 +482,7 @@ next_thread:
 	    frame = (struct db_ppc_frame *)(ddb_regs.save_r1);
 	    callpc = (db_addr_t)ddb_regs.save_srr0;
 	    linkpc = (db_addr_t)ddb_regs.save_lr;
-	    th = current_act();
+	    th = current_thread();
 	    task = (th != THR_ACT_NULL)? th->task: TASK_NULL;
 	} 
 	else if (trace_thread) {
@@ -496,7 +494,7 @@ next_thread:
 		else {
 			th = db_default_act;
 			if (th == THR_ACT_NULL)
-			   th = current_act();
+			   th = current_thread();
 			if (th == THR_ACT_NULL) {
 			   db_printf("no active thread\n");
 			   return;
@@ -511,30 +509,22 @@ next_activation:
 	    user_frame = 0;
 
 	    task = th->task;
-	    if (th == current_act()) {
+	    if (th == current_thread()) {
 	        frame = (struct db_ppc_frame *)(ddb_regs.save_r1);
 	        callpc = (db_addr_t)ddb_regs.save_srr0;
 			linkpc = (db_addr_t)ddb_regs.save_lr;
 	    } 
 		else {
-			if (th->mact.pcb == 0) {
+			if (th->machine.pcb == 0) {
 		    	db_printf("thread has no pcb\n");
 				goto thread_done;
 			}
-			if (!th->thread) {
+			if (th->kernel_stack == 0) {
 				register struct savearea *pss =
-							th->mact.pcb;
-	
-				db_printf("thread has no shuttle\n");
-				goto thread_done;
-			}
-			else if ((th->thread->state & TH_STACK_HANDOFF) ||
-				  th->thread->kernel_stack == 0) {
-				register struct savearea *pss =
-							th->mact.pcb;
+							th->machine.pcb;
 	
 				db_printf("Continuation ");
-				db_task_printsym((db_expr_t)th->thread->continuation,
+				db_task_printsym((db_expr_t)th->continuation,
 								DB_STGY_PROC, task);
 				db_printf("\n");
 				frame = (struct db_ppc_frame *) (pss->save_r1);
@@ -544,10 +534,10 @@ next_activation:
 			else {
 				int cpu;
 	
-				for (cpu = 0; cpu < NCPUS; cpu++) {
+				for (cpu = 0; cpu < real_ncpus; cpu++) {
 					if (cpu_to_processor(cpu)->state == PROCESSOR_RUNNING &&
-						cpu_to_processor(cpu)->active_thread == th->thread &&
-						saved_state[cpu]) {
+						cpu_to_processor(cpu)->active_thread == th &&
+						PerProcTable[cpu].ppe_vaddr->db_saved_state) {
 						break;
 					}
 				}
@@ -559,16 +549,16 @@ next_activation:
 					 */
 					struct savearea *pss;
 	
-					pss = th->mact.pcb;
+					pss = th->machine.pcb;
 					frame = (struct db_ppc_frame *) (pss->save_r1);
 					callpc = (db_addr_t) (pss->save_srr0);
 					linkpc = (db_addr_t) (pss->save_lr);
 					} else {
-						if (cpu == NCPUS) {
+						if (cpu == real_ncpus) {
 							register struct savearea *iks;
 							int r;
 			
-							iks = th->mact.pcb;
+							iks = th->machine.pcb;
 							prev = db_recover;
 							if ((r = _setjmp(db_recover = &db_jmp_buf)) == 0) {
 								frame = (struct db_ppc_frame *) (iks->save_r1);
@@ -592,16 +582,16 @@ next_activation:
 							db_printf(">>>>> active on cpu %d <<<<<\n",
 								  cpu);
 							frame = (struct db_ppc_frame *)
-							(saved_state[cpu]->save_r1);
-							callpc = (db_addr_t) saved_state[cpu]->save_srr0;
-							linkpc = (db_addr_t) saved_state[cpu]->save_lr;
+							(PerProcTable[cpu].ppe_vaddr->db_saved_state->save_r1);
+							callpc = (db_addr_t) PerProcTable[cpu].ppe_vaddr->db_saved_state->save_srr0;
+							linkpc = (db_addr_t) PerProcTable[cpu].ppe_vaddr->db_saved_state->save_lr;
 						}
 					}
 				}
 	    }
 	} else {
 	    frame = (struct db_ppc_frame *)addr;
-	    th = (db_default_act)? db_default_act: current_act();
+	    th = (db_default_act)? db_default_act: current_thread();
 	    task = (th != THR_ACT_NULL)? th->task: TASK_NULL;
 	    if (frame->f_frame) {
 	      callpc = (db_addr_t)db_get_task_value
@@ -670,7 +660,7 @@ next_activation:
 					goto next_act;
 				}
 			}
-	    	} else {
+	    } else {
 			frame_type = 0;
 			prev = db_recover;
 			if ((r = _setjmp(db_recover = &db_jmp_buf)) == 0) {
@@ -685,11 +675,11 @@ next_activation:
 		}
 
 	    if (name == 0 || offset > db_maxoff) {
-		db_printf("[%08X]0x%08X(", frame, callpc);
+			db_printf("[%08X]0x%08X(", frame, callpc);
 	    } else {
 	        db_printf("[%08X]%s", frame, name);
-		if (offset)
-                        db_printf("+%x", offset);
+			if (offset)
+				db_printf("+%llx", offset);
 	        db_printf("(");
 	   };
 
@@ -747,16 +737,6 @@ next_activation:
 
 	    if (frame == 0) {
 	next_act:
-		if (th->lower != THR_ACT_NULL) {
-		    if (top_act == THR_ACT_NULL)
-			top_act = th;
-		    th = th->lower;
-		    db_printf(">>>>> next activation 0x%x ($task%d.%d) <<<<<\n",
-			      th,
-			      db_lookup_task(th->task),
-			      db_lookup_task_act(th->task, th));
-		    goto next_activation;
-		}
 		/* end of chain */
 		break;
 	    }

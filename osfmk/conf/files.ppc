@@ -30,6 +30,7 @@ osfmk/ppc/cpu.c 			standard
 osfmk/ppc/ppc_init.c		standard
 osfmk/ppc/ppc_vm_init.c		standard
 osfmk/ppc/model_dep.c		standard
+osfmk/ppc/locks_ppc.c			standard
 osfmk/ppc/pmap.c			standard
 osfmk/ppc/mappings.c		standard
 osfmk/ppc/savearea.c		standard
@@ -51,7 +52,6 @@ osfmk/ppc/bzero.s			standard
 osfmk/ppc/bcopy.s			standard
 osfmk/ppc/atomic_switch.s	standard
 osfmk/ppc/PseudoKernel.c	standard
-osfmk/ppc/misc.c			standard
 osfmk/ppc/interrupt.c		standard
 osfmk/ppc/machine_routines.c		standard
 osfmk/ppc/machine_routines_asm.s		standard
@@ -86,6 +86,11 @@ osfmk/ppc/commpage/mach_absolute_time.s	standard
 osfmk/ppc/commpage/pthread.s	standard
 osfmk/ppc/commpage/spinlocks.s	standard
 osfmk/ppc/commpage/bigcopy_970.s	standard
+osfmk/ppc/commpage/atomic.s		standard
+osfmk/ppc/commpage/memset_64.s  standard
+osfmk/ppc/commpage/memset_g3.s  standard
+osfmk/ppc/commpage/memset_g4.s  standard
+osfmk/ppc/commpage/memset_g5.s  standard
 
 osfmk/ppc/chud/chud_osfmk_callback.c	standard
 osfmk/ppc/chud/chud_cpu.c		standard
@@ -105,7 +110,7 @@ osfmk/console/panic_dialog.c	optional	vc device-driver
 osfmk/console/video_console.c	optional	vc device-driver
 osfmk/console/ppc/video_scroll.s	optional	vc device-driver
 
+
 # DUMMIES TO FORCE GENERATION OF .h FILES
-OPTIONS/hi_res_clock		optional hi_res_clock
 OPTIONS/bm			optional bm
 OPTIONS/debug			optional debug

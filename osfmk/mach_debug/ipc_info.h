@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -22,64 +22,6 @@
 /*
  * @OSF_COPYRIGHT@
  */
-/*
- * HISTORY
- * 
- * Revision 1.1.1.1  1998/09/22 21:05:45  wsanchez
- * Import of Mac OS X kernel (~semeria)
- *
- * Revision 1.1.1.1  1998/03/07 02:26:17  wsanchez
- * Import of OSF Mach kernel (~mburg)
- *
- * Revision 1.2.13.2  1995/01/06  19:52:40  devrcs
- * 	mk6 CR668 - 1.3b26 merge
- * 	64bit cleanup
- * 	[1994/10/14  03:43:35  dwm]
- *
- * Revision 1.2.13.1  1994/09/23  02:45:18  ezf
- * 	change marker to not FREE
- * 	[1994/09/22  21:44:05  ezf]
- * 
- * Revision 1.2.3.3  1993/09/09  16:07:52  jeffc
- * 	CR9745 - Delete message accepted notifications
- * 	[1993/09/03  20:45:48  jeffc]
- * 
- * Revision 1.2.3.2  1993/06/09  02:44:43  gm
- * 	Added to OSF/1 R1.3 from NMK15.0.
- * 	[1993/06/02  21:19:04  jeffc]
- * 
- * Revision 1.2  1993/04/19  16:41:20  devrcs
- * 	ansi C conformance changes
- * 	[1993/02/02  18:56:50  david]
- * 
- * Revision 1.1  1992/09/30  02:32:34  robert
- * 	Initial revision
- * 
- * $EndLog$
- */
-/* CMU_HIST */
-/*
- * Revision 2.5.4.2  92/04/08  15:45:00  jeffreyh
- * 	Back out Mainline changes. Revert back to revision 2.5.
- * 	[92/04/07  10:29:40  jeffreyh]
- * 
- * Revision 2.5  91/05/14  17:03:28  mrt
- * 	Correcting copyright
- * 
- * Revision 2.4  91/02/05  17:37:50  mrt
- * 	Changed to new Mach copyright
- * 	[91/02/01  17:28:30  mrt]
- * 
- * Revision 2.3  91/01/08  15:19:05  rpd
- * 	Moved ipc_info_bucket_t to mach_debug/hash_info.h.
- * 	[91/01/02            rpd]
- * 
- * Revision 2.2  90/06/02  15:00:28  rpd
- * 	Created for new IPC.
- * 	[90/03/26  23:45:14  rpd]
- * 
- */
-/* CMU_ENDHIST */
 /* 
  * Mach Operating System
  * Copyright (c) 1991,1990 Carnegie Mellon University
@@ -143,7 +85,7 @@ typedef struct ipc_info_name {
 /*boolean_t*/integer_t iin_collision;	/* collision at this entry? */
 	mach_port_type_t iin_type;	/* straight port type */
 	mach_port_urefs_t iin_urefs;	/* user-references */
-	vm_offset_t iin_object;		/* object pointer */
+	natural_t iin_object;		/* object pointer/identifier */
 	natural_t iin_next;		/* marequest/next in free list */
 	natural_t iin_hash;		/* hash index */
 } ipc_info_name_t;

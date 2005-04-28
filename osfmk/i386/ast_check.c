@@ -50,6 +50,5 @@
 
 /*
  */
-#include <cpus.h>
 #include <platforms.h>
 

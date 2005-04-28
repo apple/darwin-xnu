@@ -41,16 +41,21 @@
 
 #include <mach/mach_types.h>
 #include <mach/machine.h>
+#include <mach/vm_map.h>
 #include <i386/machine_routines.h>
 #include <machine/cpu_capabilities.h>
 #include <machine/commpage.h>
 #include <machine/pmap.h>
 #include <vm/vm_kern.h>
-#include <mach/vm_map.h>
+#include <vm/vm_map.h>
+#include <ipc/ipc_port.h>
 
-static  uintptr_t	next = 0;			// next available byte in comm page
-static  int     	cur_routine = 0;	// comm page address of "current" routine
-static  int     	matched;			// true if we've found a match for "current" routine
+
+extern vm_map_t	com_region_map32;	// the shared submap, set up in vm init
+
+static uintptr_t next = 0;		// next available byte in comm page
+static int     	cur_routine = 0;	// comm page address of "current" routine
+static int     	matched;		// true if we've found a match for "current" routine
 
 int     _cpu_capabilities = 0;          // define the capability vector
 
@@ -66,13 +71,13 @@ char    *commPagePtr = NULL;            // virtual address of comm page in kerne
 static  void*
 commpage_allocate( void )
 {
-    extern  vm_map_t    com_region_map;             // the shared submap, set up in vm init
     vm_offset_t         kernel_addr;                // address of commpage in kernel map
     vm_offset_t         zero = 0;
     vm_size_t           size = _COMM_PAGE_AREA_LENGTH;
+    vm_map_entry_t	entry;
     ipc_port_t          handle;
 
-    if (com_region_map == NULL)
+    if (com_region_map32 == NULL)
         panic("commpage map is null");
 
     if (vm_allocate(kernel_map,&kernel_addr,_COMM_PAGE_AREA_LENGTH,VM_FLAGS_ANYWHERE))
@@ -80,6 +85,18 @@ commpage_allocate( void )
 
     if (vm_map_wire(kernel_map,kernel_addr,kernel_addr+_COMM_PAGE_AREA_LENGTH,VM_PROT_DEFAULT,FALSE))
         panic("cannot wire commpage");
+
+    /* 
+     * Now that the object is created and wired into the kernel map, mark it so that no delay
+     * copy-on-write will ever be performed on it as a result of mapping it into user-space.
+     * If such a delayed copy ever occurred, we could remove the kernel's wired mapping - and
+     * that would be a real disaster.
+     *
+     * JMM - What we really need is a way to create it like this in the first place.
+     */
+    if (!vm_map_lookup_entry( kernel_map, vm_map_trunc_page(kernel_addr), &entry) || entry->is_sub_map)
+	panic("cannot find commpage entry");
+    entry->object.vm_object->copy_strategy = MEMORY_OBJECT_COPY_NONE;
 
     if (mach_make_memory_entry( kernel_map,         // target map
                                 &size,              // size 
@@ -89,7 +106,7 @@ commpage_allocate( void )
                                 NULL ))             // parent_entry (what is this?)
         panic("cannot make entry for commpage");
 
-    if (vm_map_64(  com_region_map,                 // target map (shared submap)
+    if (vm_map_64(  com_region_map32,               // target map (shared submap)
                     &zero,                          // address (map into 1st page in submap)
                     _COMM_PAGE_AREA_LENGTH,         // size
                     0,                              // mask
@@ -109,7 +126,7 @@ commpage_allocate( void )
 
 /* Get address (in kernel map) of a commpage field. */
 
-static  void*
+static void*
 commpage_addr_of(
     int     addr_at_runtime )
 {
@@ -148,7 +165,7 @@ commpage_init_cpu_capabilities( void )
 	
 	switch (cpu_info.vector_unit) {
 		case 5:
-			bits |= kHasPNI;
+			bits |= kHasSSE3;
 			/* fall thru */
 		case 4:
 			bits |= kHasSSE2;
@@ -181,6 +198,8 @@ commpage_init_cpu_capabilities( void )
 
 	bits |= (cpus << kNumCPUsShift);
 
+	bits |= kFastThreadLocalStorage;	// we use %gs for TLS
+
 	_cpu_capabilities = bits;		// set kernel version for use by drivers etc
 }
 
@@ -195,11 +214,21 @@ commpage_stuff(
     void	*dest = commpage_addr_of(address);
     
     if ((uintptr_t)dest < next)
-        panic("commpage overlap");
+        panic("commpage overlap at address 0x%x, 0x%x < 0x%x", address, dest, next);
     
     bcopy(source,dest,length);
     
     next = ((uintptr_t)dest + length);
+}
+
+
+static void
+commpage_stuff2(
+	int address,
+	void *source,
+	int length )
+{
+	commpage_stuff(address, source, length);
 }
 
 /* Copy a routine into comm page if it matches running machine.
@@ -229,6 +258,67 @@ commpage_stuff_routine(
 	}
 }
 
+ 
+#define COMMPAGE_DESC(name)	commpage_ ## name
+#define EXTERN_COMMPAGE_DESC(name)				\
+	extern commpage_descriptor COMMPAGE_DESC(name)
+
+EXTERN_COMMPAGE_DESC(compare_and_swap32_mp);
+EXTERN_COMMPAGE_DESC(compare_and_swap32_up);
+EXTERN_COMMPAGE_DESC(compare_and_swap64_mp);
+EXTERN_COMMPAGE_DESC(compare_and_swap64_up);
+EXTERN_COMMPAGE_DESC(atomic_add32_mp);
+EXTERN_COMMPAGE_DESC(atomic_add32_up);
+EXTERN_COMMPAGE_DESC(mach_absolute_time);
+EXTERN_COMMPAGE_DESC(spin_lock_try_mp);
+EXTERN_COMMPAGE_DESC(spin_lock_try_up);
+EXTERN_COMMPAGE_DESC(spin_lock_mp);
+EXTERN_COMMPAGE_DESC(spin_lock_up);
+EXTERN_COMMPAGE_DESC(spin_unlock);
+EXTERN_COMMPAGE_DESC(pthread_getspecific);
+EXTERN_COMMPAGE_DESC(gettimeofday);
+EXTERN_COMMPAGE_DESC(sys_flush_dcache);
+EXTERN_COMMPAGE_DESC(sys_icache_invalidate);
+EXTERN_COMMPAGE_DESC(pthread_self);
+EXTERN_COMMPAGE_DESC(relinquish);
+EXTERN_COMMPAGE_DESC(bit_test_and_set_mp);
+EXTERN_COMMPAGE_DESC(bit_test_and_set_up);
+EXTERN_COMMPAGE_DESC(bit_test_and_clear_mp);
+EXTERN_COMMPAGE_DESC(bit_test_and_clear_up);
+EXTERN_COMMPAGE_DESC(bzero_scalar);
+EXTERN_COMMPAGE_DESC(bcopy_scalar);
+EXTERN_COMMPAGE_DESC(nanotime);
+
+static  commpage_descriptor *routines[] = {
+	&COMMPAGE_DESC(compare_and_swap32_mp),
+	&COMMPAGE_DESC(compare_and_swap32_up),
+	&COMMPAGE_DESC(compare_and_swap64_mp),
+	&COMMPAGE_DESC(compare_and_swap64_up),
+	&COMMPAGE_DESC(atomic_add32_mp),
+	&COMMPAGE_DESC(atomic_add32_up),
+	&COMMPAGE_DESC(mach_absolute_time),
+	&COMMPAGE_DESC(spin_lock_try_mp),
+	&COMMPAGE_DESC(spin_lock_try_up),
+	&COMMPAGE_DESC(spin_lock_mp),
+	&COMMPAGE_DESC(spin_lock_up),
+	&COMMPAGE_DESC(spin_unlock),
+	&COMMPAGE_DESC(pthread_getspecific),
+	&COMMPAGE_DESC(gettimeofday),
+	&COMMPAGE_DESC(sys_flush_dcache),
+	&COMMPAGE_DESC(sys_icache_invalidate),
+	&COMMPAGE_DESC(pthread_self),
+	&COMMPAGE_DESC(relinquish),
+	&COMMPAGE_DESC(bit_test_and_set_mp),
+	&COMMPAGE_DESC(bit_test_and_set_up),
+	&COMMPAGE_DESC(bit_test_and_clear_mp),
+	&COMMPAGE_DESC(bit_test_and_clear_up),
+	&COMMPAGE_DESC(bzero_scalar),
+	&COMMPAGE_DESC(bcopy_scalar),
+	&COMMPAGE_DESC(nanotime),
+	NULL
+};
+
+
 /* Fill in commpage: called once, during kernel initialization, from the
  * startup thread before user-mode code is running.
  * See the top of this file for a list of what you have to do to add
@@ -238,45 +328,11 @@ commpage_stuff_routine(
 void
 commpage_populate( void )
 {
+   	short   c2;
+	static double   two52 = 1048576.0 * 1048576.0 * 4096.0; // 2**52
+	static double   ten6 = 1000000.0;                       // 10**6
 	commpage_descriptor **rd;
 	short   version = _COMM_PAGE_THIS_VERSION;
-	void	*sig_addr;
-
-	extern char commpage_sigs_begin[];
-	extern char commpage_sigs_end[];
- 
-	extern commpage_descriptor commpage_mach_absolute_time;
-	extern commpage_descriptor commpage_spin_lock_try_mp;
-	extern commpage_descriptor commpage_spin_lock_try_up;
-	extern commpage_descriptor commpage_spin_lock_mp;
-	extern commpage_descriptor commpage_spin_lock_up;
-	extern commpage_descriptor commpage_spin_unlock;
-	extern commpage_descriptor commpage_pthread_getspecific;
-	extern commpage_descriptor commpage_gettimeofday;
-	extern commpage_descriptor commpage_sys_flush_dcache;
-	extern commpage_descriptor commpage_sys_icache_invalidate;
-	extern commpage_descriptor commpage_pthread_self;
-	extern commpage_descriptor commpage_relinquish;
-	extern commpage_descriptor commpage_bzero_scalar;
-	extern commpage_descriptor commpage_bcopy_scalar;
-
-	static  commpage_descriptor *routines[] = {
-		&commpage_mach_absolute_time,
-		&commpage_spin_lock_try_mp,
-		&commpage_spin_lock_try_up,
-		&commpage_spin_lock_mp,
-		&commpage_spin_lock_up,
-		&commpage_spin_unlock,
-		&commpage_pthread_getspecific,
-		&commpage_gettimeofday,
-		&commpage_sys_flush_dcache,
-		&commpage_sys_icache_invalidate,
-		&commpage_pthread_self,
-		&commpage_relinquish,
-		&commpage_bzero_scalar,
-		&commpage_bcopy_scalar,
-		NULL
-	};
 
 	commPagePtr = (char *)commpage_allocate();
 
@@ -286,9 +342,23 @@ commpage_populate( void )
 	* ascending order, so we can check for overlap and panic if so.
 	*/
 
-	commpage_stuff(_COMM_PAGE_VERSION,&version,sizeof(short));
+	commpage_stuff2(_COMM_PAGE_VERSION,&version,sizeof(short));
 	commpage_stuff(_COMM_PAGE_CPU_CAPABILITIES,&_cpu_capabilities,
 		sizeof(int));
+
+	if (_cpu_capabilities & kCache32)
+		c2 = 32;
+	else if (_cpu_capabilities & kCache64)
+		c2 = 64;
+	else if (_cpu_capabilities & kCache128)
+		c2 = 128;
+	commpage_stuff(_COMM_PAGE_CACHE_LINESIZE,&c2,2);
+
+	c2 = 32;
+
+	commpage_stuff2(_COMM_PAGE_2_TO_52,&two52,8);
+
+	commpage_stuff2(_COMM_PAGE_10_TO_6,&ten6,8);
 
 	for( rd = routines; *rd != NULL ; rd++ )
 		commpage_stuff_routine(*rd);
@@ -296,30 +366,38 @@ commpage_populate( void )
 	if (!matched)
 		panic("commpage no match on last routine");
 
-	if (next > ((uintptr_t)commPagePtr + PAGE_SIZE))
-		panic("commpage overflow");
+	if (next > (uintptr_t)_COMM_PAGE_END)
+		panic("commpage overflow: next = 0x%08x, commPagePtr = 0x%08x", next, (uintptr_t)commPagePtr);
 
-#define STUFF_SIG(addr, func) \
-	extern char commpage_sig_ ## func [];					\
-	sig_addr = (void *)(	(uintptr_t)_COMM_PAGE_BASE_ADDRESS + 		\
-				(uintptr_t)_COMM_PAGE_SIGS_OFFSET + 0x1000 +	\
-				(uintptr_t)&commpage_sig_ ## func - 		\
-				(uintptr_t)&commpage_sigs_begin	);		\
-	commpage_stuff(addr + _COMM_PAGE_SIGS_OFFSET, &sig_addr, sizeof(void *));
 
-	STUFF_SIG(_COMM_PAGE_ABSOLUTE_TIME, mach_absolute_time);
-	STUFF_SIG(_COMM_PAGE_SPINLOCK_TRY, spin_lock_try);
-	STUFF_SIG(_COMM_PAGE_SPINLOCK_LOCK, spin_lock);
-	STUFF_SIG(_COMM_PAGE_SPINLOCK_UNLOCK, spin_unlock);
-	STUFF_SIG(_COMM_PAGE_PTHREAD_GETSPECIFIC, pthread_getspecific);
-	STUFF_SIG(_COMM_PAGE_GETTIMEOFDAY, gettimeofday);
-	STUFF_SIG(_COMM_PAGE_FLUSH_DCACHE, sys_dcache_flush);
-	STUFF_SIG(_COMM_PAGE_FLUSH_ICACHE, sys_icache_invalidate); 
-	STUFF_SIG(_COMM_PAGE_PTHREAD_SELF, pthread_self);
-	STUFF_SIG(_COMM_PAGE_BZERO, bzero);
-	STUFF_SIG(_COMM_PAGE_BCOPY, bcopy);
-	STUFF_SIG(_COMM_PAGE_MEMCPY, memmove);
-
-	commpage_stuff(_COMM_PAGE_BASE_ADDRESS + _COMM_PAGE_SIGS_OFFSET + 0x1000, &commpage_sigs_begin,
-			(uintptr_t)&commpage_sigs_end - (uintptr_t)&commpage_sigs_begin);	
+	pmap_commpage_init((vm_offset_t) commPagePtr, _COMM_PAGE_BASE_ADDRESS, 
+			   _COMM_PAGE_AREA_LENGTH/INTEL_PGBYTES);
 }
+
+/*
+ * This macro prevents compiler instruction scheduling:
+ */
+#define NO_REORDERING	asm volatile("" : : : "memory")
+
+void
+commpage_set_nanotime(commpage_nanotime_t *newp)
+{
+	commpage_nanotime_t	*cnp;
+
+	/* Nop if commpage not set up yet */
+	if (commPagePtr == NULL)
+		return;
+
+	cnp = (commpage_nanotime_t *)commpage_addr_of(_COMM_PAGE_NANOTIME_INFO);
+
+	/*
+	 * Update in reverse order:
+	 * check_tsc first - it's read and compared with base_tsc last.
+	 */
+	cnp->nt_check_tsc = newp->nt_base_tsc;	NO_REORDERING;
+	cnp->nt_shift     = newp->nt_shift;	NO_REORDERING;
+	cnp->nt_scale     = newp->nt_scale;	NO_REORDERING;
+	cnp->nt_base_ns   = newp->nt_base_ns;	NO_REORDERING;
+	cnp->nt_base_tsc  = newp->nt_base_tsc;
+}
+

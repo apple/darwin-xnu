@@ -37,11 +37,11 @@ extern Boolean kld_file_map(const char *pathName,
 #else
 extern Boolean kld_file_map(const char *pathName);
 
-extern void *
-    kld_file_lookupsymbol(const char *pathName, const char *symbolname);
-
 Boolean kld_file_debug_dump(const char *pathName, const char *outName);
 #endif /* KERNEL */
+
+extern void *
+    kld_file_lookupsymbol(const char *pathName, const char *symbolname);
 
 extern void *kld_file_getaddr(const char *pathName, long *size);
 
@@ -49,8 +49,8 @@ extern Boolean kld_file_merge_OSObjects(const char *pathName);
 
 extern Boolean kld_file_patch_OSObjects(const char *pathName);
 
-extern Boolean kld_file_prepare_for_link();
+extern Boolean kld_file_prepare_for_link(void);
 
-extern void kld_file_cleanup_all_resources();
+extern void kld_file_cleanup_all_resources(void);
 
 __END_DECLS

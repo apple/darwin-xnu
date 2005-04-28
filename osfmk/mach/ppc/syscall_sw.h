@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -23,6 +23,8 @@
  * @OSF_COPYRIGHT@
  */
 
+#ifdef	PRIVATE
+
 #ifndef	_MACH_PPC_SYSCALL_SW_H_
 #define _MACH_PPC_SYSCALL_SW_H_
 
@@ -34,19 +36,6 @@ ENTRY(trap_name, TAG_NO_FRAME_USED) @\
 	sc	@\
 	blr
 
-#define rpc_trap(trap_name,trap_number,number_args) \
-ENTRY(trap_name, TAG_NO_FRAME_USED) @\
-	li	r0,	trap_number @\
-	sc	@\
-	blr
-
-	/* CHECKME! What is this supposed to do? */
-#define rpc_return_trap(trap_name,trap_number,number_args) \
-ENTRY(trap_name, TAG_NO_FRAME_USED) @\
-	li	r0,	trap_number @\
-	sc	@\
-	blr
-	
 #define ppc_trap(trap_name,trap_number) \
 ENTRY(trap_name, TAG_NO_FRAME_USED) @\
 	li	r0,	trap_number @\
@@ -60,7 +49,9 @@ ENTRY(trap_name, TAG_NO_FRAME_USED) @\
  *
  *	Note: PPC-only system calls are in the 0x6000 to 0x6FFF range
  */
+
 #ifdef _MACH_SYSCALL_SW_H_	
+
 ppc_trap(diagCall,0x6000)	
 ppc_trap(vmm_get_version,0x6001)
 ppc_trap(vmm_get_features,0x6002)
@@ -74,6 +65,9 @@ ppc_trap(CHUDCall,0x6009)
 ppc_trap(ppcNull,0x600A)	
 ppc_trap(perfmon_control,0x600B)	
 ppc_trap(ppcNullinst,0x600C)	
+
 #endif /* _MACH_SYSCALL_SW_H_ */
 
 #endif	/* _MACH_PPC_SYSCALL_SW_H_ */
+
+#endif	/* PRIVATE */

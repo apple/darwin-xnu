@@ -34,13 +34,11 @@
 #define _NET_IF_FAITH_H_
 #include <sys/appleapiopts.h>
 
-#ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
+#ifdef KERNEL_PRIVATE
 #if INET6
 struct in6_addr;
-int faithprefix __P((struct in6_addr *));
+int faithprefix(struct in6_addr *);
 #endif /* INET6 */
-#endif /* __APPLE_API_PRIVATE */
-#endif /* KERNEL */
+#endif /* KERNEL_PRIVATE */
 
 #endif /* _NET_IF_FAITH_H_ */

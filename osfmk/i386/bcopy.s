@@ -109,3 +109,54 @@ ENTRY(bcopy16)
 	popl	%edi
 	ret	
 
+	
+ /*
+  * Based on NetBSD's bcopy.S from their libc.
+  * bcopy(src, dst, cnt)
+  *  ws@tools.de     (Wolfgang Solfrank, TooLs GmbH) +49-228-985800
+  */
+ENTRY(bcopy)
+	        pushl   %esi
+	        pushl   %edi
+	        movl    12(%esp),%esi
+	        movl    16(%esp),%edi
+	        movl    20(%esp),%ecx
+
+	        movl    %edi,%edx
+	        subl    %esi,%edx
+	        cmpl    %ecx,%edx                       /* overlapping && src < dst? */
+			movl    %ecx,%edx
+	        jb      1f
+
+	        shrl    $2,%ecx                         /* copy by 32-bit words */
+	        cld                                     /* nope, copy forwards */
+	        rep
+	        movsl
+	        movl    %edx,%ecx
+	        andl    $3,%ecx                         /* any bytes left? */
+	        rep
+	        movsb
+	        popl    %edi
+	        popl    %esi
+	        ret
+
+
+1:
+	        addl    %ecx,%edi                       /* copy backwards */
+	        addl    %ecx,%esi
+	        decl    %edi
+	        decl    %esi
+	        andl    $3,%ecx                         /* any fractional bytes? */
+	        std
+	        rep
+	        movsb
+	        movl    %edx,%ecx                   /* copy remainder by 32-bit words */
+	        shrl    $2,%ecx
+	        subl    $3,%esi
+	        subl    $3,%edi
+	        rep
+	        movsl
+	        popl    %edi
+	        popl    %esi
+	        cld
+	        ret

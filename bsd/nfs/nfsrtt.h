@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -104,7 +104,6 @@ struct nfsrtt {
 /*
  * Bits for the flags field.
  */
-#define	DRT_NQNFS	0x01	/* Rpc used Nqnfs protocol */
 #define	DRT_TCP		0x02	/* Client used TCP transport */
 #define	DRT_CACHEREPLY	0x04	/* Reply was from recent request cache */
 #define	DRT_CACHEDROP	0x08	/* Rpc request dropped, due to recent reply */

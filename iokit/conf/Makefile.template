@@ -31,6 +31,10 @@ CFLAGS+= -DKERNEL -DDRIVER_PRIVATE				\
 	-DIOMATCHDEBUG=1 -DIOALLOCDEBUG=1			\
 #-DIOKITDEBUG=-1
 
+CWARNFLAGS   += -Wno-unused-parameter -Wno-redundant-decls -Wno-nested-externs -Wno-write-strings
+MWARNFLAGS   += -Wno-unused-parameter -Wno-redundant-decls -Wno-nested-externs -Wno-write-strings
+CXXWARNFLAGS += -Wno-unused-parameter -Wno-redundant-decls -Wno-write-strings -Wno-cast-qual -Wno-shadow
+
 CFLAGS_RELEASE += -DIOASSERT=0
 CFLAGS_DEBUG += -DIOASSERT=1
 
@@ -46,14 +50,6 @@ COMP_SUBDIRS =
 #  time.
 #
 .PRECIOUS: Makefile
-
-VERSION_FILES= \
-	$(SOURCE_DIR)/$(COMPONENT)/conf/version.major  \
-	$(SOURCE_DIR)/$(COMPONENT)/conf/version.minor   \
-	$(SOURCE_DIR)/$(COMPONENT)/conf/version.variant 
-
-COPYRIGHT_FILES = \
-	$(SOURCE_DIR)/$(COMPONENT)/conf/copyright
 
 #
 #  Theses macros are filled in by the config program depending on the
@@ -90,12 +86,9 @@ LDOBJS = $(OBJS)
 
 $(COMPONENT).o: $(LDOBJS)
 	@echo "creating $(COMPONENT).o"
-	$(RM) $(RMFLAGS) vers.c
-	$(COMPOBJROOT)/newvers \
-	`$(CAT) ${VERSION_FILES}` ${COPYRIGHT_FILES}
-	${KCC} $(CFLAGS) $(INCLUDES) -c vers.c
+
 	@echo [ updating $(COMPONENT).o ${IOKIT_KERNEL_CONFIG} ]
-	$(LD)  $(LDFLAGS_COMPONENT) -o $(COMPONENT).o ${LDOBJS} vers.o 
+	$(LD)  $(LDFLAGS_COMPONENT) -o $(COMPONENT).o ${LDOBJS} 
 
 do_depend: do_all
 	${MD} -u Makedep -f -d `ls *.d`

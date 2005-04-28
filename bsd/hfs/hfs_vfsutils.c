@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -32,11 +32,11 @@
 #include <sys/malloc.h>
 #include <sys/stat.h>
 #include <sys/mount.h>
-#include <sys/namei.h>
-#include <sys/lock.h>
 #include <sys/buf.h>
 #include <sys/ubc.h>
 #include <sys/unistd.h>
+#include <sys/utfconv.h>
+#include <sys/kauth.h>
 
 #include "hfs.h"
 #include "hfs_catalog.h"
@@ -50,7 +50,7 @@
 #include "hfscommon/headers/HFSUnicodeWrappers.h"
 
 
-extern int count_lock_queue __P((void));
+extern int count_lock_queue(void);
 
 
 static void ReleaseMetaFileVNode(struct vnode *vp);
@@ -63,11 +63,8 @@ static u_int32_t hfs_hotfile_freeblocks(struct hfsmount *);
 
 u_int32_t GetLogicalBlockSize(struct vnode *vp);
 
-/* BTree accessor routines */
-extern OSStatus GetBTreeBlock(FileReference vp, UInt32 blockNum, GetBlockOptions options, BlockDescriptor *block);
-extern OSStatus SetBTreeBlockSize(FileReference vp, ByteCount blockSize, ItemCount minBlockCount);
-extern OSStatus ExtendBTreeFile(FileReference vp, FSSize minEOF, FSSize maxEOF);
-extern OSStatus ReleaseBTreeBlock(FileReference vp, BlockDescPtr blockPtr, ReleaseBlockOptions options);
+extern int hfs_attrkeycompare(HFSPlusAttrKey *searchKey, HFSPlusAttrKey *trialKey);
+
 
 //*******************************************************************************
 // Note: Finder information in the HFS/HFS+ metadata are considered opaque and
@@ -83,6 +80,7 @@ extern OSStatus ReleaseBTreeBlock(FileReference vp, BlockDescPtr blockPtr, Relea
 char hfs_catname[] = "Catalog B-tree";
 char hfs_extname[] = "Extents B-tree";
 char hfs_vbmname[] = "Volume Bitmap";
+char hfs_attrname[] = "Attribute B-tree";
 
 char hfs_privdirname[] =
 	"\xE2\x90\x80\xE2\x90\x80\xE2\x90\x80\xE2\x90\x80HFS+ Private Data";
@@ -149,10 +147,11 @@ OSErr hfs_MountHFSVolume(struct hfsmount *hfsmp, HFSMasterDirectoryBlock *mdb,
 	hfsmp->hfs_logBlockSize = BestBlockSizeFit(vcb->blockSize, MAXBSIZE, hfsmp->hfs_phys_block_size);
 	vcb->vcbVBMIOSize = kHFSBlockSize;
 
-	VCB_LOCK_INIT(vcb);
+	hfsmp->hfs_alt_id_sector = HFS_ALT_SECTOR(hfsmp->hfs_phys_block_size,
+	                                          hfsmp->hfs_phys_block_count);
 
 	bzero(&cndesc, sizeof(cndesc));
-	cndesc.cd_parentcnid = kRootParID;
+	cndesc.cd_parentcnid = kHFSRootParentID;
 	cndesc.cd_flags |= CD_ISMETA;
 	bzero(&cnattr, sizeof(cnattr));
 	cnattr.ca_nlink = 1;
@@ -177,13 +176,13 @@ OSErr hfs_MountHFSVolume(struct hfsmount *hfsmp, HFSMasterDirectoryBlock *mdb,
 	fork.cf_extents[2].blockCount = SWAP_BE16(mdb->drXTExtRec[2].blockCount);
 	cnattr.ca_blocks = fork.cf_blocks;
 
-	error = hfs_getnewvnode(hfsmp, NULL, &cndesc, 0, &cnattr, &fork,
-	                        &vcb->extentsRefNum);
+	error = hfs_getnewvnode(hfsmp, NULL, NULL, &cndesc, 0, &cnattr, &fork,
+	                        &hfsmp->hfs_extents_vp);
 	if (error) goto MtVolErr;
-	error = MacToVFSError(BTOpenPath(VTOF(vcb->extentsRefNum),
+	error = MacToVFSError(BTOpenPath(VTOF(hfsmp->hfs_extents_vp),
 	                                 (KeyCompareProcPtr)CompareExtentKeys));
 	if (error) {
-		VOP_UNLOCK(vcb->extentsRefNum, 0, p);
+		hfs_unlock(VTOC(hfsmp->hfs_extents_vp));
 		goto MtVolErr;
 	}
 
@@ -205,17 +204,34 @@ OSErr hfs_MountHFSVolume(struct hfsmount *hfsmp, HFSMasterDirectoryBlock *mdb,
 	fork.cf_extents[2].blockCount = SWAP_BE16(mdb->drCTExtRec[2].blockCount);
 	cnattr.ca_blocks = fork.cf_blocks;
 
-	error = hfs_getnewvnode(hfsmp, NULL, &cndesc, 0, &cnattr, &fork,
-	                        &vcb->catalogRefNum);
+	error = hfs_getnewvnode(hfsmp, NULL, NULL, &cndesc, 0, &cnattr, &fork,
+	                        &hfsmp->hfs_catalog_vp);
 	if (error) {
-		VOP_UNLOCK(vcb->extentsRefNum, 0, p);
+		hfs_unlock(VTOC(hfsmp->hfs_extents_vp));
 		goto MtVolErr;
 	}
-	error = MacToVFSError(BTOpenPath(VTOF(vcb->catalogRefNum),
+	error = MacToVFSError(BTOpenPath(VTOF(hfsmp->hfs_catalog_vp),
 	                                 (KeyCompareProcPtr)CompareCatalogKeys));
 	if (error) {
-		VOP_UNLOCK(vcb->catalogRefNum, 0, p);
-		VOP_UNLOCK(vcb->extentsRefNum, 0, p);
+		hfs_unlock(VTOC(hfsmp->hfs_catalog_vp));
+		hfs_unlock(VTOC(hfsmp->hfs_extents_vp));
+		goto MtVolErr;
+	}
+
+	/*
+	 * Set up dummy Allocation file vnode (used only for locking bitmap)
+	 */  
+	cndesc.cd_nameptr = hfs_vbmname;
+	cndesc.cd_namelen = strlen(hfs_vbmname);
+	cndesc.cd_cnid = cnattr.ca_fileid = kHFSAllocationFileID;
+	bzero(&fork, sizeof(fork));
+	cnattr.ca_blocks = 0;
+
+	error = hfs_getnewvnode(hfsmp, NULL, NULL, &cndesc, 0, &cnattr, &fork,
+	                         &hfsmp->hfs_allocation_vp);
+	if (error) {
+		hfs_unlock(VTOC(hfsmp->hfs_catalog_vp));
+		hfs_unlock(VTOC(hfsmp->hfs_extents_vp));
 		goto MtVolErr;
 	}
 
@@ -223,10 +239,11 @@ OSErr hfs_MountHFSVolume(struct hfsmount *hfsmp, HFSMasterDirectoryBlock *mdb,
 	vcb->vcbAtrb &=	~kHFSVolumeUnmountedMask;
 
 	/*
-	 * all done with b-trees so we can unlock now...
+	 * all done with system files so we can unlock now...
 	 */
-	VOP_UNLOCK(vcb->catalogRefNum, 0, p);
-	VOP_UNLOCK(vcb->extentsRefNum, 0, p);
+	hfs_unlock(VTOC(hfsmp->hfs_allocation_vp));
+	hfs_unlock(VTOC(hfsmp->hfs_catalog_vp));
+	hfs_unlock(VTOC(hfsmp->hfs_extents_vp));
 
     if ( error == noErr )
       {
@@ -239,8 +256,8 @@ OSErr hfs_MountHFSVolume(struct hfsmount *hfsmp, HFSMasterDirectoryBlock *mdb,
 
     //--	Release any resources allocated so far before exiting with an error:
 MtVolErr:
-	ReleaseMetaFileVNode(vcb->catalogRefNum);
-	ReleaseMetaFileVNode(vcb->extentsRefNum);
+	ReleaseMetaFileVNode(hfsmp->hfs_catalog_vp);
+	ReleaseMetaFileVNode(hfsmp->hfs_extents_vp);
 
 CmdDone:
     return (error);
@@ -254,14 +271,14 @@ CmdDone:
 
 __private_extern__
 OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
-	off_t embeddedOffset, u_int64_t disksize, struct proc *p, void *args)
+	off_t embeddedOffset, u_int64_t disksize, struct proc *p, void *args, kauth_cred_t cred)
 {
 	register ExtendedVCB *vcb;
 	struct cat_desc cndesc;
 	struct cat_attr cnattr;
 	struct cat_fork cfork;
 	UInt32 blockSize;
-	u_int64_t volumesize;
+	daddr64_t spare_sectors;
 	struct BTreeInfoRec btinfo;
 	u_int16_t  signature;
 	u_int16_t  version;
@@ -285,7 +302,9 @@ OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 		signature = kHFSPlusSigWord;
 		hfsmp->hfs_flags |= HFS_X;
 	} else {
-		printf("hfs_mount: invalid HFS+ sig 0x%04x\n", signature);
+		/* Removed printf for invalid HFS+ signature because it gives
+		 * false error for UFS root volume 
+		 */
 		return (EINVAL);
 	}
 
@@ -314,7 +333,7 @@ OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 	vcb->vcbSigWord	= signature;
 	vcb->vcbJinfoBlock = SWAP_BE32(vhp->journalInfoBlock);
 	vcb->vcbLsMod	= to_bsd_time(SWAP_BE32(vhp->modifyDate));
-	vcb->vcbAtrb	= (UInt16)SWAP_BE32(vhp->attributes);
+	vcb->vcbAtrb	= SWAP_BE32(vhp->attributes);
 	vcb->vcbClpSiz	= SWAP_BE32(vhp->rsrcClumpSize);
 	vcb->vcbNxtCNID	= SWAP_BE32(vhp->nextCatalogID);
 	vcb->vcbVolBkUp	= to_bsd_time(SWAP_BE32(vhp->backupDate));
@@ -328,8 +347,6 @@ OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 	vcb->vcbAlBlSt = 0;		/* hfs+ allocation blocks start at first block of volume */
 	if ((hfsmp->hfs_flags & HFS_READ_ONLY) == 0)
 		vcb->vcbWrCnt++;	/* compensate for write of Volume Header on last flush */
-
-	VCB_LOCK_INIT(vcb);
 
 	/* Now fill in the Extended VCB info */
 	vcb->nextAllocation	= SWAP_BE32(vhp->nextAllocation);
@@ -352,8 +369,23 @@ OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 	hfsmp->hfs_logBlockSize = BestBlockSizeFit(vcb->blockSize, MAXBSIZE, hfsmp->hfs_phys_block_size);
 	vcb->vcbVBMIOSize = min(vcb->blockSize, MAXPHYSIO);
 
+	/*
+	 * Validate and initialize the location of the alternate volume header.
+	 */
+	spare_sectors = hfsmp->hfs_phys_block_count -
+	                (((daddr64_t)vcb->totalBlocks * blockSize) /
+	                   hfsmp->hfs_phys_block_size);
+
+	if (spare_sectors > (blockSize / hfsmp->hfs_phys_block_size)) {
+		hfsmp->hfs_alt_id_sector = 0;  /* partition has grown! */
+	} else {
+		hfsmp->hfs_alt_id_sector = (hfsmp->hfsPlusIOPosOffset / hfsmp->hfs_phys_block_size) +
+					   HFS_ALT_SECTOR(hfsmp->hfs_phys_block_size,
+							  hfsmp->hfs_phys_block_count);
+	}
+
 	bzero(&cndesc, sizeof(cndesc));
-	cndesc.cd_parentcnid = kRootParID;
+	cndesc.cd_parentcnid = kHFSRootParentID;
 	cndesc.cd_flags |= CD_ISMETA;
 	bzero(&cnattr, sizeof(cnattr));
 	cnattr.ca_nlink = 1;
@@ -377,14 +409,14 @@ OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 		cfork.cf_extents[i].blockCount =
 				SWAP_BE32 (vhp->extentsFile.extents[i].blockCount);
 	}
-	retval = hfs_getnewvnode(hfsmp, NULL, &cndesc, 0, &cnattr, &cfork,
-	                         &vcb->extentsRefNum);
+	retval = hfs_getnewvnode(hfsmp, NULL, NULL, &cndesc, 0, &cnattr, &cfork,
+	                         &hfsmp->hfs_extents_vp);
 
 	if (retval) goto ErrorExit;
-	retval = MacToVFSError(BTOpenPath(VTOF(vcb->extentsRefNum),
+	retval = MacToVFSError(BTOpenPath(VTOF(hfsmp->hfs_extents_vp),
 	                                  (KeyCompareProcPtr) CompareExtentKeysPlus));
 	if (retval) {
-		VOP_UNLOCK(vcb->extentsRefNum, 0, p);
+		hfs_unlock(VTOC(hfsmp->hfs_extents_vp));
 		goto ErrorExit;
 	}
 
@@ -406,25 +438,25 @@ OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 		cfork.cf_extents[i].blockCount =
 				SWAP_BE32 (vhp->catalogFile.extents[i].blockCount);
 	}
-	retval = hfs_getnewvnode(hfsmp, NULL, &cndesc, 0, &cnattr, &cfork,
-	                         &vcb->catalogRefNum);
+	retval = hfs_getnewvnode(hfsmp, NULL, NULL, &cndesc, 0, &cnattr, &cfork,
+	                         &hfsmp->hfs_catalog_vp);
 	if (retval) {
-		VOP_UNLOCK(vcb->extentsRefNum, 0, p);
+		hfs_unlock(VTOC(hfsmp->hfs_extents_vp));
 		goto ErrorExit;
 	}
-	retval = MacToVFSError(BTOpenPath(VTOF(vcb->catalogRefNum),
+	retval = MacToVFSError(BTOpenPath(VTOF(hfsmp->hfs_catalog_vp),
 	                                  (KeyCompareProcPtr) CompareExtendedCatalogKeys));
 	if (retval) {
-		VOP_UNLOCK(vcb->catalogRefNum, 0, p);
-		VOP_UNLOCK(vcb->extentsRefNum, 0, p);
+		hfs_unlock(VTOC(hfsmp->hfs_catalog_vp));
+		hfs_unlock(VTOC(hfsmp->hfs_extents_vp));
 		goto ErrorExit;
 	}
 	if ((hfsmp->hfs_flags & HFS_X) &&
-	    BTGetInformation(VTOF(vcb->catalogRefNum), 0, &btinfo) == 0) {
+	    BTGetInformation(VTOF(hfsmp->hfs_catalog_vp), 0, &btinfo) == 0) {
 		if (btinfo.keyCompareType == kHFSBinaryCompare) {
 			hfsmp->hfs_flags |= HFS_CASE_SENSITIVE;
 			/* Install a case-sensitive key compare */
-			(void) BTOpenPath(VTOF(vcb->catalogRefNum),
+			(void) BTOpenPath(VTOF(hfsmp->hfs_catalog_vp),
 			                  (KeyCompareProcPtr)cat_binarykeycompare);
 		}
 	}
@@ -447,20 +479,59 @@ OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 		cfork.cf_extents[i].blockCount =
 				SWAP_BE32 (vhp->allocationFile.extents[i].blockCount);
 	}
-	retval = hfs_getnewvnode(hfsmp, NULL, &cndesc, 0, &cnattr, &cfork,
-	                         &vcb->allocationsRefNum);
+	retval = hfs_getnewvnode(hfsmp, NULL, NULL, &cndesc, 0, &cnattr, &cfork,
+	                         &hfsmp->hfs_allocation_vp);
 	if (retval) {
-		VOP_UNLOCK(vcb->catalogRefNum, 0, p);
-		VOP_UNLOCK(vcb->extentsRefNum, 0, p);
+		hfs_unlock(VTOC(hfsmp->hfs_catalog_vp));
+		hfs_unlock(VTOC(hfsmp->hfs_extents_vp));
 		goto ErrorExit;
 	}
+
+	/*
+	 * Set up Attribute B-tree vnode
+	 */
+	if (vhp->attributesFile.totalBlocks != 0) {
+		cndesc.cd_nameptr = hfs_attrname;
+		cndesc.cd_namelen = strlen(hfs_attrname);
+		cndesc.cd_cnid = cnattr.ca_fileid = kHFSAttributesFileID;
+	
+		cfork.cf_size    = SWAP_BE64 (vhp->attributesFile.logicalSize);
+		cfork.cf_clump   = SWAP_BE32 (vhp->attributesFile.clumpSize);
+		cfork.cf_blocks  = SWAP_BE32 (vhp->attributesFile.totalBlocks);
+		cfork.cf_vblocks = 0;
+		cnattr.ca_blocks = cfork.cf_blocks;
+		for (i = 0; i < kHFSPlusExtentDensity; i++) {
+			cfork.cf_extents[i].startBlock =
+					SWAP_BE32 (vhp->attributesFile.extents[i].startBlock);
+			cfork.cf_extents[i].blockCount =
+					SWAP_BE32 (vhp->attributesFile.extents[i].blockCount);
+		}
+		retval = hfs_getnewvnode(hfsmp, NULL, NULL, &cndesc, 0, &cnattr, &cfork,
+					 &hfsmp->hfs_attribute_vp);
+		if (retval) {
+			hfs_unlock(VTOC(hfsmp->hfs_allocation_vp));
+			hfs_unlock(VTOC(hfsmp->hfs_catalog_vp));
+			hfs_unlock(VTOC(hfsmp->hfs_extents_vp));
+			goto ErrorExit;
+		}
+		retval = MacToVFSError(BTOpenPath(VTOF(hfsmp->hfs_attribute_vp),
+						  (KeyCompareProcPtr) hfs_attrkeycompare));
+		if (retval) {
+			hfs_unlock(VTOC(hfsmp->hfs_attribute_vp));
+			hfs_unlock(VTOC(hfsmp->hfs_allocation_vp));
+			hfs_unlock(VTOC(hfsmp->hfs_catalog_vp));
+			hfs_unlock(VTOC(hfsmp->hfs_extents_vp));
+			goto ErrorExit;
+		}
+	}
+
 
 	/* Pick up volume name and create date */
 	retval = cat_idlookup(hfsmp, kHFSRootFolderID, &cndesc, &cnattr, NULL);
 	if (retval) {
-		VOP_UNLOCK(vcb->allocationsRefNum, 0, p);
-		VOP_UNLOCK(vcb->catalogRefNum, 0, p);
-		VOP_UNLOCK(vcb->extentsRefNum, 0, p);
+		hfs_unlock(VTOC(hfsmp->hfs_allocation_vp));
+		hfs_unlock(VTOC(hfsmp->hfs_catalog_vp));
+		hfs_unlock(VTOC(hfsmp->hfs_extents_vp));
 		goto ErrorExit;
 	}
 	vcb->vcbCrDate = cnattr.ca_itime;
@@ -471,15 +542,17 @@ OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 	/* mark the volume dirty (clear clean unmount bit) */
 	vcb->vcbAtrb &=	~kHFSVolumeUnmountedMask;
 	if (hfsmp->jnl && (hfsmp->hfs_flags & HFS_READ_ONLY) == 0) {
-		hfs_flushvolumeheader(hfsmp, TRUE, TRUE);
+		hfs_flushvolumeheader(hfsmp, TRUE, 0);
 	}
 
 	/*
 	 * all done with metadata files so we can unlock now...
 	 */
-	VOP_UNLOCK(vcb->allocationsRefNum, 0, p);
-	VOP_UNLOCK(vcb->catalogRefNum, 0, p);
-	VOP_UNLOCK(vcb->extentsRefNum, 0, p);
+	if (hfsmp->hfs_attribute_vp)
+		hfs_unlock(VTOC(hfsmp->hfs_attribute_vp));
+	hfs_unlock(VTOC(hfsmp->hfs_allocation_vp));
+	hfs_unlock(VTOC(hfsmp->hfs_catalog_vp));
+	hfs_unlock(VTOC(hfsmp->hfs_extents_vp));
 
 	//
 	// Check if we need to do late journal initialization.  This only
@@ -494,9 +567,42 @@ OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 		retval = hfs_late_journal_init(hfsmp, vhp, args);
 		if (retval != 0) {
 			hfsmp->jnl = NULL;
+			
+			// if the journal failed to open, then set the lastMountedVersion
+			// to be "FSK!" which fsck_hfs will see and force the fsck instead
+			// of just bailing out because the volume is journaled.
+			if (!(hfsmp->hfs_flags & HFS_READ_ONLY)) {
+				HFSPlusVolumeHeader *jvhp;
+				daddr64_t mdb_offset;
+				struct buf *bp = NULL;
+				
+				hfsmp->hfs_flags |= HFS_NEED_JNL_RESET;
+				    
+				mdb_offset = (daddr64_t)((embeddedOffset / blockSize) + HFS_PRI_SECTOR(blockSize));
+
+				retval = (int)buf_meta_bread(hfsmp->hfs_devvp, mdb_offset, blockSize, cred, &bp);
+				if (retval == 0) {
+					jvhp = (HFSPlusVolumeHeader *)(buf_dataptr(bp) + HFS_PRI_OFFSET(blockSize));
+					    
+					if (SWAP_BE16(jvhp->signature) == kHFSPlusSigWord || SWAP_BE16(jvhp->signature) == kHFSXSigWord) {
+						printf ("hfs(3): Journal replay fail.  Writing lastMountVersion as FSK!\n");
+						jvhp->lastMountedVersion = SWAP_BE32(kFSKMountVersion);
+					   	buf_bwrite(bp);
+					} else {
+						buf_brelse(bp);
+					}
+					bp = NULL;
+				} else if (bp) {
+					buf_brelse(bp);
+					// clear this so the error exit path won't try to use it
+					bp = NULL;
+			    }
+			}
+
+			retval = EINVAL;
 			goto ErrorExit;
 		} else if (hfsmp->jnl) {
-			hfsmp->hfs_mp->mnt_flag |= MNT_JOURNALED;
+			vfs_setflags(hfsmp->hfs_mp, (uint64_t)((unsigned int)MNT_JOURNALED));
 		}
 	} else if (hfsmp->jnl) {
 		struct cat_attr jinfo_attr, jnl_attr;
@@ -529,7 +635,7 @@ OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 
 	/* setup private/hidden directory for unlinked files */
 	FindMetaDataDirectory(vcb);
-	if (hfsmp->jnl && ((hfsmp->hfs_flags & HFS_READ_ONLY) == 0))
+	if ((hfsmp->hfs_flags & HFS_READ_ONLY) == 0) 
 		hfs_remove_orphans(hfsmp);
 
 	if ( !(vcb->vcbAtrb & kHFSVolumeHardwareLockMask) )	// if the disk is not write protected
@@ -537,27 +643,28 @@ OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 		MarkVCBDirty( vcb );	// mark VCB dirty so it will be written
 	}
 
-
 	/*
 	 * Allow hot file clustering if conditions allow.
 	 */
 	if ((hfsmp->hfs_flags & HFS_METADATA_ZONE)  &&
 	    ((hfsmp->hfs_flags & HFS_READ_ONLY) == 0)) {
-		(void) hfs_recording_init(hfsmp, p);
+		(void) hfs_recording_init(hfsmp);
 	}
+
+	hfs_checkextendedsecurity(hfsmp);
 
 	return (0);
 
 ErrorExit:
 	/*
-	 * A fatal error occured and the volume cannot be mounted
+	 * A fatal error occurred and the volume cannot be mounted
 	 * release any resources that we aquired...
 	 */
-
-	InvalidateCatalogCache(vcb);   
-	ReleaseMetaFileVNode(vcb->allocationsRefNum);
-	ReleaseMetaFileVNode(vcb->catalogRefNum);
-	ReleaseMetaFileVNode(vcb->extentsRefNum);
+	if (hfsmp->hfs_attribute_vp)
+		ReleaseMetaFileVNode(hfsmp->hfs_attribute_vp);
+	ReleaseMetaFileVNode(hfsmp->hfs_allocation_vp);
+	ReleaseMetaFileVNode(hfsmp->hfs_catalog_vp);
+	ReleaseMetaFileVNode(hfsmp->hfs_extents_vp);
 
 	return (retval);
 }
@@ -573,12 +680,15 @@ static void ReleaseMetaFileVNode(struct vnode *vp)
 	struct filefork *fp;
 
 	if (vp && (fp = VTOF(vp))) {
-		if (fp->fcbBTCBPtr != NULL)
+		if (fp->fcbBTCBPtr != NULL) {
+			(void)hfs_lock(VTOC(vp), HFS_EXCLUSIVE_LOCK);
 			(void) BTClosePath(fp);
+			hfs_unlock(VTOC(vp));
+		}
 
 		/* release the node even if BTClosePath fails */
-		vrele(vp);
-		vgone(vp);
+		vnode_recycle(vp);
+		vnode_put(vp);
 	}
 }
 
@@ -594,28 +704,21 @@ __private_extern__
 int
 hfsUnmount( register struct hfsmount *hfsmp, struct proc *p)
 {
-	ExtendedVCB *vcb = HFSTOVCB(hfsmp);
-	int retval = E_NONE;
+	if (hfsmp->hfs_allocation_vp)
+		ReleaseMetaFileVNode(hfsmp->hfs_allocation_vp);
 
-	InvalidateCatalogCache( vcb );
+	if (hfsmp->hfs_attribute_vp)
+		ReleaseMetaFileVNode(hfsmp->hfs_attribute_vp);
 
-	if (hfsmp->hfc_filevp) {
-		ReleaseMetaFileVNode(hfsmp->hfc_filevp);
-		hfsmp->hfc_filevp = NULL;
-	}
-		
-	if (vcb->vcbSigWord == kHFSPlusSigWord)
-		ReleaseMetaFileVNode(vcb->allocationsRefNum);
+	ReleaseMetaFileVNode(hfsmp->hfs_catalog_vp);
+	ReleaseMetaFileVNode(hfsmp->hfs_extents_vp);
 
-	ReleaseMetaFileVNode(vcb->catalogRefNum);
-	ReleaseMetaFileVNode(vcb->extentsRefNum);
-
-	return (retval);
+	return (0);
 }
 
 
 /*
- * Test is fork has overflow extents.
+ * Test if fork has overflow extents.
  */
 __private_extern__
 int
@@ -649,54 +752,127 @@ overflow_extents(struct filefork *fp)
 
 
 /*
- * Lock/Unlock a metadata file.
+ * Lock HFS system file(s).
  */
 __private_extern__
 int
-hfs_metafilelocking(struct hfsmount *hfsmp, u_long fileID, u_int flags, struct proc *p)
+hfs_systemfile_lock(struct hfsmount *hfsmp, int flags, enum hfslocktype locktype)
 {
-	ExtendedVCB		*vcb;
-	struct vnode	*vp = NULL;
-	int				numOfLockedBuffs;
-	int	retval = 0;
-
-	vcb = HFSTOVCB(hfsmp);
-
- 	switch (fileID) {
-	case kHFSExtentsFileID:
-		vp = vcb->extentsRefNum;
-		break;
-
-	case kHFSCatalogFileID:
-		vp = vcb->catalogRefNum;
-		break;
-
-	case kHFSAllocationFileID:
-		/* bitmap is covered by Extents B-tree locking */
-		/* FALL THROUGH */
-	default:
-		panic("hfs_lockmetafile: invalid fileID");
-	}
-
-	if ((flags & LK_TYPE_MASK) != LK_RELEASE) {
-		flags |= LK_RETRY;
-	} else if (hfsmp->jnl == NULL) {
-		struct timeval tv = time;
-		u_int32_t		lastfsync = tv.tv_sec; 
-		
-		(void) BTGetLastSync((FCB*)VTOF(vp), &lastfsync);
-		
-		numOfLockedBuffs = count_lock_queue();
-		if ((numOfLockedBuffs > kMaxLockedMetaBuffers) ||
-		    ((numOfLockedBuffs > 1) && ((tv.tv_sec - lastfsync) > kMaxSecsForFsync))) {
-			hfs_btsync(vp, HFS_SYNCTRANS);
+	if (flags & ~SFL_VALIDMASK)
+		panic("hfs_systemfile_lock: invalid lock request (0x%x)", (unsigned long) flags);
+	/*
+	 * Locking order is Catalog file, Attributes file, Bitmap file, Extents file
+	 */
+	if (flags & SFL_CATALOG) {
+		(void) hfs_lock(VTOC(hfsmp->hfs_catalog_vp), locktype);
+		/*
+		 * When the catalog file has overflow extents then
+		 * also acquire the extents b-tree lock if its not
+		 * already requested.
+		 */
+		if ((flags & SFL_EXTENTS) == 0 &&
+		    overflow_extents(VTOF(hfsmp->hfs_catalog_vp))) {
+			flags |= SFL_EXTENTS;
 		}
 	}
-	
-	retval = lockmgr(&VTOC(vp)->c_lock, flags, &vp->v_interlock, p);
-
-	return (retval);
+	if (flags & SFL_ATTRIBUTE) {
+		if (hfsmp->hfs_attribute_vp) {
+			(void) hfs_lock(VTOC(hfsmp->hfs_attribute_vp), locktype);
+			/*
+			 * When the attribute file has overflow extents then
+			 * also acquire the extents b-tree lock if its not
+			 * already requested.
+			 */
+			if ((flags & SFL_EXTENTS) == 0 &&
+			    overflow_extents(VTOF(hfsmp->hfs_attribute_vp))) {
+				flags |= SFL_EXTENTS;
+			}
+		} else {
+			flags &= ~SFL_ATTRIBUTE;
+		}
+	}
+	if (flags & SFL_BITMAP) {
+		/*
+		 * Since the only bitmap operations are clearing and
+		 * setting bits we always need exclusive access. And
+		 * when we have a journal, we can "hide" behind that
+		 * lock since we can only change the bitmap from
+		 * within a transaction.
+		 */
+		if (hfsmp->jnl) {
+			flags &= ~SFL_BITMAP;
+		} else {
+			(void) hfs_lock(VTOC(hfsmp->hfs_allocation_vp), HFS_EXCLUSIVE_LOCK);
+		}
+	}
+	if (flags & SFL_EXTENTS) {
+		/*
+		 * Since the extents btree lock is recursive we always
+		 * need exclusive access.
+		 */
+		(void) hfs_lock(VTOC(hfsmp->hfs_extents_vp), HFS_EXCLUSIVE_LOCK);
+	}
+	return (flags);
 }
+
+/*
+ * unlock HFS system file(s).
+ */
+__private_extern__
+void
+hfs_systemfile_unlock(struct hfsmount *hfsmp, int flags)
+{
+	struct timeval tv;
+	u_int32_t lastfsync;
+	int numOfLockedBuffs;
+
+	microuptime(&tv);
+	lastfsync = tv.tv_sec;
+	
+	if (flags & ~SFL_VALIDMASK)
+		panic("hfs_systemfile_unlock: invalid lock request (0x%x)", (unsigned long) flags);
+
+	if (flags & SFL_ATTRIBUTE && hfsmp->hfs_attribute_vp) {
+		if (hfsmp->jnl == NULL) {
+			BTGetLastSync((FCB*)VTOF(hfsmp->hfs_attribute_vp), &lastfsync);
+			numOfLockedBuffs = count_lock_queue();
+			if ((numOfLockedBuffs > kMaxLockedMetaBuffers) ||
+			    ((numOfLockedBuffs > 1) && ((tv.tv_sec - lastfsync) >
+			      kMaxSecsForFsync))) {
+				hfs_btsync(hfsmp->hfs_attribute_vp, HFS_SYNCTRANS);
+			}
+		}
+		hfs_unlock(VTOC(hfsmp->hfs_attribute_vp));
+	}
+	if (flags & SFL_CATALOG) {
+		if (hfsmp->jnl == NULL) {
+			BTGetLastSync((FCB*)VTOF(hfsmp->hfs_catalog_vp), &lastfsync);
+			numOfLockedBuffs = count_lock_queue();
+			if ((numOfLockedBuffs > kMaxLockedMetaBuffers) ||
+			    ((numOfLockedBuffs > 1) && ((tv.tv_sec - lastfsync) >
+			      kMaxSecsForFsync))) {
+				hfs_btsync(hfsmp->hfs_catalog_vp, HFS_SYNCTRANS);
+			}
+		}
+		hfs_unlock(VTOC(hfsmp->hfs_catalog_vp));
+	}
+	if (flags & SFL_BITMAP) {
+		hfs_unlock(VTOC(hfsmp->hfs_allocation_vp));
+	}
+	if (flags & SFL_EXTENTS) {
+		if (hfsmp->jnl == NULL) {
+			BTGetLastSync((FCB*)VTOF(hfsmp->hfs_extents_vp), &lastfsync);
+			numOfLockedBuffs = count_lock_queue();
+			if ((numOfLockedBuffs > kMaxLockedMetaBuffers) ||
+			    ((numOfLockedBuffs > 1) && ((tv.tv_sec - lastfsync) >
+			      kMaxSecsForFsync))) {
+				hfs_btsync(hfsmp->hfs_extents_vp, HFS_SYNCTRANS);
+			}
+		}
+		hfs_unlock(VTOC(hfsmp->hfs_extents_vp));
+	}
+}
+
 
 /*
  * RequireFileLock
@@ -707,37 +883,32 @@ hfs_metafilelocking(struct hfsmount *hfsmp, u_long fileID, u_int flags, struct p
 #if HFS_DIAGNOSTIC
 void RequireFileLock(FileReference vp, int shareable)
 {
-	struct lock__bsd__ *lkp;
-	int locked = false;
-	pid_t pid;
-	void * self;
+	int locked;
 
-	pid = current_proc()->p_pid;
-	self = (void *) current_act();
-	lkp = &VTOC(vp)->c_lock;
-
-	simple_lock(&lkp->lk_interlock);
+	/* The extents btree and allocation bitmap are always exclusive. */
+	if (VTOC(vp)->c_fileid == kHFSExtentsFileID ||
+	    VTOC(vp)->c_fileid == kHFSAllocationFileID) {
+		shareable = 0;
+	}
 	
-	if (shareable && (lkp->lk_sharecount > 0) && (lkp->lk_lockholder == LK_NOPROC))
-		locked = true;
-	else if ((lkp->lk_exclusivecount > 0) && (lkp->lk_lockholder == pid) && (lkp->lk_lockthread == self))
-		locked = true;
-
-	simple_unlock(&lkp->lk_interlock);
+	locked = VTOC(vp)->c_lockowner == (void *)current_thread();
 	
-	if (!locked) {
+	if (!locked && !shareable) {
 		switch (VTOC(vp)->c_fileid) {
-			case 3:
-				DEBUG_BREAK_MSG((" #\n # RequireFileLock: extent btree vnode not locked! v: 0x%08X\n #\n", (u_int)vp));
-				break;
-
-			case 4:
-				DEBUG_BREAK_MSG((" #\n # RequireFileLock: catalog btree vnode not locked! v: 0x%08X\n #\n", (u_int)vp));
-				break;
-
-			default:
-				DEBUG_BREAK_MSG((" #\n # RequireFileLock: file (%d) not locked! v: 0x%08X\n #\n", VTOC(vp)->c_fileid, (u_int)vp));
-				break;
+		case kHFSExtentsFileID:
+			panic("extents btree not locked! v: 0x%08X\n #\n", (u_int)vp);
+			break;
+		case kHFSCatalogFileID:
+			panic("catalog btree not locked! v: 0x%08X\n #\n", (u_int)vp);
+			break;
+		case kHFSAllocationFileID:
+			/* The allocation file can hide behind the jornal lock. */
+			if (VTOHFS(vp)->jnl == NULL)
+				panic("allocation file not locked! v: 0x%08X\n #\n", (u_int)vp);
+			break;
+		case kHFSAttributesFileID:
+			panic("attributes btree not locked! v: 0x%08X\n #\n", (u_int)vp);
+			break;
 		}
 	}
 }
@@ -757,15 +928,15 @@ void RequireFileLock(FileReference vp, int shareable)
  *
  */
 int
-hfs_owner_rights(struct hfsmount *hfsmp, uid_t cnode_uid, struct ucred *cred,
+hfs_owner_rights(struct hfsmount *hfsmp, uid_t cnode_uid, kauth_cred_t cred,
 		struct proc *p, int invokesuperuserstatus)
 {
-	if ((cred->cr_uid == cnode_uid) ||                                    /* [1a] */
+	if ((kauth_cred_getuid(cred) == cnode_uid) ||                                    /* [1a] */
 	    (cnode_uid == UNKNOWNUID) ||  									  /* [1b] */
-	    ((HFSTOVFS(hfsmp)->mnt_flag & MNT_UNKNOWNPERMISSIONS) &&          /* [2] */
-	      ((cred->cr_uid == hfsmp->hfs_uid) ||                            /* [2a] */
+	    ((((unsigned int)vfs_flags(HFSTOVFS(hfsmp))) & MNT_UNKNOWNPERMISSIONS) &&          /* [2] */
+	      ((kauth_cred_getuid(cred) == hfsmp->hfs_uid) ||                            /* [2a] */
 	        (hfsmp->hfs_uid == UNKNOWNUID))) ||                           /* [2b] */
-	    (invokesuperuserstatus && (suser(cred, &p->p_acflag) == 0))) {    /* [3] */
+	    (invokesuperuserstatus && (suser(cred, 0) == 0))) {    /* [3] */
 		return (0);
 	} else {	
 		return (EPERM);
@@ -834,6 +1005,7 @@ FindMetaDataDirectory(ExtendedVCB *vcb)
 	struct proc *p = current_proc();
 	struct timeval tv;
 	cat_cookie_t cookie;
+	int lockflags;
 	int error;
 	
 	if (vcb->vcbSigWord != kHFSPlusSigWord)
@@ -848,15 +1020,12 @@ FindMetaDataDirectory(ExtendedVCB *vcb)
 		hfsmp->hfs_privdir_desc.cd_flags = CD_ISDIR;
 	}
 
-	/* Lock catalog b-tree */
-	if (hfs_metafilelocking(hfsmp, kHFSCatalogFileID, LK_SHARED, p) != 0)
-		return (0);
+	lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_SHARED_LOCK);
 
 	error = cat_lookup(hfsmp, &hfsmp->hfs_privdir_desc, 0, NULL,
-			&hfsmp->hfs_privdir_attr, NULL);
+			&hfsmp->hfs_privdir_attr, NULL, NULL);
 
-	/* Unlock catalog b-tree */
-	(void) hfs_metafilelocking(hfsmp, kHFSCatalogFileID, LK_RELEASE, p);
+	hfs_systemfile_unlock(hfsmp, lockflags);
 
 	if (error == 0) {
 		hfsmp->hfs_metadata_createdate = hfsmp->hfs_privdir_attr.ca_itime;
@@ -868,22 +1037,16 @@ FindMetaDataDirectory(ExtendedVCB *vcb)
 		    (hfsmp->hfs_flags & HFS_READ_ONLY) == 0) {
 			hfsmp->hfs_privdir_attr.ca_flags &= ~SF_IMMUTABLE;
 
-			hfs_global_shared_lock_acquire(hfsmp);
-			if (hfsmp->jnl) {
-				if ((error = journal_start_transaction(hfsmp->jnl)) != 0) {
-					hfs_global_shared_lock_release(hfsmp);
-					return (hfsmp->hfs_privdir_attr.ca_fileid);
-				}
+			if ((error = hfs_start_transaction(hfsmp)) != 0) {
+			    return (hfsmp->hfs_privdir_attr.ca_fileid);
 			}
-			if (hfs_metafilelocking(hfsmp, kHFSCatalogFileID, LK_SHARED, p) == 0) {
-				(void)cat_update(hfsmp, &hfsmp->hfs_privdir_desc,
-			                     &hfsmp->hfs_privdir_attr, NULL, NULL);
-				(void) hfs_metafilelocking(hfsmp, kHFSCatalogFileID, LK_RELEASE, p);
-			}
-			if (hfsmp->jnl) {
-				journal_end_transaction(hfsmp->jnl);
-			}
-			hfs_global_shared_lock_release(hfsmp);
+
+			lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_SHARED_LOCK);
+			(void) cat_update(hfsmp, &hfsmp->hfs_privdir_desc,
+			                 &hfsmp->hfs_privdir_attr, NULL, NULL);
+			hfs_systemfile_unlock(hfsmp, lockflags);
+
+			hfs_end_transaction(hfsmp);
 		}
 		return (hfsmp->hfs_privdir_attr.ca_fileid);
 
@@ -897,7 +1060,8 @@ FindMetaDataDirectory(ExtendedVCB *vcb)
 	hfsmp->hfs_privdir_attr.ca_mode = S_IFDIR;
 	hfsmp->hfs_privdir_attr.ca_nlink = 2;
 	hfsmp->hfs_privdir_attr.ca_itime = vcb->vcbCrDate;
-	hfsmp->hfs_privdir_attr.ca_mtime = time.tv_sec;
+	microtime(&tv);
+	hfsmp->hfs_privdir_attr.ca_mtime = tv.tv_sec;
 
 	/* hidden and off the desktop view */
 	fndrinfo = (struct FndrDirInfo *)&hfsmp->hfs_privdir_attr.ca_finderinfo;
@@ -905,61 +1069,51 @@ FindMetaDataDirectory(ExtendedVCB *vcb)
 	fndrinfo->frLocation.h = SWAP_BE16 (22460);
 	fndrinfo->frFlags |= SWAP_BE16 (kIsInvisible + kNameLocked);		
 
-	// XXXdbg
-	hfs_global_shared_lock_acquire(hfsmp);
-	if (hfsmp->jnl) {
-	    if ((error = journal_start_transaction(hfsmp->jnl)) != 0) {
-			hfs_global_shared_lock_release(hfsmp);
-			return (0);
-	    }
+	if ((error = hfs_start_transaction(hfsmp)) != 0) {
+	    return (0);
 	}
 	/* Reserve some space in the Catalog file. */
 	if (cat_preflight(hfsmp, CAT_CREATE, &cookie, p) != 0) {
-		if (hfsmp->jnl) {
-			journal_end_transaction(hfsmp->jnl);
-		}
-		hfs_global_shared_lock_release(hfsmp);
-		return (0);
+	    hfs_end_transaction(hfsmp);
+
+	    return (0);
 	}
 
-	if (hfs_metafilelocking(hfsmp, kHFSCatalogFileID, LK_EXCLUSIVE, p) == 0) {
+	lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_EXCLUSIVE_LOCK);
+
 		error = cat_create(hfsmp, &hfsmp->hfs_privdir_desc,
 				&hfsmp->hfs_privdir_attr, &out_desc);
 
-		(void) hfs_metafilelocking(hfsmp, kHFSCatalogFileID, LK_RELEASE, p);
-	}
+	hfs_systemfile_unlock(hfsmp, lockflags);
 
 	cat_postflight(hfsmp, &cookie, p);
 	
 	if (error) {
-	    if (hfsmp->jnl) {
-			journal_end_transaction(hfsmp->jnl);
-	    }
-		hfs_global_shared_lock_release(hfsmp);
+		hfs_volupdate(hfsmp, VOL_UPDATE, 0);
 
-	    return (0);
+		hfs_end_transaction(hfsmp);
+
+		return (0);
 	}
 
 	hfsmp->hfs_privdir_desc.cd_hint = out_desc.cd_hint;
 	hfsmp->hfs_privdir_desc.cd_cnid = out_desc.cd_cnid;
 	hfsmp->hfs_privdir_attr.ca_fileid = out_desc.cd_cnid;
 	hfsmp->hfs_metadata_createdate = vcb->vcbCrDate;
-	
-	if (VFS_ROOT(HFSTOVFS(hfsmp), &dvp) == 0) {
+
+	if (hfs_vget(hfsmp, kRootDirID, &dvp, 0) == 0) {
 		dcp = VTOC(dvp);
 		dcp->c_childhint = out_desc.cd_hint;
 		dcp->c_nlink++;
 		dcp->c_entries++;
-		dcp->c_flag |= C_CHANGE | C_UPDATE;
-		tv = time;
-		(void) VOP_UPDATE(dvp, &tv, &tv, 0);
-		vput(dvp);
+		dcp->c_touch_chgtime = TRUE;
+		dcp->c_touch_modtime = TRUE;
+		(void) hfs_update(dvp, 0);
+		hfs_unlock(dcp);
+		vnode_put(dvp);
 	}
 	hfs_volupdate(hfsmp, VOL_MKDIR, 1);
-	if (hfsmp->jnl) {
-	    journal_end_transaction(hfsmp->jnl);
-	} 
-	hfs_global_shared_lock_release(hfsmp);
+	hfs_end_transaction(hfsmp);
 
 	cat_releasedesc(&out_desc);
 
@@ -968,7 +1122,7 @@ FindMetaDataDirectory(ExtendedVCB *vcb)
 
 __private_extern__
 u_long
-GetFileInfo(ExtendedVCB *vcb, u_int32_t dirid, char *name,
+GetFileInfo(ExtendedVCB *vcb, u_int32_t dirid, const char *name,
 			struct cat_attr *fattr, struct cat_fork *forkinfo)
 {
 	struct hfsmount * hfsmp;
@@ -976,7 +1130,7 @@ GetFileInfo(ExtendedVCB *vcb, u_int32_t dirid, char *name,
 	struct cnode * dcp = NULL;
 	struct FndrDirInfo * fndrinfo;
 	struct cat_desc jdesc;
-	struct timeval tv;
+	int lockflags;
 	int error;
 	
 	if (vcb->vcbSigWord != kHFSPlusSigWord)
@@ -989,25 +1143,22 @@ GetFileInfo(ExtendedVCB *vcb, u_int32_t dirid, char *name,
 	jdesc.cd_nameptr = name;
 	jdesc.cd_namelen = strlen(name);
 
-	/* Lock catalog b-tree */
-	error = hfs_metafilelocking(hfsmp, kHFSCatalogFileID, LK_EXCLUSIVE, current_proc());	
-	if (error)
-		return (0);
-
-	error = cat_lookup(hfsmp, &jdesc, 0, NULL, fattr, forkinfo);
-
-	(void) hfs_metafilelocking(hfsmp, kHFSCatalogFileID, LK_RELEASE, current_proc());
+	lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_SHARED_LOCK);
+	error = cat_lookup(hfsmp, &jdesc, 0, NULL, fattr, forkinfo, NULL);
+	hfs_systemfile_unlock(hfsmp, lockflags);
 
 	if (error == 0) {
 		return (fattr->ca_fileid);
 	} else if (hfsmp->hfs_flags & HFS_READ_ONLY) {
 		return (0);
 	}
+
+	return (0);	/* XXX what callers expect on an error */
 }
 
 
 /*
- * On Journaled HFS, there can be orphaned files.  These
+ * On HFS Plus Volume, there can be orphaned files.  These
  * are files that were unlinked while busy. If the volume
  * was not cleanly unmounted then some of these files may
  * have persisted and need to be removed.
@@ -1026,18 +1177,21 @@ hfs_remove_orphans(struct hfsmount * hfsmp)
 	char filename[32];
 	char tempname[32];
 	size_t namelen;
-	cat_cookie_t cookie = {0};
+	cat_cookie_t cookie;
 	int catlock = 0;
 	int catreserve = 0;
 	int started_tr = 0;
-	int shared_lock = 0;
+	int lockflags;
 	int result;
-	
+	int orphanedlinks = 0;
+
+	bzero(&cookie, sizeof(cookie));
+
 	if (hfsmp->hfs_flags & HFS_CLEANED_ORPHANS)
 		return;
 
 	vcb = HFSTOVCB(hfsmp);
-	fcb = VTOF(vcb->catalogRefNum);
+	fcb = VTOF(hfsmp->hfs_catalog_vp);
 
 	btdata.bufferAddress = &filerec;
 	btdata.itemSize = sizeof(filerec);
@@ -1045,34 +1199,31 @@ hfs_remove_orphans(struct hfsmount * hfsmp)
 
 	MALLOC(iterator, struct BTreeIterator *, sizeof(*iterator), M_TEMP, M_WAITOK);
 	bzero(iterator, sizeof(*iterator));
+	
+	/* Build a key to "temp" */
 	keyp = (HFSPlusCatalogKey*)&iterator->key;
 	keyp->parentID = hfsmp->hfs_privdir_desc.cd_cnid;
+	keyp->nodeName.length = 4;  /* "temp" */
+	keyp->keyLength = kHFSPlusCatalogKeyMinimumLength + keyp->nodeName.length * 2;
+	keyp->nodeName.unicode[0] = 't';
+	keyp->nodeName.unicode[1] = 'e';
+	keyp->nodeName.unicode[2] = 'm';
+	keyp->nodeName.unicode[3] = 'p';
 
-	result = hfs_metafilelocking(hfsmp, kHFSCatalogFileID, LK_EXCLUSIVE, p);	
-	if (result)
-		goto exit;
 	/*
-	 * Position the iterator at the folder thread record.
-	 * (i.e. one record before first child)
+	 * Position the iterator just before the first real temp file.
 	 */
-	result = BTSearchRecord(fcb, iterator, NULL, NULL, iterator);
+	lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_EXCLUSIVE_LOCK);
+	(void) BTSearchRecord(fcb, iterator, NULL, NULL, iterator);
+	hfs_systemfile_unlock(hfsmp, lockflags);
 
-	(void) hfs_metafilelocking(hfsmp, kHFSCatalogFileID, LK_RELEASE, p);
-	if (result)
-		goto exit;
-
-	/* Visit all the children in the HFS+ private directory. */
+	/* Visit all the temp files in the HFS+ private directory. */
 	for (;;) {
-		result = hfs_metafilelocking(hfsmp, kHFSCatalogFileID, LK_EXCLUSIVE, p);	
-		if (result)
-			goto exit;
-
+		lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_EXCLUSIVE_LOCK);
 		result = BTIterateRecord(fcb, kBTreeNextRecord, iterator, &btdata, NULL);
-
-		(void) hfs_metafilelocking(hfsmp, kHFSCatalogFileID, LK_RELEASE, p);
+		hfs_systemfile_unlock(hfsmp, lockflags);
 		if (result)
 			break;
-
 		if (keyp->parentID != hfsmp->hfs_privdir_desc.cd_cnid)
 			break;
 		if (filerec.recordType != kHFSPlusFileRecord)
@@ -1089,33 +1240,30 @@ hfs_remove_orphans(struct hfsmount * hfsmp)
 		 *
 		 */
 		if (bcmp(tempname, filename, namelen) == 0) {
-   			struct filefork dfork = {0};
-    			struct filefork rfork = {0};
-  			struct cnode cnode = {0};
+   			struct filefork dfork;
+    			struct filefork rfork;
+  			struct cnode cnode;
 
-			// XXXdbg
-			hfs_global_shared_lock_acquire(hfsmp);
-			shared_lock = 1;
-			if (hfsmp->jnl) {
-				if (journal_start_transaction(hfsmp->jnl) != 0) {
-					goto exit;
-				}
-				started_tr = 1;
+			bzero(&dfork, sizeof(dfork));
+			bzero(&rfork, sizeof(rfork));
+			bzero(&cnode, sizeof(cnode));
+			
+			if (hfs_start_transaction(hfsmp) != 0) {
+			    printf("hfs_remove_orphans: failed to start transaction\n");
+			    goto exit;
 			}
+			started_tr = 1;
 		
 			/*
 			 * Reserve some space in the Catalog file.
 			 */
 			if (cat_preflight(hfsmp, CAT_DELETE, &cookie, p) != 0) {
+			    printf("hfs_remove_orphans: cat_preflight failed\n");
 				goto exit;
 			}
 			catreserve = 1;
 
-			/* Lock catalog b-tree */
-			if (hfs_metafilelocking(hfsmp, kHFSCatalogFileID,
-			                        LK_EXCLUSIVE, p) != 0) {
-				goto exit;
-			}
+			lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG | SFL_ATTRIBUTE | SFL_EXTENTS | SFL_BITMAP, HFS_EXCLUSIVE_LOCK);
 			catlock = 1;
 
 			/* Build a fake cnode */
@@ -1159,8 +1307,8 @@ hfs_remove_orphans(struct hfsmount * hfsmp)
 					// that no one transaction gets too big.
 					//
 					if (fsize > 0 && started_tr) {
-						journal_end_transaction(hfsmp->jnl);
-						if (journal_start_transaction(hfsmp->jnl) != 0) {
+						hfs_end_transaction(hfsmp);
+						if (hfs_start_transaction(hfsmp) != 0) {
 							started_tr = 0;
 							break;
 						}
@@ -1180,9 +1328,14 @@ hfs_remove_orphans(struct hfsmount * hfsmp)
 
 			/* Remove the file record from the Catalog */	
 			if (cat_delete(hfsmp, &cnode.c_desc, &cnode.c_attr) != 0) {
-				printf("error deleting cat rec!\n");
+				printf("hfs_remove_oprhans: error deleting cat rec for id %d!\n", cnode.c_desc.cd_cnid);
+				hfs_volupdate(hfsmp, VOL_UPDATE, 0);
 				break;
 			}
+			++orphanedlinks;
+
+			/* Delete any attributes, ignore errors */
+			(void) hfs_removeallattr(hfsmp, cnode.c_fileid);
 			
 			/* Update parent and volume counts */	
 			hfsmp->hfs_privdir_attr.ca_entries--;
@@ -1191,31 +1344,27 @@ hfs_remove_orphans(struct hfsmount * hfsmp)
  			hfs_volupdate(hfsmp, VOL_RMFILE, 0);
 
 			/* Drop locks and end the transaction */
-			(void) hfs_metafilelocking(hfsmp, kHFSCatalogFileID, LK_RELEASE, p);
+			hfs_systemfile_unlock(hfsmp, lockflags);
 			cat_postflight(hfsmp, &cookie, p);
 			catlock = catreserve = 0;
 			if (started_tr) {
-				journal_end_transaction(hfsmp->jnl);
+				hfs_end_transaction(hfsmp);
 				started_tr = 0;
 			}
-			hfs_global_shared_lock_release(hfsmp);
-			shared_lock = 0;
 
 		} /* end if */
 	} /* end for */
-	
+	if (orphanedlinks > 0)
+		printf("HFS: Removed %d orphaned unlinked files\n", orphanedlinks);
 exit:
 	if (catlock) {
-		(void) hfs_metafilelocking(hfsmp, kHFSCatalogFileID, LK_RELEASE, p);
+		hfs_systemfile_unlock(hfsmp, lockflags);
 	}
 	if (catreserve) {
 		cat_postflight(hfsmp, &cookie, p);
 	}
 	if (started_tr) {
-		journal_end_transaction(hfsmp->jnl);
-	}
-	if (shared_lock) {
-		hfs_global_shared_lock_release(hfsmp);
+		hfs_end_transaction(hfsmp);
 	}
 
 	FREE(iterator, M_TEMP);
@@ -1238,7 +1387,7 @@ u_int32_t logBlockSize;
 	/* start with default */
 	logBlockSize = VTOHFS(vp)->hfs_logBlockSize;
 
-	if (vp->v_flag & VSYSTEM) {
+	if (vnode_issystem(vp)) {
 		if (VTOF(vp)->fcbBTCBPtr != NULL) {
 			BTreeInfoRec			bTreeInfo;
 	
@@ -1268,9 +1417,10 @@ __private_extern__
 u_int32_t
 hfs_freeblks(struct hfsmount * hfsmp, int wantreserve)
 {
-	struct vcb_t *vcb = HFSTOVCB(hfsmp);
+	ExtendedVCB *vcb = HFSTOVCB(hfsmp);
 	u_int32_t freeblks;
 
+	HFS_MOUNT_LOCK(hfsmp, TRUE);
 	freeblks = vcb->freeBlocks;
 	if (wantreserve) {
 		if (freeblks > vcb->reserveBlocks)
@@ -1282,6 +1432,7 @@ hfs_freeblks(struct hfsmount * hfsmp, int wantreserve)
 		freeblks -= vcb->loanedBlocks;
 	else
 		freeblks = 0;
+	HFS_MOUNT_UNLOCK(hfsmp, TRUE);
 
 #ifdef HFS_SPARSE_DEV
 	/* 
@@ -1289,18 +1440,19 @@ hfs_freeblks(struct hfsmount * hfsmp, int wantreserve)
 	 * available space on the backing store volume.
 	 */
 	if ((hfsmp->hfs_flags & HFS_HAS_SPARSE_DEVICE) && hfsmp->hfs_backingfs_rootvp) {
-		struct statfs statbuf;  /* 272 bytes */
+		struct vfsstatfs *vfsp;  /* 272 bytes */
 		u_int32_t vfreeblks;
 		u_int32_t loanedblks;
 		struct mount * backingfs_mp;
 
-		backingfs_mp = hfsmp->hfs_backingfs_rootvp->v_mount;
+		backingfs_mp = vnode_mount(hfsmp->hfs_backingfs_rootvp);
 
-		if (VFS_STATFS(backingfs_mp, &statbuf, current_proc()) == 0) {
-			vfreeblks = statbuf.f_bavail;
+		if (vfsp = vfs_statfs(backingfs_mp)) {
+			HFS_MOUNT_LOCK(hfsmp, TRUE);
+			vfreeblks = (u_int32_t)vfsp->f_bavail;
 			/* Normalize block count if needed. */
-			if (statbuf.f_bsize != vcb->blockSize) {
-				vfreeblks = ((u_int64_t)vfreeblks * (u_int64_t)statbuf.f_bsize) / vcb->blockSize;
+			if (vfsp->f_bsize != vcb->blockSize) {
+				vfreeblks = ((u_int64_t)vfreeblks * (u_int64_t)(vfsp->f_bsize)) / vcb->blockSize;
 			}
 			if (vfreeblks > hfsmp->hfs_sparsebandblks)
 				vfreeblks -= hfsmp->hfs_sparsebandblks;
@@ -1315,6 +1467,7 @@ hfs_freeblks(struct hfsmount * hfsmp, int wantreserve)
 				vfreeblks = 0;
 
 			freeblks = MIN(vfreeblks, freeblks);
+			HFS_MOUNT_UNLOCK(hfsmp, TRUE);
 		}
 	}
 #endif /* HFS_SPARSE_DEV */
@@ -1378,87 +1531,121 @@ short MacToVFSError(OSErr err)
 
 
 /*
- * Get the directory entry name hint for a given index.
- * The directory cnode (dcp) must be locked.
+ * Find the current thread's directory hint for a given index.
+ *
+ * Requires an exclusive lock on directory cnode.
  */
 __private_extern__
-char *
-hfs_getnamehint(struct cnode *dcp, int index)
+directoryhint_t *
+hfs_getdirhint(struct cnode *dcp, int index)
 {
-	struct hfs_index *entry;
+	struct timeval tv;
+	directoryhint_t *hint, *next, *oldest;
+	char * name;
 
-	if (index > 0) {
-		SLIST_FOREACH(entry, &dcp->c_indexlist, hi_link) {
-			if (entry->hi_index == index)
-				return (entry->hi_name);
+	oldest = NULL;
+	microuptime(&tv);
+
+	/* Look for an existing hint first */
+	for(hint = dcp->c_hintlist.slh_first; hint != NULL; hint = next) {
+		next = hint->dh_link.sle_next;
+		if (hint->dh_index == index) {
+			goto out;
+		} else if (oldest == NULL || (hint->dh_time < oldest->dh_time)) {
+			oldest = hint;
 		}
 	}
-
-	return (NULL);
-}
-
-/*
- * Save a directory entry name hint for a given index.
- * The directory cnode (dcp) must be locked.
- */
-__private_extern__
-void
-hfs_savenamehint(struct cnode *dcp, int index, const char * namehint)
-{
-	struct hfs_index *entry;
-	int len;
-
-	if (index > 0) {
-		len = strlen(namehint);
-		MALLOC(entry, struct hfs_index *, len + sizeof(struct hfs_index),
-			M_TEMP, M_WAITOK);
-		entry->hi_index = index;
-		bcopy(namehint, entry->hi_name, len + 1);
-		SLIST_INSERT_HEAD(&dcp->c_indexlist, entry, hi_link);
+	/* Recycle one if we have too many already. */
+	if ((dcp->c_dirhintcnt >= HFS_MAXDIRHINTS) && (oldest != NULL)) {
+		hint = oldest;
+		if ((name = hint->dh_desc.cd_nameptr)) {
+			hint->dh_desc.cd_nameptr = NULL;
+			vfs_removename(name);
+		}
+		goto init;
 	}
+
+	/* Create a default directory hint */
+	MALLOC_ZONE(hint, directoryhint_t *, sizeof(directoryhint_t), M_HFSDIRHINT, M_WAITOK);
+	SLIST_INSERT_HEAD(&dcp->c_hintlist, hint, dh_link);
+	++dcp->c_dirhintcnt;
+init:
+	hint->dh_index = index;
+	hint->dh_desc.cd_flags = 0;
+	hint->dh_desc.cd_encoding = 0;
+	hint->dh_desc.cd_namelen = 0;
+	hint->dh_desc.cd_nameptr = NULL;
+	hint->dh_desc.cd_parentcnid = dcp->c_cnid;
+	hint->dh_desc.cd_hint = dcp->c_childhint;
+	hint->dh_desc.cd_cnid = 0;
+out:
+	hint->dh_time = tv.tv_sec;
+	return (hint);
 }
 
 /*
- * Release the directory entry name hint for a given index.
- * The directory cnode (dcp) must be locked.
+ * Release a single directory hint.
+ *
+ * Requires an exclusive lock on directory cnode.
  */
 __private_extern__
 void
-hfs_relnamehint(struct cnode *dcp, int index)
+hfs_reldirhint(struct cnode *dcp, directoryhint_t * relhint)
 {
-	struct hfs_index *entry;
+	directoryhint_t *hint;
+	char * name;
 
-	if (index > 0) {
-		SLIST_FOREACH(entry, &dcp->c_indexlist, hi_link) {
-			if (entry->hi_index == index) {
-				SLIST_REMOVE(&dcp->c_indexlist, entry, hfs_index,
-					hi_link);
-				FREE(entry, M_TEMP);
-				break;
+	SLIST_FOREACH(hint, &dcp->c_hintlist, dh_link) {
+		if (hint == relhint) {
+			SLIST_REMOVE(&dcp->c_hintlist, hint, directoryhint, dh_link);
+			name = hint->dh_desc.cd_nameptr;
+			if (name != NULL) {
+				hint->dh_desc.cd_nameptr = NULL;
+				vfs_removename(name);
 			}
+			FREE_ZONE(hint, sizeof(directoryhint_t), M_HFSDIRHINT);
+			--dcp->c_dirhintcnt;
+			break;
 		}
 	}
 }
 
 /*
- * Release all directory entry name hints.
+ * Release directory hints for given directory
+ *
+ * Requires an exclusive lock on directory cnode.
  */
 __private_extern__
 void
-hfs_relnamehints(struct cnode *dcp)
+hfs_reldirhints(struct cnode *dcp, int stale_hints_only)
 {
-	struct hfs_index *entry;
-	struct hfs_index *next;
+	struct timeval tv;
+	directoryhint_t *hint, *next;
+	char * name;
 
-	if (!SLIST_EMPTY(&dcp->c_indexlist)) {
-		for(entry = SLIST_FIRST(&dcp->c_indexlist);
-		    entry != NULL;
-		    entry = next) {
-			next = SLIST_NEXT(entry, hi_link);
-			SLIST_REMOVE(&dcp->c_indexlist, entry, hfs_index, hi_link);
-			FREE(entry, M_TEMP);
+	if (stale_hints_only)
+		microuptime(&tv);
+	else
+		tv.tv_sec = 0;
+
+	for (hint = dcp->c_hintlist.slh_first; hint != NULL; hint = next) {
+		next = hint->dh_link.sle_next;
+		if (stale_hints_only) {
+			/* Skip over newer entries. */
+			if ((tv.tv_sec - hint->dh_time) < HFS_DIRHINT_TTL)
+				continue;
+			SLIST_REMOVE(&dcp->c_hintlist, hint, directoryhint, dh_link);
 		}
+		name = hint->dh_desc.cd_nameptr;
+		if (name != NULL) {
+			hint->dh_desc.cd_nameptr = NULL;
+			vfs_removename(name);
+		}
+		FREE_ZONE(hint, sizeof(directoryhint_t), M_HFSDIRHINT);
+		--dcp->c_dirhintcnt;
 	}
+	if (!stale_hints_only)
+		dcp->c_hintlist.slh_first = NULL;
 }
 
 
@@ -1498,8 +1685,8 @@ out:
 __private_extern__
 int
 hfs_early_journal_init(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
-					   void *_args, int embeddedOffset, int mdb_offset,
-					   HFSMasterDirectoryBlock *mdbp, struct ucred *cred)
+					   void *_args, off_t embeddedOffset, daddr64_t mdb_offset,
+					   HFSMasterDirectoryBlock *mdbp, kauth_cred_t cred)
 {
 	JournalInfoBlock *jibp;
 	struct buf       *jinfo_bp, *bp;
@@ -1517,14 +1704,14 @@ hfs_early_journal_init(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 
 	sectors_per_fsblock = SWAP_BE32(vhp->blockSize) / blksize;
 				
-	retval = meta_bread(devvp,
-						embeddedOffset/blksize + 
-						(SWAP_BE32(vhp->journalInfoBlock)*sectors_per_fsblock),
+	retval = (int)buf_meta_bread(devvp,
+						(daddr64_t)((embeddedOffset/blksize) + 
+						(SWAP_BE32(vhp->journalInfoBlock)*sectors_per_fsblock)),
 						SWAP_BE32(vhp->blockSize), cred, &jinfo_bp);
 	if (retval)
 		return retval;
 
-	jibp = (JournalInfoBlock *)jinfo_bp->b_data;
+	jibp = (JournalInfoBlock *)buf_dataptr(jinfo_bp);
 	jibp->flags  = SWAP_BE32(jibp->flags);
 	jibp->offset = SWAP_BE64(jibp->offset);
 	jibp->size   = SWAP_BE64(jibp->size);
@@ -1533,7 +1720,7 @@ hfs_early_journal_init(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 		hfsmp->jvp = hfsmp->hfs_devvp;
 	} else {
 		printf("hfs: journal not stored in fs! don't know what to do.\n");
-		brelse(jinfo_bp);
+		buf_brelse(jinfo_bp);
 		return EINVAL;
 	}
 
@@ -1543,9 +1730,9 @@ hfs_early_journal_init(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 
 	if (jibp->flags & kJIJournalNeedInitMask) {
 		printf("hfs: Initializing the journal (joffset 0x%llx sz 0x%llx)...\n",
-			   jibp->offset + (off_t)embeddedOffset, jibp->size);
+			   jibp->offset + embeddedOffset, jibp->size);
 		hfsmp->jnl = journal_create(hfsmp->jvp,
-									jibp->offset + (off_t)embeddedOffset,
+									jibp->offset + embeddedOffset,
 									jibp->size,
 									devvp,
 									blksize,
@@ -1559,16 +1746,16 @@ hfs_early_journal_init(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 		jibp->flags  = SWAP_BE32(jibp->flags);
 		jibp->offset = SWAP_BE64(jibp->offset);
 		jibp->size   = SWAP_BE64(jibp->size);
-		bwrite(jinfo_bp);
+		buf_bwrite(jinfo_bp);
 		jinfo_bp = NULL;
 		jibp     = NULL;
 	} else { 
 		//printf("hfs: Opening the journal (joffset 0x%llx sz 0x%llx vhp_blksize %d)...\n",
-		//	   jibp->offset + (off_t)embeddedOffset,
+		//	   jibp->offset + embeddedOffset,
 		//	   jibp->size, SWAP_BE32(vhp->blockSize));
 				
 		hfsmp->jnl = journal_open(hfsmp->jvp,
-								  jibp->offset + (off_t)embeddedOffset,
+								  jibp->offset + embeddedOffset,
 								  jibp->size,
 								  devvp,
 								  blksize,
@@ -1576,7 +1763,7 @@ hfs_early_journal_init(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 								  arg_tbufsz,
 								  hfs_sync_metadata, hfsmp->hfs_mp);
 
-		brelse(jinfo_bp);
+		buf_brelse(jinfo_bp);
 		jinfo_bp = NULL;
 		jibp     = NULL;
 
@@ -1584,17 +1771,17 @@ hfs_early_journal_init(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 			// reload the mdb because it could have changed
 			// if the journal had to be replayed.
 			if (mdb_offset == 0) {
-				mdb_offset = (embeddedOffset / blksize) + HFS_PRI_SECTOR(blksize);
+				mdb_offset = (daddr64_t)((embeddedOffset / blksize) + HFS_PRI_SECTOR(blksize));
 			}
-			retval = meta_bread(devvp, mdb_offset, blksize, cred, &bp);
+			retval = (int)buf_meta_bread(devvp, mdb_offset, blksize, cred, &bp);
 			if (retval) {
-				brelse(bp);
+				buf_brelse(bp);
 				printf("hfs: failed to reload the mdb after opening the journal (retval %d)!\n",
 					   retval);
 				return retval;
 			}
-			bcopy(bp->b_data + HFS_PRI_OFFSET(blksize), mdbp, 512);
-			brelse(bp);
+			bcopy((char *)buf_dataptr(bp) + HFS_PRI_OFFSET(blksize), mdbp, 512);
+			buf_brelse(bp);
 			bp = NULL;
 		}
 	}
@@ -1673,9 +1860,9 @@ hfs_late_journal_init(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp, void *_a
 
 
 	sectors_per_fsblock = SWAP_BE32(vhp->blockSize) / hfsmp->hfs_phys_block_size;
-	retval = meta_bread(devvp,
-						vcb->hfsPlusIOPosOffset / hfsmp->hfs_phys_block_size + 
-						(SWAP_BE32(vhp->journalInfoBlock)*sectors_per_fsblock),
+	retval = (int)buf_meta_bread(devvp,
+						(daddr64_t)(vcb->hfsPlusIOPosOffset / hfsmp->hfs_phys_block_size + 
+						(SWAP_BE32(vhp->journalInfoBlock)*sectors_per_fsblock)),
 						SWAP_BE32(vhp->blockSize), NOCRED, &jinfo_bp);
 	if (retval) {
 		printf("hfs: can't read journal info block. disabling journaling.\n");
@@ -1683,7 +1870,7 @@ hfs_late_journal_init(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp, void *_a
 		return 0;
 	}
 
-	jibp = (JournalInfoBlock *)jinfo_bp->b_data;
+	jibp = (JournalInfoBlock *)buf_dataptr(jinfo_bp);
 	jibp->flags  = SWAP_BE32(jibp->flags);
 	jibp->offset = SWAP_BE64(jibp->offset);
 	jibp->size   = SWAP_BE64(jibp->size);
@@ -1692,7 +1879,7 @@ hfs_late_journal_init(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp, void *_a
 	if (fid == 0 || jfork.cf_extents[0].startBlock == 0 || jfork.cf_size == 0) {
 		printf("hfs: can't find the journal file! disabling journaling (start: %d)\n",
 			   jfork.cf_extents[0].startBlock);
-		brelse(jinfo_bp);
+		buf_brelse(jinfo_bp);
 		vcb->vcbAtrb &= ~kHFSVolumeJournaledMask;
 		return 0;
 	}
@@ -1720,7 +1907,7 @@ hfs_late_journal_init(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp, void *_a
 		hfsmp->jvp = hfsmp->hfs_devvp;
 	} else {
 		printf("hfs: journal not stored in fs! don't know what to do.\n");
-		brelse(jinfo_bp);
+		buf_brelse(jinfo_bp);
 		return EINVAL;
 	}
 
@@ -1776,9 +1963,9 @@ hfs_late_journal_init(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp, void *_a
 		jibp->offset = SWAP_BE64(jibp->offset);
 		jibp->size   = SWAP_BE64(jibp->size);
 
-		bwrite(jinfo_bp);
+		buf_bwrite(jinfo_bp);
 	} else {
-		brelse(jinfo_bp);
+		buf_brelse(jinfo_bp);
 	} 
 	jinfo_bp = NULL;
 	jibp     = NULL;
@@ -1828,7 +2015,6 @@ static void
 hfs_metadatazone_init(struct hfsmount *hfsmp)
 {
 	ExtendedVCB  *vcb;
-	struct BTreeInfoRec btinfo;
 	u_int64_t  fs_size;
 	u_int64_t  zonesize;
 	u_int64_t  temp;
@@ -1931,7 +2117,6 @@ hfs_metadatazone_init(struct hfsmount *hfsmp)
 		}
 	}
 	filesize += (items + 1) * sizeof(struct dqblk);
-	hfsmp->hfs_hotfile_maxblks = filesize / vcb->blockSize;
 	zonesize += filesize;
 
 	/*
@@ -1943,6 +2128,8 @@ hfs_metadatazone_init(struct hfsmount *hfsmp)
 	temp = zonesize - temp;  /* temp has extra space */
 	filesize += temp / 3;
 	hfsmp->hfs_catalog_maxblks += (temp - (temp / 3)) / vcb->blockSize;
+
+	hfsmp->hfs_hotfile_maxblks = filesize / vcb->blockSize;
 
 	/* Convert to allocation blocks. */
 	blk = zonesize / vcb->blockSize;
@@ -1968,15 +2155,19 @@ static u_int32_t
 hfs_hotfile_freeblocks(struct hfsmount *hfsmp)
 {
 	ExtendedVCB  *vcb = HFSTOVCB(hfsmp);
+	int  lockflags;
 	int  freeblocks;
 
+	lockflags = hfs_systemfile_lock(hfsmp, SFL_BITMAP, HFS_EXCLUSIVE_LOCK);
 	freeblocks = MetaZoneFreeBlocks(vcb);
+	hfs_systemfile_unlock(hfsmp, lockflags);
+
 	/* Minus Extents overflow file reserve. */
 	freeblocks -=
-		hfsmp->hfs_overflow_maxblks - VTOF(vcb->extentsRefNum)->ff_blocks;
+		hfsmp->hfs_overflow_maxblks - VTOF(hfsmp->hfs_extents_vp)->ff_blocks;
 	/* Minus catalog file reserve. */
 	freeblocks -=
-		hfsmp->hfs_catalog_maxblks - VTOF(vcb->catalogRefNum)->ff_blocks;
+		hfsmp->hfs_catalog_maxblks - VTOF(hfsmp->hfs_catalog_vp)->ff_blocks;
 	if (freeblocks < 0)
 		freeblocks = 0;
 
@@ -2011,3 +2202,55 @@ hfs_virtualmetafile(struct cnode *cp)
 	return (0);
 }
 
+
+__private_extern__
+int
+hfs_start_transaction(struct hfsmount *hfsmp)
+{
+    int ret;
+
+    if (hfsmp->jnl == NULL || journal_owner(hfsmp->jnl) != current_thread()) {
+	lck_rw_lock_shared(&hfsmp->hfs_global_lock);
+    }
+
+    if (hfsmp->jnl) {
+	ret = journal_start_transaction(hfsmp->jnl);
+	if (ret == 0) {
+	    OSAddAtomic(1, &hfsmp->hfs_global_lock_nesting);
+	}
+    } else {
+	ret = 0;
+    }
+
+    if (ret != 0) {
+	lck_rw_done(&hfsmp->hfs_global_lock);
+    }
+
+    return ret;
+}
+
+__private_extern__
+int
+hfs_end_transaction(struct hfsmount *hfsmp)
+{
+    int need_unlock=0, ret;
+
+    if (    hfsmp->jnl == NULL
+	|| (   journal_owner(hfsmp->jnl) == current_thread()
+	    && (OSAddAtomic(-1, &hfsmp->hfs_global_lock_nesting) == 1)) ) {
+
+	    need_unlock = 1;
+    } 
+
+    if (hfsmp->jnl) {
+	ret = journal_end_transaction(hfsmp->jnl);
+    } else {
+	ret = 0;
+    }
+
+    if (need_unlock) {
+	lck_rw_done(&hfsmp->hfs_global_lock);
+    }
+
+    return ret;
+}

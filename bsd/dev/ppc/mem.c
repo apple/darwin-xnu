@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -70,10 +70,9 @@
 #include <sys/param.h>
 #include <sys/dir.h>
 #include <sys/proc.h>
-#include <sys/buf.h>
 #include <sys/systm.h>
 #include <sys/vm.h>
-#include <sys/uio.h>
+#include <sys/uio_internal.h>
 #include <sys/malloc.h>
 
 #include <vm/pmap.h>
@@ -87,7 +86,14 @@
 static caddr_t devzerobuf;
 
 extern pmap_t kernel_pmap;
+extern boolean_t kernacc(off_t, size_t );
 
+int mmread(dev_t dev, struct uio *uio);
+int mmrw(dev_t dev, struct uio *uio, enum uio_rw rw);
+int mmioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p);
+int mmwrite(dev_t dev, struct uio *uio);
+
+int
 mmread(dev, uio)
 	dev_t dev;
 	struct uio *uio;
@@ -96,6 +102,7 @@ mmread(dev, uio)
 	return (mmrw(dev, uio, UIO_READ));
 }
 
+int
 mmwrite(dev, uio)
 	dev_t dev;
 	struct uio *uio;
@@ -104,25 +111,41 @@ mmwrite(dev, uio)
 	return (mmrw(dev, uio, UIO_WRITE));
 }
 
+int
+mmioctl(__unused dev_t dev, u_long cmd, __unused caddr_t data, 
+		__unused int flag, __unused struct proc *p)
+{
+	switch (cmd) {
+	case FIONBIO:
+	case FIOASYNC:
+		/* OK to do nothing: we always return immediately */
+		break;
+	default:
+		return ENODEV;
+	}
+
+	return (0);
+}
+
+int
 mmrw(dev, uio, rw)
 	dev_t dev;
 	struct uio *uio;
 	enum uio_rw rw;
 {
 	register int o;
-	register u_int c, v;
+#if LP64KERN
+	register uint64_t c;
+#else
+	register uint c;
+#endif
 	addr64_t vll;
-	register struct iovec *iov;
 	int error = 0;
 	vm_offset_t	where;
-	int		spl;
-	vm_size_t size;
-	extern boolean_t kernacc(off_t, size_t );
 
-	while (uio->uio_resid > 0 && error == 0) {
-		iov = uio->uio_iov;
-		if (iov->iov_len == 0) {
-			uio->uio_iov++;
+	while (uio_resid(uio) > 0 && error == 0) {
+		if (uio_iov_len(uio) == 0) {
+			uio_next_iov(uio);
 			uio->uio_iovcnt--;
 			if (uio->uio_iovcnt < 0)
 				panic("mmrw");
@@ -157,7 +180,8 @@ mmrw(dev, uio, rw)
 				}
 			}
 			o = uio->uio_offset - vll;
-			c = min(PAGE_SIZE - o, (u_int)iov->iov_len);
+			// LP64todo - fix this!
+			c = min(PAGE_SIZE - o, uio_iov_len(uio));
 			error = uiomove((caddr_t)(where + o), c, uio);
 
 			if(dgWork.dgFlags & enaDiagDM) (void)mapping_remove(kernel_pmap, (addr64_t)where);	/* Unmap it */
@@ -170,17 +194,17 @@ mmrw(dev, uio, rw)
 			if (((addr64_t)uio->uio_offset > vm_last_addr) ||
 				((addr64_t)uio->uio_offset < VM_MIN_KERNEL_ADDRESS))
 				goto fault;
-			c = iov->iov_len;
+			c = uio_iov_len(uio);
 			if (!kernacc(uio->uio_offset, c))
 				goto fault;
-			error = uiomove64(uio->uio_offset, (int)c, uio);
+			error = uiomove64(uio->uio_offset, c, uio);
 			continue;
 
 		/* minor device 2 is EOF/RATHOLE */
 		case 2:
 			if (rw == UIO_READ)
 				return (0);
-			c = iov->iov_len;
+			c = uio_iov_len(uio);
 			break;
 		/* minor device 3 is ZERO/RATHOLE */
 		case 3:
@@ -189,11 +213,12 @@ mmrw(dev, uio, rw)
 				bzero(devzerobuf, PAGE_SIZE);
 			}
 			if(uio->uio_rw == UIO_WRITE) {
-				c = iov->iov_len;
+				c = uio_iov_len(uio);
 				break;
 			}
-			c = min(iov->iov_len, PAGE_SIZE);
-			error = uiomove(devzerobuf, (int)c, uio);
+			// LP64todo - fix this!
+			c = min(uio_iov_len(uio), PAGE_SIZE);
+			error = uiomove(devzerobuf, c, uio);
 			continue;
 		default:
 			goto fault;
@@ -202,10 +227,15 @@ mmrw(dev, uio, rw)
 			
 		if (error)
 			break;
-		iov->iov_base += c;
-		iov->iov_len -= c;
+		uio_iov_base_add(uio, c);
 		uio->uio_offset += c;
-		uio->uio_resid -= c;
+#if LP64KERN
+		uio_setresid(uio, (uio_resid(uio) - c));
+		uio_iov_len_add(uio, -((int64_t)c));
+#else
+		uio_setresid(uio, (uio_resid(uio) - c));
+		uio_iov_len_add(uio, -((int)c));
+#endif
 	}
 	return (error);
 fault:

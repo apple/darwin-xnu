@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -95,7 +95,7 @@ typedef natural_t	ipc_kobject_type_t;
 #define IKOT_HOST_SECURITY		17
 #define	IKOT_LEDGER				18
 #define IKOT_MASTER_DEVICE		19
-#define IKOT_ACT				20
+/* (unused)						20	*/
 #define IKOT_SUBSYSTEM			21
 #define IKOT_IO_DONE_QUEUE		22
 #define IKOT_SEMAPHORE			23
@@ -119,9 +119,6 @@ typedef natural_t	ipc_kobject_type_t;
  *	Define types of kernel objects that use page lists instead
  *	of entry lists for copyin of out of line memory.
  */
-
-/* Initialize kernel server dispatch table */
-extern void		mig_init(void);
 
 /* Dispatch a kernel server function */
 extern ipc_kmsg_t	ipc_kobject_server(

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -47,13 +47,41 @@
  * any improvements or extensions that they make and grant Carnegie Mellon
  * the rights to redistribute these changes.
  */
-#include <string.h>
 
+#include <mach_rt.h>
+#include <mach_debug.h>
+#include <mach_ldebug.h>
+
+#include <sys/kdebug.h>
+
+#include <mach/kern_return.h>
+#include <mach/thread_status.h>
 #include <mach/vm_param.h>
-#include <mach/boolean.h>
-#include <vm/pmap.h>
-#include <vm/vm_page.h>
+
+#include <kern/counters.h>
+#include <kern/mach_param.h>
+#include <kern/task.h>
+#include <kern/thread.h>
+#include <kern/sched_prim.h>
 #include <kern/misc_protos.h>
+#include <kern/assert.h>
+#include <kern/spl.h>
+#include <ipc/ipc_port.h>
+#include <vm/vm_kern.h>
+#include <vm/vm_map.h>
+#include <vm/pmap.h>
+
+#include <i386/cpu_data.h>
+#include <i386/cpu_number.h>
+#include <i386/thread.h>
+#include <i386/eflags.h>
+#include <i386/proc_reg.h>
+#include <i386/seg.h>
+#include <i386/tss.h>
+#include <i386/user_ldt.h>
+#include <i386/fpu.h>
+#include <i386/iopb_entries.h>
+#include <i386/misc_protos.h>
 
 /*
  *	pmap_zero_page zeros the specified (machine independent) page.
@@ -62,10 +90,8 @@ void
 pmap_zero_page(
 	       ppnum_t pn)
 {
-        vm_offset_t p;
 	assert(pn != vm_page_fictitious_addr);
-	p = (vm_offset_t)i386_ptob(pn);
-	bzero((char *)phystokv(p), PAGE_SIZE);
+	bzero_phys((addr64_t)i386_ptob(pn), PAGE_SIZE);
 }
 
 /*
@@ -80,26 +106,7 @@ pmap_zero_part_page(
 {
 	assert(pn != vm_page_fictitious_addr);
 	assert(offset + len <= PAGE_SIZE);
-	bzero((char *)phystokv(i386_ptob(pn)) + offset, len);
-}
-
-/*
- *	pmap_copy_page copies the specified (machine independent) pages.
- */
-void
-pmap_copy_page(
-       ppnum_t  psrc,
-       ppnum_t  pdst)
-
-{
-        vm_offset_t src,dst;
-
-	assert(psrc != vm_page_fictitious_addr);
-	assert(pdst != vm_page_fictitious_addr);
-	src = (vm_offset_t)i386_ptob(psrc);
-	dst = (vm_offset_t)i386_ptob(pdst);
-
-	memcpy((void *)phystokv(dst), (void *)phystokv(src), PAGE_SIZE);
+	bzero_phys((addr64_t)(i386_ptob(pn) + offset), len);
 }
 
 /*
@@ -114,16 +121,15 @@ pmap_copy_part_page(
 	vm_size_t	len)
 {
         vm_offset_t  src, dst;
-
 	assert(psrc != vm_page_fictitious_addr);
 	assert(pdst != vm_page_fictitious_addr);
 	src = (vm_offset_t)i386_ptob(psrc);
 	dst = (vm_offset_t)i386_ptob(pdst);
 	assert(((dst & PAGE_MASK) + dst_offset + len) <= PAGE_SIZE);
 	assert(((src & PAGE_MASK) + src_offset + len) <= PAGE_SIZE);
-
-        memcpy((void *)(phystokv(dst) + dst_offset),
-	       (void *)(phystokv(src) + src_offset), len);
+	bcopy_phys((addr64_t)src + (src_offset & INTEL_OFFMASK),
+		   (addr64_t)dst + (dst_offset & INTEL_OFFMASK),
+		   len);
 }
 
 /*
@@ -137,14 +143,21 @@ pmap_copy_part_lpage(
 	vm_offset_t	dst_offset,
 	vm_size_t	len)
 {
-        vm_offset_t dst;
+	pt_entry_t *ptep;
+	thread_t	thr_act = current_thread();
 
-	assert(src != vm_page_fictitious_addr);
 	assert(pdst != vm_page_fictitious_addr);
-	dst = (vm_offset_t)i386_ptob(pdst);
-	assert(((dst & PAGE_MASK) + dst_offset + len) <= PAGE_SIZE);
-
-        memcpy((void *)(phystokv(dst) + dst_offset), (void *)src, len);
+	ptep = pmap_pte(thr_act->map->pmap, i386_ptob(pdst));
+	if (0 == ptep)
+		panic("pmap_copy_part_lpage ptep");
+	assert(((pdst & PAGE_MASK) + dst_offset + len) <= PAGE_SIZE);
+	if (*(pt_entry_t *) CM2)
+	  panic("pmap_copy_part_lpage");
+	*(int *) CM2 = INTEL_PTE_VALID | INTEL_PTE_RW | (*ptep & PG_FRAME) | 
+	  INTEL_PTE_REF | INTEL_PTE_MOD;
+	invlpg((unsigned int) CA2);
+	memcpy((void *) (CA2 + (dst_offset & INTEL_OFFMASK)), (void *) src, len);
+	*(pt_entry_t *) CM2 = 0;
 }
 
 /*
@@ -158,14 +171,21 @@ pmap_copy_part_rpage(
 	vm_offset_t	dst,
 	vm_size_t	len)
 {
-        vm_offset_t src;
+  pt_entry_t *ptep;
+  thread_t thr_act = current_thread();
 
 	assert(psrc != vm_page_fictitious_addr);
-	assert(dst != vm_page_fictitious_addr);
-	src = (vm_offset_t)i386_ptob(psrc);
-	assert(((src & PAGE_MASK) + src_offset + len) <= PAGE_SIZE);
-
-        memcpy((void *)dst, (void *)(phystokv(src) + src_offset), len);
+	ptep = pmap_pte(thr_act->map->pmap, i386_ptob(psrc));
+	if (0 == ptep)
+		panic("pmap_copy_part_rpage ptep");
+	assert(((psrc & PAGE_MASK) + src_offset + len) <= PAGE_SIZE);
+	if (*(pt_entry_t *) CM2)
+	  panic("pmap_copy_part_rpage");
+	*(pt_entry_t *) CM2 = INTEL_PTE_VALID | INTEL_PTE_RW | (*ptep & PG_FRAME) | 
+	  INTEL_PTE_REF;
+	invlpg((unsigned int) CA2);
+	memcpy((void *) dst, (void *) (CA2 + (src_offset & INTEL_OFFMASK)), len);
+	*(pt_entry_t *) CM2 = 0;
 }
 
 /*
@@ -177,9 +197,15 @@ vm_offset_t
 kvtophys(
 	vm_offset_t addr)
 {
-	pt_entry_t *pte;
+        pt_entry_t *ptep;
+	pmap_paddr_t pa;
 
-	if ((pte = pmap_pte(kernel_pmap, addr)) == PT_ENTRY_NULL)
-		return 0;
-	return i386_trunc_page(*pte) | (addr & INTEL_OFFMASK);
+	if ((ptep = pmap_pte(kernel_pmap, addr)) == PT_ENTRY_NULL) {
+	  pa = 0;
+	} else {
+	  pa =  pte_to_pa(*ptep) | (addr & INTEL_OFFMASK);
+	}
+	if (0 == pa)
+		kprintf("kvtophys ret 0!\n");
+	return (pa);
 }

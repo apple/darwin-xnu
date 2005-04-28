@@ -19,14 +19,6 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
-/*
- * Copyright (c) 1998 Apple Computer, Inc.  All rights reserved. 
- *
- * HISTORY
- * 23 Nov 98 sdouglas, created from IODeviceTreeBus.m, & MacOS exp mgr.
- * 05 Apr 99 sdouglas, add interrupt mapping.
- *
- */
 
 #include <IOKit/IODeviceTreeSupport.h>
 #include <libkern/c++/OSContainers.h>
@@ -75,27 +67,30 @@ const OSSymbol *	gIODTInterruptCellKey;
 const OSSymbol *	gIODTInterruptParentKey;
 const OSSymbol *	gIODTNWInterruptMappingKey;
 
+OSDictionary   *	gIODTSharedInterrupts;
 
 static IORegistryEntry * MakeReferenceTable( DTEntry dtEntry, bool copy );
 static void AddPHandle( IORegistryEntry * regEntry );
 static void FreePhysicalMemory( vm_offset_t * range );
+static bool IODTMapInterruptsSharing( IORegistryEntry * regEntry, OSDictionary * allInts );
 
 IORegistryEntry *
 IODeviceTreeAlloc( void * dtTop )
 {
-    IORegistryEntry 	*parent;
-    IORegistryEntry		*child;
-    IORegistryIterator	*regIter;
+    IORegistryEntry *		parent;
+    IORegistryEntry *		child;
+    IORegistryIterator *	regIter;
     DTEntryIterator		iter;
-    DTEntry				dtChild;
-    DTEntry				mapEntry;
-    OSArray				*stack;
-    OSData				*prop;
-    OSObject			*obj;
-    vm_offset_t			*dtMap;
-    int					propSize;
-    bool				intMap;
-    bool				freeDT;
+    DTEntry			dtChild;
+    DTEntry			mapEntry;
+    OSArray *			stack;
+    OSData *			prop;
+    OSObject *			obj;
+    OSDictionary *		allInts;
+    vm_offset_t *		dtMap;
+    int				propSize;
+    bool			intMap;
+    bool			freeDT;
 
     gIODTPlane = IORegistryEntry::makePlane( kIODeviceTreePlane );
 
@@ -196,13 +191,16 @@ IODeviceTreeAlloc( void * dtTop )
     }
 
     // adjust tree
+
+    gIODTSharedInterrupts = OSDictionary::withCapacity(4);
+    allInts = OSDictionary::withCapacity(4);
     intMap = false;
     regIter = IORegistryIterator::iterateOver( gIODTPlane,
 						kIORegistryIterateRecursively );
-    assert( regIter );
-    if( regIter) {
+    assert( regIter && allInts && gIODTSharedInterrupts );
+    if( regIter && allInts && gIODTSharedInterrupts ) {
         while( (child = regIter->getNextObject())) {
-            IODTMapInterrupts( child );
+            IODTMapInterruptsSharing( child, allInts );
             if( !intMap && child->getProperty( gIODTInterruptParentKey))
                 intMap = true;
 
@@ -225,6 +223,30 @@ IODeviceTreeAlloc( void * dtTop )
         }
         regIter->release();
     }
+
+#if IODTSUPPORTDEBUG
+    parent->setProperty("allInts", allInts);
+    parent->setProperty("sharedInts", gIODTSharedInterrupts);
+
+    regIter = IORegistryIterator::iterateOver( gIODTPlane,
+						kIORegistryIterateRecursively );
+    if (regIter) {
+        while( (child = regIter->getNextObject())) {
+	    OSArray *
+	    array = OSDynamicCast(OSArray, child->getProperty( gIOInterruptSpecifiersKey ));
+	    for( UInt32 i = 0; array && (i < array->getCount()); i++)
+	    {
+		IOOptionBits options;
+		IOReturn ret = IODTGetInterruptOptions( child, i, &options );
+		if( (ret != kIOReturnSuccess) || options)
+		    IOLog("%s[%ld] %ld (%x)\n", child->getName(), i, options, ret);
+	    }
+	}
+        regIter->release();
+    }
+#endif
+
+    allInts->release();
 
     if( intMap)
         // set a key in the root to indicate we found NW interrupt mapping
@@ -565,19 +587,57 @@ UInt32 IODTMapOneInterrupt( IORegistryEntry * regEntry, UInt32 * intSpec,
     return( ok ? original_icells : 0 );
 }
 
-bool IODTMapInterrupts( IORegistryEntry * regEntry )
+IOReturn IODTGetInterruptOptions( IORegistryEntry * regEntry, int source, IOOptionBits * options )
 {
-    IORegistryEntry *parent;
-    OSData			*local;
-    OSData			*local2;
-    UInt32			*localBits;
-    UInt32			*localEnd;
-    OSData			*map;
-    OSArray			*mapped;
-    const OSSymbol	*controller;
-    OSArray			*controllers;
-    UInt32			skip = 1;
-    bool			ok, nw;
+    OSArray *	controllers;
+    OSArray *	specifiers;
+    OSArray *	shared;
+    OSObject *	spec;
+    OSObject *	oneSpec;
+
+    *options = 0;
+
+    controllers = OSDynamicCast(OSArray, regEntry->getProperty(gIOInterruptControllersKey));
+    specifiers  = OSDynamicCast(OSArray, regEntry->getProperty(gIOInterruptSpecifiersKey));
+
+    if( !controllers || !specifiers)
+        return (kIOReturnNoInterrupt);
+    
+    shared = (OSArray *) gIODTSharedInterrupts->getObject(
+                        (const OSSymbol *) controllers->getObject(source) );
+    if (!shared)
+        return (kIOReturnSuccess);
+
+    spec = specifiers->getObject(source);
+    if (!spec)
+        return (kIOReturnNoInterrupt);
+
+    for (unsigned int i = 0;
+            (oneSpec = shared->getObject(i))
+            && (!oneSpec->isEqualTo(spec));
+            i++ )	{}
+
+    if (oneSpec)
+        *options = kIODTInterruptShared;
+
+    return (kIOReturnSuccess);
+}
+
+static bool IODTMapInterruptsSharing( IORegistryEntry * regEntry, OSDictionary * allInts )
+{
+    IORegistryEntry *	parent;
+    OSData *		local;
+    OSData *		local2;
+    UInt32 *		localBits;
+    UInt32 *		localEnd;
+    OSData * 		map;
+    OSObject *		oneMap;
+    OSArray *		mapped;
+    OSArray *		controllerInts;
+    const OSSymbol *	controller;
+    OSArray *		controllers;
+    UInt32		skip = 1;
+    bool		ok, nw;
 
     nw = (0 == (local = OSDynamicCast( OSData,
         regEntry->getProperty( gIODTAAPLInterruptsKey))));
@@ -618,8 +678,47 @@ bool IODTMapInterrupts( IORegistryEntry * regEntry )
 
         localBits += skip;
         mapped->setObject( map );
+        controllers->setObject( controller );
+
+        if (allInts)
+        {
+            controllerInts = (OSArray *) allInts->getObject( controller );
+            if (controllerInts)
+	    {
+                for (unsigned int i = 0; (oneMap = controllerInts->getObject(i)); i++)
+                {
+                    if (map->isEqualTo(oneMap))
+                    {
+                        controllerInts = (OSArray *) gIODTSharedInterrupts->getObject( controller );
+                        if (controllerInts)
+                            controllerInts->setObject(map);
+                        else
+                        {
+                            controllerInts = OSArray::withObjects( (const OSObject **) &map, 1, 4 );
+                            if (controllerInts)
+                            {
+                                gIODTSharedInterrupts->setObject( controller, controllerInts );
+                                controllerInts->release();
+                            }
+                        }
+                        break;
+                    }
+                }
+		if (!oneMap)
+                    controllerInts->setObject(map);
+            }
+            else
+            {
+                controllerInts = OSArray::withObjects( (const OSObject **) &map, 1, 16 );
+                if (controllerInts)
+                {
+                    allInts->setObject( controller, controllerInts );
+                    controllerInts->release();
+                }
+            }
+        }
+
         map->release();
-        controllers->setObject( (OSObject *) controller );
         controller->release();
 
     } while( localBits < localEnd);
@@ -638,6 +737,11 @@ bool IODTMapInterrupts( IORegistryEntry * regEntry )
         mapped->release();
 
     return( ok );
+}
+
+bool IODTMapInterrupts( IORegistryEntry * regEntry )
+{
+    return( IODTMapInterruptsSharing( regEntry, 0 ));
 }
 
 /*
@@ -1078,4 +1182,9 @@ OSData * IODTFindSlotName( IORegistryEntry * regEntry, UInt32 deviceNumber )
     }
 
     return( ret );
+}
+
+extern "C" IOReturn IONDRVLibrariesInitialize( IOService * provider )
+{
+    return( kIOReturnUnsupported );
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -57,8 +57,8 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/mount.h>
-#include <sys/vnode.h>
+#include <sys/mount_internal.h>
+#include <sys/vnode_internal.h>
 
 /*
  * These define the root filesystem, device, and root filesystem type.
@@ -71,7 +71,9 @@ int (*mountroot)() = NULL;
  * Set up the initial array of known filesystem types.
  */
 extern	struct vfsops ufs_vfsops;
+#if FFS
 extern	int ffs_mountroot();
+#endif
 extern	struct vfsops mfs_vfsops;
 extern	int mfs_mountroot();
 extern  struct vfsops hfs_vfsops;
@@ -90,60 +92,60 @@ extern	struct vfsops devfs_vfsops;
 /*
  * Set up the filesystem operations for vnodes.
  */
-static struct vfsconf vfsconflist[] = {
+static struct vfstable vfsconflist[] = {
 	/* HFS/HFS+ Filesystem */
 #if HFS
-	{ &hfs_vfsops, "hfs", 17, 0, MNT_LOCAL | MNT_DOVOLFS, hfs_mountroot, NULL },
+	{ &hfs_vfsops, "hfs", 17, 0, MNT_LOCAL | MNT_DOVOLFS, hfs_mountroot, NULL, 0, {0}, VFC_VFSLOCALARGS, 0, 0 },
 #endif
 
 	/* Fast Filesystem */
 #if FFS
-	{ &ufs_vfsops, "ufs", 1, 0, MNT_LOCAL, ffs_mountroot, NULL },
+	{ &ufs_vfsops, "ufs", 1, 0, MNT_LOCAL, ffs_mountroot, NULL, 0, {0}, VFC_VFSLOCALARGS, 0, 0  },
 #endif
 
 	/* ISO9660 (aka CDROM) Filesystem */
 #if CD9660
-	{ &cd9660_vfsops, "cd9660", 14, 0, MNT_LOCAL, cd9660_mountroot, NULL },
+	{ &cd9660_vfsops, "cd9660", 14, 0, MNT_LOCAL, cd9660_mountroot, NULL, 0, {0}, VFC_VFSLOCALARGS, 0, 0 },
 #endif
 
 	/* Memory-based Filesystem */
 #if MFS
-	{ &mfs_vfsops, "mfs", 3, 0, MNT_LOCAL, mfs_mountroot, NULL },
+	{ &mfs_vfsops, "mfs", 3, 0, MNT_LOCAL, mfs_mountroot, NULL, 0, {0}, VFC_VFSGENERICARGS , 0, 0},
 #endif
 
 	/* Sun-compatible Network Filesystem */
 #if NFSCLIENT
-	{ &nfs_vfsops, "nfs", 2, 0, 0, nfs_mountroot, NULL },
+	{ &nfs_vfsops, "nfs", 2, 0, 0, nfs_mountroot, NULL, 0, {0}, VFC_VFSGENERICARGS , 0, 0},
 #endif
 
 	/* Andrew Filesystem */
 #if AFS
-	{ &afs_vfsops, "andrewfs", 13, 0, 0, afs_mountroot, NULL },
+	{ &afs_vfsops, "andrewfs", 13, 0, 0, afs_mountroot, NULL, 0, {0}, VFC_VFSGENERICARGS , 0, 0},
 #endif
 
 	/* Loopback (Minimal) Filesystem Layer */
 #if NULLFS
-	{ &null_vfsops, "loopback", 9, 0, 0, NULL, NULL },
+	{ &null_vfsops, "loopback", 9, 0, 0, NULL, NULL, 0, {0}, VFC_VFSGENERICARGS , 0, 0},
 #endif
 
 	/* Union (translucent) Filesystem */
 #if UNION
-	{ &union_vfsops, "union", 15, 0, 0, NULL, NULL },
+	{ &union_vfsops, "union", 15, 0, 0, NULL, NULL, 0, {0}, VFC_VFSGENERICARGS , 0, 0},
 #endif
 
 	/* File Descriptor Filesystem */
 #if FDESC
-	{ &fdesc_vfsops, "fdesc", 7, 0, 0, NULL, NULL },
+	{ &fdesc_vfsops, "fdesc", 7, 0, 0, NULL, NULL, 0, {0}, VFC_VFSGENERICARGS , 0, 0},
 #endif
 
 	/* Volume ID Filesystem */
 #if VOLFS
-	{ &volfs_vfsops, "volfs", 18, 0, 0, NULL, NULL },
+	{ &volfs_vfsops, "volfs", 18, 0, 0, NULL, NULL, 0, {0}, VFC_VFSGENERICARGS , 0, 0},
 #endif
 
 	/* Device Filesystem */
 #if DEVFS
-	{ &devfs_vfsops, "devfs", 19, 0, 0, NULL, NULL },
+	{ &devfs_vfsops, "devfs", 19, 0, 0, NULL, NULL, 0, {0}, VFC_VFSGENERICARGS , 0, 0},
 #endif
 
 	{0},
@@ -169,7 +171,7 @@ static struct vfsconf vfsconflist[] = {
 int maxvfsslots = sizeof(vfsconflist) / sizeof (struct vfsconf);
 int numused_vfsslots = 0;
 int maxvfsconf = sizeof(vfsconflist) / sizeof (struct vfsconf);
-struct vfsconf *vfsconf = vfsconflist;
+struct vfstable *vfsconf = vfsconflist;
 
 /*
  *
@@ -178,9 +180,11 @@ struct vfsconf *vfsconf = vfsconflist;
  * vectors.  It is NULL terminated.
  *
  */
+#if FFS
 extern struct vnodeopv_desc ffs_vnodeop_opv_desc;
 extern struct vnodeopv_desc ffs_specop_opv_desc;
 extern struct vnodeopv_desc ffs_fifoop_opv_desc;
+#endif
 extern struct vnodeopv_desc mfs_vnodeop_opv_desc;
 extern struct vnodeopv_desc dead_vnodeop_opv_desc;
 extern struct vnodeopv_desc fifo_vnodeop_opv_desc;
@@ -203,10 +207,12 @@ extern struct vnodeopv_desc devfs_vnodeop_opv_desc;
 extern struct vnodeopv_desc devfs_spec_vnodeop_opv_desc;
 
 struct vnodeopv_desc *vfs_opv_descs[] = {
+#if FFS
 	&ffs_vnodeop_opv_desc,
 	&ffs_specop_opv_desc,
 #if FIFO
 	&ffs_fifoop_opv_desc,
+#endif
 #endif
 	&dead_vnodeop_opv_desc,
 #if FIFO

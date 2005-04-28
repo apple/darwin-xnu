@@ -1,0 +1,65 @@
+Creating a Panic UI image (either the default or loadable)
+
+The key steps are: create an indexed image using the MacOS X system 8 clut, saved
+in QuickTime uncompressed 256 color format. Run it through the genimage tool
+to create a C structure or a kernel loadable file.
+
+
+===== Create the image 
+
+Using an application like Photoshop, create an image to be used as the image 
+displayed at panic time. Your selection of colors is limited to those found in
+the MacOS X system 8 clut; in the application you're using, make sure you are
+in "indexed mode" and that the supplied CLUT (appleClut8.act) has been selected. 
+
+* The appleClut8.act is the default Mac OS X CLUT.
+
+Keep in mind the following.
+
+* There must be at least 20 lines at the bottom of the image reserved.  This is
+used by the system for displaying extra panic information.  There can be more than
+20 lines, but you'll have to provide this information when generating the image for
+the kernel.
+
+* You must determine the colors used by the font for displaying the panic information.
+There are forground and background colors.  The default foreground is "100% White".
+It is represented by a 24-bit value of 0xFFFFFF.  The default background is
+"13% White, or Dark Gray".  It is represented by a 24-bit value of 0x222222. To change
+the defaults, you'll have to provide this information when generating the image for
+the kernel.
+
+Save the completed image as a TIFF (still indexed off the CLUT).
+
+
+===== Convert the TIFF indexed image to QuickTime RAW
+
+Using Preview, open the TIFF image. Use File:Export to save the TIFF image in
+QuickTime image format with options of "None" for compression and "256 Colors"
+for the depth.  Quality should be "Best".  The saved results should be a .qtif
+formatted RAW image.
+
+
+===== Generate an image for the kernel.
+
+To generate the default kernel panic image file "panic_image.c", in your working
+directory, execute:
+
+genimage -i <your .qtif image> -n <lines> -fg <24-bit color> -bg <24-bit color> 
+** options other than -i are optional.
+
+To genertate a kernel loadable panic image file, execute:
+
+qtif2kraw -i <your .qtif image> -o <your .kraw file> -n <lines> -fg <24-bit color> -bg <24-bit color> 
+** options other than -i and -o are optional.
+
+
+
+===== Other Info
+
+The reason an 8-bit image was choosen, was because it is easy to convert to 24 or 16 bit colors.
+The system does not typically run in 8-bit mode.  If the system is in 8-bit mode.  Then we have
+to check to see if the active CLUT is the same as the one that the image was created with.  If the
+CLUTs are different.  The image is converted to grayscale and the nearest matching gray in the active
+CLUT is used.
+
+

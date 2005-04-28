@@ -77,7 +77,7 @@ int aurp_open(gref)
 		if (ddp_AURPfuncx(AURPCODE_REG, AURPcmdx, 0)) {
 			aurp_gref = 0;
 			aurp_minor_no[i] = 0;
-			return EPROTO;
+			return EPROTOTYPE;
 		}
 	}
 

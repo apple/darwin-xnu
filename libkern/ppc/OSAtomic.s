@@ -50,8 +50,14 @@ $0:
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 /*
-int OSCompareAndSwap( UInt32 oldVal, UInt32 newVal, UInt32 * addr )
-This is now an alias to hw_compare_and_store, see xnu/libkern/Makefile
+int     OSCompareAndSwap( UInt32 oldVal, UInt32 newVal, UInt32 * addr )
+    This is now an alias to hw_compare_and_store, see xnu/libkern/Makefile.
+
+void *	OSDequeueAtomic(void ** inList, SInt32 inOffset)
+    This is also aliased, to hw_dequeue_atomic.
+    
+void	OSEnqueueAtomic(void ** inList, void * inNewLink, SInt32 inOffset)
+    This is aliased to hw_queue_atomic.
 */
 
 /*

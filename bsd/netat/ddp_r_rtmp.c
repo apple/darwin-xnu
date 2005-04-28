@@ -49,6 +49,7 @@
 #include <sys/mbuf.h>
 #include <sys/ioctl.h>
 #include <sys/malloc.h>
+#include <kern/locks.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
 
@@ -82,7 +83,7 @@ gbuf_t *rtmp_prep_new_packet();
 
 void rtmp_timeout();
 void rtmp_send_port();
-void rtmp_send_port_funnel();
+void rtmp_send_port_locked();
 void rtmp_dropper(void *);
 void rtmp_shutdown();
 static void rtmp_update();
@@ -92,6 +93,7 @@ extern int elap_online3();
 extern pktsIn, pktsOut, pktsDropped, pktsHome;
 extern short ErrorRTMPoverflow, ErrorZIPoverflow;
 extern atlock_t ddpinp_lock;
+extern lck_mtx_t * atalk_mutex;
 
 /*
  * rtmp_router_input: function called by DDP (in router mode) to handle
@@ -739,12 +741,11 @@ register at_ifaddr_t        *ifID;
 		register unsigned int s;
 		short i;
 		RT_entry *en = &RT_table[0];
-                boolean_t 	funnel_state;
 
-                funnel_state = thread_funnel_set(network_flock, TRUE);
+		atalk_lock();
 
 		if (ifID->ifRoutingState < PORT_ONLINE) {
-                        (void) thread_funnel_set(network_flock, FALSE);
+			atalk_unlock();
 			return;
                 }
 
@@ -799,7 +800,7 @@ register at_ifaddr_t        *ifID;
 		ATENABLE(s, ddpinp_lock);
 		timeout(rtmp_timeout, (caddr_t) ifID, 20*SYS_HZ);
 		
-                (void) thread_funnel_set(network_flock, FALSE);
+		atalk_unlock();
 }
 			 
 /*
@@ -1168,13 +1169,13 @@ static void rtmp_request(ifID, ddp)
 
 }
 
-/* funnel version of rtmp_send_port */
-void rtmp_send_port_funnel(ifID)
+/* locked version of rtmp_send_port */
+void rtmp_send_port_locked(ifID)
      register at_ifaddr_t *ifID;
 {
-        thread_funnel_set(network_flock, TRUE);
+	atalk_lock();
 	rtmp_send_port(ifID);
-        thread_funnel_set(network_flock, FALSE);
+	atalk_unlock();
 }
 
 
@@ -1212,7 +1213,7 @@ void rtmp_send_port(ifID)
 	dPrintf(D_M_RTMP_LOW, D_L_TRACE,
 		("rtmp_send_port: func=0x%x, ifID=0x%x\n", 
 		 (u_int) rtmp_send_port, (u_int) ifID));
-	timeout (rtmp_send_port_funnel, (caddr_t)ifID, 10 * SYS_HZ);
+	timeout (rtmp_send_port_locked, (caddr_t)ifID, 10 * SYS_HZ);
 
 }
 
@@ -1222,14 +1223,13 @@ void rtmp_send_port(ifID)
 
 void rtmp_dropper(void *arg)
 {
-	boolean_t 	funnel_state;
 
-	funnel_state = thread_funnel_set(network_flock, TRUE);
+	atalk_lock();
 
 	pktsIn = pktsOut = pktsHome = pktsDropped = 0;
 	timeout(rtmp_dropper, NULL, 2*SYS_HZ);
 
-	(void) thread_funnel_set(network_flock, FALSE);
+	atalk_unlock();
 }
 	
 /*
@@ -1248,9 +1248,8 @@ int rtmp_router_start(keP)
 	register short Index, router_starting_timer = 0;
 	register RT_entry *Entry;
 	register at_net_al netStart, netStop;
-	boolean_t 	funnel_state;
+	struct timespec ts;
 
-	funnel_state = thread_funnel_set(network_flock, TRUE);
 
 	/* clear the static structure used to record routing errors */
 	bzero(&ke, sizeof(ke));
@@ -1422,13 +1421,15 @@ int rtmp_router_start(keP)
 		goto error;
 	}
 
-	/* sleep for 10 seconds */
+	/* sleep for 11 seconds */
+	ts.tv_sec = 11;
+	ts.tv_nsec = 0;
 	if ((err = 
 	     /* *** eventually this will be the ifID for the interface
 		being brought up in router mode *** */
 	     /* *** router sends rtmp packets every 10 seconds *** */
-	     tsleep(&ifID_home->startup_inprogress, 
-		    PSOCK | PCATCH, "router_start1", (10+1) * SYS_HZ))
+		msleep(&ifID_home->startup_inprogress, atalk_mutex,
+		    PSOCK | PCATCH, "router_start1", &ts))
 	    != EWOULDBLOCK) {
 		goto error;
 	}
@@ -1470,11 +1471,13 @@ startZoneInfo:
 			dPrintf(D_M_RTMP, D_L_STARTUP,
 				("rtmp_router_start: waiting for zone info to complete\n"));
 			/* sleep for 10 seconds */
+			ts.tv_sec = 10;
+			ts.tv_nsec = 0;
 			if ((err = 
 			     /* *** eventually this will be the ifID for the 
 				    interface being brought up in router mode *** */
-			     tsleep(&ifID_home->startup_inprogress, 
-				    PSOCK | PCATCH, "router_start2", 10 * SYS_HZ))
+				msleep(&ifID_home->startup_inprogress, atalk_mutex,
+				    PSOCK | PCATCH, "router_start2", &ts))
 			    != EWOULDBLOCK) {
 				goto error;
 			}
@@ -1558,22 +1561,20 @@ startZoneInfo:
 	/* prepare the packet dropper timer */
 	timeout (rtmp_dropper, NULL, 1*SYS_HZ);
 
-	(void) thread_funnel_set(network_flock, funnel_state);
 	return(0);
 
 error:
 	dPrintf(D_M_RTMP,D_L_ERROR, 
-		("rtmp_router_start: error type=%d occured on port %d\n",
+		("rtmp_router_start: error type=%d occurred on port %d\n",
 		ifID->ifRoutingState, ifID->ifPort));
 
 	/* if there's no keP->error, copy the local ke structure,
-	   since the error occured asyncronously */
+	   since the error occurred asyncronously */
 	if ((!keP->error) && ke.error)
 		bcopy(&ke, keP, sizeof(ke));
 	rtmp_shutdown();
 
 	/* to return the error in keP, the ioctl has to return 0 */
-	(void) thread_funnel_set(network_flock, funnel_state);
         
 	return((keP->error)? 0: err);
 } /* rtmp_router_start */
@@ -1597,7 +1598,7 @@ void rtmp_shutdown()
 	TAILQ_FOREACH(ifID, &at_ifQueueHd, aa_link) {
 		if (ifID->ifRoutingState > PORT_OFFLINE ) {
 			if (ifID->ifRoutingState == PORT_ONLINE)  {
-				untimeout(rtmp_send_port_funnel, (caddr_t)ifID);
+				untimeout(rtmp_send_port_locked, (caddr_t)ifID);
 				untimeout(rtmp_timeout, (caddr_t) ifID); 
 			}
 			/* 

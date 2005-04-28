@@ -291,10 +291,10 @@ FlushCatalog(ExtendedVCB *volume)
 		
 		if ( 0 /*fcb->fcbFlags & fcbModifiedMask*/ )
 		{
-			VCB_LOCK(volume);
+			HFS_MOUNT_LOCK(volume, TRUE);
 			volume->vcbFlags |= 0xFF00;		// Mark the VCB dirty
 			volume->vcbLsMod = GetTimeUTC();	// update last modified date
-			VCB_UNLOCK(volume);
+			HFS_MOUNT_UNLOCK(volume, TRUE);
 
 		//	result = FlushVolumeControlBlock(volume);
 		}

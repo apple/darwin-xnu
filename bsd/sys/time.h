@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -58,27 +58,145 @@
 #ifndef _SYS_TIME_H_
 #define _SYS_TIME_H_
 
-#include <sys/appleapiopts.h>
-#include <sys/types.h>
+#include <sys/cdefs.h>
+#include <sys/_types.h>
+
+#ifndef	_TIME_T
+#define	_TIME_T
+typedef	__darwin_time_t	time_t;
+#endif
+
+#ifndef _SUSECONDS_T
+#define _SUSECONDS_T
+typedef __darwin_suseconds_t	suseconds_t;
+#endif
+
 
 /*
  * Structure returned by gettimeofday(2) system call,
  * and used in other calls.
  */
+#ifndef _TIMEVAL
+#define _TIMEVAL
 struct timeval {
-	int32_t	tv_sec;		/* seconds */
-	int32_t	tv_usec;	/* and microseconds */
+	time_t		tv_sec;		/* seconds */
+	suseconds_t	tv_usec;	/* and microseconds */
+};
+#endif	/* _TIMEVAL */
+
+/*
+ * Structure used as a parameter by getitimer(2) and setitimer(2) system
+ * calls.
+ */
+struct	itimerval {
+	struct	timeval it_interval;	/* timer interval */
+	struct	timeval it_value;	/* current value */
 };
 
 /*
+ * Names of the interval timers, and structure
+ * defining a timer setting.
+ */
+#define	ITIMER_REAL	0
+#define	ITIMER_VIRTUAL	1
+#define	ITIMER_PROF	2
+
+
+/*
+ * [XSI] The fd_set type shall be defined as described in <sys/select.h>.
+ *
+ * Note:	We use _FD_SET to protect all select related
+ *		types and macros
+ */
+#ifndef _FD_SET
+#define	_FD_SET
+
+/*
+ * Select uses bit masks of file descriptors in longs.  These macros
+ * manipulate such bit fields (the filesystem macros use chars).  The
+ * extra protection here is to permit application redefinition above
+ * the default size.
+ */
+#ifndef	FD_SETSIZE
+#define	FD_SETSIZE	1024
+#endif
+
+#define	__DARWIN_NBBY	8				/* bits in a byte */
+#define __DARWIN_NFDBITS	(sizeof(__int32_t) * __DARWIN_NBBY) /* bits per mask */
+#define	__DARWIN_howmany(x, y) (((x) + ((y) - 1)) / (y))	/* # y's == x bits? */
+
+__BEGIN_DECLS
+typedef	struct fd_set {
+	__int32_t	fds_bits[__DARWIN_howmany(FD_SETSIZE, __DARWIN_NFDBITS)];
+} fd_set;
+__END_DECLS
+
+#define	FD_SET(n, p)	((p)->fds_bits[(n)/__DARWIN_NFDBITS] |= (1<<((n) % __DARWIN_NFDBITS)))
+#define	FD_CLR(n, p)	((p)->fds_bits[(n)/__DARWIN_NFDBITS] &= ~(1<<((n) % __DARWIN_NFDBITS)))
+#define	FD_ISSET(n, p)	((p)->fds_bits[(n)/__DARWIN_NFDBITS] & (1<<((n) % __DARWIN_NFDBITS)))
+#if __GNUC__ > 3 || __GNUC__ == 3 && __GNUC_MINOR__ >= 3
+/*
+ * Use the built-in bzero function instead of the library version so that
+ * we do not pollute the namespace or introduce prototype warnings.
+ */
+#define	FD_ZERO(p)	__builtin_bzero(p, sizeof(*(p)))
+#else
+#define	FD_ZERO(p)	bzero(p, sizeof(*(p)))
+#endif
+#ifndef _POSIX_C_SOURCE
+#define	FD_COPY(f, t)	bcopy(f, t, sizeof(*(f)))
+#endif	/* !_POSIX_C_SOURCE */
+
+#endif	/* !_FD_SET */
+
+
+#ifndef _POSIX_C_SOURCE
+/*
  * Structure defined by POSIX.4 to be like a timeval.
  */
-#ifndef _TIMESPEC_DECLARED
-#define _TIMESPEC_DECLARED
+#ifndef _TIMESPEC
+#define _TIMESPEC
 struct timespec {
 	time_t	tv_sec;		/* seconds */
+	long	tv_nsec;	/* and nanoseconds */
+};
+
+#ifdef KERNEL
+// LP64todo - should this move?
+#include <machine/types.h>	/* user_time_t */
+
+/* LP64 version of struct timeval.  time_t is a long and must grow when 
+ * we're dealing with a 64-bit process.
+ * WARNING - keep in sync with struct timeval
+ */
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=natural
+#endif
+
+struct user_timeval {
+	user_time_t	tv_sec;		/* seconds */
+	suseconds_t	tv_usec;	/* and microseconds */
+};	
+
+struct	user_itimerval {
+	struct	user_timeval it_interval;	/* timer interval */
+	struct	user_timeval it_value;		/* current value */
+};
+
+/* LP64 version of struct timespec.  time_t is a long and must grow when 
+ * we're dealing with a 64-bit process.
+ * WARNING - keep in sync with struct timespec
+ */
+struct user_timespec {
+	user_time_t	tv_sec;		/* seconds */
 	int32_t	tv_nsec;	/* and nanoseconds */
 };
+
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=reset
+#endif
+
+#endif // KERNEL
 #endif
 
 #define	TIMEVAL_TO_TIMESPEC(tv, ts) {					\
@@ -101,8 +219,6 @@ struct timezone {
 #define	DST_MET		4	/* Middle European dst */
 #define	DST_EET		5	/* Eastern European dst */
 #define	DST_CAN		6	/* Canada */
-
-#define time_second time.tv_sec
 
 /* Operations on timevals. */
 #define	timerclear(tvp)		(tvp)->tv_sec = (tvp)->tv_usec = 0
@@ -133,19 +249,6 @@ struct timezone {
 #define timevalcmp(l, r, cmp)   timercmp(l, r, cmp) /* freebsd */
 
 /*
- * Names of the interval timers, and structure
- * defining a timer setting.
- */
-#define	ITIMER_REAL	0
-#define	ITIMER_VIRTUAL	1
-#define	ITIMER_PROF	2
-
-struct	itimerval {
-	struct	timeval it_interval;	/* timer interval */
-	struct	timeval it_value;	/* current value */
-};
-
-/*
  * Getkerninfo clock information structure
  */
 struct clockinfo {
@@ -155,39 +258,56 @@ struct clockinfo {
 	int	stathz;		/* statistics clock frequency */
 	int	profhz;		/* profiling clock frequency */
 };
+#endif /* ! _POSIX_C_SOURCE */
 
-#include <sys/cdefs.h>
 
 #ifdef KERNEL
-void	microtime __P((struct timeval *tv));
-void	microuptime __P((struct timeval *tv));
+
+#ifndef _POSIX_C_SOURCE
+__BEGIN_DECLS
+void	microtime(struct timeval *tv);
+void	microuptime(struct timeval *tv);
 #define getmicrotime(a)		microtime(a)
 #define getmicrouptime(a)	microuptime(a)
-void	nanotime __P((struct timespec *ts));
-void	nanouptime __P((struct timespec *ts));
+void	nanotime(struct timespec *ts);
+void	nanouptime(struct timespec *ts);
 #define getnanotime(a)		nanotime(a)
 #define getnanouptime(a)	nanouptime(a)
-#ifdef __APPLE_API_PRIVATE
-int	itimerfix __P((struct timeval *tv));
-int	itimerdecr __P((struct itimerval *itp, int usec));
-#endif /* __APPLE_API_PRIVATE */
+void	timevaladd(struct timeval *t1, struct timeval *t2);
+void	timevalsub(struct timeval *t1, struct timeval *t2);
+void	timevalfix(struct timeval *t1);
+#ifdef	BSD_KERNEL_PRIVATE
+time_t	boottime_sec(void);
+void	inittodr(time_t base);
+int	itimerfix(struct timeval *tv);
+int	itimerdecr(struct itimerval *itp, int usec);
+#endif /* BSD_KERNEL_PRIVATE */
+
+__END_DECLS
+
+#endif /* ! _POSIX_C_SOURCE */
 
 #else /* !KERNEL */
-#include <time.h>
-
-#ifndef _POSIX_SOURCE
-#include <sys/cdefs.h>
 
 __BEGIN_DECLS
-int	adjtime __P((const struct timeval *, struct timeval *));
-int	futimes __P((int, const struct timeval *));
-int	getitimer __P((int, struct itimerval *));
-int	gettimeofday __P((struct timeval *, struct timezone *));
-int	setitimer __P((int, const struct itimerval *, struct itimerval *));
-int	settimeofday __P((const struct timeval *, const struct timezone *));
-int	utimes __P((const char *, const struct timeval *));
+
+#ifndef _POSIX_C_SOURCE
+#include <time.h>
+
+int	adjtime(const struct timeval *, struct timeval *);
+int	futimes(int, const struct timeval *);
+int	settimeofday(const struct timeval *, const struct timezone *);
+#endif /* ! _POSIX_C_SOURCE */
+
+int	getitimer(int, struct itimerval *);
+int	gettimeofday(struct timeval * __restrict, struct timezone * __restrict);
+int	select(int, fd_set * __restrict, fd_set * __restrict,
+		fd_set * __restrict, struct timeval * __restrict);
+int	setitimer(int, const struct itimerval * __restrict,
+		struct itimerval * __restrict);
+int	utimes(const char *, const struct timeval *);
+
 __END_DECLS
-#endif /* !POSIX */
 
 #endif /* !KERNEL */
 

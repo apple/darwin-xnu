@@ -63,11 +63,6 @@
 
 #include <mach/machine/kern_return.h>
 
-/*
- * N.B.:	If you add errors, please update
- *			mach_services/lib/libmach/err_kern.sub
- */
-
 #define KERN_SUCCESS			0
 
 #define KERN_INVALID_ADDRESS		1

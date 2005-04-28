@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -56,9 +56,11 @@
 /*
  * Symbol table routines for a.out format files.
  */
+#include <mach/mach_types.h>
 #include <mach/boolean.h>
 #include <mach/std_types.h>
 #include <machine/db_machdep.h>		/* data types */
+#include <vm/pmap.h>
 #include <string.h>			/* For strcpy(), strcmp() */
 #include <ddb/db_aout.h>
 #include <ddb/db_output.h>		/* For db_printf() */
@@ -660,7 +662,7 @@ aout_db_search_symbol(
 	db_strategy_t	strategy,
 	db_expr_t	*diffp)		/* in/out */
 {
-	register unsigned long	diff = *diffp;
+	db_expr_t diff = *diffp;
 	register struct nlist	*symp = 0;
 	struct nlist		*sp, *ep, *cp;
 	boolean_t		first_pass = FALSE;

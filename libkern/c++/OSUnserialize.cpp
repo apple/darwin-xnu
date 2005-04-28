@@ -1562,7 +1562,7 @@ OSUnserialize(const char *buffer, OSString **errorString)
 	OSObject *object;
 
 	if (!lock) {
-		lock = mutex_alloc(ETAP_IO_AHA);
+		lock = mutex_alloc(0);
 		mutex_lock(lock);
 	} else {
 		mutex_lock(lock);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -281,7 +281,7 @@ db_end_line(void)
  */
 
 void
-db_printf(char *fmt, ...)
+db_printf(const char *fmt, ...)
 {
 	va_list	listp;
 
@@ -293,7 +293,7 @@ db_printf(char *fmt, ...)
 /* alternate name */
 
 void
-kdbprintf(char *fmt, ...)
+kdbprintf(const char *fmt, ...)
 {
 	va_list	listp;
 
@@ -308,7 +308,7 @@ int	db_indent = 0;
  * Printing (to console) with indentation.
  */
 void
-iprintf(char *fmt, ...)
+iprintf(const char *fmt, ...)
 {
 	va_list listp;
 	register int i;

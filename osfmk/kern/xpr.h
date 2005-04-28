@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -22,102 +22,6 @@
 /*
  * @OSF_COPYRIGHT@
  */
-/*
- * HISTORY
- * 
- * Revision 1.1.1.1  1998/09/22 21:05:32  wsanchez
- * Import of Mac OS X kernel (~semeria)
- *
- * Revision 1.1.1.1  1998/03/07 02:25:57  wsanchez
- * Import of OSF Mach kernel (~mburg)
- *
- * Revision 1.1.12.5  1995/02/24  15:22:46  alanl
- * 	Add XPR definition to trace generic XMM activities.
- * 	[95/01/31            alanl]
- *
- * Revision 1.1.14.3  1994/11/02  18:37:35  dwm
- * 	mk6 CR668 - 1.3b26 merge
- * 	Add MOR token, update XPR names for locks, vm_maps.
- * 	now only a single XPR(...) macro, 5 args always.
- * 	[1994/11/02  18:17:33  dwm]
- * 
- * Revision 1.1.12.3  1994/09/23  02:32:50  ezf
- * 	change marker to not FREE
- * 	[1994/09/22  21:38:33  ezf]
- * 
- * Revision 1.1.12.2  1994/09/10  21:46:57  bolinger
- * 	Merge up to NMK17.3
- * 	[1994/09/08  19:57:50  bolinger]
- * 
- * Revision 1.1.12.1  1994/06/14  17:13:10  bolinger
- * 	Merge up to NMK17.2.
- * 	[1994/06/14  16:55:44  bolinger]
- * 
- * Revision 1.1.7.2  1994/05/30  07:37:07  bernadat
- * 	Added missing ')' to XPR5.
- * 	[94/05/25            bernadat]
- * 
- * Revision 1.1.7.1  1994/03/24  15:29:18  paire
- * 	Set up correct XPR and XPR[1-5] macros.
- * 	Added XPR_SIMPLE_LOCK define.
- * 	[94/03/08            paire]
- * 
- * Revision 1.1.2.5  1993/08/03  18:29:24  gm
- * 	CR9596: Change KERNEL to MACH_KERNEL.
- * 	[1993/08/02  17:41:44  gm]
- * 
- * Revision 1.1.2.4  1993/07/27  18:09:08  rod
- * 	Add ANSI prototypes.  CR #9523.
- * 	[1993/07/27  10:42:04  rod]
- * 
- * Revision 1.1.2.3  1993/06/07  22:15:39  jeffc
- * 	CR9176 - ANSI C violations: trailing tokens on CPP
- * 	directives, extra semicolons after decl_ ..., asm keywords
- * 	[1993/06/07  19:07:55  jeffc]
- * 
- * Revision 1.1.2.2  1993/06/02  23:42:14  jeffc
- * 	Added to OSF/1 R1.3 from NMK15.0.
- * 	[1993/06/02  21:15:17  jeffc]
- * 
- * Revision 1.1  1992/09/30  02:30:28  robert
- * 	Initial revision
- * 
- * $EndLog$
- */
-/* CMU_HIST */
-/*
- * Revision 2.3  91/05/14  16:50:21  mrt
- * 	Correcting copyright
- * 
- * Revision 2.2  91/02/05  17:31:18  mrt
- * 	MACH_KERNEL: removed conditionals.
- * 	[88/12/19            dbg]
- * 
- * Revision 2.1  89/08/03  15:57:39  rwd
- * Created.
- * 
- * Revision 2.5  88/12/19  02:51:59  mwyoung
- * 	Added VM system tags.
- * 	[88/11/22            mwyoung]
- * 
- * Revision 2.4  88/08/24  02:55:54  mwyoung
- * 	Adjusted include file references.
- * 	[88/08/17  02:29:56  mwyoung]
- * 
- *
- *  9-Apr-88  Daniel Julin (dpj) at Carnegie-Mellon University
- *	Added flags for TCP and MACH_NP debugging.
- *
- *  6-Jan-88  Michael Young (mwyoung) at Carnegie-Mellon University
- *	Make the event structure smaller to make it easier to read from
- *	kernel debuggers.
- *
- * 16-Mar-87  Mike Accetta (mja) at Carnegie-Mellon University
- *	MACH:  made XPR_DEBUG definition conditional on MACH
- *	since the routines invoked under it won't link without MACH.
- *	[ V5.1(F7) ]
- */
-/* CMU_ENDHIST */
 /* 
  * Mach Operating System
  * Copyright (c) 1991,1990,1989,1988,1987 Carnegie Mellon University
@@ -216,10 +120,10 @@ extern int xprflags;
 #endif	/* XPR_DEBUG */
 
 struct xprbuf {
-	char 	*msg;
-	long	arg1,arg2,arg3,arg4,arg5;
-	int	timestamp;
-	int	cpuinfo;
+	const char 	*msg;
+	long		arg1,arg2,arg3,arg4,arg5;
+	int		timestamp;
+	int		cpuinfo;
 };
 
 /* Bootstrap XPR facility */
@@ -230,11 +134,11 @@ extern void xprinit(void);
 
 /* Log an XPR message */
 extern void xpr(
-	char	*msg,
-	long	arg1,
-	long	arg2,
-	long	arg3,
-	long	arg4,
-	long	arg5);
+	const char	*msg,
+	long		arg1,
+	long		arg2,
+	long		arg3,
+	long		arg4,
+	long		arg5);
 
 #endif /* _KERN_XPR_H_ */

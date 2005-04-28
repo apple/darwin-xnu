@@ -7,7 +7,6 @@ bsd/netinet/in_cksum.c		standard
 bsd/dev/ppc/conf.c		standard
 bsd/dev/ppc/cons.c		standard
 bsd/dev/ppc/mem.c		standard
-bsd/dev/ppc/unix_startup.c	standard
 bsd/dev/ppc/unix_signal.c	standard
 bsd/dev/ppc/ffs.s		standard
 bsd/dev/ppc/memmove.c		standard
@@ -18,6 +17,7 @@ bsd/dev/ppc/systemcalls.c	standard
 bsd/dev/ppc/km.c		standard
 bsd/dev/ppc/xsumas.s		standard	
 bsd/dev/ppc/sysctl.c		standard	
+bsd/dev/ppc/munge.s		standard
 
 bsd/dev/ppc/chud/chud_bsd_callback.c	standard
 bsd/dev/ppc/chud/chud_process.c		standard

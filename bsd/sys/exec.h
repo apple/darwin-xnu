@@ -65,38 +65,13 @@
 
 #include <sys/appleapiopts.h>
 
-#ifdef  __APPLE_API_OBSOLETE
 /*
- * The following structure is found at the top of the user stack of each
- * user process. The ps program uses it to locate argv and environment
- * strings. Programs that wish ps to display other information may modify
- * it; normally ps_argvstr points to the text for argv[0], and ps_nargvstr
- * is the same as the program's argc. The fields ps_envstr and ps_nenvstr
- * are the equivalent for the environment.
+ * XXX at this point, this file only exists for backward compatability with
+ * XXX software which includes <sys/exec.h> instead of the more correct
+ * XXX <machine/exec.h> and/or need the inclusion of <sys/appleapiopts.h>
+ * XXX as a side effect.
  */
-struct ps_strings {
-	char	*ps_argvstr;	/* first of 0 or more argument strings */
-	int	ps_nargvstr;	/* the number of argument strings */
-	char	*ps_envstr;	/* first of 0 or more environment strings */
-	int	ps_nenvstr;	/* the number of environment strings */
-};
-
-#endif /* __APPLE_API_OBSOLETE */
-
 #include <machine/exec.h>
-
-#ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
-/*
- * Arguments to the exec system call.
- */
-struct execve_args {
-	char	*fname;
-	char	**argp;
-	char	**envp;
-};
-#endif /*__APPLE_API_PRIVATE */
-#endif /* KERNEL */
 
 #endif /* !_SYS_EXEC_H_ */
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -32,6 +32,9 @@
 
 #include <mach/mach_types.h>
 #include <mach/kern_return.h>
+
+#include <kern/kalloc.h>
+#include <kern/kern_types.h>
 #include <kern/host.h>
 #include <kern/task.h>
 #include <kern/thread.h>
@@ -39,9 +42,12 @@
 #include <ppc/exception.h>
 #include <ppc/misc_protos.h>
 #include <ppc/proc_reg.h>
+
+#include <vm/pmap.h>
+#include <vm/vm_map.h>
 #include <vm/vm_kern.h>
 
-void bbSetRupt(ReturnHandler *rh, thread_act_t ct);
+void bbSetRupt(ReturnHandler *rh, thread_t ct);
 
 /*
 ** Function:	NotifyInterruption
@@ -59,8 +65,7 @@ kern_return_t syscall_notify_interrupt ( void ) {
   
     UInt32			interruptState; 
     task_t			task;
-	thread_act_t 	act, fact;
-	thread_t		thread;
+	thread_t 		act, fact;
 	bbRupt			*bbr;
 	BTTD_t			*bttd;
 	int				i;
@@ -69,52 +74,58 @@ kern_return_t syscall_notify_interrupt ( void ) {
 
 	task_lock(task);						/* Lock our task */
 	
-	fact = (thread_act_t)task->threads.next;		/* Get the first activation on task */
+	fact = (thread_t)task->threads.next;		/* Get the first activation on task */
 	act = 0;										/* Pretend we didn't find it yet */
 	
 	for(i = 0; i < task->thread_count; i++) {		/* Scan the whole list */
-		if(fact->mact.bbDescAddr) {					/* Is this a Blue thread? */
-			bttd = (BTTD_t *)(fact->mact.bbDescAddr & -PAGE_SIZE);
+		if(fact->machine.bbDescAddr) {					/* Is this a Blue thread? */
+			bttd = (BTTD_t *)(fact->machine.bbDescAddr & -PAGE_SIZE);
 			if(bttd->InterruptVector) {				/* Is this the Blue interrupt thread? */
 				act = fact;							/* Yeah... */
 				break;								/* Found it, Bail the loop... */
 			}
 		}
-		fact = (thread_act_t)fact->task_threads.next;	/* Go to the next one */
+		fact = (thread_t)fact->task_threads.next;	/* Go to the next one */
 	}
 
 	if(!act) {								/* Couldn't find a bluebox */
 		task_unlock(task);					/* Release task lock */
 		return KERN_FAILURE;				/* No tickie, no shirtee... */
 	}
+
+	thread_reference(act);
 	
-	act_lock_thread(act);							/* Make sure this stays 'round */
 	task_unlock(task);								/* Safe to release now */
+
+	thread_mtx_lock(act);
 
 	/* if the calling thread is the BlueBox thread that handles interrupts
 	 * we know that we are in the PsuedoKernel and we can short circuit 
 	 * setting up the asynchronous task by setting a pending interrupt.
 	 */
 	
-	if ( (unsigned int)act == (unsigned int)current_act() ) {		
+	if ( (unsigned int)act == (unsigned int)current_thread() ) {		
 		bttd->InterruptControlWord = bttd->InterruptControlWord | 
 			((bttd->postIntMask >> kCR2ToBackupShift) & kBackupCR2Mask);
 				
-		act_unlock_thread(act);						/* Unlock the activation */
+		thread_mtx_unlock(act);						/* Unlock the activation */
+		thread_deallocate(act);
 		return KERN_SUCCESS;
 	}
 
-	if(act->mact.emPendRupts >= 16) {				/* Have we hit the arbitrary maximum? */
-		act_unlock_thread(act);						/* Unlock the activation */
+	if(act->machine.emPendRupts >= 16) {				/* Have we hit the arbitrary maximum? */
+		thread_mtx_unlock(act);						/* Unlock the activation */
+		thread_deallocate(act);
 		return KERN_RESOURCE_SHORTAGE;				/* Too many pending right now */
 	}
 	
 	if(!(bbr = (bbRupt *)kalloc(sizeof(bbRupt)))) {	/* Get a return handler control block */
-		act_unlock_thread(act);						/* Unlock the activation */
+		thread_mtx_unlock(act);						/* Unlock the activation */
+		thread_deallocate(act);
 		return KERN_RESOURCE_SHORTAGE;				/* No storage... */
 	}
 	
-	(void)hw_atomic_add(&act->mact.emPendRupts, 1);	/* Count this 'rupt */
+	(void)hw_atomic_add(&act->machine.emPendRupts, 1);	/* Count this 'rupt */
 	bbr->rh.handler = bbSetRupt;					/* Set interruption routine */
 
 	bbr->rh.next = act->handlers;					/* Put our interrupt at the start of the list */
@@ -122,7 +133,8 @@ kern_return_t syscall_notify_interrupt ( void ) {
 
 	act_set_apc(act);								/* Set an APC AST */
 
-	act_unlock_thread(act);							/* Unlock the activation */
+	thread_mtx_unlock(act);							/* Unlock the activation */
+	thread_deallocate(act);
 	return KERN_SUCCESS;							/* We're done... */
 }
 
@@ -132,7 +144,7 @@ kern_return_t syscall_notify_interrupt ( void ) {
  *	we just leave after releasing our work area
  */
 
-void bbSetRupt(ReturnHandler *rh, thread_act_t act) {
+void bbSetRupt(ReturnHandler *rh, thread_t act) {
 
 	savearea 	*sv;
 	BTTD_t		*bttd;
@@ -141,19 +153,19 @@ void bbSetRupt(ReturnHandler *rh, thread_act_t act) {
 	
 	bbr = (bbRupt *)rh;								/* Make our area convenient */
 
-	if(!(act->mact.bbDescAddr)) {					/* Is BlueBox still enabled? */
-		kfree((vm_offset_t)bbr, sizeof(bbRupt));	/* No, release the control block */
+	if(!(act->machine.bbDescAddr)) {					/* Is BlueBox still enabled? */
+		kfree(bbr, sizeof(bbRupt));	/* No, release the control block */
 		return;
 	}
 
-	(void)hw_atomic_sub(&act->mact.emPendRupts, 1);	/* Uncount this 'rupt */
+	(void)hw_atomic_sub(&act->machine.emPendRupts, 1);	/* Uncount this 'rupt */
 
 	if(!(sv = find_user_regs(act))) {				/* Find the user state registers */
-		kfree((vm_offset_t)bbr, sizeof(bbRupt));	/* Couldn't find 'em, release the control block */
+		kfree(bbr, sizeof(bbRupt));	/* Couldn't find 'em, release the control block */
 		return;
 	}
 
-	bttd = (BTTD_t *)(act->mact.bbDescAddr & -PAGE_SIZE);
+	bttd = (BTTD_t *)(act->machine.bbDescAddr & -PAGE_SIZE);
 		
     interruptState = (bttd->InterruptControlWord & kInterruptStateMask) >> kInterruptStateShift; 
 
@@ -168,14 +180,14 @@ void bbSetRupt(ReturnHandler *rh, thread_act_t act) {
 				(kInPseudoKernel << kInterruptStateShift);
 				
 			bttd->exceptionInfo.srr0 = (unsigned int)sv->save_srr0;		/* Save the current PC */
-			sv->save_srr0 = (uint64_t)act->mact.bbInterrupt;	/* Set the new PC */
+			sv->save_srr0 = (uint64_t)act->machine.bbInterrupt;	/* Set the new PC */
 			bttd->exceptionInfo.sprg1 = (unsigned int)sv->save_r1;		/* Save the original R1 */
 			sv->save_r1 = (uint64_t)bttd->exceptionInfo.sprg0;	/* Set the new R1 */
 			bttd->exceptionInfo.srr1 = (unsigned int)sv->save_srr1;		/* Save the original MSR */
 			sv->save_srr1 &= ~(MASK(MSR_BE)|MASK(MSR_SE));	/* Clear SE|BE bits in MSR */
-			act->mact.specFlags &= ~bbNoMachSC;				/* reactivate Mach SCs */ 
+			act->machine.specFlags &= ~bbNoMachSC;				/* reactivate Mach SCs */ 
 			disable_preemption();							/* Don't move us around */
-			per_proc_info[cpu_number()].spcFlags = act->mact.specFlags;	/* Copy the flags */
+			getPerProc()->spcFlags = act->machine.specFlags;	/* Copy the flags */
 			enable_preemption();							/* Ok to move us around */
 			/* drop through to post int in backup CR2 in ICW */
 
@@ -190,7 +202,7 @@ void bbSetRupt(ReturnHandler *rh, thread_act_t act) {
 			break;
 	}
 
-	kfree((vm_offset_t)bbr, sizeof(bbRupt));	/* Release the control block */
+	kfree(bbr, sizeof(bbRupt));	/* Release the control block */
 	return;
 
 }
@@ -221,7 +233,7 @@ kern_return_t enable_bluebox(
 
 	if ( host == HOST_NULL ) return KERN_INVALID_HOST;
 	if ( ! is_suser() ) return KERN_FAILURE;						/* We will only do this for the superuser */
-	if ( th->top_act->mact.bbDescAddr ) return KERN_FAILURE;		/* Bail if already authorized... */
+	if ( th->machine.bbDescAddr ) return KERN_FAILURE;		/* Bail if already authorized... */
 	if ( ! (unsigned int) Desc_TableStart ) return KERN_FAILURE;	/* There has to be a descriptor page */ 
 	if ( ! TWI_TableStart ) return KERN_FAILURE;					/* There has to be a TWI table */ 
 
@@ -231,7 +243,7 @@ kern_return_t enable_bluebox(
 	/* Align the descriptor to a page */
 	Desc_TableStart = (char *)((vm_offset_t)Desc_TableStart & -PAGE_SIZE);
 
-	ret = vm_map_wire(th->top_act->map, 					/* Kernel wire the descriptor in the user's map */
+	ret = vm_map_wire(th->map, 					/* Kernel wire the descriptor in the user's map */
 		(vm_offset_t)Desc_TableStart,
 		(vm_offset_t)Desc_TableStart + PAGE_SIZE,
 		VM_PROT_READ | VM_PROT_WRITE,
@@ -242,11 +254,11 @@ kern_return_t enable_bluebox(
 	}
 		
 	physdescpage = 											/* Get the physical page number of the page */
-		pmap_find_phys(th->top_act->map->pmap, (addr64_t)Desc_TableStart);
+		pmap_find_phys(th->map->pmap, (addr64_t)Desc_TableStart);
 
 	ret =  kmem_alloc_pageable(kernel_map, &kerndescaddr, PAGE_SIZE);	/* Find a virtual address to use */
 	if(ret != KERN_SUCCESS) {								/* Could we get an address? */
-		(void) vm_map_unwire(th->top_act->map,				/* No, unwire the descriptor */
+		(void) vm_map_unwire(th->map,				/* No, unwire the descriptor */
 			(vm_offset_t)Desc_TableStart,
 			(vm_offset_t)Desc_TableStart + PAGE_SIZE,
 			TRUE);
@@ -259,32 +271,32 @@ kern_return_t enable_bluebox(
 	
 	bttd = (BTTD_t *)kerndescaddr;							/* Get the address in a convienient spot */ 
 	
-	th->top_act->mact.bbDescAddr = (unsigned int)kerndescaddr+origdescoffset;	/* Set kernel address of the table */
-	th->top_act->mact.bbUserDA = (unsigned int)Desc_TableStart;	/* Set user address of the table */
-	th->top_act->mact.bbTableStart = (unsigned int)TWI_TableStart;	/* Set address of the trap table */
-	th->top_act->mact.bbTaskID = (unsigned int)taskID;		/* Assign opaque task ID */
-	th->top_act->mact.bbTaskEnv = 0;						/* Clean task environment data */
-	th->top_act->mact.emPendRupts = 0;						/* Clean pending 'rupt count */
-	th->top_act->mact.bbTrap = bttd->TrapVector;			/* Remember trap vector */
-	th->top_act->mact.bbSysCall = bttd->SysCallVector;		/* Remember syscall vector */
-	th->top_act->mact.bbInterrupt = bttd->InterruptVector;	/* Remember interrupt vector */
-	th->top_act->mact.bbPending = bttd->PendingIntVector;	/* Remember pending vector */
-	th->top_act->mact.specFlags &= ~(bbNoMachSC | bbPreemptive);	/* Make sure mach SCs are enabled and we are not marked preemptive */
-	th->top_act->mact.specFlags |= bbThread;				/* Set that we are Classic thread */
+	th->machine.bbDescAddr = (unsigned int)kerndescaddr+origdescoffset;	/* Set kernel address of the table */
+	th->machine.bbUserDA = (unsigned int)Desc_TableStart;	/* Set user address of the table */
+	th->machine.bbTableStart = (unsigned int)TWI_TableStart;	/* Set address of the trap table */
+	th->machine.bbTaskID = (unsigned int)taskID;		/* Assign opaque task ID */
+	th->machine.bbTaskEnv = 0;						/* Clean task environment data */
+	th->machine.emPendRupts = 0;						/* Clean pending 'rupt count */
+	th->machine.bbTrap = bttd->TrapVector;			/* Remember trap vector */
+	th->machine.bbSysCall = bttd->SysCallVector;		/* Remember syscall vector */
+	th->machine.bbInterrupt = bttd->InterruptVector;	/* Remember interrupt vector */
+	th->machine.bbPending = bttd->PendingIntVector;	/* Remember pending vector */
+	th->machine.specFlags &= ~(bbNoMachSC | bbPreemptive);	/* Make sure mach SCs are enabled and we are not marked preemptive */
+	th->machine.specFlags |= bbThread;				/* Set that we are Classic thread */
 		
 	if(!(bttd->InterruptVector)) {							/* See if this is a preemptive (MP) BlueBox thread */
-		th->top_act->mact.specFlags |= bbPreemptive;		/* Yes, remember it */
+		th->machine.specFlags |= bbPreemptive;		/* Yes, remember it */
 	}
 		
 	disable_preemption();									/* Don't move us around */
-	per_proc_info[cpu_number()].spcFlags = th->top_act->mact.specFlags;	/* Copy the flags */
+	getPerProc()->spcFlags = th->machine.specFlags;	/* Copy the flags */
 	enable_preemption();									/* Ok to move us around */
 		
 	{
 		/* mark the proc to indicate that this is a TBE proc */
 		extern void tbeproc(void *proc);
 
-		tbeproc(th->top_act->task->bsd_info);
+		tbeproc(th->task->bsd_info);
 	}
 
 	return KERN_SUCCESS;
@@ -292,37 +304,37 @@ kern_return_t enable_bluebox(
 
 kern_return_t disable_bluebox( host_t host ) {				/* User call to terminate bluebox */
 	
-	thread_act_t 	act;
+	thread_t 	act;
 	
-	act = current_act();									/* Get our thread */					
+	act = current_thread();									/* Get our thread */					
 
 	if (host == HOST_NULL) return KERN_INVALID_HOST;
 	
 	if(!is_suser()) return KERN_FAILURE;					/* We will only do this for the superuser */
-	if(!act->mact.bbDescAddr) return KERN_FAILURE;			/* Bail if not authorized... */
+	if(!act->machine.bbDescAddr) return KERN_FAILURE;			/* Bail if not authorized... */
 
 	disable_bluebox_internal(act);							/* Clean it all up */
 	return KERN_SUCCESS;									/* Leave */
 }
 
-void disable_bluebox_internal(thread_act_t act) {			/* Terminate bluebox */
+void disable_bluebox_internal(thread_t act) {			/* Terminate bluebox */
 		
 	(void) vm_map_unwire(act->map,							/* Unwire the descriptor in user's address space */
-		(vm_offset_t)act->mact.bbUserDA,
-		(vm_offset_t)act->mact.bbUserDA + PAGE_SIZE,
+		(vm_offset_t)act->machine.bbUserDA,
+		(vm_offset_t)act->machine.bbUserDA + PAGE_SIZE,
 		FALSE);
 		
-	kmem_free(kernel_map, (vm_offset_t)act->mact.bbDescAddr & -PAGE_SIZE, PAGE_SIZE);	/* Release the page */
+	kmem_free(kernel_map, (vm_offset_t)act->machine.bbDescAddr & -PAGE_SIZE, PAGE_SIZE);	/* Release the page */
 	
-	act->mact.bbDescAddr = 0;								/* Clear kernel pointer to it */
-	act->mact.bbUserDA = 0;									/* Clear user pointer to it */
-	act->mact.bbTableStart = 0;								/* Clear user pointer to TWI table */
-	act->mact.bbTaskID = 0;									/* Clear opaque task ID */
-	act->mact.bbTaskEnv = 0;								/* Clean task environment data */
-	act->mact.emPendRupts = 0;								/* Clean pending 'rupt count */
-	act->mact.specFlags &= ~(bbNoMachSC | bbPreemptive | bbThread);	/* Clean up Blue Box enables */
+	act->machine.bbDescAddr = 0;								/* Clear kernel pointer to it */
+	act->machine.bbUserDA = 0;									/* Clear user pointer to it */
+	act->machine.bbTableStart = 0;								/* Clear user pointer to TWI table */
+	act->machine.bbTaskID = 0;									/* Clear opaque task ID */
+	act->machine.bbTaskEnv = 0;								/* Clean task environment data */
+	act->machine.emPendRupts = 0;								/* Clean pending 'rupt count */
+	act->machine.specFlags &= ~(bbNoMachSC | bbPreemptive | bbThread);	/* Clean up Blue Box enables */
 	disable_preemption();								/* Don't move us around */
-	per_proc_info[cpu_number()].spcFlags = act->mact.specFlags;	/* Copy the flags */
+	getPerProc()->spcFlags = act->machine.specFlags;		/* Copy the flags */
 	enable_preemption();								/* Ok to move us around */
 	return;
 }
@@ -370,45 +382,46 @@ int bb_settaskenv( struct savearea *save )
 {
 	int				i;
     task_t			task;
-	thread_act_t	act, fact;
+	thread_t	act, fact;
 
 
 	task = current_task();							/* Figure out who our task is */
 
 	task_lock(task);								/* Lock our task */
-	fact = (thread_act_t)task->threads.next;		/* Get the first activation on task */
+	fact = (thread_t)task->threads.next;		/* Get the first activation on task */
 	act = 0;										/* Pretend we didn't find it yet */
 	
 	for(i = 0; i < task->thread_count; i++) {		/* Scan the whole list */
-		if(fact->mact.bbDescAddr) {					/* Is this a Blue thread? */
-			if ( fact->mact.bbTaskID == save->save_r3 ) {	/* Is this the task we are looking for? */
+		if(fact->machine.bbDescAddr) {					/* Is this a Blue thread? */
+			if ( fact->machine.bbTaskID == save->save_r3 ) {	/* Is this the task we are looking for? */
 				act = fact;							/* Yeah... */
 				break;								/* Found it, Bail the loop... */
 			}
 		}
-		fact = (thread_act_t)fact->task_threads.next;	/* Go to the next one */
+		fact = (thread_t)fact->task_threads.next;	/* Go to the next one */
 	}
 
 	if ( !act || !act->active) {
 		task_unlock(task);							/* Release task lock */
-		goto failure;
+		save->save_r3 = -1;							/* we failed to find the taskID */
+		return 1;
 	}
 
-	act_lock_thread(act);							/* Make sure this stays 'round */
+	thread_reference(act);
+
 	task_unlock(task);								/* Safe to release now */
 
-	act->mact.bbTaskEnv = save->save_r4;
-	if(act == current_act()) {						/* Are we setting our own? */
+	thread_mtx_lock(act);							/* Make sure this stays 'round */
+
+	act->machine.bbTaskEnv = save->save_r4;
+	if(act == current_thread()) {						/* Are we setting our own? */
 		disable_preemption();						/* Don't move us around */
-		per_proc_info[cpu_number()].ppbbTaskEnv = act->mact.bbTaskEnv;	/* Remember the environment */
+		getPerProc()->ppbbTaskEnv = act->machine.bbTaskEnv;	/* Remember the environment */
 		enable_preemption();						/* Ok to move us around */
 	}
 
-	act_unlock_thread(act);							/* Unlock the activation */
+	thread_mtx_unlock(act);							/* Unlock the activation */
+	thread_deallocate(act);
 	save->save_r3 = 0;
-	return 1;
-
-failure:
-	save->save_r3 = -1;								/* we failed to find the taskID */
 	return 1;
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002,2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -23,18 +23,16 @@
  * @OSF_COPYRIGHT@
  * 
  */
-#ifndef	MACH_VM_TYPES_H_
-#define MACH_VM_TYPES_H_
-
-#include <stdint.h>
-#include <sys/appleapiopts.h>
+#ifndef	_MACH_VM_TYPES_H_
+#define _MACH_VM_TYPES_H_
 
 #include <mach/port.h>
 #include <mach/machine/vm_types.h>
 
+#include <stdint.h>
+
 typedef vm_offset_t     	pointer_t;
 typedef vm_offset_t     	vm_address_t;
-typedef uint64_t		vm_object_offset_t;
 
 /*
  * We use addr64_t for 64-bit addresses that are used on both
@@ -64,24 +62,34 @@ typedef	uint32_t	reg64_t;
 typedef uint32_t ppnum_t;		/* Physical page number */
 #define PPNUM_MAX UINT32_MAX
 
-#ifdef KERNEL_PRIVATE
 
-#if !defined(__APPLE_API_PRIVATE) || !defined(MACH_KERNEL_PRIVATE)
+#ifdef	KERNEL_PRIVATE
 
+#include <sys/cdefs.h>
+
+#ifndef	MACH_KERNEL_PRIVATE
 /*
  * Use specifically typed null structures for these in
  * other parts of the kernel to enable compiler warnings
  * about type mismatches, etc...  Otherwise, these would
  * be void*.
  */
+__BEGIN_DECLS
+
+struct pmap ;
 struct vm_map ;
 struct vm_object ;
 
-#endif /* !__APPLE_API_PRIVATE || !MACH_KERNEL_PRIVATE */
+__END_DECLS
 
+#endif	/* MACH_KERNEL_PRIVATE */
+
+typedef struct pmap		*pmap_t;
 typedef struct vm_map		*vm_map_t;
 typedef struct vm_object 	*vm_object_t;
-#define VM_OBJECT_NULL		((vm_object_t) 0)
+
+#define PMAP_NULL		((pmap_t) 0)
+#define VM_OBJECT_NULL	((vm_object_t) 0)
 
 #else   /* KERNEL_PRIVATE */
 
@@ -91,16 +99,26 @@ typedef mach_port_t		vm_map_t;
 
 #define VM_MAP_NULL		((vm_map_t) 0)
 
+/*
+ * Evolving definitions, likely to change.
+ */
 
-#ifdef  __APPLE_API_EVOLVING
+typedef uint64_t		vm_object_offset_t;
+typedef uint64_t		vm_object_size_t;
 
 #ifdef  KERNEL_PRIVATE
 
-#ifndef MACH_KERNEL_PRIVATE
+#ifndef	MACH_KERNEL_PRIVATE
+
+__BEGIN_DECLS
+
 struct upl ;
 struct vm_map_copy ;
 struct vm_named_entry ;
-#endif /* !MACH_KERNEL_PRIVATE */
+
+__END_DECLS
+
+#endif	/* MACH_KERNEL_PRIVATE */
 
 typedef struct upl		*upl_t;
 typedef struct vm_map_copy	*vm_map_copy_t;
@@ -108,18 +126,14 @@ typedef struct vm_named_entry	*vm_named_entry_t;
 
 #define VM_MAP_COPY_NULL	((vm_map_copy_t) 0)
 
-#else  /* !KERNEL_PRIVATE */
+#else	/* KERNEL_PRIVATE */
 
 typedef mach_port_t		upl_t;
 typedef mach_port_t		vm_named_entry_t;
 
-#endif /* !KERNEL_PRIVATE */
+#endif	/* KERNEL_PRIVATE */
 
 #define UPL_NULL		((upl_t) 0)
 #define VM_NAMED_ENTRY_NULL	((vm_named_entry_t) 0)
 
-#endif	/* __APPLE_API_EVOLVING */
-
-#endif	/* MACH_VM_TYPES_H_ */
-
-
+#endif	/* _MACH_VM_TYPES_H_ */

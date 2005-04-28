@@ -49,8 +49,7 @@
 
 #ifndef _NET_PPP_COMP_H
 #define _NET_PPP_COMP_H
-#include <sys/appleapiopts.h>
-#ifdef __APPLE_API_UNSTABLE
+#ifdef KERNEL_PRIVATE
 /*
  * The following symbols control whether we include code for
  * various compression methods.
@@ -72,36 +71,35 @@ struct compressor {
 	int	compress_proto;	/* CCP compression protocol number */
 
 	/* Allocate space for a compressor (transmit side) */
-	void	*(*comp_alloc) __P((u_char *options, int opt_len));
+	void	*(*comp_alloc)(u_char *options, int opt_len);
 	/* Free space used by a compressor */
-	void	(*comp_free) __P((void *state));
+	void	(*comp_free)(void *state);
 	/* Initialize a compressor */
-	int	(*comp_init) __P((void *state, u_char *options, int opt_len,
-				  int unit, int hdrlen, int debug));
+	int	(*comp_init)(void *state, u_char *options, int opt_len,
+				  int unit, int hdrlen, int debug);
 	/* Reset a compressor */
-	void	(*comp_reset) __P((void *state));
+	void	(*comp_reset)(void *state);
 	/* Compress a packet */
-	int	(*compress) __P((void *state, PACKETPTR *mret,
-				 PACKETPTR mp, int orig_len, int max_len));
+	int	(*compress)(void *state, PACKETPTR *mret,
+				 PACKETPTR mp, int orig_len, int max_len);
 	/* Return compression statistics */
-	void	(*comp_stat) __P((void *state, struct compstat *stats));
+	void	(*comp_stat)(void *state, struct compstat *stats);
 
 	/* Allocate space for a decompressor (receive side) */
-	void	*(*decomp_alloc) __P((u_char *options, int opt_len));
+	void	*(*decomp_alloc)(u_char *options, int opt_len);
 	/* Free space used by a decompressor */
-	void	(*decomp_free) __P((void *state));
+	void	(*decomp_free)(void *state);
 	/* Initialize a decompressor */
-	int	(*decomp_init) __P((void *state, u_char *options, int opt_len,
-				    int unit, int hdrlen, int mru, int debug));
+	int	(*decomp_init)(void *state, u_char *options, int opt_len,
+				    int unit, int hdrlen, int mru, int debug);
 	/* Reset a decompressor */
-	void	(*decomp_reset) __P((void *state));
+	void	(*decomp_reset)(void *state);
 	/* Decompress a packet. */
-	int	(*decompress) __P((void *state, PACKETPTR mp,
-				   PACKETPTR *dmpp));
+	int	(*decompress)(void *state, PACKETPTR mp, PACKETPTR *dmpp);
 	/* Update state for an incompressible packet received */
-	void	(*incomp) __P((void *state, PACKETPTR mp));
+	void	(*incomp)(void *state, PACKETPTR mp);
 	/* Return decompression statistics */
-	void	(*decomp_stat) __P((void *state, struct compstat *stats));
+	void	(*decomp_stat)(void *state, struct compstat *stats);
 };
 #endif /* PACKETPTR */
 
@@ -183,5 +181,5 @@ struct compressor {
 #define CI_PREDICTOR_2		2	/* config option for Predictor-2 */
 #define CILEN_PREDICTOR_2	2	/* length of its config option */
 
-#endif /* __APPLE_API_UNSTABLE */
+#endif /* KERNEL_PRIVATE */
 #endif /* _NET_PPP_COMP_H */

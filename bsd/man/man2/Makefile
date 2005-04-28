@@ -9,12 +9,17 @@ include $(MakeInc_def)
 DATAFILES = \
 	__syscall.2	\
 	_exit.2	\
+	aio_cancel.2	\
+	aio_error.2	\
+	aio_read.2	\
+	aio_return.2	\
+	aio_suspend.2	\
+	aio_write.2	\
 	accept.2	\
 	access.2	\
 	acct.2	\
 	adjtime.2	\
 	bind.2	\
-	brk.2	\
 	chdir.2	\
 	chflags.2	\
 	chmod.2	\
@@ -25,6 +30,7 @@ DATAFILES = \
 	dup.2	\
 	dup2.2	\
 	execve.2	\
+	exchangedata.2	\
 	fchdir.2	\
 	fchflags.2	\
 	fchmod.2	\
@@ -35,11 +41,12 @@ DATAFILES = \
 	fpathconf.2	\
 	fstat.2	\
 	fstatfs.2	\
-	fsctl.2	\
 	fsync.2	\
 	ftruncate.2	\
 	futimes.2	\
+	getattrlist.2	\
 	getdirentries.2	\
+	getdirentriesattr.2	\
 	getegid.2	\
 	geteuid.2	\
 	getfh.2	\
@@ -61,6 +68,7 @@ DATAFILES = \
 	getsockopt.2	\
 	gettimeofday.2	\
 	getuid.2	\
+	getxattr.2	\
 	intro.2	\
 	ioctl.2	\
 	issetugid.2	\
@@ -70,6 +78,7 @@ DATAFILES = \
 	lchown.2	\
 	link.2	\
 	listen.2	\
+	listxattr.2	\
 	lseek.2	\
 	lstat.2	\
 	madvise.2	\
@@ -89,6 +98,7 @@ DATAFILES = \
 	open.2	\
 	pathconf.2	\
 	pipe.2	\
+	poll.2 \
 	posix_madvise.2	\
 	pread.2	\
 	profil.2	\
@@ -103,9 +113,10 @@ DATAFILES = \
 	recvfrom.2	\
 	recvmsg.2	\
 	rename.2	\
+	removexattr.2	\
 	revoke.2	\
 	rmdir.2	\
-	sbrk.2	\
+	searchfs.2	\
 	select.2	\
 	semctl.2	\
 	semget.2	\
@@ -113,6 +124,7 @@ DATAFILES = \
 	send.2	\
 	sendmsg.2	\
 	sendto.2	\
+	setattrlist.2	\
 	setegid.2	\
 	seteuid.2	\
 	setgid.2	\
@@ -127,6 +139,7 @@ DATAFILES = \
 	setsockopt.2	\
 	settimeofday.2	\
 	setuid.2	\
+	setxattr.2	\
 	shmat.2	\
 	shmctl.2	\
 	shmdt.2	\
@@ -159,7 +172,12 @@ DATAFILES = \
 	write.2	\
 	writev.2	\
 
+# List of source/target hard link pairs for installed manual pages; source
+# names may be repeated
+MLINKS= kqueue.2 kevent.2
+
 INSTALL_MAN_LIST = ${DATAFILES}
+INSTALL_MAN_LINKS = ${MLINKS}
 
 INSTALL_MAN_DIR = man2
 

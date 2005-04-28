@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -36,13 +36,15 @@
 #include <mach/boolean.h>
 #include <sys/param.h>
 #include <sys/systm.h>
+#include <sys/user.h>
 #include <sys/proc.h>
+#include <sys/kauth.h>
 #include <sys/buf.h>
 #include <sys/uio.h>
-#include <sys/vnode.h>
+#include <sys/vnode_internal.h>
 #include <sys/namei.h>
-#include <sys/mount.h>
-#include <sys/ubc.h>
+#include <sys/mount_internal.h>	/* needs internal due to fhandle_t */
+#include <sys/ubc_internal.h>
 #include <sys/lock.h>
 
 #include <mach/mach_types.h>
@@ -59,6 +61,13 @@
 
 #include <kern/assert.h>
 #include <sys/kdebug.h>
+#include <machine/spl.h>
+
+#include <nfs/rpcv2.h>
+#include <nfs/nfsproto.h>
+#include <nfs/nfs.h>
+
+#include <vm/vm_protos.h>
 
 unsigned int vp_pagein=0;
 unsigned int vp_pgodirty=0;
@@ -69,12 +78,8 @@ unsigned int dp_pgins=0;	/* Default pager pageins */
 vm_object_offset_t
 vnode_pager_get_filesize(struct vnode *vp)
 {
-	if (UBCINVALID(vp)) {
-		return (vm_object_offset_t) 0;
-	}
 
 	return (vm_object_offset_t) ubc_getsize(vp);
-	
 }
 
 pager_return_t
@@ -86,98 +91,136 @@ vnode_pageout(struct vnode *vp,
 	int			flags,
 	int			*errorp)
 {
-	int		result = PAGER_SUCCESS;
 	struct proc 	*p = current_proc();
+	int		result = PAGER_SUCCESS;
 	int		error = 0;
-	int blkno=0, s;
-	int cnt, isize;
+	int		error_ret = 0;
+	daddr64_t blkno;
+	int isize;
 	int pg_index;
+	int base_index;
 	int offset;
-	struct buf *bp;
-	boolean_t	funnel_state;
 	upl_page_info_t *pl;
-	upl_t vpupl = NULL;
+	struct vfs_context context;
 
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
+	context.vc_proc = p;
+	context.vc_ucred = kauth_cred_get();
 
 	isize = (int)size;
 
 	if (isize <= 0) {
-	        result = error = PAGER_ERROR;
+	        result    = PAGER_ERROR;
+		error_ret = EINVAL;
 		goto out;
 	}
 	UBCINFOCHECK("vnode_pageout", vp);
 
 	if (UBCINVALID(vp)) {
-		result = error = PAGER_ERROR;
+		result    = PAGER_ERROR;
+		error_ret = EINVAL;
 
 		if (upl && !(flags & UPL_NOCOMMIT))
 		        ubc_upl_abort_range(upl, upl_offset, size, UPL_ABORT_FREE_ON_EMPTY);
 		goto out;
 	}
-	if (upl) {
+	if ( !(flags & UPL_VNODE_PAGER)) {
 		/*
-		 * This is a pageout from the Default pager,
-		 * just go ahead and call VOP_PAGEOUT
+		 * This is a pageout from the default pager,
+		 * just go ahead and call vnop_pageout since
+		 * it has already sorted out the dirty ranges
 		 */
 		dp_pgouts++;
 
 		KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, 1)) | DBG_FUNC_START, 
 				      size, 1, 0, 0, 0);
 
-		if (error = VOP_PAGEOUT(vp, upl, upl_offset, (off_t)f_offset,
-					(size_t)size, p->p_ucred, flags))
-			result = error = PAGER_ERROR;
+		if ( (error_ret = VNOP_PAGEOUT(vp, upl, upl_offset, (off_t)f_offset,
+					       (size_t)size, flags, &context)) )
+			result = PAGER_ERROR;
 
 		KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, 1)) | DBG_FUNC_END, 
 				      size, 1, 0, 0, 0);
 
 		goto out;
 	}
-	ubc_create_upl(vp, f_offset, isize, &vpupl, &pl, UPL_FOR_PAGEOUT | UPL_COPYOUT_FROM | UPL_SET_LITE);
-
-	if (vpupl == (upl_t) 0) {
-		result = error = PAGER_ABSENT;
-		goto out;
-	}
 	/*
-	 * if we get here, we've created the upl and
-	 * are responsible for commiting/aborting it
-	 * regardless of what the caller has passed in
+	 * we come here for pageouts to 'real' files and
+	 * for msyncs...  the upl may not contain any
+	 * dirty pages.. it's our responsibility to sort
+	 * through it and find the 'runs' of dirty pages
+	 * to call VNOP_PAGEOUT on...
 	 */
-	flags &= ~UPL_NOCOMMIT;
+	pl = ubc_upl_pageinfo(upl);
 
 	if (ubc_getsize(vp) == 0) {
-		for (offset = 0; isize; isize -= PAGE_SIZE,
-					offset += PAGE_SIZE) {
-			blkno = ubc_offtoblk(vp, (off_t)f_offset);
-			f_offset += PAGE_SIZE;
-			if ((bp = incore(vp, blkno)) &&
-			    ISSET(bp->b_flags, B_BUSY)) {
-				ubc_upl_abort_range(vpupl, offset, PAGE_SIZE,
-						    UPL_ABORT_FREE_ON_EMPTY);
-				result = error = PAGER_ERROR;
-				continue;
-			} else if (bp) {
-				bremfree(bp);
-				SET(bp->b_flags, B_BUSY | B_INVAL);
-				brelse(bp);
+	        /*
+		 * if the file has been effectively deleted, then
+		 * we need to go through the UPL and invalidate any
+		 * buffer headers we might have that reference any
+		 * of it's pages
+		 */
+		for (offset = upl_offset; isize; isize -= PAGE_SIZE, offset += PAGE_SIZE) {
+#if NFSCLIENT
+			if (vp->v_tag == VT_NFS)
+				/* check with nfs if page is OK to drop */
+				error = nfs_buf_page_inval(vp, (off_t)f_offset);
+			else
+#endif
+			{
+			        blkno = ubc_offtoblk(vp, (off_t)f_offset);
+			        error = buf_invalblkno(vp, blkno, 0);
 			}
-			ubc_upl_commit_range(vpupl, offset, PAGE_SIZE,
-					     UPL_COMMIT_FREE_ON_EMPTY);
+			if (error) {
+			        if ( !(flags & UPL_NOCOMMIT))
+				        ubc_upl_abort_range(upl, offset, PAGE_SIZE, UPL_ABORT_FREE_ON_EMPTY);
+				if (error_ret == 0)
+				        error_ret = error;
+				result = PAGER_ERROR;
+
+			} else if ( !(flags & UPL_NOCOMMIT)) {
+			        ubc_upl_commit_range(upl, offset, PAGE_SIZE, UPL_COMMIT_FREE_ON_EMPTY);
+			}
+			f_offset += PAGE_SIZE;
 		}
 		goto out;
 	}
-	pg_index = 0;
-	offset   = 0;
+	/*
+	 * Ignore any non-present pages at the end of the
+	 * UPL so that we aren't looking at a upl that 
+	 * may already have been freed by the preceeding
+	 * aborts/completions.
+	 */
+	base_index = upl_offset / PAGE_SIZE;
+
+	for (pg_index = (upl_offset + isize) / PAGE_SIZE; pg_index > base_index;) {
+	        if (upl_page_present(pl, --pg_index))
+		        break;
+		if (pg_index == base_index) {
+		        /*
+			 * no pages were returned, so release
+			 * our hold on the upl and leave
+			 */
+		        if ( !(flags & UPL_NOCOMMIT))
+			        ubc_upl_abort_range(upl, upl_offset, isize, UPL_ABORT_FREE_ON_EMPTY);
+
+			goto out;
+		}
+	}
+	isize = (pg_index + 1) * PAGE_SIZE;
+
+	offset = upl_offset;
+	pg_index = base_index;
 
 	while (isize) {
 		int  xsize;
 		int  num_of_pages;
 
-		if ( !upl_valid_page(pl, pg_index)) {
-			ubc_upl_abort_range(vpupl, offset, PAGE_SIZE,
-					    UPL_ABORT_FREE_ON_EMPTY);
+		if ( !upl_page_present(pl, pg_index)) {
+		        /*
+			 * we asked for RET_ONLY_DIRTY, so it's possible
+			 * to get back empty slots in the UPL
+			 * just skip over them
+			 */
 			offset += PAGE_SIZE;
 			isize  -= PAGE_SIZE;
 			pg_index++;
@@ -192,45 +235,31 @@ vnode_pageout(struct vnode *vp,
 			 * We also get here from vm_object_terminate()
 			 * So all you need to do in these
 			 * cases is to invalidate incore buffer if it is there
-			 * Note we must not sleep here if B_BUSY - that is
+			 * Note we must not sleep here if the buffer is busy - that is
 			 * a lock inversion which causes deadlock.
 			 */
-			blkno = ubc_offtoblk(vp, (off_t)(f_offset + offset));
-			s = splbio();
 			vp_pgoclean++;			
-			if (vp->v_tag == VT_NFS) {
+
+#if NFSCLIENT
+			if (vp->v_tag == VT_NFS)
 				/* check with nfs if page is OK to drop */
 				error = nfs_buf_page_inval(vp, (off_t)(f_offset + offset));
-				splx(s);
-				if (error) {
-					ubc_upl_abort_range(vpupl, offset, PAGE_SIZE,
-							    UPL_ABORT_FREE_ON_EMPTY);
-					result = error = PAGER_ERROR;
-					offset += PAGE_SIZE;
-					isize -= PAGE_SIZE;
-					pg_index++;
-					continue;
-				}
-			} else if ((bp = incore(vp, blkno)) &&
-			    ISSET(bp->b_flags, B_BUSY | B_NEEDCOMMIT)) {
-				splx(s);
-				ubc_upl_abort_range(vpupl, offset, PAGE_SIZE,
-						    UPL_ABORT_FREE_ON_EMPTY);
-				result = error = PAGER_ERROR;
-				offset += PAGE_SIZE;
-				isize -= PAGE_SIZE;
-				pg_index++;
-				continue;
-			} else if (bp) {
-			        bremfree(bp);
-				SET(bp->b_flags, B_BUSY | B_INVAL );
-				splx(s);
-				brelse(bp);
-			} else
-				splx(s);
+			else
+#endif
+			{
+			        blkno = ubc_offtoblk(vp, (off_t)(f_offset + offset));
+			        error = buf_invalblkno(vp, blkno, 0);
+			}
+			if (error) {
+			        if ( !(flags & UPL_NOCOMMIT))
+				        ubc_upl_abort_range(upl, offset, PAGE_SIZE, UPL_ABORT_FREE_ON_EMPTY);
+				if (error_ret == 0)
+				        error_ret = error;
+				result = PAGER_ERROR;
 
-			ubc_upl_commit_range(vpupl, offset, PAGE_SIZE, 
-					     UPL_COMMIT_FREE_ON_EMPTY);
+			} else if ( !(flags & UPL_NOCOMMIT)) {
+			        ubc_upl_commit_range(upl, offset, PAGE_SIZE, UPL_COMMIT_FREE_ON_EMPTY);
+			}
 			offset += PAGE_SIZE;
 			isize  -= PAGE_SIZE;
 			pg_index++;
@@ -243,8 +272,6 @@ vnode_pageout(struct vnode *vp,
 		xsize = isize - PAGE_SIZE;
 
 		while (xsize) {
-			if ( !upl_valid_page(pl, pg_index + num_of_pages))
-				break;
 			if ( !upl_dirty_page(pl, pg_index + num_of_pages))
 				break;
 			num_of_pages++;
@@ -253,13 +280,15 @@ vnode_pageout(struct vnode *vp,
 		xsize = num_of_pages * PAGE_SIZE;
 
 		KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, 1)) | DBG_FUNC_START, 
-				      xsize, 0, 0, 0, 0);
+				      xsize, (int)(f_offset + offset), 0, 0, 0);
 
-		if (error = VOP_PAGEOUT(vp, vpupl, (vm_offset_t)offset,
+		if ( (error = VNOP_PAGEOUT(vp, upl, (vm_offset_t)offset,
 					(off_t)(f_offset + offset), xsize,
-					p->p_ucred, flags))
-			result = error = PAGER_ERROR;
-
+					   flags, &context)) ) {
+		        if (error_ret == 0)
+		                error_ret = error;
+			result = PAGER_ERROR;
+		}
 		KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, 1)) | DBG_FUNC_END, 
 				      xsize, 0, 0, 0, 0);
 
@@ -269,13 +298,13 @@ vnode_pageout(struct vnode *vp,
 	}
 out:
 	if (errorp)
-		*errorp = result;
+		*errorp = error_ret;
 
-	thread_funnel_set(kernel_flock, funnel_state);
-
-	return (error);
+	return (result);
 }
 
+
+void IOSleep(int);
 
 pager_return_t
 vnode_pagein(
@@ -288,20 +317,17 @@ vnode_pagein(
 	int 			*errorp)
 {
         struct proc     *p = current_proc();
+        struct uthread	*ut;
         upl_page_info_t *pl;
 	int	        result = PAGER_SUCCESS;
 	int		error = 0;
-	int		xfer_size;
         int             pages_in_upl;
         int             start_pg;
         int             last_pg;
 	int             first_pg;
         int             xsize;
 	int             abort_needed = 1;
-	boolean_t	funnel_state;
 
-
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 
 	UBCINFOCHECK("vnode_pagein", vp);
 
@@ -414,14 +440,16 @@ vnode_pagein(
 		}
 		if (last_pg > start_pg) {
 		        int xoff;
+			struct vfs_context context;
 
+			context.vc_proc = p;
+			context.vc_ucred = kauth_cred_get();
 		        xsize = (last_pg - start_pg) * PAGE_SIZE;
 			xoff  = start_pg * PAGE_SIZE;
 
-			if (error = VOP_PAGEIN(vp, upl, (vm_offset_t) xoff,
+			if ( (error = VNOP_PAGEIN(vp, upl, (vm_offset_t) xoff,
 					       (off_t)f_offset + xoff,
-					       xsize, p->p_ucred,
-					       flags)) {
+					       xsize, flags, &context)) ) {
 				result = PAGER_ERROR;
 				error  = PAGER_ERROR;
 
@@ -434,28 +462,36 @@ vnode_pagein(
 out:
 	if (errorp)
 		*errorp = result;
-	thread_funnel_set(kernel_flock, funnel_state);
 
+	ut = get_bsdthread_info(current_thread());
+
+	if (ut->uu_lowpri_delay) {
+	        /*
+		 * task is marked as a low priority I/O type
+		 * and the I/O we issued while in this system call
+		 * collided with normal I/O operations... we'll
+		 * delay in order to mitigate the impact of this
+		 * task on the normal operation of the system
+		 */
+		IOSleep(ut->uu_lowpri_delay);
+	        ut->uu_lowpri_delay = 0;
+	}
 	return (error);
 }
 
 void
-vnode_pager_shutdown()
+vnode_pager_shutdown(void)
 {
 	int i;
-	extern struct bs_map  bs_port_table[];
-	struct vnode *vp;
+	vnode_t vp;
 
 	for(i = 0; i < MAX_BACKING_STORE; i++) {
-		vp = (struct vnode *)(bs_port_table[i]).vp;
+		vp = (vnode_t)(bs_port_table[i]).vp;
 		if (vp) {
 			(bs_port_table[i]).vp = 0;
-			ubc_rele(vp);
-			/* get rid of macx_swapon() namei() reference */
-			vrele(vp);
 
-			/* get rid of macx_swapon() "extra" reference */
-			vrele(vp);
+			/* get rid of macx_swapon() reference */
+			vnode_rele(vp);
 		}
 	}
 }

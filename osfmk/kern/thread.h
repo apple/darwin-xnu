@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -87,63 +87,38 @@
 #include <mach/thread_status.h>
 #include <mach/exception_types.h>
 
-#include <kern/cpu_data.h>		/* for current_thread */
 #include <kern/kern_types.h>
 
-#include <ipc/ipc_types.h>
-
-/*
- * Logically, a thread of control consists of two parts:
- *
- * + A thread_shuttle, which may migrate due to resource contention
- *
- * + A thread_activation, which remains attached to a task.
- *
- * The thread_shuttle contains scheduling info, accounting info,
- * and links to the thread_activation within which the shuttle is
- * currently operating.
- *
- * An activation always has a valid task pointer, and it is always constant.
- * The activation is only linked onto the task's activation list until
- * the activation is terminated.
- *
- * The thread holds a reference on the activation while using it.
- */
-
-#include <sys/appleapiopts.h>
-
-#ifdef	__APPLE_API_PRIVATE
+#include <sys/cdefs.h>
 
 #ifdef	MACH_KERNEL_PRIVATE
 
-#include <cpus.h>
 #include <cputypes.h>
 
 #include <mach_assert.h>
 #include <mach_host.h>
 #include <mach_prof.h>
-#include <mach_lock_mon.h>
 #include <mach_ldebug.h>
 
+#include <ipc/ipc_types.h>
+
 #include <mach/port.h>
-#include <kern/ast.h>
 #include <kern/cpu_number.h>
 #include <kern/queue.h>
-#include <kern/time_out.h>
 #include <kern/timer.h>
 #include <kern/lock.h>
+#include <kern/locks.h>
 #include <kern/sched.h>
 #include <kern/sched_prim.h>
 #include <kern/thread_call.h>
 #include <kern/timer_call.h>
 #include <kern/task.h>
 #include <kern/exception.h>
-#include <kern/etap_macros.h>
-#include <ipc/ipc_kmsg.h>
-#include <ipc/ipc_port.h>
 
+#include <ipc/ipc_kmsg.h>
+
+#include <machine/cpu_data.h>
 #include <machine/thread.h>
-#include <machine/thread_act.h>
 
 struct thread {
 	/*
@@ -152,23 +127,21 @@ struct thread {
 	 *	locked by the thread_lock, but if its value is something else
 	 *	(i.e. a run_queue) then it is locked by that run_queue's lock.
 	 *
-	 *	Beginning of thread_shuttle proper.  When the thread is on
-	 *	a wait queue, these first three fields are treated as an un-
-	 *	official union with a wait_queue_element.  If you change
-	 *	these, you must change that definition as well (wait_queue.h).
+	 *	When the thread is on a wait queue, these first three fields
+	 *	are treated as an unofficial union with a wait_queue_element.
+	 *	If you change these, you must change that definition as well
+	 *	(kern/wait_queue.h).
 	 */
   	/* Items examined often, modified infrequently */
 	queue_chain_t	links;				/* run/wait queue links */
 	run_queue_t		runq;				/* run queue thread is on SEE BELOW */
 	wait_queue_t	wait_queue;			/* wait queue we are currently on */
 	event64_t		wait_event;			/* wait queue event */
-	thread_act_t	top_act;			/* "current" thr_act */
-	uint32_t							/* Only set by thread itself */
-						interrupt_level:2,	/* interrupts/aborts allowed */
-						vm_privilege:1,		/* can use reserved memory? */
-						active_callout:1,	/* an active callout */
-						:0;
-
+	integer_t		options;			/* options set by thread itself */
+#define TH_OPT_INTMASK		0x03		/* interrupt / abort level */
+#define TH_OPT_VMPRIV		0x04		/* may allocate reserved memory */
+#define TH_OPT_DELAYIDLE	0x08		/* performing delayed idle */
+#define TH_OPT_CALLOUT		0x10		/* executing as callout */
 
 	/* Data updated during assert_wait/thread_wakeup */
 	decl_simple_lock_data(,sched_lock)	/* scheduling lock (thread_lock()) */
@@ -179,8 +152,8 @@ struct thread {
 	wait_result_t		wait_result;	/* outcome of wait -
 										 * may be examined by this thread
 										 * WITHOUT locking */
-	thread_roust_t 		roust;			/* routine to roust it after wait */
-	thread_continue_t	continuation;	/* resume here next dispatch */
+	thread_continue_t	continuation;	/* continue here next dispatch */
+	void				*parameter;		/* continuation parameter */
 
 	/* Data updated/used in thread_invoke */
     struct funnel_lock	*funnel_lock;		/* Non-reentrancy funnel */
@@ -209,10 +182,6 @@ struct thread {
 
 #define	TH_SCHED_STATE	(TH_WAIT|TH_SUSP|TH_RUN|TH_UNINT)
 
-#define	TH_STACK_HANDOFF	0x0100		/* thread has no kernel stack */
-#define	TH_STACK_ALLOC		0x0200		/* waiting for stack allocation */
-#define	TH_STACK_STATE	(TH_STACK_HANDOFF | TH_STACK_ALLOC)
-
 	/* Scheduling information */
 	integer_t			sched_mode;			/* scheduling mode bits */
 #define TH_MODE_REALTIME		0x0001		/* time constraints supplied */
@@ -220,9 +189,8 @@ struct thread {
 #define TH_MODE_PREEMPT			0x0004		/* can preempt kernel contexts */
 #define TH_MODE_FAILSAFE		0x0008		/* fail-safe has tripped */
 #define	TH_MODE_PROMOTED		0x0010		/* sched pri has been promoted */
-#define	TH_MODE_FORCEDPREEMPT	0x0020		/* force setting of mode PREEMPT */
-#define	TH_MODE_DEPRESS			0x0040		/* normal depress yield */
-#define TH_MODE_POLLDEPRESS		0x0080		/* polled depress yield */
+#define	TH_MODE_DEPRESS			0x0020		/* normal depress yield */
+#define TH_MODE_POLLDEPRESS		0x0040		/* polled depress yield */
 #define TH_MODE_ISDEPRESSED		(TH_MODE_DEPRESS | TH_MODE_POLLDEPRESS)
 
 	integer_t			sched_pri;			/* scheduled (current) priority */
@@ -262,33 +230,32 @@ struct thread {
 	natural_t			safe_release;	/* when to release fail-safe */
 
 	/* Statistics and timesharing calculations */
-	natural_t			sched_stamp;	/* when priority was updated */
-	natural_t			cpu_usage;		/* exp. decaying cpu usage [%cpu] */
-	natural_t			cpu_delta;		/* cpu usage since last update */
-	natural_t			sched_usage;	/* load-weighted cpu usage [sched] */
-	natural_t			sched_delta;	/* weighted cpu usage since update */
-	natural_t			sleep_stamp;	/* when entered TH_WAIT state */
+	natural_t			sched_stamp;	/* last scheduler tick */
+	natural_t			sched_usage;	/* timesharing cpu usage [sched] */
+	natural_t			pri_shift;		/* usage -> priority from pset */
+	natural_t			cpu_usage;		/* instrumented cpu usage [%cpu] */
+	natural_t			cpu_delta;		/* accumulated cpu_usage delta */
 
 	/* Timing data structures */
-	timer_data_t			user_timer;			/* user mode timer */
-	timer_save_data_t		system_timer_save;	/* saved system timer value */
-	timer_save_data_t		user_timer_save;	/* saved user timer value */
+	timer_data_t		user_timer;			/* user mode timer */
+	uint64_t			system_timer_save;	/* saved system timer value */
+	uint64_t			user_timer_save;	/* saved user timer value */
 
 	/* Timed wait expiration */
-	timer_call_data_t		wait_timer;
-	integer_t				wait_timer_active;
-	boolean_t				wait_timer_is_set;
+	timer_call_data_t	wait_timer;
+	integer_t			wait_timer_active;
+	boolean_t			wait_timer_is_set;
 
 	/* Priority depression expiration */
-	timer_call_data_t		depress_timer;
-	integer_t				depress_timer_active;
+	timer_call_data_t	depress_timer;
+	integer_t			depress_timer_active;
 
 	/* Various bits of stashed state */
 	union {
 		struct {
 		  	mach_msg_return_t	state;		/* receive state */
 		  	ipc_object_t		object;		/* object received on */
-		  	mach_msg_header_t	*msg;		/* receive buffer pointer */
+		  	mach_vm_address_t	msg_addr;	/* receive buffer pointer */
 			mach_msg_size_t		msize;		/* max size for recvd msg */
 		  	mach_msg_option_t	option;		/* options for receive */
 		  	mach_msg_size_t		slist_size;	/* scatter list size */
@@ -311,7 +278,6 @@ struct thread {
 
 	/* IPC data structures */
 	struct ipc_kmsg_queue ith_messages;
-	mach_port_t ith_mig_reply;			/* reply port for mig */
 	mach_port_t ith_rpc_reply;			/* reply port for kernel RPCs */
 
 	/* Ast/Halt data structures */
@@ -329,23 +295,13 @@ struct thread {
 		queue_chain_t			task_threads;
 
 		/*** Machine-dependent state ***/
-		struct MachineThrAct	mact;
+		struct machine_thread	machine;
 
 		/* Task membership */
 		struct task				*task;
 		vm_map_t				map;
 
-		decl_mutex_data(,lock)
-		int						act_ref_count;
-
-		/* Associated shuttle */
-		struct thread			*thread;
-
-		/*
-		 * Next higher and next lower activation on
-		 * the thread's activation stack.
-		 */
-		struct thread			*higher, *lower;
+		decl_mutex_data(,mutex)
 
 		/* Kernel holds on this thread  */
 		int						suspend_count;
@@ -356,7 +312,7 @@ struct thread {
 		/* Pending thread ast(s) */
 		ast_t					ast;
 
-		/* Miscellaneous bits guarded by lock mutex */
+		/* Miscellaneous bits guarded by mutex */
 		uint32_t
 		/* Indicates that the thread has not been terminated */
 						active:1,
@@ -370,7 +326,7 @@ struct thread {
 			struct ReturnHandler	*next;
 			void		(*handler)(
 							struct ReturnHandler		*rh,
-							struct thread				*act);
+							struct thread				*thread);
 		} *handlers, special_handler;
 
 		/* Ports associated with this thread */
@@ -391,40 +347,11 @@ struct thread {
 #ifdef	MACH_BSD
 		void					*uthread;
 #endif
-
-/* BEGIN TRACING/DEBUG */
-
-#if	MACH_LOCK_MON
-	unsigned			lock_stack;			/* number of locks held */
-#endif  /* MACH_LOCK_MON */
-
-#if	ETAP_EVENT_MONITOR
-	int					etap_reason;		/* real reason why we blocked */
-	boolean_t			etap_trace;			/* ETAP trace status */
-#endif	/* ETAP_EVENT_MONITOR */
-
-#if	MACH_LDEBUG
-	/*
-	 *	Debugging:  track acquired mutexes and locks.
-	 *	Because a thread can block while holding such
-	 *	synchronizers, we think of the thread as
-	 *	"owning" them.
-	 */
-#define	MUTEX_STACK_DEPTH	20
-#define	LOCK_STACK_DEPTH	20
-	mutex_t				*mutex_stack[MUTEX_STACK_DEPTH];
-	lock_t				*lock_stack[LOCK_STACK_DEPTH];
-	unsigned int		mutex_stack_index;
-	unsigned int		lock_stack_index;
-	unsigned			mutex_count;		/* XXX to be deleted XXX */
-#endif	/* MACH_LDEBUG */
-/* END TRACING/DEBUG */
-
 };
 
 #define ith_state		saved.receive.state
 #define ith_object		saved.receive.object
-#define ith_msg			saved.receive.msg
+#define ith_msg_addr			saved.receive.msg_addr
 #define ith_msize		saved.receive.msize
 #define	ith_option		saved.receive.option
 #define ith_scatter_list_size	saved.receive.slist_size
@@ -442,45 +369,54 @@ extern void			thread_bootstrap(void);
 
 extern void			thread_init(void);
 
-extern void			thread_reaper_init(void);
+extern void			thread_daemon_init(void);
 
-extern void			thread_reference(
-						thread_t		thread);
+#define	thread_reference_internal(thread)	\
+			hw_atomic_add(&(thread)->ref_count, 1)
+
+#define thread_deallocate_internal(thread)	\
+			hw_atomic_sub(&(thread)->ref_count, 1)
+
+#define thread_reference(thread)					\
+MACRO_BEGIN											\
+	if ((thread) != THREAD_NULL)					\
+		thread_reference_internal(thread);			\
+MACRO_END
 
 extern void			thread_deallocate(
 						thread_t		thread);
 
 extern void			thread_terminate_self(void);
 
+extern kern_return_t	thread_terminate_internal(
+							thread_t		thread);
+
+extern void			thread_terminate_enqueue(
+						thread_t		thread);
+
+extern void			thread_stack_enqueue(
+						thread_t		thread);
+
 extern void			thread_hold(
-						thread_act_t	thread);
+						thread_t	thread);
 
 extern void			thread_release(
-						thread_act_t	thread);
+						thread_t	thread);
 
-#define	thread_lock_init(th)	simple_lock_init(&(th)->sched_lock, ETAP_THREAD_LOCK)
+#define	thread_lock_init(th)	simple_lock_init(&(th)->sched_lock, 0)
 #define thread_lock(th)			simple_lock(&(th)->sched_lock)
 #define thread_unlock(th)		simple_unlock(&(th)->sched_lock)
 #define thread_lock_try(th)		simple_lock_try(&(th)->sched_lock)
 
-#define thread_should_halt_fast(thread)	\
-	(!(thread)->top_act || !(thread)->top_act->active)
+#define thread_should_halt_fast(thread)		(!(thread)->active)
 
-#define thread_reference_locked(thread) ((thread)->ref_count++)
-
-#define wake_lock_init(th)					\
-			simple_lock_init(&(th)->wake_lock, ETAP_THREAD_WAKE)
-#define wake_lock(th)		simple_lock(&(th)->wake_lock)
-#define wake_unlock(th)		simple_unlock(&(th)->wake_lock)
+#define wake_lock_init(th)		simple_lock_init(&(th)->wake_lock, 0)
+#define wake_lock(th)			simple_lock(&(th)->wake_lock)
+#define wake_unlock(th)			simple_unlock(&(th)->wake_lock)
 #define wake_lock_try(th)		simple_lock_try(&(th)->wake_lock)
 
-extern vm_offset_t		stack_alloc(
-							thread_t		thread,
-							void			(*start)(thread_t));
-
-extern boolean_t		stack_alloc_try(
-							thread_t	    thread,
-							void			(*start)(thread_t));
+extern void				stack_alloc(
+							thread_t		thread);
 
 extern void				stack_free(
 							thread_t		thread);
@@ -488,22 +424,30 @@ extern void				stack_free(
 extern void				stack_free_stack(
 							vm_offset_t		stack);
 
+extern boolean_t		stack_alloc_try(
+							thread_t	    thread);
+
 extern void				stack_collect(void);
 
+extern void				stack_init(void);
+
+extern kern_return_t    thread_state_initialize(
+							thread_t				thread);
+
 extern kern_return_t	thread_setstatus(
-							thread_act_t			thread,
+							thread_t				thread,
 							int						flavor,
 							thread_state_t			tstate,
 							mach_msg_type_number_t	count);
 
 extern kern_return_t	thread_getstatus(
-							thread_act_t			thread,
+							thread_t				thread,
 							int						flavor,
 							thread_state_t			tstate,
 							mach_msg_type_number_t	*count);
 
-extern kern_return_t	thread_info_shuttle(
-							thread_act_t			thread,
+extern kern_return_t	thread_info_internal(
+							thread_t				thread,
 							thread_flavor_t			flavor,
 							thread_info_t			thread_info_out,
 							mach_msg_type_number_t	*thread_info_count);
@@ -513,31 +457,24 @@ extern void				thread_task_priority(
 							integer_t		priority,
 							integer_t		max_priority);
 
-extern kern_return_t	thread_get_special_port(
-							thread_act_t	thread,
-							int				which,
-							ipc_port_t 		*port);
+extern void				thread_policy_reset(
+							thread_t		thread);
 
-extern kern_return_t	thread_set_special_port(
-							thread_act_t	thread,
-							int				which,
-							ipc_port_t		port);
+extern kern_return_t	kernel_thread_create(
+							thread_continue_t	continuation,
+							void				*parameter,
+							integer_t			priority,
+							thread_t			*new_thread);
 
-extern thread_act_t		switch_act(
-							thread_act_t	act);
-
-extern thread_t			kernel_thread_create(
-							void			(*start)(void),
-							integer_t		priority);
-
-extern thread_t			kernel_thread_with_priority(
-							void            (*start)(void),
-							integer_t		priority);
+extern kern_return_t	kernel_thread_start_priority(
+							thread_continue_t	continuation,
+							void				*parameter,
+							integer_t			priority,
+							thread_t			*new_thread);
 
 extern void				machine_stack_attach(
 							thread_t		thread,
-							vm_offset_t		stack,
-							void			(*start)(thread_t));
+							vm_offset_t		stack);
 
 extern vm_offset_t		machine_stack_detach(
 							thread_t		thread);
@@ -554,26 +491,24 @@ extern thread_t			machine_switch_context(
 extern void				machine_load_context(
 							thread_t		thread);
 
-extern void				machine_switch_act(
-							thread_t		thread,
-							thread_act_t	old,
-							thread_act_t	new);
+extern kern_return_t	machine_thread_state_initialize(
+							thread_t				thread);
 
 extern kern_return_t	machine_thread_set_state(
-							thread_act_t			act,
+							thread_t				thread,
 							thread_flavor_t			flavor,
 							thread_state_t			state,
 							mach_msg_type_number_t	count);
 
 extern kern_return_t	machine_thread_get_state(
-							thread_act_t			act,
+							thread_t				thread,
 							thread_flavor_t			flavor,
 							thread_state_t			state,
 							mach_msg_type_number_t	*count);
 
 extern kern_return_t	machine_thread_dup(
-							thread_act_t	self,
-							thread_act_t	target);
+							thread_t		self,
+							thread_t		target);
 
 extern void				machine_thread_init(void);
 
@@ -584,10 +519,17 @@ extern kern_return_t	machine_thread_create(
 extern void 		    machine_thread_destroy(
 							thread_t		thread);
 
-extern void				machine_thread_set_current(
-							thread_t		thread);
+extern void				machine_set_current_thread(
+							thread_t			thread);
 
 extern void			machine_thread_terminate_self(void);
+
+extern kern_return_t	machine_thread_get_kern_state(
+							thread_t				thread,
+							thread_flavor_t			flavor,
+							thread_state_t			tstate,
+							mach_msg_type_number_t	*count);
+
 
 /*
  * XXX Funnel locks XXX
@@ -595,13 +537,48 @@ extern void			machine_thread_terminate_self(void);
 
 struct funnel_lock {
 	int			fnl_type;			/* funnel type */
-	mutex_t		*fnl_mutex;			/* underlying mutex for the funnel */
+	lck_mtx_t	*fnl_mutex;			/* underlying mutex for the funnel */
 	void *		fnl_mtxholder;		/* thread (last)holdng mutex */
 	void *		fnl_mtxrelease;		/* thread (last)releasing mutex */
-	mutex_t		*fnl_oldmutex;		/* Mutex before collapsing split funnel */
+	lck_mtx_t	*fnl_oldmutex;		/* Mutex before collapsing split funnel */
 };
 
+typedef struct ReturnHandler		ReturnHandler;
+
+#define	thread_mtx_lock(thread)			mutex_lock(&(thread)->mutex)
+#define	thread_mtx_try(thread)			mutex_try(&(thread)->mutex)
+#define	thread_mtx_unlock(thread)		mutex_unlock(&(thread)->mutex)
+
+extern void			act_execute_returnhandlers(void);
+
+extern void			install_special_handler(
+						thread_t		thread);
+
+extern void			special_handler(
+						ReturnHandler	*rh,
+						thread_t		thread);
+
+#else	/* MACH_KERNEL_PRIVATE */
+
+__BEGIN_DECLS
+
+extern thread_t		current_thread(void);
+
+extern void			thread_reference(
+						thread_t	thread);
+
+extern void			thread_deallocate(
+						thread_t	thread);
+
+__END_DECLS
+
+#endif	/* MACH_KERNEL_PRIVATE */
+
+#ifdef	KERNEL_PRIVATE
+
 typedef struct funnel_lock		funnel_t;
+
+#ifdef	MACH_KERNEL_PRIVATE
 
 extern void 		funnel_lock(
 						funnel_t	*lock);
@@ -609,110 +586,30 @@ extern void 		funnel_lock(
 extern void 		funnel_unlock(
 						funnel_t	*lock);
 
-typedef struct ReturnHandler		ReturnHandler;
-
-#define	act_lock(act)			mutex_lock(&(act)->lock)
-#define	act_lock_try(act)		mutex_try(&(act)->lock)
-#define	act_unlock(act)			mutex_unlock(&(act)->lock)
-
-#define		act_reference_locked(act)	\
-MACRO_BEGIN								\
-	(act)->act_ref_count++;				\
-MACRO_END
-
-#define		act_deallocate_locked(act)		\
-MACRO_BEGIN									\
-	if (--(act)->act_ref_count == 0)		\
-	    panic("act_deallocate_locked");		\
-MACRO_END
-
-extern void				act_reference(
-							thread_act_t	act);
-
-extern void				act_deallocate(
-							thread_act_t	act);
-
-extern void				act_attach(
-							thread_act_t		act,
-							thread_t			thread);
-
-extern void				act_detach(
-							thread_act_t	act);
-
-extern thread_t			act_lock_thread(
-								thread_act_t	act);
-
-extern void					act_unlock_thread(
-								thread_act_t	act);
-
-extern thread_act_t			thread_lock_act(
-								thread_t		thread);
-
-extern void					thread_unlock_act(
-								thread_t		thread);
-
-extern void			act_execute_returnhandlers(void);
-
-extern void			install_special_handler(
-						thread_act_t	thread);
-
-extern void			special_handler(
-						ReturnHandler	*rh,
-						thread_act_t	act);
-
-#else	/* MACH_KERNEL_PRIVATE */
-
-typedef struct funnel_lock		funnel_t;
-
-extern boolean_t	thread_should_halt(
-						thread_t		thread);
-
-extern void			act_reference(
-						thread_act_t	act);
-
-extern void			act_deallocate(
-						thread_act_t	act);
+vm_offset_t			min_valid_stack_address(void);
+vm_offset_t			max_valid_stack_address(void);
 
 #endif	/* MACH_KERNEL_PRIVATE */
+
+__BEGIN_DECLS
+
+extern funnel_t		*thread_funnel_get(void);
+
+extern boolean_t	thread_funnel_set(
+						funnel_t	*lock,
+						boolean_t	 funneled);
 
 extern thread_t		kernel_thread(
 						task_t		task,
 						void		(*start)(void));
 
-extern void         thread_set_cont_arg(
-						int				arg);
+__END_DECLS
 
-extern int          thread_get_cont_arg(void);
+#endif	/* KERNEL_PRIVATE */
 
-/* JMM - These are only temporary */
-extern boolean_t	is_thread_running(thread_act_t); /* True is TH_RUN */
-extern boolean_t	is_thread_idle(thread_t); /* True is TH_IDLE */
-extern kern_return_t	get_thread_waitresult(thread_t);
+__BEGIN_DECLS
 
-typedef void	(thread_apc_handler_t)(thread_act_t);
-
-extern kern_return_t	thread_apc_set(thread_act_t, thread_apc_handler_t);
-extern kern_return_t	thread_apc_clear(thread_act_t, thread_apc_handler_t);
-
-extern vm_map_t			swap_act_map(thread_act_t, vm_map_t);
-
-extern void		*get_bsdthread_info(thread_act_t);
-extern void		set_bsdthread_info(thread_act_t, void *);
-extern task_t	get_threadtask(thread_act_t);
-
-#endif	/* __APPLE_API_PRIVATE */
-
-#ifdef	__APPLE_API_UNSTABLE
-
-#if		!defined(MACH_KERNEL_PRIVATE)
-
-extern thread_act_t	current_act(void);
-
-#endif	/* MACH_KERNEL_PRIVATE */
-
-#endif	/* __APPLE_API_UNSTABLE */
-
-#ifdef __APPLE_API_EVOLVING
+#ifdef	XNU_KERNEL_PRIVATE
 
 /*
  * XXX Funnel locks XXX
@@ -723,28 +620,55 @@ extern thread_act_t	current_act(void);
 extern funnel_t		 *funnel_alloc(
 						int			type);
 
-extern funnel_t		*thread_funnel_get(void);
+extern void			funnel_free(
+						funnel_t	*lock);
 
-extern boolean_t	thread_funnel_set(
-						funnel_t	*lock,
-						boolean_t	 funneled);
+extern void			thread_read_times(
+						thread_t 		thread,
+						time_value_t	*user_time,
+						time_value_t	*system_time);
 
-extern boolean_t	thread_funnel_merge(
-						funnel_t	*lock,
-						funnel_t	*other);
-
-#endif	/* __APPLE_API_EVOLVING */
-
-#ifdef __APPLE_API_PRIVATE
-
-extern boolean_t	refunnel_hint(
+extern void			thread_setuserstack(
 						thread_t		thread,
-						wait_result_t	wresult);
+						mach_vm_offset_t	user_stack);
 
-/* For use by CHUD */
-vm_offset_t min_valid_stack_address(void);
-vm_offset_t max_valid_stack_address(void);
+extern uint64_t		thread_adjuserstack(
+						thread_t		thread,
+						int				adjust);
 
-#endif	/* __APPLE_API_PRIVATE */
+extern void			thread_setentrypoint(
+						thread_t		thread,
+						mach_vm_offset_t	entry);
+
+extern kern_return_t	thread_wire_internal(
+							host_priv_t		host_priv,
+							thread_t		thread,
+							boolean_t		wired,
+							boolean_t		*prev_state);
+
+/* JMM - These are only temporary */
+extern boolean_t	is_thread_running(thread_t); /* True is TH_RUN */
+extern boolean_t	is_thread_idle(thread_t); /* True is TH_IDLE */
+
+extern kern_return_t	thread_dup(thread_t);
+
+extern task_t	get_threadtask(thread_t);
+
+extern void		*get_bsdthread_info(thread_t);
+extern void		set_bsdthread_info(thread_t, void *);
+extern void		*uthread_alloc(task_t, thread_t);
+extern void		uthread_free(task_t, void *, void *); 
+
+extern boolean_t	thread_should_halt(
+						thread_t		thread);
+
+#endif	/* XNU_KERNEL_PRIVATE */
+
+extern kern_return_t	kernel_thread_start(
+							thread_continue_t	continuation,
+							void				*parameter,
+							thread_t			*new_thread);
+
+__END_DECLS
 
 #endif	/* _KERN_THREAD_H_ */

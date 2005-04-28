@@ -68,7 +68,7 @@
 #warning if_pppvar.h is not used by the darwin kernel
 #endif
 
-#ifdef __APPLE_API_PRIVATE
+#ifdef KERNEL_PRIVATE
 
 /*
  * Supported network protocols.  These values are used for
@@ -85,10 +85,10 @@ struct ppp_softc {
 /*hi*/	u_int	sc_flags;		/* control/status bits; see if_ppp.h */
 	struct	callout_handle sc_ch;	/* Used for scheduling timeouts */
 	void	*sc_devp;		/* pointer to device-dep structure */
-	void	(*sc_start) __P((struct ppp_softc *));	/* start output proc */
-	void	(*sc_ctlp) __P((struct ppp_softc *)); /* rcvd control pkt */
-	void	(*sc_relinq) __P((struct ppp_softc *)); /* relinquish ifunit */
-	void	(*sc_setmtu) __P((struct ppp_softc *)); /* set mtu */
+	void	(*sc_start)(struct ppp_softc *);	/* start output proc */
+	void	(*sc_ctlp)(struct ppp_softc *); /* rcvd control pkt */
+	void	(*sc_relinq)(struct ppp_softc *); /* relinquish ifunit */
+	void	(*sc_setmtu)(struct ppp_softc *); /* set mtu */
 	short	sc_mru;			/* max receive unit */
 	pid_t	sc_xfer;		/* used in transferring unit */
 /*hi*/	struct	ifqueue sc_rawq;	/* received packets */
@@ -128,13 +128,13 @@ struct ppp_softc {
 
 extern struct ppp_softc ppp_softc[];
 
-struct	ppp_softc *pppalloc __P((pid_t pid));
-void	pppdealloc __P((struct ppp_softc *sc));
-int	pppioctl __P((struct ppp_softc *sc, u_long cmd, caddr_t data,
-		      int flag, struct proc *p));
-int	pppoutput __P((struct ifnet *ifp, struct mbuf *m0,
-		       struct sockaddr *dst, struct rtentry *rtp));
-void	ppp_restart __P((struct ppp_softc *sc));
-void	ppppktin __P((struct ppp_softc *sc, struct mbuf *m, int lost));
-struct	mbuf *ppp_dequeue __P((struct ppp_softc *sc));
+struct	ppp_softc *pppalloc(pid_t pid);
+void	pppdealloc(struct ppp_softc *sc);
+int	pppioctl(struct ppp_softc *sc, u_long cmd, caddr_t data,
+		      int flag, struct proc *p);
+int	pppoutput(struct ifnet *ifp, struct mbuf *m0,
+		       struct sockaddr *dst, struct rtentry *rtp);
+void	ppp_restart(struct ppp_softc *sc);
+void	ppppktin(struct ppp_softc *sc, struct mbuf *m, int lost);
+struct	mbuf *ppp_dequeue(struct ppp_softc *sc);
 #endif /* __APPLE_API_PRIVATE */

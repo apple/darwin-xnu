@@ -62,6 +62,7 @@
 #include <sys/malloc.h>
 #define my_malloc(a)	_MALLOC(a, M_TEMP, M_WAITOK)
 #define my_free(a)	FREE(a, M_TEMP)
+#include <libkern/libkern.h>
 #endif /* TEST_SHADOW */
 
 #include "shadow.h"
@@ -289,7 +290,7 @@ bitmap_get(u_char * map, u_long start_bit, u_long bit_count,
     }
 
  end:
-    for (i = start.bit; i < end.bit; i++) {
+    for (i = start.bit; i < (int)end.bit; i++) {
 	boolean_t this_is_set = (map[start.byte] & bit(i)) ? TRUE : FALSE;
 	
 	if (this_is_set != is_set) {
@@ -523,6 +524,15 @@ shadow_map_write(shadow_map_t * map, u_long block_offset,
 	shadow_grew = TRUE;
     }
     return (shadow_grew);
+}
+
+boolean_t
+shadow_map_is_written(shadow_map_t * map, u_long block_offset)
+{
+    bitmap_offset_t 	b;
+
+    b = bitmap_offset(block_offset);
+    return ((map->block_bitmap[b.byte] & bit(b.bit)) ? TRUE : FALSE);
 }
 
 /*

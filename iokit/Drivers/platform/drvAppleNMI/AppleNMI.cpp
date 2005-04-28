@@ -20,7 +20,7 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 /*
- * Copyright (c) 1998-9 Apple Computer, Inc.  All rights reserved.
+ * Copyright (c) 1998-2003 Apple Computer, Inc.  All rights reserved.
  *
  *  DRI: Josh de Cesare
  *
@@ -52,7 +52,7 @@ OSMetaClassDefineReservedUnused(AppleNMI,  3);
 
 bool AppleNMI::start(IOService *provider)
 {
-  if (!super::init()) return false;
+  if (!super::start(provider)) return false;
 
   enable_debugger = FALSE;
   mask_NMI = FALSE;
@@ -89,18 +89,6 @@ bool RootRegistered( OSObject * us, void *, IOService * yourDevice )
 
 IOReturn AppleNMI::initNMI(IOInterruptController *parentController, OSData *parentSource)
 {
-  // Allocate the IOInterruptSource so this can act like a nub.
-  _interruptSources = (IOInterruptSource *)IOMalloc(sizeof(IOInterruptSource));
-  if (_interruptSources == 0) return kIOReturnNoMemory;
-  _numInterruptSources = 1;
-  
-  // Set up the IOInterruptSource to point at this.
-  _interruptSources[0].interruptController = parentController;
-  _interruptSources[0].vectorData = parentSource;
-  
-  // call start using itself as its provider.
-  if (!start(this)) return kIOReturnError;
-  
   return kIOReturnSuccess;
 }
 
@@ -129,8 +117,6 @@ IOReturn AppleNMI::powerStateWillChangeTo ( IOPMPowerFlags theFlags, unsigned lo
     {
         if ( ! (theFlags & IOPMPowerOn) )
         {
-            IOLog("AppleNMI mask NMI\n");
-
             // Mask NMI and change from edge to level whilst sleeping (copied directly from OS9 code)
             nmiIntSourceAddr = (volatile unsigned long *)kExtInt9_NMIIntSource;
             nmiIntSource = ml_phys_read(nmiIntSourceAddr);
@@ -143,8 +129,6 @@ IOReturn AppleNMI::powerStateWillChangeTo ( IOPMPowerFlags theFlags, unsigned lo
         }
         else
         {
-            IOLog("AppleNMI unmask NMI\n");
-
             // Unmask NMI and change back to edge (copied directly from OS9 code)
             nmiIntSourceAddr = (volatile unsigned long *)kExtInt9_NMIIntSource;
             nmiIntSource = ml_phys_read(nmiIntSourceAddr);
@@ -156,6 +140,6 @@ IOReturn AppleNMI::powerStateWillChangeTo ( IOPMPowerFlags theFlags, unsigned lo
             eieio();
         }
     }
-
+    
     return IOPMAckImplied;
 }

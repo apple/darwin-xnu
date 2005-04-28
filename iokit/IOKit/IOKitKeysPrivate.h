@@ -41,5 +41,6 @@
 // IOResources property
 #define kIOConsoleUsersSeedKey		"IOConsoleUsersSeed"		/* value is OSNumber */
 
+#define kIOKernelHasSafeSleep		1
 
 #endif /* ! _IOKIT_IOKITKEYSPRIVATE_H */

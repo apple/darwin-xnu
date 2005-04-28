@@ -152,6 +152,19 @@ Get disk device information.
 Currently this only includes the
 disk device address that corresponds
 to the current file offset.
+.It Dv F_FULLFSYNC
+Does the same thing as
+.Xr fsync 2
+then asks the drive to
+flush all buffered data to
+the permanent storage device
+.Fa ( arg
+is ignored).
+This is currently
+only implemented on HFS filesystems and
+the operation may take quite a while to
+complete.  Certain FireWire drives have
+also been known to ignore this request.
 .El
 .Pp
 The flags for the

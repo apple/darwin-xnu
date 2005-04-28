@@ -20,7 +20,7 @@ EXPINC_SUBDIRS_PPC = \
 EXPINC_SUBDIRS_I386 = \
 
 DATAFILES = \
-	dinode.h dir.h inode.h lockf.h quota.h ufs_extern.h ufsmount.h
+	dinode.h dir.h inode.h quota.h ufs_extern.h ufsmount.h
 
 INSTALL_MI_LIST	= ${DATAFILES}
 

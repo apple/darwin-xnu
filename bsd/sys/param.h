@@ -70,9 +70,11 @@
 #define NeXTBSD	1995064		/* NeXTBSD version (year, month, release) */
 #define NeXTBSD4_0 0		/* NeXTBSD 4.0 */
 
+#include <sys/_types.h>
+
 #ifndef NULL
-#define	NULL	0
-#endif
+#define	NULL	__DARWIN_NULL
+#endif /* ! NULL */
 
 #ifndef LOCORE
 #include <sys/types.h>
@@ -137,6 +139,7 @@
 #define	PRIMASK	0x0ff
 #define	PCATCH	0x100		/* OR'd with pri for tsleep to check signals */
 #define PTTYBLOCK 0x200		/* for tty SIGTTOU and SIGTTIN blocking */
+#define PDROP	0x400		/* OR'd with pri to stop re-entry of interlock mutex */
 
 #define	NZERO	0		/* default "nice" */
 
@@ -175,15 +178,19 @@
 /*
  * File system parameters and macros.
  *
- * The file system is made out of blocks of at most MAXBSIZE units, with
+ * The file system is made out of blocks of at most MAXPHYS units, with
  * smaller units (fragments) only in the last direct block.  MAXBSIZE
  * primarily determines the size of buffers in the buffer pool.  It may be
- * made larger without any effect on existing file systems; however making
- * it smaller make make some file systems unmountable.
+ * made larger than MAXPHYS without any effect on existing file systems;
+ * however making it smaller may make some file systems unmountable.
+ * We set this to track the value of (MAX_UPL_TRANSFER*PAGE_SIZE) from
+ * osfmk/mach/memory_object_types.h to bound it at the maximum UPL size.
  */
-#define	MAXBSIZE	MAXPHYS
+#define	MAXBSIZE	(256 * 4096)
 #define MAXPHYSIO	MAXPHYS
 #define MAXFRAG 	8
+
+#define	MAXPHYSIO_WIRED	(16 * 1024 * 1024)
 
 /*
  * MAXPATHLEN defines the longest permissable path length after expanding

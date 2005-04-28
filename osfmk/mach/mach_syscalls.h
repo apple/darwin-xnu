@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -26,22 +26,6 @@
 #ifndef _MACH_MACH_SYSCALLS_H_
 #define	_MACH_MACH_SYSCALLS_H_
 
-#include <mach/std_types.h>
-#include <mach/kern_return.h>
-#include <mach/port.h>
-#include <mach/message.h>
-#include <mach/clock_types.h>
-
-extern kern_return_t	clock_sleep_trap(
-							mach_port_name_t	clock_name,
-							sleep_type_t		sleep_type,
-							int					sleep_sec,
-							int					sleep_nsec,
-							mach_timespec_t		*wakeup_time);
-
-extern kern_return_t	thread_switch(
-							mach_port_name_t	thread_name,
-							int					option,
-							mach_msg_timeout_t	option_time);
+#include <mach/mach_traps.h>
 
 #endif	/* _MACH_MACH_SYSCALLS_H_ */

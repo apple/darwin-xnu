@@ -58,7 +58,7 @@
 #ifndef _NETINET_TCP_DEBUG_H_
 #define	_NETINET_TCP_DEBUG_H_
 #include <sys/appleapiopts.h>
-#ifdef __APPLE_API_PRIVATE
+#ifdef PRIVATE
 
 struct	tcp_debug {
 	n_time	td_time;
@@ -97,11 +97,6 @@ static char	*tanames[] =
 
 #define	TCP_NDEBUG 100
 
-#ifndef KERNEL
-/* XXX common variables for broken applications. */
-struct	tcp_debug tcp_debug[TCP_NDEBUG];
-int	tcp_debx;
-#endif
-#endif /* __APPLE_API_PRIVATE */
+#endif /* PRIVATE */
 
 #endif /* !_NETINET_TCP_DEBUG_H_ */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -95,46 +95,44 @@
 #include <sys/cdefs.h>
 #include <sys/types.h>
 #include <sys/time.h>
+#include <sys/ioctl.h>
+#include <sys/malloc.h>
+#ifdef BSD_KERNEL_PRIVATE
 #include <sys/tty.h>
 #include <sys/vm.h>
-#include <sys/proc.h>
 #include <sys/linker_set.h>
+#endif
+#include <sys/proc.h>
 __BEGIN_DECLS
+#ifdef KERNEL
+#include <libkern/libkern.h>
+#endif
 #include <kern/thread.h>
+#include <kern/debug.h>
 __END_DECLS
 
-#ifdef __APPLE_API_PRIVATE
-extern int securelevel;		/* system security level */
-extern const char *panicstr;	/* panic message */
+#ifdef BSD_KERNEL_PRIVATE
 extern char version[];		/* system version */
 extern char copyright[];	/* system copyright */
 
-
-extern struct sysent {		/* system call table */
-	int16_t		sy_narg;	/* number of args */
-	int8_t		sy_parallel;/* can execute in parallel */
-        int8_t		sy_funnel;	/* funnel type */
-	int32_t		(*sy_call)();	/* implementing function */
-} sysent[];
-extern int nsysent;
 
 extern int	boothowto;	/* reboot flags, from console subsystem */
 extern int	show_space;
 
 extern int nblkdev;		/* number of entries in bdevsw */
 extern int nchrdev;		/* number of entries in cdevsw */
-extern dev_t rootdev;		/* root device */
-extern struct vnode *rootvp;	/* vnode equivalent to above */
-#endif /* __APPLE_API_PRIVATE */
+#endif /* BSD_KERNEL_PRIVATE */
 
-#ifdef __APPLE_API_UNSTABLE
+#ifdef KERNEL_PRIVATE
 #define NO_FUNNEL 0
 #define KERNEL_FUNNEL 1
-#define NETWORK_FUNNEL 2
 
+extern int securelevel;		/* system security level */
+extern dev_t rootdev;		/* root device */
+extern struct vnode *rootvp;	/* vnode equivalent to above */
 extern funnel_t * kernel_flock;
-extern funnel_t * network_flock;
-#endif /* __APPLE_API_UNSTABLE */
+
+#endif /* KERNEL_PRIVATE */
 
 #define SYSINIT(a,b,c,d,e)
 #define MALLOC_DEFINE(a,b,c)
@@ -146,95 +144,85 @@ extern funnel_t * network_flock;
  * General function declarations.
  */
 __BEGIN_DECLS
-int	nullop __P((void));
-int	enodev ();		/* avoid actual prototype for multiple use */
-void	enodev_strat();
-int	nulldev();
-int	enoioctl __P((void));
-int	enxio __P((void));
-int	eopnotsupp __P((void));
-int	einval __P((void));
+int	nullop(void);
+int	nulldev(void);
+int	enoioctl(void);
+int	enxio(void);
+int	eopnotsupp(void);
+int	einval(void);
 
-#ifdef __APPLE_API_UNSTABLE
-int	seltrue __P((dev_t dev, int which, struct proc *p));
+#ifdef BSD_KERNEL_PRIVATE
+int	seltrue(dev_t dev, int which, struct proc *p);
+void	ttyprintf(struct tty *, const char *, ...);
+void	realitexpire(void *);
+int	hzto(struct timeval *tv);
 #endif /* __APPLE_API_UNSTABLE */
 
-void	*hashinit __P((int count, int type, u_long *hashmask));
-int	nosys __P((struct proc *, void *, register_t *));
+void	*hashinit(int count, int type, u_long *hashmask);
 
-#ifdef __GNUC__
-volatile void	panic __P((const char *, ...));
-#else
-void	panic __P((const char *, ...));
-#endif
-void	tablefull __P((const char *));
-void	log __P((int, const char *, ...));
-void	kprintf __P((const char *, ...));
-void	ttyprintf __P((struct tty *, const char *, ...));
+void	tablefull(const char *);
 
-int	kvprintf __P((char const *, void (*)(int, void*), void *, int,
-		      _BSD_VA_LIST_));
+int	kvprintf(char const *, void (*)(int, void*), void *, int,
+		      __darwin_va_list);
 
-int	snprintf __P((char *, size_t, const char *, ...));
-int	sprintf __P((char *buf, const char *, ...));
-void	uprintf __P((const char *, ...));
-void	vprintf __P((const char *, _BSD_VA_LIST_));
-int	vsnprintf __P((char *, size_t, const char *, _BSD_VA_LIST_));
-int     vsprintf __P((char *buf, const char *, _BSD_VA_LIST_));
+void	uprintf(const char *, ...);
 
-void	bcopy __P((const void *from, void *to, size_t len));
-void	ovbcopy __P((const void *from, void *to, size_t len));
-void	bzero __P((void *buf, size_t len));
 
-int	copystr __P((void *kfaddr, void *kdaddr, size_t len, size_t *done));
-int	copyinstr __P((void *udaddr, void *kaddr, size_t len, size_t *done));
-int	copyoutstr __P((void *kaddr, void *udaddr, size_t len, size_t *done));
-int	copyin __P((void *udaddr, void *kaddr, size_t len));
-int	copyout __P((void *kaddr, void *udaddr, size_t len));
-int	copywithin __P((void *saddr, void *daddr, size_t len));
+void	ovbcopy(const void *from, void *to, size_t len);
+int	copywithin(void *saddr, void *daddr, size_t len);
 
-int	fubyte __P((void *base));
-#ifdef notdef
-int	fuibyte __P((void *base));
-#endif
-int	subyte __P((void *base, int byte));
-int	suibyte __P((void *base, int byte));
-long	fuword __P((void *base));
-long	fuiword __P((void *base));
-int	suword __P((void *base, long word));
-int	suiword __P((void *base, long word));
+int	fubyte(user_addr_t addr);
+int	fuibyte(user_addr_t addr);
+int	subyte(user_addr_t addr, int byte);
+int	suibyte(user_addr_t addr, int byte);
+long   fuword(user_addr_t addr);
+long   fuiword(user_addr_t addr);
+int    suword(user_addr_t addr, long word);
+int    suiword(user_addr_t addr, long word);
+int64_t	fulong(user_addr_t addr);
+int	sulong(user_addr_t addr, int64_t longword);
+uint64_t fuulong(user_addr_t addr);
+int	suulong(user_addr_t addr, uint64_t ulongword);
+#define fusize(_a)	((user_size_t)fulong(_a))
+#define susize(_a, _s)	sulong((_a), (_s))
+#define fuptr(a)	((user_addr_t)fulong(_a)
+#define suptr(_a, _p)	sulong((_a), (_p))
+int	useracc(user_addr_t addr, user_size_t len,int prot);
 
-#ifdef __APPLE_API_UNSTABLE
-int	hzto __P((struct timeval *tv));
 typedef void (*timeout_fcn_t)(void *);
-void	timeout __P((void (*)(void *), void *arg, int ticks));
-void	untimeout __P((void (*)(void *), void *arg));
-void	realitexpire __P((void *));
-#endif /* __APPLE_API_UNSTABLE */
+#ifdef KERNEL_PRIVATE
+void	timeout(void (*)(void *), void *arg, int ticks);
+void	untimeout(void (*)(void *), void *arg);
+#endif /* KERNEL_PRIVATE */
+void	bsd_timeout(void (*)(void *), void *arg, struct timespec * ts);
+void	bsd_untimeout(void (*)(void *), void *arg);
 
-#ifdef __APPLE_API_PRIVATE
-void	bsd_hardclock __P((boolean_t usermode, caddr_t pc, int numticks));
-void	gatherstats __P((boolean_t usermode, caddr_t pc));
+void	set_fsblocksize(struct vnode *);
 
-void	initclocks __P((void));
+#ifdef BSD_KERNEL_PRIVATE
+int	vslock(user_addr_t addr, user_size_t len);
+int	vsunlock(user_addr_t addr, user_size_t len, int dirtied);
+int	clone_system_shared_regions(int shared_regions_active,
+				    int chain_regions,
+				    int base_vnode);
 
-void	startprofclock __P((struct proc *));
-void	stopprofclock __P((struct proc *));
-void	setstatclockrate __P((int hzrate));
-#ifdef DDB
-/* debugger entry points */
-int	Debugger __P((void));	/* in DDB only */
-#endif
+extern kern_return_t bsd_exception(int, exception_data_type_t codes[], int);
+extern void	bsdinit_task(void);
+void	bsd_hardclock(boolean_t usermode, caddr_t pc, int numticks);
+void	gatherstats(boolean_t usermode, caddr_t pc);
 
-void	set_fsblocksize __P((struct vnode *));
-#endif /* __APPLE_API_PRIVATE */
+void	initclocks(void);
 
-void addlog __P((const char *, ...));
-void printf __P((const char *, ...));
+void	startprofclock(struct proc *);
+void	stopprofclock(struct proc *);
+void	setstatclockrate(int hzrate);
 
-extern boolean_t    thread_funnel_switch(int oldfnl, int newfnl);
+struct time_value;
+void	get_procrustime(struct time_value *tv);
 
-#include <libkern/libkern.h>
+void	load_init_program(struct proc *p);
+#endif /* BSD_KERNEL_PRIVATE */
+
 
 __END_DECLS
 

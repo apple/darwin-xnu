@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -22,10 +22,7 @@
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
  * Copyright (c) 1989, 1993
- *	The Regents of the University of California.  All rights reserved.
- *
- * The NEXTSTEP Software License Agreement specifies the terms
- * and conditions for redistribution.
+ *     The Regents of the University of California.  All rights reserved.
  *
  * This code is derived from software contributed to Berkeley by
  * Rick Macklem at The University of Guelph.
@@ -40,8 +37,8 @@
  *    documentation and/or other materials provided with the distribution.
  * 3. All advertising materials mentioning features or use of this software
  *    must display the following acknowledgement:
- *	This product includes software developed by the University of
- *	California, Berkeley and its contributors.
+ *     This product includes software developed by the University of
+ *     California, Berkeley and its contributors.
  * 4. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
@@ -58,9 +55,10 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- *	@(#)xdr_subs.h	8.3 (Berkeley) 3/30/95
+ *     @(#)xdr_subs.h  8.3 (Berkeley) 3/30/95
  * FreeBSD-Id: xdr_subs.h,v 1.9 1997/02/22 09:42:53 peter Exp $
  */
+ 
 
 
 #ifndef _NFS_XDR_SUBS_H_

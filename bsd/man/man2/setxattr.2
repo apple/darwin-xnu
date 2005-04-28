@@ -1,0 +1,175 @@
+.\"
+.\" Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
+.\"
+.\" @APPLE_LICENSE_HEADER_START@
+.\"
+.\" This file contains Original Code and/or Modifications of Original Code
+.\" as defined in and that are subject to the Apple Public Source License
+.\" Version 2.0 (the 'License'). You may not use this file except in
+.\" compliance with the License. Please obtain a copy of the License at
+.\" http://www.opensource.apple.com/apsl/ and read it before using this
+.\" file.
+.\"
+.\" The Original Code and all software distributed under the License are
+.\" distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+.\" EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+.\" INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+.\" FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+.\" Please see the License for the specific language governing rights and
+.\" limitations under the License.
+.\"
+.\" @APPLE_LICENSE_HEADER_END@
+.\"
+.Dd Oct 19, 2004
+.Dt SETXATTR 2
+.Os "Mac OS X"
+.Sh NAME
+.Nm setxattr,
+.Nm fsetxattr
+.Nd set an extended attribute value
+.Sh SYNOPSIS
+.Fd #include <sys/xattr.h>
+.Ft int
+.Fn setxattr "const char *path" "const char *name" "void *value" "size_t size" "u_int32_t position" "int options"
+.Ft int
+.Fn fsetxattr "int fd" "const char *name" "void *value" "size_t size" "u_int32_t position" "int options"
+.Sh DESCRIPTION
+Extended attributes extend the basic attributes associated with files and
+directories in the file system.  They are stored as name:data pairs
+associated with file system objects (files, directories, symlinks, etc).
+.Pp
+.Fn setxattr
+associates
+.Fa name
+and
+.Fa data
+together as an attribute of
+.Fa path .
+.Pp
+An extended attribute's
+.Fa name
+is a simple NULL-terminated UTF-8 string.
+.Fa Value
+is a pointer to a data buffer of
+.Fa size
+bytes containing textual or binary data to be associated with the
+extended attribute.
+.Fa Position
+specifies the offset within the extended attribute.  In the current
+implementation, only the resource fork extended attribute makes use of
+this argument.  For all others,
+.Fa position
+is reserved and should be
+set to zero.
+.Pp
+.Fa options
+controls how the attribute is set:
+.Pp
+.Bl -tag -width XATTR_NOFOLLOW
+.It Dv XATTR_NOFOLLOW
+do not follow symbolic links.
+.Fn setxattr
+normally sets attributes on the target of
+.Fa path
+if it is a symbolic link.
+With this option,
+.Fn setxattr
+will act on the link itself.
+.It Dv XATTR_CREATE
+fail if the named attribute already exists.
+.It Dv XATTR_REPLACE
+fail if the named attribute does not exist.  Failure to specify
+.Dv XATTR_REPLACE
+or
+.Dv XATTR_CREATE
+allows creation and replacement.
+.El
+.Pp
+.Fn fsetxattr
+is identical to
+.Fn setxattr ,
+except that it sets an extended attribute on an open file referenced by
+file descriptor
+.Fa fd .
+.Sh RETURN VALUES
+On success, 0 is returned.  On failure, -1 is returned and the global
+variable
+.Va errno
+is set as follows.
+.Sh ERRORS
+.Bl -tag -width Er
+.It Bq Er EEXIST
+.Fa options
+contains
+.Em XATTR_CREATE
+and the named attribute already exists.
+.It Bq Er ENOATTR
+.Fa options
+is set to
+.Em XATTR_REPLACE
+and the named attribute does not exist.
+.It Bq Er ENOTSUP
+The file system does not support extended attributes or has them disabled.
+.It Bq Er EROFS
+The file system is mounted read-only.
+.It Bq Er ERANGE
+The data size of the attribute is out of range (some attributes have size
+restrictions).
+.It Bq Er EPERM
+.\" EFTYPE could be more specific but isn't POSIX
+Attributes cannot be associated with this type of object.  For example,
+attributes are not allowed for resource forks.
+.It Bq Er EINVAL
+.Fa name
+or
+.Fa options
+is invalid.
+.Fa name
+must be valid UTF-8 and
+.Fa options
+must make sense.
+.It Bq Er ENOTDIR
+A component of
+.Fa path
+is not a directory.
+.It Bq Er ENAMETOOLONG
+.Fa name
+exceeded
+.Dv XATTR_MAXNAMELEN
+UTF-8 bytes, or a component of
+.Fa path
+exceeded
+.Dv NAME_MAX
+characters, or the entire
+.Fa path
+exceeded
+.Dv PATH_MAX
+characters.
+.It Bq Er EACCES
+Search permission is denied for a component of
+.Fa path
+or permission to set the attribute is denied.
+.It Bq Er ELOOP
+Too many symbolic links were encountered resolving
+.Fa path .
+.It Bq Er EFAULT
+.Fa path
+or
+.Fa name
+points to an invalid address.
+.It Bq Er EIO
+An I/O error occurred while reading from or writing to the file system.
+.It Bq Er E2BIG
+The data size of the extended attribute is too large.
+.It Bq Er ENOSPC
+Not enough space left on the file system.
+.El
+.Sh SEE ALSO
+.Xr getxattr 2 ,
+.Xr removexattr 2 ,
+.Xr listxattr 2
+.Sh HISTORY
+.Fn setxattr
+and
+.Fn fsetxattr
+first appeared in Mac OS X 10.4.

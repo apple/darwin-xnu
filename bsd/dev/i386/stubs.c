@@ -27,17 +27,22 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/buf.h>
 #include <sys/ioctl.h>
 #include <sys/tty.h>
 #include <sys/conf.h>
-#include <sys/proc.h>
+#include <sys/kauth.h>
+#include <sys/ucred.h>
+#include <sys/proc_internal.h>
 #include <sys/user.h>
 #include <kern/task.h>
 #include <kern/thread.h>
-#include <kern/thread_act.h>
 #include <vm/vm_map.h>
 
+/* XXX should be elsewhere (cpeak) */
+extern int	set_bsduthreadargs(thread_t, void *, void *);
+extern void	*get_bsduthreadarg(thread_t);
+extern int	*get_bsduthreadrval(thread_t);
+extern int	*get_bsduthreadlowpridelay(thread_t);
 
 /* 
  * copy a null terminated string from the kernel address space into
@@ -50,11 +55,11 @@
  * the number of bytes copied is always returned in lencopied.
  */
 int
-copyoutstr(from, to, maxlen, lencopied)
-    void * from, * to;
-    size_t maxlen, *lencopied;
+copyoutstr(const void *from, user_addr_t to, size_t maxlen, size_t *lencopied)
 {
-	int slen,len,error=0;
+	size_t	slen;
+	size_t	len;
+	int	error = 0;
 
 	slen = strlen(from) + 1;
 	if (slen > maxlen)
@@ -81,41 +86,57 @@ copyoutstr(from, to, maxlen, lencopied)
  */
 /* from ppc/fault_copy.c -Titan1T4 VERSION  */
 int
-copystr(vfrom, vto, maxlen, lencopied)
-    register void * vfrom, *vto;
-    size_t maxlen, *lencopied;
+copystr(const void *vfrom, void *vto, size_t maxlen, size_t *lencopied)
 {
-    register unsigned l;
-    int error;
-caddr_t from, to;
+	size_t		l;
+	char const	*from = (char const *) vfrom;
+	char		*to = (char *) vto;
 
-	from = vfrom;
-	to = vto;
-    for (l = 0; l < maxlen; l++)
-        if ((*to++ = *from++) == '\0') {
-            if (lencopied)
-                *lencopied = l + 1;
-            return 0;
-        }
-    if (lencopied)
-	*lencopied = maxlen;
-    return ENAMETOOLONG;
+	for (l = 0; l < maxlen; l++) {
+		if ((*to++ = *from++) == '\0') {
+			if (lencopied)
+				*lencopied = l + 1;
+			return 0;
+		}
+	}
+	if (lencopied)
+		*lencopied = maxlen;
+	return ENAMETOOLONG;
 }
 
-int copywithin(src, dst, count)
-void  * src, *dst;
-size_t count;
+int
+copywithin(void *src, void *dst, size_t count)
 {
 	bcopy(src,dst,count);
 	return 0;
 }
 
-set_bsduthreadargs(thread_t th, void * pcb, void *ignored_arg)
+int
+set_bsduthreadargs(thread_t th, void * pcb, __unused void *ignored_arg)
 {
-struct uthread * ut;
+	struct uthread * ut;
+	struct proc *p = current_proc();
 
 	ut = get_bsdthread_info(th);
 	ut->uu_ar0 = (int *)pcb;
+
+	/*
+	 * Delayed binding of thread credential to process credential.
+	 *
+	 * XXX This doesn't really belong here, but the i386 code has a
+	 * XXX number of seemingly gratuitous structural differences that
+	 * XXX make this the most appropriate place to do the work.
+	 */
+	if (ut->uu_ucred != p->p_ucred &&
+	    (ut->uu_flag & UT_SETUID) == 0) {
+		kauth_cred_t old = ut->uu_ucred;
+		proc_lock(p);
+		ut->uu_ucred = p->p_ucred;
+		kauth_cred_ref(ut->uu_ucred);
+		proc_unlock(p);
+		if (old != NOCRED)
+			kauth_cred_rele(old);
+	}
 
 	return(1);
 }
@@ -129,9 +150,17 @@ struct uthread *ut;
 }
 
 int *
-get_bsduthreadrval(thread_act_t th)
+get_bsduthreadrval(thread_t th)
 {
 struct uthread *ut;
 	ut = get_bsdthread_info(th);
 	return(&ut->uu_rval[0]);
+}
+
+int *
+get_bsduthreadlowpridelay(thread_t th)
+{
+struct uthread *ut;
+	ut = get_bsdthread_info(th);
+	return(&ut->uu_lowpri_delay);
 }

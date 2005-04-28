@@ -25,10 +25,10 @@
  
 struct consdev {
 	char	*cn_name;	/* name of device in dev_name_list */
-	int	(*cn_probe)();	/* probe hardware and fill in consdev info */
-	int	(*cn_init)();	/* turn on as console */
-	int	(*cn_getc)();	/* kernel getchar interface */
-	int	(*cn_putc)();	/* kernel putchar interface */
+	int	(*cn_probe)(void);	/* probe and fill in consdev info */
+	int	(*cn_init)(void);	/* turn on as console */
+	int	(*cn_getc)(void);	/* kernel getchar interface */
+	int	(*cn_putc)(void);	/* kernel putchar interface */
 	struct	tty *cn_tp;	/* tty structure for console device */
 	dev_t	cn_dev;		/* major/minor of device */
 	short	cn_pri;		/* pecking order; the higher the better */

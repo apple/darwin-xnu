@@ -30,19 +30,19 @@ class IOMemoryDescriptor;
 /**************************** class IOMemoryCursor ***************************/
 
 /*!
-    @class IOMemoryCursor : public OSObject
+    @class IOMemoryCursor
     @abstract A mechanism to convert memory references to physical addresses.
     @discussion The IOMemoryCursor declares the super class that all
 specific memory cursors must inherit from, but a memory cursor can be created without a specific format subclass by just providing a segment function to the initializers.  This class does the difficult stuff of dividing a memory descriptor into a physical scatter/gather list appropriate for the target hardware.
 <br><br>
-    A driver is expected to create a memory cursor and configure it to the limitations of it's DMA hardware; for instance the memory cursor used by the firewire SBP2 protocol has a maximum physical segment size of 2^16 - 1 but the actual transfer size is unlimited.  Thus it would create a cursor with a maxSegmentSize of 65535 and a maxTransfer size of UINT_MAX.   It would also provide a SegmentFunction that can output a pagelist entry.
+    A driver is expected to create a memory cursor and configure it to the limitations of its DMA hardware; for instance the memory cursor used by the FireWire SBP-2 protocol has a maximum physical segment size of 2^16 - 1 but the actual transfer size is unlimited.  Thus it would create a cursor with a maxSegmentSize of 65535 and a maxTransfer size of UINT_MAX.   It would also provide a SegmentFunction that can output a pagelist entry.
 <br><br>
-Below is the simplest example of a SegmentFunction:-
-void IONaturalMemoryCursor::outputSegment(PhysicalSegment segment,
-					  void *	  outSegments,
-					  UInt32	  outSegmentIndex)
-{
-    ((PhysicalSegment *) outSegments)[outSegmentIndex] = segment;
+Below is the simplest example of a SegmentFunction:<br>
+void IONaturalMemoryCursor::outputSegment(PhysicalSegment segment,<br>
+					  void *	  outSegments,<br>
+					  UInt32	  outSegmentIndex)<br>
+{<br>
+    ((PhysicalSegment *) outSegments)[outSegmentIndex] = segment;<br>
 }
 
 */
@@ -62,7 +62,8 @@ public:
     };
 
 /*! @defined IOPhysicalSegment
-    @discussion Backward compatibilty define for the old non-class scoped type definition.  See $link IOMemoryCursor::PhysicalSegment */
+    @discussion Backward compatibility define for the old non-class scoped type definition.  See IOMemoryCursor::PhysicalSegment 
+*/
 #define IOPhysicalSegment IOMemoryCursor::PhysicalSegment
 
 /*!
@@ -77,7 +78,7 @@ public:
 				    UInt32	    segmentIndex);
 
 /*! @defined OutputSegmentFunc
-    @discussion Backward compatibilty define for the old non-class scoped type definition.  See $link IOMemoryCursor::SegmentFunction */
+    @discussion Backward compatibility define for the old non-class scoped type definition.  See IOMemoryCursor::SegmentFunction */
 #define OutputSegmentFunc IOMemoryCursor::SegmentFunction
 
 protected:
@@ -97,12 +98,13 @@ protected:
 
 public:
 /*! @function withSpecification
-    @abstract Factory function to create and initialise an IOMemoryCursor in one operation, see $link IOMemoryCursor::initWithSpecification.
+    @abstract Creates and initializes an IOMemoryCursor in one operation.
+    @discussion Factory function to create and initialize an IOMemoryCursor in one operation.  For more information, see IOMemoryCursor::initWithSpecification.
     @param outSegFunc SegmentFunction to call to output one physical segment.
     @param maxSegmentSize Maximum allowable size for one segment.  Defaults to 0.
-    @param maxTransferSize Maximum size of an entire transfer.	Default to 0 indicating no maximum.
-    @param alignment Alligment restrictions on output physical addresses.  Not currently implemented.  Defaults to single byte alignment.
-    @result A new memory cursor if successfully created and initialised, 0 otherwise.
+    @param maxTransferSize Maximum size of an entire transfer.	Defaults to 0 indicating no maximum.
+    @param alignment Alignment restrictions on output physical addresses.  Not currently implemented.  Defaults to single byte alignment.
+    @result Returns a new memory cursor if successfully created and initialized, 0 otherwise.
 */
     static IOMemoryCursor *
 	withSpecification(SegmentFunction  outSegFunc,
@@ -111,12 +113,12 @@ public:
 			  IOPhysicalLength alignment = 1);
 
 /*! @function initWithSpecification
-    @abstract Primary initialiser for the IOMemoryCursor class.
+    @abstract Primary initializer for the IOMemoryCursor class.
     @param outSegFunc SegmentFunction to call to output one physical segment.
     @param maxSegmentSize Maximum allowable size for one segment.  Defaults to 0.
-    @param maxTransferSize Maximum size of an entire transfer.	Default to 0 indicating no maximum.
-    @param alignment Alligment restrictions on output physical addresses.  Not currently implemented.  Defaults to single byte alignment.
-    @result true if the inherited classes and this instance initialise
+    @param maxTransferSize Maximum size of an entire transfer.	Defaults to 0 indicating no maximum.
+    @param alignment Alignment restrictions on output physical addresses.  Not currently implemented.  Defaults to single byte alignment.
+    @result Returns true if the inherited classes and this instance initialize
 successfully.
 */
     virtual bool initWithSpecification(SegmentFunction	outSegFunc,
@@ -125,14 +127,14 @@ successfully.
 				       IOPhysicalLength alignment = 1);
 
 /*! @function genPhysicalSegments
-    @abstract Generate a physical scatter/gather list given a memory descriptor.
+    @abstract Generates a physical scatter/gather list given a memory descriptor.
     @discussion Generates a list of physical segments from the given memory descriptor, relative to the current position of the descriptor.
     @param descriptor IOMemoryDescriptor that describes the data associated with an I/O request. 
     @param fromPosition Starting location of the I/O within a memory descriptor. 
     @param segments Void pointer to base of output physical scatter/gather list.  Always passed directly onto the SegmentFunction without interpretation by the cursor. 
     @param maxSegments Maximum number of segments that can be written to segments array.
     @param maxTransferSize Maximum transfer size is limited to that many bytes, otherwise it defaults to the maximum transfer size specified when the memory cursor was initialized.
-    @param transferSize Pointer to a IOByteCount variable that can contain the total size of the transfer being described.  Default to 0 indicating that no transfer size need be returned. 
+    @param transferSize Pointer to an IOByteCount variable that can contain the total size of the transfer being described.  Defaults to 0 indicating that no transfer size need be returned. 
     @result If the descriptor is exhausted of memory, a zero is returned, otherwise the number of segments that were filled in is returned.
 */
     virtual UInt32 genPhysicalSegments(
@@ -148,8 +150,8 @@ successfully.
 
 
 /*!
-    @class IONaturalMemoryCursor : public IOMemoryCursor
-    @abstract A $link IOMemoryCursor subclass that outputs a vector of PhysicalSegments in the natural byte orientation for the cpu.  
+    @class IONaturalMemoryCursor
+    @abstract An IOMemoryCursor subclass that outputs a vector of PhysicalSegments in the natural byte orientation for the CPU.  
     @discussion The IONaturalMemoryCursor would be used when it is too difficult to safely describe a SegmentFunction that is more appropriate for your hardware.  This cursor just outputs an array of PhysicalSegments.
 */
 class IONaturalMemoryCursor : public IOMemoryCursor
@@ -157,8 +159,8 @@ class IONaturalMemoryCursor : public IOMemoryCursor
     OSDeclareDefaultStructors(IONaturalMemoryCursor)
 
 public:
-/*! @funtion outputSegment
-    @abstract Output the given segment into the output segments array in natural byte order.
+/*! @function outputSegment
+    @abstract Outputs the given segment into the output segments array in natural byte order.
     @param segment The physical address and length that is next to be output.
     @param segments Base of the output vector of DMA address length pairs.
     @param segmentIndex Index to output 'segment' in the 'segments' array.
@@ -168,15 +170,17 @@ public:
 			      UInt32	      segmentIndex);
 
 /*! @defined naturalOutputSegment
-    @discussion Backward compatibilty define for the old global function definition.  See $link IONaturalMemoryCursor::outputSegment */
+    @discussion Backward compatibility define for the old global function definition.  See IONaturalMemoryCursor::outputSegment.
+*/
 #define naturalOutputSegment IONaturalMemoryCursor::outputSegment
 
 /*! @function withSpecification
-    @abstract Factory function to create and initialise an IONaturalMemoryCursor in one operation, see $link IONaturalMemoryCursor::initWithSpecification.
+    @abstract Creates and initializes an IONaturalMemoryCursor in one operation.
+    @discussion Factory function to create and initialize an IONaturalMemoryCursor in one operation.  For more information, see IONaturalMemoryCursor::initWithSpecification.
     @param maxSegmentSize Maximum allowable size for one segment.  Defaults to 0.
-    @param maxTransferSize Maximum size of an entire transfer.	Default to 0 indicating no maximum.
-    @param alignment Alligment restrictions on output physical addresses.  Not currently implemented.  Defaults to single byte alignment.
-    @result A new memory cursor if successfully created and initialised, 0 otherwise.
+    @param maxTransferSize Maximum size of an entire transfer.	Defaults to 0 indicating no maximum.
+    @param alignment Alignment restrictions on output physical addresses.  Not currently implemented.  Defaults to single byte alignment.
+    @result Returns a new memory cursor if successfully created and initialized, 0 otherwise.
 */
     static IONaturalMemoryCursor * 
 	withSpecification(IOPhysicalLength maxSegmentSize,
@@ -184,12 +188,11 @@ public:
 			  IOPhysicalLength alignment = 1);
 
 /*! @function initWithSpecification
-    @abstract Primary initialiser for the IONaturalMemoryCursor class.
+    @abstract Primary initializer for the IONaturalMemoryCursor class.
     @param maxSegmentSize Maximum allowable size for one segment.  Defaults to 0.
-    @param maxTransferSize Maximum size of an entire transfer.	Default to 0 indicating no maximum.
-    @param alignment Alligment restrictions on output physical addresses.  Not currently implemented.  Defaults to single byte alignment.
-    @result true if the inherited classes and this instance initialise
-successfully.
+    @param maxTransferSize Maximum size of an entire transfer.	Defaults to 0 indicating no maximum.
+    @param alignment Alignment restrictions on output physical addresses.  Not currently implemented.  Defaults to single byte alignment.
+    @result Returns true if the inherited classes and this instance initialize successfully.
 */
     virtual bool initWithSpecification(IOPhysicalLength	 maxSegmentSize,
 				       IOPhysicalLength	 maxTransferSize,
@@ -197,14 +200,14 @@ successfully.
 
 
 /*! @function getPhysicalSegments
-    @abstract Generate a cpu natural physical scatter/gather list given a memory descriptor.
-    @discussion Generates a list of physical segments from the given memory descriptor, relative to the current position of the descriptor.  Wraps $link IOMemoryCursor::genPhysicalSegments.
+    @abstract Generates a CPU natural physical scatter/gather list given a memory descriptor.
+    @discussion Generates a list of physical segments from the given memory descriptor, relative to the current position of the descriptor.  Wraps IOMemoryCursor::genPhysicalSegments.
     @param descriptor IOMemoryDescriptor that describes the data associated with an I/O request. 
     @param fromPosition Starting location of the I/O within a memory descriptor. 
-    @param segments Pointer to an array of $link IOMemoryCursor::PhysicalSegments for the output physical scatter/gather list.
+    @param segments Pointer to an array of IOMemoryCursor::PhysicalSegments for the output physical scatter/gather list.
     @param maxSegments Maximum number of segments that can be written to segments array.
     @param maxTransferSize Maximum transfer size is limited to that many bytes, otherwise it defaults to the maximum transfer size specified when the memory cursor was initialized.
-    @param transferSize Pointer to a IOByteCount variable that can contain the total size of the transfer being described.  Default to 0 indicating that no transfer size need be returned. 
+    @param transferSize Pointer to an IOByteCount variable that can contain the total size of the transfer being described.  Defaults to 0 indicating that no transfer size need be returned. 
     @result If the descriptor is exhausted of memory, a zero is returned, otherwise the number of segments that were filled in is returned.
 */
     virtual UInt32 getPhysicalSegments(IOMemoryDescriptor *descriptor,
@@ -222,8 +225,8 @@ successfully.
 /************************** class IOBigMemoryCursor **************************/
 
 /*!
-    @class IOBigMemoryCursor : public IOMemoryCursor
-    @abstract A $link IOMemoryCursor subclass that outputs a vector of PhysicalSegments in the big endian byte order.  
+    @class IOBigMemoryCursor
+    @abstract An IOMemoryCursor subclass that outputs a vector of PhysicalSegments in the big endian byte order.  
     @discussion The IOBigMemoryCursor would be used when the DMA hardware requires a big endian address and length pair.  This cursor outputs an array of PhysicalSegments that are encoded in big-endian format.
 */
 class IOBigMemoryCursor : public IOMemoryCursor
@@ -231,8 +234,8 @@ class IOBigMemoryCursor : public IOMemoryCursor
     OSDeclareDefaultStructors(IOBigMemoryCursor)
 
 public:
-/*! @funtion outputSegment
-    @abstract Output the given segment into the output segments array in big endian byte order.
+/*! @function outputSegment
+    @abstract Outputs the given segment into the output segments array in big endian byte order.
     @param segment The physical address and length that is next to be output.
     @param segments Base of the output vector of DMA address length pairs.
     @param segmentIndex Index to output 'segment' in the 'segments' array.
@@ -242,15 +245,17 @@ public:
 			      UInt32	      segmentIndex);
 
 /*! @defined bigOutputSegment
-    @discussion Backward compatibilty define for the old global function definition.  See $link IOBigMemoryCursor::outputSegment */
+    @discussion Backward compatibility define for the old global function definition.  See IOBigMemoryCursor::outputSegment 
+*/
 #define bigOutputSegment IOBigMemoryCursor::outputSegment
 
 /*! @function withSpecification
-    @abstract Factory function to create and initialise an IOBigMemoryCursor in one operation, see $link IOBigMemoryCursor::initWithSpecification.
+    @abstract Creates and initializes an IOBigMemoryCursor in one operation.
+    @discussion Factory function to create and initialize an IOBigMemoryCursor in one operation.  See also IOBigMemoryCursor::initWithSpecification.
     @param maxSegmentSize Maximum allowable size for one segment.  Defaults to 0.
-    @param maxTransferSize Maximum size of an entire transfer.	Default to 0 indicating no maximum.
-    @param alignment Alligment restrictions on output physical addresses.  Not currently implemented.  Defaults to single byte alignment.
-    @result A new memory cursor if successfully created and initialised, 0 otherwise.
+    @param maxTransferSize Maximum size of an entire transfer.	Defaults to 0 indicating no maximum.
+    @param alignment Alignment restrictions on output physical addresses.  Not currently implemented.  Defaults to single byte alignment.
+    @result Returns a new memory cursor if successfully created and initialized, 0 otherwise.
 */
     static IOBigMemoryCursor *
 	withSpecification(IOPhysicalLength maxSegmentSize,
@@ -258,11 +263,11 @@ public:
 			  IOPhysicalLength alignment = 1);
 
 /*! @function initWithSpecification
-    @abstract Primary initialiser for the IOBigMemoryCursor class.
+    @abstract Primary initializer for the IOBigMemoryCursor class.
     @param maxSegmentSize Maximum allowable size for one segment.  Defaults to 0.
-    @param maxTransferSize Maximum size of an entire transfer.	Default to 0 indicating no maximum.
-    @param alignment Alligment restrictions on output physical addresses.  Not currently implemented.  Defaults to single byte alignment.
-    @result true if the inherited classes and this instance initialise
+    @param maxTransferSize Maximum size of an entire transfer.	Defaults to 0 indicating no maximum.
+    @param alignment Alignment restrictions on output physical addresses.  Not currently implemented.  Defaults to single byte alignment.
+    @result Returns true if the inherited classes and this instance initialize
 successfully.
 */
     virtual bool initWithSpecification(IOPhysicalLength	 maxSegmentSize,
@@ -271,14 +276,14 @@ successfully.
 
 
 /*! @function getPhysicalSegments
-    @abstract Generate a big endian physical scatter/gather list given a memory descriptor.
-    @discussion Generates a list of physical segments from the given memory descriptor, relative to the current position of the descriptor.  Wraps $link IOMemoryCursor::genPhysicalSegments.
+    @abstract Generates a big endian physical scatter/gather list given a memory descriptor.
+    @discussion Generates a list of physical segments from the given memory descriptor, relative to the current position of the descriptor.  Wraps IOMemoryCursor::genPhysicalSegments.
     @param descriptor IOMemoryDescriptor that describes the data associated with an I/O request. 
     @param fromPosition Starting location of the I/O within a memory descriptor. 
-    @param segments Pointer to an array of $link IOMemoryCursor::PhysicalSegments for the output physical scatter/gather list.
+    @param segments Pointer to an array of IOMemoryCursor::PhysicalSegments for the output physical scatter/gather list.
     @param maxSegments Maximum number of segments that can be written to segments array.
     @param maxTransferSize Maximum transfer size is limited to that many bytes, otherwise it defaults to the maximum transfer size specified when the memory cursor was initialized.
-    @param transferSize Pointer to a IOByteCount variable that can contain the total size of the transfer being described.  Default to 0 indicating that no transfer size need be returned. 
+    @param transferSize Pointer to an IOByteCount variable that can contain the total size of the transfer being described.  Defaults to 0 indicating that no transfer size need be returned. 
     @result If the descriptor is exhausted of memory, a zero is returned, otherwise the number of segments that were filled in is returned.
 */
     virtual UInt32 getPhysicalSegments(IOMemoryDescriptor * descriptor,
@@ -296,8 +301,8 @@ successfully.
 /************************* class IOLittleMemoryCursor ************************/
 
 /*!
-    @class IOLittleMemoryCursor : public IOMemoryCursor
-    @abstract A $link IOMemoryCursor subclass that outputs a vector of PhysicalSegments in the little endian byte order.  
+    @class IOLittleMemoryCursor
+    @abstract An IOMemoryCursor subclass that outputs a vector of PhysicalSegments in the little endian byte order.  
     @discussion The IOLittleMemoryCursor would be used when the DMA hardware requires a little endian address and length pair.	This cursor outputs an array of PhysicalSegments that are encoded in little endian format.
 */
 class IOLittleMemoryCursor : public IOMemoryCursor
@@ -305,8 +310,8 @@ class IOLittleMemoryCursor : public IOMemoryCursor
     OSDeclareDefaultStructors(IOLittleMemoryCursor)
 
 public:
-/*! @funtion outputSegment
-    @abstract Output the given segment into the output segments array in little endian byte order.
+/*! @function outputSegment
+    @abstract Outputs the given segment into the output segments array in little endian byte order.
     @param segment The physical address and length that is next to be output.
     @param segments Base of the output vector of DMA address length pairs.
     @param segmentIndex Index to output 'segment' in the 'segments' array.
@@ -316,15 +321,16 @@ public:
 			      UInt32	      segmentIndex);
 
 /*! @defined littleOutputSegment
-    @discussion Backward compatibilty define for the old global function definition.  See $link IOLittleMemoryCursor::outputSegment */
+    @discussion Backward compatibility define for the old global function definition.  See also IOLittleMemoryCursor::outputSegment. */
 #define littleOutputSegment IOLittleMemoryCursor::outputSegment
 
 /*! @function withSpecification
-    @abstract Factory function to create and initialise an IOLittleMemoryCursor in one operation, see $link IOLittleMemoryCursor::initWithSpecification.
+    @abstract Creates and initializes an IOLittleMemoryCursor in one operation.
+    @discussion Factory function to create and initialize an IOLittleMemoryCursor in one operation.  See also IOLittleMemoryCursor::initWithSpecification.
     @param maxSegmentSize Maximum allowable size for one segment.  Defaults to 0.
-    @param maxTransferSize Maximum size of an entire transfer.	Default to 0 indicating no maximum.
-    @param alignment Alligment restrictions on output physical addresses.  Not currently implemented.  Defaults to single byte alignment.
-    @result A new memory cursor if successfully created and initialised, 0 otherwise.
+    @param maxTransferSize Maximum size of an entire transfer.	Defaults to 0 indicating no maximum.
+    @param alignment Alignment restrictions on output physical addresses.  Not currently implemented.  Defaults to single byte alignment.
+    @result Returns a new memory cursor if successfully created and initialized, 0 otherwise.
 */
     static IOLittleMemoryCursor *
 	withSpecification(IOPhysicalLength maxSegmentSize,
@@ -332,12 +338,11 @@ public:
 			  IOPhysicalLength alignment = 1);
 
 /*! @function initWithSpecification
-    @abstract Primary initialiser for the IOLittleMemoryCursor class.
+    @abstract Primary initializer for the IOLittleMemoryCursor class.
     @param maxSegmentSize Maximum allowable size for one segment.  Defaults to 0.
-    @param maxTransferSize Maximum size of an entire transfer.	Default to 0 indicating no maximum.
-    @param alignment Alligment restrictions on output physical addresses.  Not currently implemented.  Defaults to single byte alignment.
-    @result true if the inherited classes and this instance initialise
-successfully.
+    @param maxTransferSize Maximum size of an entire transfer.	Defaults to 0 indicating no maximum.
+    @param alignment Alignment restrictions on output physical addresses.  Not currently implemented.  Defaults to single byte alignment.
+    @result Returns true if the inherited classes and this instance initialize successfully.
 */
     virtual bool initWithSpecification(IOPhysicalLength	 maxSegmentSize,
 				       IOPhysicalLength	 maxTransferSize,
@@ -345,14 +350,14 @@ successfully.
 
 
 /*! @function getPhysicalSegments
-    @abstract Generate a little endian physical scatter/gather list given a memory descriptor.
-    @discussion Generates a list of physical segments from the given memory descriptor, relative to the current position of the descriptor.  Wraps $link IOMemoryCursor::genPhysicalSegments.
+    @abstract Generates a little endian physical scatter/gather list given a memory descriptor.
+    @discussion Generates a list of physical segments from the given memory descriptor, relative to the current position of the descriptor.  Wraps IOMemoryCursor::genPhysicalSegments.
     @param descriptor IOMemoryDescriptor that describes the data associated with an I/O request. 
     @param fromPosition Starting location of the I/O within a memory descriptor. 
-    @param segments Pointer to an array of $link IOMemoryCursor::PhysicalSegments for the output physical scatter/gather list.
+    @param segments Pointer to an array of IOMemoryCursor::PhysicalSegments for the output physical scatter/gather list.
     @param maxSegments Maximum number of segments that can be written to segments array.
     @param maxTransferSize Maximum transfer size is limited to that many bytes, otherwise it defaults to the maximum transfer size specified when the memory cursor was initialized.
-    @param transferSize Pointer to a IOByteCount variable that can contain the total size of the transfer being described.  Default to 0 indicating that no transfer size need be returned. 
+    @param transferSize Pointer to an IOByteCount variable that can contain the total size of the transfer being described.  Defaults to 0 indicating that no transfer size need be returned. 
     @result If the descriptor is exhausted of memory, a zero is returned, otherwise the number of segments that were filled in is returned.
 */
     virtual UInt32 getPhysicalSegments(IOMemoryDescriptor * descriptor,
@@ -374,8 +379,8 @@ successfully.
 struct IODBDMADescriptor;
 
 /*!
-    @class IODBDMAMemoryCursor : public IOMemoryCursor
-    @abstract A $link IOMemoryCursor subclass that outputs a vector of DBDMA descriptors where the address and length are filled in.  
+    @class IODBDMAMemoryCursor
+    @abstract An IOMemoryCursor subclass that outputs a vector of DBDMA descriptors where the address and length are filled in.  
     @discussion The IODBDMAMemoryCursor would be used when the DBDMA hardware is available for the device for that will use an instance of this cursor.
 */
 class IODBDMAMemoryCursor : public IOMemoryCursor
@@ -383,8 +388,8 @@ class IODBDMAMemoryCursor : public IOMemoryCursor
     OSDeclareDefaultStructors(IODBDMAMemoryCursor)
 
 public:
-/*! @funtion outputSegment
-    @abstract Output the given segment into the output segments array in address and length fields of an DBDMA descriptor.
+/*! @function outputSegment
+    @abstract Outpust the given segment into the output segments array in address and length fields of an DBDMA descriptor.
     @param segment The physical address and length that is next to be output.
     @param segments Base of the output vector of DMA address length pairs.
     @param segmentIndex Index to output 'segment' in the 'segments' array.
@@ -394,15 +399,16 @@ public:
 			      UInt32	      segmentIndex);
 
 /*! @defined dbdmaOutputSegment
-    @discussion Backward compatibilty define for the old global function definition.  See $link IODBDMAMemoryCursor::outputSegment */
+    @discussion Backward compatibility define for the old global function definition.  See IODBDMAMemoryCursor::outputSegment. */
 #define dbdmaOutputSegment IODBDMAMemoryCursor::outputSegment
 
 /*! @function withSpecification
-    @abstract Factory function to create and initialise an IODBDMAMemoryCursor in one operation, see $link IODBDMAMemoryCursor::initWithSpecification.
+    @abstract Creates and initializes an IODBDMAMemoryCursor in one operation.
+    @discussion Factory function to create and initialize an IODBDMAMemoryCursor in one operation.  See also IODBDMAMemoryCursor::initWithSpecification.
     @param maxSegmentSize Maximum allowable size for one segment.  Defaults to 0.
-    @param maxTransferSize Maximum size of an entire transfer.	Default to 0 indicating no maximum.
-    @param alignment Alligment restrictions on output physical addresses.  Not currently implemented.  Defaults to single byte alignment.
-    @result A new memory cursor if successfully created and initialised, 0 otherwise.
+    @param maxTransferSize Maximum size of an entire transfer.	Defaults to 0 indicating no maximum.
+    @param alignment Alignment restrictions on output physical addresses.  Not currently implemented.  Defaults to single byte alignment.
+    @result Returns a new memory cursor if successfully created and initialized, 0 otherwise.
 */
     static IODBDMAMemoryCursor * 
 	withSpecification(IOPhysicalLength maxSegmentSize,
@@ -410,12 +416,11 @@ public:
 			  IOPhysicalLength alignment = 1);
 
 /*! @function initWithSpecification
-    @abstract Primary initialiser for the IODBDMAMemoryCursor class.
+    @abstract Primary initializer for the IODBDMAMemoryCursor class.
     @param maxSegmentSize Maximum allowable size for one segment.  Defaults to 0.
-    @param maxTransferSize Maximum size of an entire transfer.	Default to 0 indicating no maximum.
-    @param alignment Alligment restrictions on output physical addresses.  Not currently implemented.  Defaults to single byte alignment.
-    @result true if the inherited classes and this instance initialise
-successfully.
+    @param maxTransferSize Maximum size of an entire transfer.	Defaults to 0 indicating no maximum.
+    @param alignment Alignment restrictions on output physical addresses.  Not currently implemented.  Defaults to single byte alignment.
+    @result Returns true if the inherited classes and this instance initialize successfully.
 */
     virtual bool initWithSpecification(IOPhysicalLength	 maxSegmentSize,
 				       IOPhysicalLength	 maxTransferSize,
@@ -423,14 +428,14 @@ successfully.
 
 
 /*! @function getPhysicalSegments
-    @abstract Generate a DBDMA physical scatter/gather list given a memory descriptor.
-    @discussion Generates a list of DBDMA descriptors where the address and length fields are filled in appropriately.	But the client is expected to fill in the rest of teh DBDMA descriptor as is appropriate for their particular hardware.	 Wraps $link IOMemoryCursor::genPhysicalSegments.
+    @abstract Generates a DBDMA physical scatter/gather list given a memory descriptor.
+    @discussion Generates a list of DBDMA descriptors where the address and length fields are filled in appropriately.	But the client is expected to fill in the rest of the DBDMA descriptor as is appropriate for their particular hardware.  Wraps IOMemoryCursor::genPhysicalSegments.
     @param descriptor IOMemoryDescriptor that describes the data associated with an I/O request. 
     @param fromPosition Starting location of the I/O within a memory descriptor. 
     @param segments Pointer to an array of DBDMA descriptors for the output physical scatter/gather list.  Be warned no room is left for a preamble in the output array.  'segments' should point to the first memory description slot in a DBDMA command.
-    @param maxSegments Maximum number of segments that can be written to the dbdma descriptor table.
+    @param maxSegments Maximum number of segments that can be written to the DBDMA descriptor table.
     @param maxTransferSize Maximum transfer size is limited to that many bytes, otherwise it defaults to the maximum transfer size specified when the memory cursor was initialized.
-    @param transferSize Pointer to a IOByteCount variable that can contain the total size of the transfer being described.  Default to 0 indicating that no transfer size need be returned. 
+    @param transferSize Pointer to an IOByteCount variable that can contain the total size of the transfer being described.  Defaults to 0 indicating that no transfer size need be returned. 
     @result If the descriptor is exhausted of memory, a zero is returned, otherwise the number of segments that were filled in is returned.
 */
     virtual UInt32 getPhysicalSegments(IOMemoryDescriptor * descriptor,

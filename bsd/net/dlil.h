@@ -25,22 +25,23 @@
  *	Data Link Inteface Layer
  *	Author: Ted Walker
  */
-
-
 #ifndef DLIL_H
 #define DLIL_H
-#include <sys/appleapiopts.h>
+#ifdef KERNEL
+#include <sys/kernel_types.h>
+#include <net/kpi_interface.h>
 
 #if __STDC__
 
 struct ifnet;
 struct mbuf;
 struct ether_header;
+struct sockaddr_dl;
 
 #endif
 
 
-#ifdef __APPLE_API_UNSTABLE
+#ifdef KERNEL_PRIVATE
 #define DLIL_LAST_FILTER   -1
 #define DLIL_NULL_FILTER   -2
 
@@ -54,6 +55,8 @@ struct ether_header;
 #include <net/if_var.h>
 #include <sys/kern_event.h>
 
+#endif KERNEL_PRIVATE
+
 enum {
 	BPF_TAP_DISABLE,
 	BPF_TAP_INPUT,
@@ -61,72 +64,37 @@ enum {
 	BPF_TAP_INPUT_OUTPUT
 };
 
-
-struct dl_tag_attr_str {
-    u_long	dl_tag;
-    short	if_flags;
-    short	if_unit;
-    u_long	if_family;
-    u_long	protocol_family;
-};
-
-
-struct dlil_pr_flt_str {
-    caddr_t	 cookie;
-
-    int	(*filter_dl_input)(caddr_t	cookie, 
-			   struct mbuf	**m, 
-			   char		**frame_header, 
-			   struct ifnet **ifp);
-
-
-    int (*filter_dl_output)(caddr_t	    cookie, 
-			    struct mbuf	    **m, 
-			    struct ifnet    **ifp, 
-			    struct sockaddr **dest,
-			    char            *dest_linkaddr, 
-			    char	    *frame_type);
-
-    int (*filter_dl_event)(caddr_t	      cookie, 
-			   struct kern_event_msg   *event_msg);
-
-    int (*filter_dl_ioctl)(caddr_t	cookie, 
-			   struct ifnet *ifp,
-			   u_long	ioctl_cmd,
-			   caddr_t	ioctl_arg);
-
-    int	(*filter_detach)(caddr_t  cookie);
-    u_long	reserved[2];
-};
+#ifdef KERNEL_PRIVATE
+struct kev_msg;
+struct iff_filter;
 
 struct dlil_if_flt_str {
     caddr_t				   cookie;
     int	(*filter_if_input)(caddr_t         cookie,
-			   struct ifnet    **ifnet_ptr,
+			   struct ifnet    **ifp,
 			   struct mbuf     **mbuf_ptr,
 			   char		   **frame_ptr);
 
     int	(*filter_if_event)(caddr_t          cookie,
-			   struct ifnet     **ifnet_ptr,
-			   struct kern_event_msg **event_msg_ptr);
+			   struct ifnet		*ifp,
+			   struct kev_msg	*event_msg_ptr);
 
     int	(*filter_if_output)(caddr_t      cookie,
-			    struct ifnet **ifnet_ptr,
+			    struct ifnet **ifp,
 			    struct mbuf  **mbuf_ptr);
 
 
     int	(*filter_if_ioctl)(caddr_t       cookie,
-			   struct ifnet  *ifnet_ptr,
+			   struct ifnet  *ifp,
 			   u_long	 ioctl_code_ptr,
 			   caddr_t       ioctl_arg_ptr);
 
     int	(*filter_if_free)(caddr_t      cookie,
-			  struct ifnet *ifnet_ptr);
+			  struct ifnet *ifp);
 
-    int	(*filter_detach)(caddr_t  cookie);	
+    int	(*filter_detach)(caddr_t  cookie);
     u_long	reserved[2];
 };
-
 
 #define DLIL_PR_FILTER  1
 #define DLIL_IF_FILTER  2
@@ -134,70 +102,24 @@ struct dlil_if_flt_str {
 
 
 typedef int (*dl_input_func)(struct mbuf *m, char *frame_header,
-			     struct ifnet *ifp, u_long  dl_tag, int sync_ok);
+			     struct ifnet *ifp, u_long protocol_family, int sync_ok);
 typedef int (*dl_pre_output_func)(struct ifnet		*ifp,
-				  struct mbuf		**m,
-				  struct sockaddr	*dest,
-				  caddr_t		route_entry,
-				  char			*frame_type,
-				  char			*dst_addr,
-				  u_long		dl_tag);
+					u_long protocol_family,
+					struct mbuf		**m,
+					const struct sockaddr	*dest,
+					caddr_t		route_entry,
+					char			*frame_type,
+					char			*dst_addr);
 
-typedef int (*dl_event_func)(struct kern_event_msg  *event,
-			     u_long            dl_tag);
+typedef void (*dl_event_func)(struct ifnet *ifp, struct kev_msg *event);
 
 typedef int (*dl_offer_func)(struct mbuf *m, char *frame_header);
-typedef int (*dl_ioctl_func)(u_long	dl_tag,
+typedef int (*dl_ioctl_func)(u_long	protocol_family,
 			     struct ifnet *ifp,
 			     u_long	ioctl_cmd,
 			     caddr_t	ioctl_arg);
+typedef int (*dl_detached_func)(u_long	protocol_family, struct ifnet *ifp);
 
-
-
-#ifdef __APPLE_API_PRIVATE
-struct dlil_filterq_entry {
-    TAILQ_ENTRY(dlil_filterq_entry) que;
-    u_long	 filter_id;
-    int		 type;
-    union {
-	struct dlil_if_flt_str if_filter;
-	struct dlil_pr_flt_str pr_filter;
-    } variants;
-};
-#else
-struct dlil_filterq_entry;
-#endif /* __APPLE_API_PRIVATE */
-
-TAILQ_HEAD(dlil_filterq_head, dlil_filterq_entry);
-
-
-struct if_proto {
-    TAILQ_ENTRY(if_proto)			next;
-    u_long					dl_tag;
-    struct dlil_filterq_head                    pr_flt_head;
-    struct ifnet		*ifp;
-    dl_input_func		dl_input;
-    dl_pre_output_func		dl_pre_output;
-    dl_event_func		dl_event;
-    dl_offer_func		dl_offer;
-    dl_ioctl_func		dl_ioctl;
-    u_long			protocol_family;
-    u_long			reserved[4];
-
-};
-
-#ifdef __APPLE_API_PRIVATE
-TAILQ_HEAD(dlil_proto_head, if_proto);
-
-struct dlil_tag_list_entry {
-    TAILQ_ENTRY(dlil_tag_list_entry) next;
-    struct ifnet		   *ifp;
-    u_long			   dl_tag;
-};
-#endif /* __APPLE_API_PRIVATE */
-
-
-#ifdef __APPLE_API_OBSOLETE
 /* Obsolete types */
 #define DLIL_DESC_RAW		1
 #define DLIL_DESC_802_2		2
@@ -210,9 +132,9 @@ struct dlil_tag_list_entry {
  * DLIL_DESC_802_2_SNAP - obsolete, data in variants.desc_802_2_SNAP
  *						  protocol field in host byte order
  */
-#endif /* __APPLE_API_OBSOLETE */
+#endif KERNEL_PRIVATE
 
-/* Ehernet specific types */
+/* Ethernet specific types */
 #define DLIL_DESC_ETYPE2	4
 #define DLIL_DESC_SAP		5
 #define DLIL_DESC_SNAP		6
@@ -232,6 +154,7 @@ struct dlil_tag_list_entry {
  * variants.native_type_length.
  */
 
+#ifdef KERNEL_PRIVATE
 struct dlil_demux_desc {
     TAILQ_ENTRY(dlil_demux_desc) next;
     
@@ -269,7 +192,6 @@ struct dlil_demux_desc {
 
 TAILQ_HEAD(ddesc_head_str, dlil_demux_desc);
 
-
 struct dlil_proto_reg_str {
     struct ddesc_head_str	demux_desc_head;
     u_long			interface_family;
@@ -281,23 +203,39 @@ struct dlil_proto_reg_str {
     dl_event_func		event;
     dl_offer_func		offer;
     dl_ioctl_func		ioctl;
-    u_long			reserved[4];
+    dl_detached_func	detached;
+    u_long			reserved[3];
 };
 
 
-int dlil_attach_interface_filter(struct ifnet		   *ifnet_ptr,
-				 struct dlil_if_flt_str    *interface_filter,
-				 u_long			   *filter_id,
-				 int			   insertion_point);
+int dlil_attach_filter(struct ifnet *ifp, const struct iff_filter *if_filter,
+					   interface_filter_t *filter_ref);
+
+struct ifnet_stat_increment_param;
+
+int
+dlil_input_with_stats(struct ifnet  *ifp, struct mbuf *m_head, struct mbuf *m_tail,
+					  const struct ifnet_stat_increment_param *stats);
 
 int
 dlil_input(struct ifnet  *ifp, struct mbuf *m_head, struct mbuf *m_tail);
 
 int
-dlil_output(u_long		dl_tag,
+dlil_output_list(
+		struct ifnet *ifp,
+		u_long protocol_family,
+		struct mbuf	*packetlist,
+		caddr_t		route,
+		const struct sockaddr *dest,
+		int		raw);
+
+int
+dlil_output(
+		struct ifnet *ifp,
+		u_long protocol_family,
 	    struct mbuf		*m,
 	    caddr_t		route,
-	    struct sockaddr     *dest,
+	    const struct sockaddr     *dest,
 	    int			raw);
 
 
@@ -307,32 +245,82 @@ dlil_ioctl(u_long	proto_family,
 	   u_long	ioctl_code,
 	   caddr_t	ioctl_arg);
 
-int
-dlil_attach_protocol(struct dlil_proto_reg_str   *proto,
-		     u_long		         *dl_tag);
+errno_t
+dlil_resolve_multi(
+	struct ifnet *ifp,
+	const struct sockaddr *proto_addr,
+	struct sockaddr *ll_addr,
+	size_t ll_len);
+
+/*
+ * Send arp internal bypasses the check for
+ * IPv4LL.
+ */
+errno_t
+dlil_send_arp_internal(
+	ifnet_t	ifp,
+	u_int16_t arpop,
+	const struct sockaddr_dl* sender_hw,
+	const struct sockaddr* sender_proto,
+	const struct sockaddr_dl* target_hw,
+	const struct sockaddr* target_proto);
+
+errno_t
+dlil_send_arp(
+	ifnet_t	ifp,
+	u_int16_t arpop,
+	const struct sockaddr_dl* sender_hw,
+	const struct sockaddr* sender_proto,
+	const struct sockaddr_dl* target_hw,
+	const struct sockaddr* target_proto);
 
 int
-dlil_detach_protocol(u_long	dl_tag);
+dlil_ioctl_locked(u_long	proto_family,
+	   struct ifnet	*ifp,
+	   u_long	ioctl_code,
+	   caddr_t	ioctl_arg);
+
+int
+dlil_attach_protocol(struct dlil_proto_reg_str   *proto);
+
+int
+dlil_detach_protocol(struct ifnet *ifp, u_long protocol_family);
 
 int
 dlil_if_attach(struct ifnet	*ifp);
 
+#ifdef BSD_KERNEL_PRIVATE
+
 int
-dlil_attach_protocol_filter(u_long	            dl_tag,
-			    struct dlil_pr_flt_str  *proto_filter,
-			    u_long   	            *filter_id,
-			    int		            insertion_point);
+dlil_if_attach_with_address(
+	struct ifnet		*ifp,
+	const struct sockaddr_dl	*ll_addr);
+
 int
-dlil_detach_filter(u_long	filter_id);
+dlil_attach_protocol_kpi(ifnet_t ifp, protocol_family_t protocol,
+	const struct ifnet_attach_proto_param *proto_details);
+
+errno_t dlil_set_bpf_tap(ifnet_t ifp, bpf_tap_mode mode,
+						 bpf_packet_func callback);
+
+#endif
+
+void
+dlil_detach_filter(interface_filter_t filter);
 
 struct dlil_ifmod_reg_str {
     int (*add_if)(struct ifnet *ifp);
     int (*del_if)(struct ifnet *ifp);
-    int (*add_proto)(struct ddesc_head_str   *demux_desc_head,
-		     struct if_proto  *proto, u_long dl_tag);
-    int (*del_proto)(struct if_proto  *proto, u_long dl_tag);
-    int (*ifmod_ioctl)(struct ifnet *ifp, u_long ioctl_cmd, caddr_t data);
-    int	(*shutdown)();
+	int	(*add_proto)(struct ifnet *ifp, u_long protocol_family,
+		struct ddesc_head_str *demux_desc_head);
+#ifdef __KPI_INTERFACE__
+    ifnet_del_proto_func	del_proto;
+    ifnet_ioctl_func		ifmod_ioctl;
+#else
+	void*					del_proto;
+	void*					ifmod_ioctl;
+#endif
+    int	(*shutdown)(void);
     int (*init_if)(struct ifnet *ifp);
     u_long	reserved[3];
 };
@@ -340,24 +328,6 @@ struct dlil_ifmod_reg_str {
 
 int dlil_reg_if_modules(u_long  interface_family,
 			struct dlil_ifmod_reg_str  *ifmod_reg);
-
-struct dlil_protomod_reg_str {
-    /* 
-     *   attach the protocol to the interface and return the dl_tag 
-     */
-    int (*attach_proto)(struct ifnet *ifp, u_long *dl_tag);
-
-    /*
-     *   detach the protocol from the interface. 
-     *   this is optionnal. If it is NULL, DLIL will use 0 default detach function.
-     */
-    int (*detach_proto)(struct ifnet *ifp, u_long dl_tag); 
-
-    /*
-     *   reserved for future use. MUST be NULL.
-     */
-    u_long	reserved[4];
-};
 
 /* 
 
@@ -402,7 +372,8 @@ EINVAL:
 */
 
 int dlil_reg_proto_module(u_long protocol_family, u_long interface_family,
-			struct dlil_protomod_reg_str  *protomod_reg);
+			int (*attach)(struct ifnet *ifp, u_long protocol_family),
+			int (*detach)(struct ifnet *ifp, u_long protocol_family));
 
 /* 
 
@@ -438,16 +409,11 @@ Function : dlil_plumb_protocol
 
     dlil_plumb_protocol() will plumb a protocol to an actual interface.
     This will find a registered protocol module and call its attach function.
-    The module will typically call dlil_attach_protocol with the appropriate parameters,
-    and will return the dl_tag of the attachement.
-    It is up to the caller to handle the dl_tag. 
-    Some protocol (IPv4) will stick it in their internal structure for future use.
-    Some other protocol (IPv6) can ignore the dl_tag.
-        
+    The module will typically call dlil_attach_protocol with the appropriate parameters.
+            
 Parameters :
     'protocol_family' is PF_INET, PF_INET6, ...
     'ifp' is the interface to plumb the protocol to.
-    'dl_tag' is the tag returned from the succesful attachement.
     
 Return code :    
 
@@ -464,7 +430,7 @@ other:
     Error returned by the attach_proto function
 
 */
-int dlil_plumb_protocol(u_long protocol_family, struct ifnet *ifp, u_long *dl_tag);
+int dlil_plumb_protocol(u_long protocol_family, struct ifnet *ifp);
 
 /* 
 
@@ -513,9 +479,11 @@ dlil_inject_pr_output(struct mbuf		*m,
 int
 dlil_inject_if_output(struct mbuf *m, u_long from_id);
 
-int  
-dlil_find_dltag(u_long if_family, short unit, u_long proto_family, u_long *dl_tag);
-
+#ifdef KERNEL_PRIVATE
+void
+dlil_post_msg(struct ifnet *ifp,u_long event_subclass, u_long event_code, 
+		   struct net_event_data *event_data, u_long event_data_len);
+#endif
 
 int
 dlil_event(struct ifnet *ifp, struct kern_event_msg *event);
@@ -524,6 +492,12 @@ int dlil_dereg_if_modules(u_long interface_family);
 
 int
 dlil_if_detach(struct ifnet *ifp);
+
+void
+ifp_reference(struct ifnet *ifp);
+
+void
+ifp_release(struct ifnet *ifp);
 
 
 /* 
@@ -604,7 +578,7 @@ EBUSY:
 
 */
 
-int dlil_if_acquire(u_long family, void *uniqueid, size_t uniqueid_len, 
+int dlil_if_acquire(u_long family, const void *uniqueid, size_t uniqueid_len, 
 			struct ifnet **ifp);
 			
 
@@ -619,10 +593,10 @@ Function : dlil_if_release
 	The if_eflags IF_INUSE will be cleared.
 	The fields if_output, if_ioctl, if_free and if_set_bpf_tap will be changed 
 	to point to DLIL private functions.
-	After calling dlil_if_acquire, the driver can safely terminate and
+	After calling dlil_if_release, the driver can safely terminate and
 	unload if necessary.
-	Note : if the call to dlil_if_detach returns DLIL_WAIT_FOR_FREE, the
-	driver can safely ignore it and call dlil_if_release.
+	Note: your driver should only call dlil_if_release once your if_free
+	function has been called.
 
 Parameters :
 	ifp is the pointer to the ifnet to release.
@@ -631,5 +605,6 @@ Parameters :
 
 void dlil_if_release(struct ifnet *ifp);
 
-#endif /* __APPLE_API_UNSTABLE */
+#endif /* KERNEL_PRIVATE */
+#endif /* KERNEL */
 #endif /* DLIL_H */

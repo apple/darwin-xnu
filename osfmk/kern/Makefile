@@ -19,7 +19,7 @@ EXPORT_ONLY_FILES = \
 	kalloc.h \
 	kern_types.h \
 	lock.h \
-	ledger.h \
+	locks.h \
 	host.h \
 	mach_param.h \
 	macro_help.h \
@@ -27,13 +27,10 @@ EXPORT_ONLY_FILES = \
 	queue.h \
 	sched_prim.h \
 	simple_lock.h \
-	simple_lock_types.h \
-	sync_lock.h \
+	startup.h \
 	task.h \
 	thread.h \
-	thread_act.h \
 	thread_call.h \
-	time_out.h \
 	wait_queue.h \
 	zalloc.h
 

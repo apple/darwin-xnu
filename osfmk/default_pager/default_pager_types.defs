@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -22,90 +22,6 @@
 /*
  * @OSF_COPYRIGHT@
  */
-/*
- * HISTORY
- * $Log: default_pager_types.defs,v $
- * Revision 1.4  2002/11/23 05:08:24  lindak
- * Merged PR-3107160-3107168 into ZZ100
- * 3107160	Panther Kernel builds spew tons of compiler warnings about default
- * 	argument
- * 3107168	Kernel warnings about "extra tokens at end of #endif directive"
- * 	Kernel
- *
- * Revision 1.3.1930.1  2002/11/21 22:11:29  sarcone
- *
- * Bug #:3107160,3107168
- * Submitted by: Chris Sarcone
- * Reviewed by: Simon Douglas
- *
- * Fixed a bunch of compiler warnings about default arguments and
- * extra tokens at end of #endif directives.
- *
- * Revision 1.3  2000/01/26 05:56:23  wsanchez
- * Add APSL
- *
- * Revision 1.2  1998/12/01 00:24:42  wsanchez
- * Merged in CDY_DP1 (chris: default pager)
- *
- * Revision 1.1.2.2  1998/11/25 21:32:17  youngwor
- * fix errant comment format
- *
- * Revision 1.1.2.1  1998/11/24 22:39:58  youngwor
- * Check-in of support for the in-kernel default pager 
- *
- * Revision 1.1.1.1  1998/03/07 02:26:33  wsanchez
- * Import of OSF Mach kernel (~mburg)
- *
- * Revision 1.2.7.3  1995/01/11  19:30:40  devrcs
- * 	mk6 CR668 - 1.3b26 merge
- * 	[1994/11/10  15:34:32  bolinger]
- *
- * 	Insert OSC1_3 log.
- *
- * 	BEGIN OSC1_3 HISTORY
- *
- * 	Revision 1.2.2.6  1994/05/06  19:23:25  tmt
- * 	  Merge Alpha changes into osc1.3b19 source.
- * 	  [1994/03/29  18:21:06  rmiller]
- * 	  64 bit
- * 	  [1994/01/27  14:31:30  picco]
- *
- * 	Revision 1.2.2.5  1994/04/01  18:42:58  jph
- * 	  CR10550 -- Add backing store info interfaces.
- * 	  [1994/04/01  18:40:30  jph]
- *
- * 	END OSC1_3 HISTORY
- * 	[1994/11/02  20:48:01  bolinger]
- *
- * Revision 1.2.7.1  1994/09/23  06:57:07  ezf
- * 	change marker to not FREE
- * 	[1994/09/23  06:54:36  ezf]
- * 
- * Revision 1.2.2.3  1993/08/05  17:57:50  gm
- * 	CR9627: Removed deprecated default_pager_filename_t type.
- * 	[1993/07/09  19:20:12  gm]
- * 
- * Revision 1.2.2.2  1993/06/09  02:11:13  gm
- * 	Added to OSF/1 R1.3 from NMK15.0.
- * 	[1993/06/02  20:42:07  gm]
- * 
- * Revision 1.2  1993/04/19  16:32:44  devrcs
- * 	Untyped ipc merge:
- * 	Introducing new MIG syntax for Untyped IPC (via compile option
- * 	MACH_IPC_TYPED)
- * 	[1993/03/18  09:37:27  rod]
- * 
- * 	Moved from bootstrap.
- * 	[1993/02/17  13:45:33  bruel]
- * 
- * 	Fixed comments.
- * 	[1993/02/11  09:26:06  bruel]
- * 
- * 	Created for external default pager.
- * 	[1993/02/09  14:56:57  bruel]
- * 
- * $EndLog$
- */
 
 #ifndef	_MACH_DEFAULT_PAGER_TYPES_DEFS_
 #define _MACH_DEFAULT_PAGER_TYPES_DEFS_
@@ -114,6 +30,7 @@
 
 
 type default_pager_info_t		= struct[3] of natural_t;
+type default_pager_info_64_t		= struct[6] of natural_t;
 
 type default_pager_object_t		= struct[2] of natural_t;
 type default_pager_object_array_t	= array[] of default_pager_object_t;

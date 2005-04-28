@@ -61,6 +61,7 @@
  *
  *	@(#)ar.h	8.2 (Berkeley) 1/21/94
  */
+#ifdef	KERNEL_PRIVATE
 
 #ifndef _AR_H_
 #define	_AR_H_
@@ -86,3 +87,4 @@ struct ar_hdr {
 };
 
 #endif /* !_AR_H_ */
+#endif /* KERNEL_PRIVATE */

@@ -42,6 +42,10 @@ class RootDomainUserClient : public IOUserClient
 
 private:
     IOPMrootDomain *	fOwner;
+    task_t              fOwningTask;
+
+    IOReturn            secureSleepSystem( int *return_code );
+    IOReturn            secureSetAggressiveness( unsigned long type, unsigned long newLevel, int *return_code );
 
 public:
 
@@ -50,6 +54,8 @@ public:
     virtual IOExternalMethod * getTargetAndMethodForIndex( IOService ** targetP, UInt32 index );
 
     virtual bool start( IOService * provider );
+
+    virtual bool initWithTask(task_t owningTask, void *security_id, UInt32);
 
     void setPreventative(UInt32 on_off, UInt32 types_of_sleep);
 

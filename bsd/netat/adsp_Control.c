@@ -165,7 +165,7 @@ top:
     gbuf_wset(mp,DDPL_FRAME_LEN); /* leave room for DDP header */
 
     if (sp->sendCtl) {
-	short mask;
+	short mask = 0;
 		
 	i = sp->sendCtl;	/* get local copy bitmap of */
 				/* which ctl packets to send. */

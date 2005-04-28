@@ -25,6 +25,7 @@
 #include <sys/types.h>
 
 #include <libkern/OSReturn.h>
+#include <kern/debug.h>
 
 class OSMetaClass;
 class OSObject;
@@ -83,6 +84,57 @@ public:
 #define OSCheckTypeInst(typeinst, inst) \
     OSMetaClassBase::checkTypeInst(inst, typeinst)
     
+
+// Arcane evil code interprets a C++ pointer to function as specified in the
+// -fapple-kext ABI, i.e. the gcc-2.95 generated code.  IT DOES NOT ALLOW
+// the conversion of functions that are from MULTIPLY inherited classes.
+
+typedef void (*_ptf_t)(void);
+
+static inline _ptf_t
+_ptmf2ptf(const OSMetaClassBase *self, void (OSMetaClassBase::*func)(void))
+{
+    union {
+	void (OSMetaClassBase::*fIn)(void);
+	struct { 	// Pointer to member function 2.95
+	    unsigned short fToff;
+	    short  fVInd;
+	    union {
+		_ptf_t fPFN;
+		short  fVOff;
+	    } u;
+	} fptmf2;
+    } map;
+
+    map.fIn = func;
+    if (map.fptmf2.fToff)
+	panic("Multiple inheritance is not supported");
+    else if (map.fptmf2.fVInd < 0) {
+	// Not virtual, i.e. plain member func
+	return map.fptmf2.u.fPFN;
+    } else {
+	union {
+	    const OSMetaClassBase *fObj;
+	    _ptf_t **vtablep;
+	} u;
+	u.fObj = self;
+
+	// Virtual member function so dereference vtable
+	return (*u.vtablep)[map.fptmf2.fVInd - 1];
+    }
+}
+
+/*! @function OSMemberFunctionCast
+    @abstract Convert a pointer to a member function to a c-style pointer to function.  No warnings are generated.
+    @param type The type of pointer function desired.
+    @param self The this pointer of the object whose function you wish to cache.
+    @param func The pointer to member function itself, something like &Base::func.
+    @result A pointer to function of the given type.  This function will panic if an attempt is made to call it with a multiply inherited class.
+*/
+
+#define OSMemberFunctionCast(cptrtype, self, func)			\
+    (cptrtype) OSMetaClassBase::					\
+	    _ptmf2ptf(self, (void (OSMetaClassBase::*)(void)) func)
 
 protected:
     OSMetaClassBase();
@@ -246,6 +298,8 @@ private:
     @abstract Given an error code log an error string using printf */
     static void logError(OSReturn result);
 
+public:
+
 /*! @function getMetaClassWithName
     @abstract Lookup a meta-class in the runtime type information system
     @param name Name of the desired class's meta-class. 
@@ -316,12 +370,6 @@ public:
     @param kmodName globally unique cString name of the kernel module being loaded. 
     @result If success full return a handle to be used in later calls 0 otherwise. */
     static void *preModLoad(const char *kmodName);
-
-/*! @function failModLoad
-    @abstract Record an error during the loading of an kernel module.
-    @discussion As constructor's can't return errors nor can they through exceptions in embedded-c++ an indirect error mechanism is necessary.  Check mod load returns a bool to indicate the current error state of the runtime type information system.  During object construction a call to failModLoad will cause an error code to be recorded.  Once an error has been set the continuing construction will be ignored until the end of the pre/post load.
-    @param error Code of the error. */
-    static void failModLoad(OSReturn error);
 
 /*! @function checkModLoad
     @abstract Check if the current load attempt is still OK.
@@ -427,6 +475,11 @@ public:
     @abstract 'Get'ter for the super class.
     @result Pointer to superclass, chain ends with 0 for OSObject. */
     const OSMetaClass *getSuperClass() const;
+	
+/*! @function getKmodName
+    @abstract 'Get'ter for the name of the kmod.
+    @result OSSymbol representing the kmod name. */
+	const OSSymbol *getKmodName() const;
 
 /*! @function getClassName
     @abstract 'Get'ter for class name.

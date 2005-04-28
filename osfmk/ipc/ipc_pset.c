@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -68,6 +68,8 @@
 #include <ipc/ipc_port.h>
 #include <ipc/ipc_print.h>
 
+#include <kern/kern_types.h>
+#include <kern/spl.h>
 /*
  *	Routine:	ipc_pset_alloc
  *	Purpose:
@@ -235,8 +237,6 @@ kern_return_t
 ipc_pset_remove_from_all(
 	ipc_port_t	port)
 {
-	ipc_pset_t pset;
-
 	assert(ip_active(port));
 	
 	if (port->ip_pset_count == 0)
@@ -319,13 +319,10 @@ ipc_list_count(
  *	Purpose:
  *		Pretty-print a port set for kdb.
  */
-
 void
 ipc_pset_print(
 	ipc_pset_t	pset)
 {
-	extern int db_indent;
-
 	printf("pset 0x%x\n", pset);
 
 	db_indent += 2;

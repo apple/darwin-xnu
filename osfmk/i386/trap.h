@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -99,8 +99,6 @@ extern void		i386_exception(
 				int		code,
 				int		subcode);
 
-extern void		thread_exception_return(void);
-
 extern boolean_t	kernel_trap(
 				struct i386_saved_state	*regs);
 
@@ -112,6 +110,13 @@ extern void		user_trap(
 
 extern void		i386_astintr(int preemption);
 
+#if defined(MACH_KDP)
+extern void		kdp_i386_trap(
+				unsigned int,
+				struct i386_saved_state *,
+				kern_return_t,
+				vm_offset_t);
+#endif /* MACH_KDP */
 #endif	/* !ASSEMBLER && MACH_KERNEL */
 
 #endif	/* _I386_TRAP_H_ */

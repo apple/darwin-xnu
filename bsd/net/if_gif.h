@@ -61,15 +61,15 @@
 #include <netinet/in.h>
 /* xxx sigh, why route have struct route instead of pointer? */
 
+#ifdef KERNEL_PRIVATE
 struct encaptab;
 
-#ifdef __APPLE_API_PRIVATE
 struct gif_softc {
 	struct ifnet	gif_if;	   /* common area - must be at the top */
 	struct sockaddr	*gif_psrc; /* Physical src addr */
 	struct sockaddr	*gif_pdst; /* Physical dst addr */
 #ifdef __APPLE__
-	struct if_proto	*gif_proto; /* dlil protocol attached */
+	u_long	gif_proto; /* dlil protocol attached */
 #endif
 	union {
 		struct route  gifscr_ro;    /* xxx */
@@ -78,6 +78,7 @@ struct gif_softc {
 #endif
 	} gifsc_gifscr;
 	int		gif_flags;
+	int		gif_called;
 	const struct encaptab *encap_cookie4;
 	const struct encaptab *encap_cookie6;
 	TAILQ_ENTRY(gif_softc) gif_link; /* all gif's are linked */
@@ -87,18 +88,20 @@ struct gif_softc {
 #if INET6
 #define gif_ro6 gifsc_gifscr.gifscr_ro6
 #endif
-#endif /* __APPLE_API_PRIVATE */
+
+#endif /* KERNEL_PRIVATE */
 
 #define GIF_MTU		(1280)	/* Default MTU */
 #define	GIF_MTU_MIN	(1280)	/* Minimum MTU */
 #define	GIF_MTU_MAX	(8192)	/* Maximum MTU */
 
-#ifdef __APPLE_API_PRIVATE
-/* Prototypes */
-int gif_input __P((struct mbuf *, char*, struct ifnet *, u_long, int));
-int gif_output __P((struct ifnet *, struct mbuf *,
-		    struct sockaddr *, struct rtentry *));
-int gif_ioctl __P((struct ifnet *, u_long, void*));
-#endif /* __APPLE_API_PRIVATE */
+#ifdef KERNEL_PRIVATE
 
+/* Prototypes */
+int gif_input(struct mbuf *, char*, struct ifnet *, u_long, int);
+int gif_output(struct ifnet *, struct mbuf *,
+		    struct sockaddr *, struct rtentry *);
+int gif_ioctl(struct ifnet *, u_long, void*);
+
+#endif /* KERNEL_PRIVATE */
 #endif /* _NET_IF_GIF_H_ */

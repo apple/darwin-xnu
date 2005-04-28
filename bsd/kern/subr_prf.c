@@ -77,14 +77,13 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/buf.h>
 #include <sys/conf.h>
 #include <sys/reboot.h>
 #include <sys/msgbuf.h>
-#include <sys/proc.h>
+#include <sys/proc_internal.h>
 #include <sys/ioctl.h>
 #include <sys/tty.h>
-#include <sys/file.h>
+#include <sys/file_internal.h>
 #include <sys/tprintf.h>
 #include <sys/syslog.h>
 #include <stdarg.h>
@@ -127,8 +126,6 @@ extern int  __doprnt(const char *fmt,
 static void puts(const char *s, int flags, struct tty *ttyp);
 static void printn(u_long n, int b, int flags, struct tty *ttyp, int zf, int fld_size);
 
-/* MP printf stuff */
-decl_simple_lock_data(,printf_lock)
 #if	NCPUS > 1
 boolean_t new_printf_cpu_number;  /* do we need to output who we are */
 #endif
@@ -299,7 +296,6 @@ int prf(const char *fmt, va_list ap, int flags, struct tty *ttyp)
     int cpun = cpu_number();
 
     if(ttyp == 0) {
-	    simple_lock(&printf_lock);
 	} else
 		TTY_LOCK(ttyp);
 
@@ -317,7 +313,6 @@ int prf(const char *fmt, va_list ap, int flags, struct tty *ttyp)
 
 #if    NCPUS > 1
 	if(ttyp == 0) {
-		simple_unlock(&printf_lock);
 	} else
 		TTY_UNLOCK(ttyp);
 #endif

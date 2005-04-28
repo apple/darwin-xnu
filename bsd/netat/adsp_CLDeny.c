@@ -62,9 +62,7 @@
  *	errState		not a connection listener
  *	errAborted		request aborted by a Remove call
  */
-int adspCLDeny(sp, pb)			/* (DSPPBPtr pb) */
-    struct adspcmd *pb;
-    CCBPtr sp;
+int adspCLDeny(struct adspcmd *pb, CCBPtr sp)
 {
     gbuf_t *mp;
     ADSP_FRAMEPtr adspp;

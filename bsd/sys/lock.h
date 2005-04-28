@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -63,76 +63,69 @@
 #define	_SYS_LOCK_H_
 
 #include <sys/appleapiopts.h>
+#include <sys/types.h>
+#include <sys/cdefs.h>
 
 #ifdef KERNEL
-#ifdef __APPLE_API_UNSTABLE
-#include <kern/simple_lock.h>
-#include <kern/simple_lock_types.h>
 
-#if defined(simple_lock_init)
-#undef simple_lock_init
-#endif
-#define simple_lock_init(l)	usimple_lock_init((l),0)
+#include <kern/locks.h>
 
-#if defined(simple_lock)
-#undef simple_lock
-#endif
-#define simple_lock(l)         ((void) 1)
-
-#if defined(simple_unlock)
-#undef simple_unlock
-#endif
-#define simple_unlock(l)        ((void) 1)
-
-#if defined(simple_lock_try)
-#undef simple_lock_try
-#endif
-#define simple_lock_try(l)      1
 
 #if defined(thread_sleep_simple_lock)
 #undef thread_sleep_simple_lock
 #endif
 #define thread_sleep_simple_lock(l, e, i) thread_sleep_funnel((e), (i))
 
-#endif /* __APPLE_API_UNSTABLE */
-#else /* KERNEL */
-
-#ifndef	_MACHINE_SIMPLE_LOCK_DATA_
-#define	_MACHINE_SIMPLE_LOCK_DATA_
-
-#include <mach/boolean.h>
-
-struct slock{
-	volatile unsigned int lock_data[10];
-};
-typedef struct slock	simple_lock_data_t;
-typedef struct slock	*simple_lock_t;
-#define	decl_simple_lock_data(class,name) \
-class	simple_lock_data_t	name;
-
-#endif	/* _MACHINE_SIMPLE_LOCK_DATA_ */
 
 #endif /* KERNEL */
 
-#ifdef __APPLE_API_UNSTABLE
+#ifdef BSD_KERNEL_PRIVATE
 /*
  * The general lock structure.  Provides for multiple shared locks,
  * upgrading from shared to exclusive, and sleeping until the lock
  * can be gained. The simple locks are defined in <machine/param.h>.
  */
 struct lock__bsd__ {
-	simple_lock_data_t
-		lk_interlock;		/* lock on remaining fields */
+	void * lk_interlock[10];		/* lock on remaining fields */
 	u_int	lk_flags;		/* see below */
 	int	lk_sharecount;		/* # of accepted shared locks */
 	int	lk_waitcount;		/* # of processes sleeping for lock */
 	short	lk_exclusivecount;	/* # of recursive exclusive locks */
 	short	lk_prio;		/* priority at which to sleep */
-	char	*lk_wmesg;		/* resource sleeping (for tsleep) */
+	const char	*lk_wmesg;	/* resource sleeping (for tsleep) */
 	int	lk_timo;		/* maximum sleep time (for tsleep) */
 	pid_t	lk_lockholder;		/* pid of exclusive lock holder */
 	void	*lk_lockthread;		/* thread which acquired excl lock */
 };
+
+// LP64todo - should this move?
+
+/* LP64 version of lock__bsd__.  all pointers 
+ * grow when we're dealing with a 64-bit process.
+ * WARNING - keep in sync with lock__bsd__
+ */
+
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=natural
+#endif
+
+struct user_lock__bsd__ {
+	user_addr_t	lk_interlock[10];   /* lock on remaining fields */
+	u_int		lk_flags;			/* see below */
+	int			lk_sharecount;		/* # of accepted shared locks */
+	int			lk_waitcount;		/* # of processes sleeping for lock */
+	short		lk_exclusivecount;	/* # of recursive exclusive locks */
+	short		lk_prio;			/* priority at which to sleep */
+	user_addr_t lk_wmesg;           /* resource sleeping (for tsleep) */
+	int			lk_timo;			/* maximum sleep time (for tsleep) */
+	pid_t		lk_lockholder;		/* pid of exclusive lock holder */
+	user_addr_t	lk_lockthread;		/* thread which acquired excl lock */
+};
+
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=reset
+#endif
+
 /*
  * Lock request types:
  *   LK_SHARED - get one of many possible shared locks. If a process
@@ -231,12 +224,12 @@ struct lock__bsd__ {
 
 struct proc;
 
-void	lockinit __P((struct lock__bsd__ *, int prio, char *wmesg, int timo,
-			int flags));
-int	lockmgr __P((struct lock__bsd__ *, u_int flags,
-			simple_lock_t, struct proc *p));
-int	lockstatus __P((struct lock__bsd__ *));
+void	lockinit(struct lock__bsd__ *, int prio, const char *wmesg, int timo,
+			int flags);
+int	lockmgr(struct lock__bsd__ *, u_int flags,
+			void *, struct proc *p);
+int	lockstatus(struct lock__bsd__ *);
 
-#endif /* __APPLE_API_UNSTABLE */
+#endif /* BSD_KERNEL_PRIVATE  */
 
 #endif	/* _SYS_LOCK_H_ */

@@ -39,10 +39,9 @@
 #include <sys/appleapiopts.h>
 
 #include <net/pfkeyv2.h>
+#ifdef KERNEL_PRIVATE
 #include <netkey/keydb.h>
 
-#ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
 /*
  * Security Policy Index
  * Ensure that both address families in the "src" and "dst" are same.
@@ -123,8 +122,7 @@ struct secspacq {
 	int count;		/* for lifetime */
 	/* XXX: here is mbuf place holder to be sent ? */
 };
-#endif /* __APPLE_API_PRIVATE */
-#endif /*KERNEL*/
+#endif /* KERNEL_PRIVATE */
 
 /* according to IANA assignment, port 0x0000 and proto 0xff are reserved. */
 #define IPSEC_PORT_ANY		0
@@ -179,7 +177,6 @@ struct secspacq {
 				 */
 #define IPSEC_REPLAYWSIZE  32
 
-#ifdef __APPLE_API_UNSTABLE
 /* statistics for ipsec processing */
 struct ipsecstat {
 	u_quad_t in_success;  /* succeeded inbound process */
@@ -209,8 +206,8 @@ struct ipsecstat {
 	u_quad_t out_ahhist[256];
 	u_quad_t out_comphist[256];
 };
-#endif /* __APPLE_API_UNSTABLE */
 
+#ifdef KERNEL_PRIVATE
 /*
  * Definitions for IPsec & Key sysctl operations.
  */
@@ -269,7 +266,6 @@ struct ipsecstat {
 }
 
 #ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
 struct ipsec_output_state {
 	struct mbuf *m;
 	struct route *ro;
@@ -297,59 +293,56 @@ extern int ip4_esp_randpad;
 
 #define ipseclog(x)	do { if (ipsec_debug) log x; } while (0)
 
-extern struct secpolicy *ipsec4_getpolicybysock
-	__P((struct mbuf *, u_int, struct socket *, int *));
-extern struct secpolicy *ipsec4_getpolicybyaddr
-	__P((struct mbuf *, u_int, int, int *));
+extern struct secpolicy *ipsec4_getpolicybysock(struct mbuf *, u_int,
+						struct socket *, int *);
+extern struct secpolicy *ipsec4_getpolicybyaddr(struct mbuf *, u_int, int,
+						int *);
 
 struct inpcb;
-extern int ipsec_init_policy __P((struct socket *so, struct inpcbpolicy **));
-extern int ipsec_copy_policy
-	__P((struct inpcbpolicy *, struct inpcbpolicy *));
-extern u_int ipsec_get_reqlevel __P((struct ipsecrequest *));
+extern int ipsec_init_policy(struct socket *so, struct inpcbpolicy **);
+extern int ipsec_copy_policy(struct inpcbpolicy *, struct inpcbpolicy *);
+extern u_int ipsec_get_reqlevel(struct ipsecrequest *);
 
-extern int ipsec4_set_policy __P((struct inpcb *inp, int optname,
-	caddr_t request, size_t len, int priv));
-extern int ipsec4_get_policy __P((struct inpcb *inpcb, caddr_t request,
-	size_t len, struct mbuf **mp));
-extern int ipsec4_delete_pcbpolicy __P((struct inpcb *));
-extern int ipsec4_in_reject_so __P((struct mbuf *, struct socket *));
-extern int ipsec4_in_reject __P((struct mbuf *, struct inpcb *));
+extern int ipsec4_set_policy(struct inpcb *inp, int optname,
+	caddr_t request, size_t len, int priv);
+extern int ipsec4_get_policy(struct inpcb *inpcb, caddr_t request,
+	size_t len, struct mbuf **mp);
+extern int ipsec4_delete_pcbpolicy(struct inpcb *);
+extern int ipsec4_in_reject_so(struct mbuf *, struct socket *);
+extern int ipsec4_in_reject(struct mbuf *, struct inpcb *);
 
 struct secas;
 struct tcpcb;
-extern int ipsec_chkreplay __P((u_int32_t, struct secasvar *));
-extern int ipsec_updatereplay __P((u_int32_t, struct secasvar *));
+extern int ipsec_chkreplay(u_int32_t, struct secasvar *);
+extern int ipsec_updatereplay(u_int32_t, struct secasvar *);
 
-extern size_t ipsec4_hdrsiz __P((struct mbuf *, u_int, struct inpcb *));
-extern size_t ipsec_hdrsiz_tcp __P((struct tcpcb *));
+extern size_t ipsec4_hdrsiz(struct mbuf *, u_int, struct inpcb *);
+extern size_t ipsec_hdrsiz_tcp(struct tcpcb *);
 
 struct ip;
-extern const char *ipsec4_logpacketstr __P((struct ip *, u_int32_t));
-extern const char *ipsec_logsastr __P((struct secasvar *));
+extern const char *ipsec4_logpacketstr(struct ip *, u_int32_t);
+extern const char *ipsec_logsastr(struct secasvar *);
 
-extern void ipsec_dumpmbuf __P((struct mbuf *));
+extern void ipsec_dumpmbuf(struct mbuf *);
 
-extern int ipsec4_output __P((struct ipsec_output_state *, struct secpolicy *,
-	int));
-extern int ipsec4_tunnel_validate __P((struct mbuf *, int, u_int,
-	struct secasvar *));
-extern struct mbuf *ipsec_copypkt __P((struct mbuf *));
-extern void ipsec_delaux __P((struct mbuf *));
-extern int ipsec_setsocket __P((struct mbuf *, struct socket *));
-extern struct socket *ipsec_getsocket __P((struct mbuf *));
-extern int ipsec_addhist __P((struct mbuf *, int, u_int32_t)); 
-extern struct ipsec_history *ipsec_gethist __P((struct mbuf *, int *));
-extern void ipsec_clearhist __P((struct mbuf *));
-#endif /* __APPLE_API_PRIVATE */
-#endif /*KERNEL*/
+extern int ipsec4_output(struct ipsec_output_state *, struct secpolicy *, int);
+extern int ipsec4_tunnel_validate(struct mbuf *, int, u_int, struct secasvar *);
+extern struct mbuf *ipsec_copypkt(struct mbuf *);
+extern void ipsec_delaux(struct mbuf *);
+extern int ipsec_setsocket(struct mbuf *, struct socket *);
+extern struct socket *ipsec_getsocket(struct mbuf *);
+extern int ipsec_addhist(struct mbuf *, int, u_int32_t); 
+extern struct ipsec_history *ipsec_gethist(struct mbuf *, int *);
+extern void ipsec_clearhist(struct mbuf *);
+#endif KERNEL
+#endif KERNEL_PRIVATE
 
 #ifndef KERNEL
-extern caddr_t ipsec_set_policy __P((char *, int));
-extern int ipsec_get_policylen __P((caddr_t));
-extern char *ipsec_dump_policy __P((caddr_t, char *));
+extern caddr_t ipsec_set_policy(char *, int);
+extern int ipsec_get_policylen(caddr_t);
+extern char *ipsec_dump_policy(caddr_t, char *);
 
-extern const char *ipsec_strerror __P((void));
-#endif /*!KERNEL*/
+extern const char *ipsec_strerror(void);
+#endif KERNEL
 
-#endif /*_NETINET6_IPSEC_H_*/
+#endif _NETINET6_IPSEC_H_

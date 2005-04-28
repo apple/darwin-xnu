@@ -20,16 +20,21 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 
+#include <types.h>
+#include <console/video_console.h>
+
+extern void bcopy(const void *, void *, size_t);
+
 void video_scroll_up(unsigned long start,
                      unsigned long end,
                      unsigned long dest)
 {
-    bcopy(start, dest, (end - start) << 2);
+    bcopy((void *) start, (void *) dest, (end - start) << 2);
 }
 
 void video_scroll_down(unsigned long start,  /* HIGH addr */
                        unsigned long end,    /* LOW addr */
                        unsigned long dest)   /* HIGH addr */
 {
-    bcopy(end, dest, (start - end) << 2);
+    bcopy((void *) end, (void *) dest, (start - end) << 2);
 }

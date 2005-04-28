@@ -28,6 +28,8 @@
 
 static int DEBUGFlag;
 
+int32_t gPESerialBaud = -1;
+
 void pe_init_debug(void)
 {
   if (!PE_parse_boot_arg("debug", &DEBUGFlag))

@@ -47,15 +47,6 @@
  * any improvements or extensions that they make and grant Carnegie Mellon
  * the rights to redistribute these changes.
  */
-/*
- * JMM -
- * This header will eventually be MIG-generated and define the
- * exception interfaces.  It used to define the exception data
- * types, but those have been moved to exception_types.h for
- * consistency.  Once this is MIG-generated, it will automatically
- * drag in the types, but for compatibility in the interim, just
- * pull them in manually.
- */
 
 #ifndef	_MACH_EXCEPTION_H_
 #define	_MACH_EXCEPTION_H_

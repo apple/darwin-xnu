@@ -52,13 +52,19 @@ the socket associated with
 to be shut down.
 If
 .Fa how
-is 0, further receives will be disallowed.
+is 
+.Dv SHUT_RD ,
+further receives will be disallowed.
 If
 .Fa how
-is 1, further sends will be disallowed.
+is 
+.Dv SHUT_WR ,
+further sends will be disallowed.
 If
 .Fa how
-is 2, further sends and receives will be disallowed.
+is 
+.Dv SHUT_RDWR ,
+further sends and receives will be disallowed.
 .Sh DIAGNOSTICS
 A 0 is returned if the call succeeds, -1 if it fails.
 .Sh ERRORS

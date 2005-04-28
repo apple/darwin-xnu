@@ -19,7 +19,7 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
-#warning include <mach.h> is going away, please don't use it anymore.
+#warning include <mach.h> is going away, please do not use it anymore.
 
 #include <sys/appleapiopts.h>
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -38,8 +38,6 @@
 #else
 #define Panic(aargh) panic("%s[KERNEL]: %s", my_name, aargh)
 #endif
-
-extern char	my_name[];
 
 #define VSTATS_ACTION(l, stmt)	\
 	do { VSTATS_LOCK(l); stmt; VSTATS_UNLOCK(l); } while (0)

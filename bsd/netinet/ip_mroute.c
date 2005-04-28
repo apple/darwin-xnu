@@ -71,13 +71,13 @@
 #endif
 
 #ifndef MROUTING
-extern u_long	_ip_mcast_src __P((int vifi));
-extern int	_ip_mforward __P((struct ip *ip, struct ifnet *ifp,
-				  struct mbuf *m, struct ip_moptions *imo));
-extern int	_ip_mrouter_done __P((void));
-extern int	_ip_mrouter_get __P((struct socket *so, struct sockopt *sopt));
-extern int	_ip_mrouter_set __P((struct socket *so, struct sockopt *sopt));
-extern int	_mrt_ioctl __P((int req, caddr_t data, struct proc *p));
+extern u_long	_ip_mcast_src(int vifi);
+extern int	_ip_mforward(struct ip *ip, struct ifnet *ifp,
+				  struct mbuf *m, struct ip_moptions *imo);
+extern int	_ip_mrouter_done(void);
+extern int	_ip_mrouter_get(struct socket *so, struct sockopt *sopt);
+extern int	_ip_mrouter_set(struct socket *so, struct sockopt *sopt);
+extern int	_mrt_ioctl(int req, caddr_t data, struct proc *p);
 
 /*
  * Dummy routines and globals used when multicast routing is not compiled in.
@@ -215,7 +215,7 @@ ip_rsvp_force_done(so)
 struct socket  *ip_mrouter  = NULL;
 static struct mrtstat	mrtstat;
 #else /* MROUTE_LKM */
-extern void	X_ipip_input __P((struct mbuf *m, int iphlen));
+extern void	X_ipip_input(struct mbuf *m, int iphlen);
 extern struct mrtstat mrtstat;
 static int ip_mrtproto;
 #endif
@@ -286,13 +286,13 @@ static int have_encap_tunnel = 0;
 static u_long last_encap_src;
 static struct vif *last_encap_vif;
 
-static u_long	X_ip_mcast_src __P((int vifi));
-static int	X_ip_mforward __P((struct ip *ip, struct ifnet *ifp, struct mbuf *m, struct ip_moptions *imo));
-static int	X_ip_mrouter_done __P((void));
-static int	X_ip_mrouter_get __P((struct socket *so, struct sockopt *m));
-static int	X_ip_mrouter_set __P((struct socket *so, struct sockopt *m));
-static int	X_legal_vif_num __P((int vif));
-static int	X_mrt_ioctl __P((int cmd, caddr_t data));
+static u_long	X_ip_mcast_src(int vifi);
+static int	X_ip_mforward(struct ip *ip, struct ifnet *ifp, struct mbuf *m, struct ip_moptions *imo);
+static int	X_ip_mrouter_done(void);
+static int	X_ip_mrouter_get(struct socket *so, struct sockopt *m);
+static int	X_ip_mrouter_set(struct socket *so, struct sockopt *m);
+static int	X_legal_vif_num(int vif);
+static int	X_mrt_ioctl(int cmd, caddr_t data);
 
 static int get_sg_cnt(struct sioc_sg_req *);
 static int get_vif_cnt(struct sioc_vif_req *);
@@ -713,6 +713,8 @@ add_vif(vifcp)
     ifa = ifa_ifwithaddr((struct sockaddr *)&sin);
     if (ifa == 0) return EADDRNOTAVAIL;
     ifp = ifa->ifa_ifp;
+    ifafree(ifa);
+    ifa = NULL;
 
     if (vifcp->vifc_flags & VIFF_TUNNEL) {
 	if ((vifcp->vifc_flags & VIFF_SRCRT) == 0) {
@@ -1076,14 +1078,17 @@ socket_send(s, mm, src)
 	struct mbuf *mm;
 	struct sockaddr_in *src;
 {
+	socket_lock(s, 1);
 	if (s) {
 		if (sbappendaddr(&s->so_rcv,
 				 (struct sockaddr *)src,
-				 mm, (struct mbuf *)0) != 0) {
+				 mm, (struct mbuf *)0, NULL) != 0) {
 			sorwakeup(s);
+			socket_unlock(s, 1);
 			return 0;
 		}
 	}
+	socket_unlock(s, 1);
 	m_freem(mm);
 	return -1;
 }
@@ -1336,10 +1341,7 @@ expire_upcalls(void *unused)
     struct mfc *mfc, **nptr;
     int i;
     int s;
-    boolean_t 	funnel_state;
 
-
-    funnel_state = thread_funnel_set(network_flock, TRUE);
     
     s = splnet();
     for (i = 0; i < MFCTBLSIZ; i++) {
@@ -1382,7 +1384,6 @@ expire_upcalls(void *unused)
     }
     splx(s);
     timeout(expire_upcalls, (caddr_t)NULL, EXPIRE_TIMEOUT);
-    (void) thread_funnel_set(network_flock, FALSE);
 }
 
 /*
@@ -1646,8 +1647,6 @@ ipip_input(m, iphlen)
     struct ifnet *ifp = m->m_pkthdr.rcvif;
     register struct ip *ip = mtod(m, struct ip *);
     register int hlen = ip->ip_hl << 2;
-    register int s;
-    register struct ifqueue *ifq;
     register struct vif *vifp;
 
     if (!have_encap_tunnel) {
@@ -1698,23 +1697,8 @@ ipip_input(m, iphlen)
     m->m_len -= IP_HDR_LEN;
     m->m_pkthdr.len -= IP_HDR_LEN;
     m->m_pkthdr.rcvif = ifp;
-
-    ifq = &ipintrq;
-    s = splimp();
-    if (IF_QFULL(ifq)) {
-	IF_DROP(ifq);
-	m_freem(m);
-    } else {
-	IF_ENQUEUE(ifq, m);
-	/*
-	 * normally we would need a "schednetisr(NETISR_IP)"
-	 * here but we were called by ip_input and it is going
-	 * to loop back & try to dequeue the packet we just
-	 * queued as soon as we return so we avoid the
-	 * unnecessary software interrrupt.
-	 */
-    }
-    splx(s);
+ 
+    proto_inject(PF_INET, m);
 }
 
 /*
@@ -1852,11 +1836,8 @@ tbf_reprocess_q(xvifp)
 	void *xvifp;
 {
     register struct vif *vifp = xvifp;
-    boolean_t 	funnel_state;
 
-    funnel_state = thread_funnel_set(network_flock, TRUE);
     if (ip_mrouter == NULL)  {
-	(void) thread_funnel_set(network_flock, FALSE);
 	return;
      }   
 
@@ -1866,7 +1847,6 @@ tbf_reprocess_q(xvifp)
 
     if (vifp->v_tbf->tbf_q_len)
 	timeout(tbf_reprocess_q, (caddr_t)vifp, TBF_REPROCESS);
-    (void) thread_funnel_set(network_flock, FALSE);
 }
 
 /* function that will selectively discard a member of the queue

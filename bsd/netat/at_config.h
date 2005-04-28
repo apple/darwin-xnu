@@ -27,6 +27,8 @@
 #define	_NETAT_AT_CONFIG_H_
 #include <sys/appleapiopts.h>
 
+#ifdef __APPLE_API_OBSOLETE
+
 /* originally from if_cnt.h
  *
  * defines for if_stat struct. 
@@ -73,4 +75,5 @@ typedef struct if_zone {
 } if_zone_t;
 
 
+#endif /* __APPLE_API_OBSOLETE */
 #endif /* _NETAT_AT_CONFIG_H_ */

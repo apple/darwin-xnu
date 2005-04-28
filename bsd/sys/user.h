@@ -68,14 +68,16 @@
 #include <sys/uio.h>
 #endif
 #include <sys/resourcevar.h>
+#ifdef KERNEL_PRIVATE
 #include <sys/signalvar.h>
+#endif
 #include <sys/vm.h>		/* XXX */
 #include <sys/sysctl.h>
  
 #ifdef KERNEL
-
 #ifdef __APPLE_API_PRIVATE
-struct nlminfo;
+#include <sys/eventvar.h>
+
 /*
  *	Per-thread U area.
  */
@@ -83,39 +85,44 @@ struct uthread {
 	int	*uu_ar0;		/* address of users saved R0 */
 
 	/* syscall parameters, results and catches */
-	int	uu_arg[8];		/* arguments to current system call */
+	u_int64_t uu_arg[8]; /* arguments to current system call */
 	int	*uu_ap;			/* pointer to arglist */
     int uu_rval[2];
 
 	/* thread exception handling */
 	int	uu_code;			/* ``code'' to trap */
-	char uu_cursig;				/* p_cursig for exc. */
-	struct nlminfo *uu_nlminfo;	/* for rpc.lockd */
-	/* support for syscalls which use continuations */
+	char uu_cursig;			/* p_cursig for exc. */
+	/* support for select - across system calls */
+	struct _select {
+		u_int32_t	*ibits, *obits; /* bits to select on */
+		uint	nbytes;	/* number of bytes in ibits and obits */
+		wait_queue_set_t wqset;	 /* cached across select calls */
+		size_t allocsize;		 /* ...size of select cache */
+		u_int64_t abstime;
+		int poll;
+		int error;
+		int count;
+		char * wql;
+	} uu_select;			/* saved state for select() */
+	/* to support continuations */
 	union {
-		struct _select {
-			u_int32_t	*ibits, *obits; /* bits to select on */
-			uint	nbytes;	/* number of bytes in ibits and obits */
-			u_int64_t abstime;
-			int poll;
-			int error;
-			int count;
-			int nfcount;
-			char * wql;
-			int allocsize;		/* select allocated size */
-		} ss_select;			/* saved state for select() */
-		struct _wait {
-			int	f;
-		} ss_wait;			/* saved state for wait?() */
-	  struct _owait {
-		int pid;
-		int *status;
-		int options;
-		struct rusage *rusage;
-	  } ss_owait;
-	  int uu_nfs_myiod;    /* saved state for nfsd */
+		int uu_nfs_myiod;    /* saved state for nfsd */
+		struct _kevent_scan {
+			kevent_callback_t call; /* per-event callback */
+			kevent_continue_t cont; /* whole call continuation */
+			uint64_t deadline;	/* computed deadline for operation */
+			void *data;		/* caller's private data */
+		} ss_kevent_scan;		/* saved state for kevent_scan() */
+		struct _kevent {
+			struct _kevent_scan scan;/* space for the generic data */
+			struct fileproc *fp;	 /* fileproc we hold iocount on */
+			int fd;			 /* filedescriptor for kq */
+			register_t *retval;	 /* place to store return val */
+			user_addr_t eventlist;	 /* user-level event list address */
+			int eventcount;	 	/* user-level event count */
+			int eventout;		 /* number of events output */
+		} ss_kevent;			 /* saved state for kevent() */
 	} uu_state;
-
   /* internal support for continuation framework */
     int (*uu_continuation)(int);
     int uu_pri;
@@ -123,27 +130,48 @@ struct uthread {
 	int uu_flag;
 	struct proc * uu_proc;
 	void * uu_userstate;
-	wait_queue_sub_t uu_wqsub;
 	sigset_t uu_siglist;				/* signals pending for the thread */
 	sigset_t  uu_sigwait;				/*  sigwait on this thread*/
 	sigset_t  uu_sigmask;				/* signal mask for the thread */
 	sigset_t  uu_oldmask;				/* signal mask saved before sigpause */
-	thread_act_t uu_act;
+	thread_t uu_act;
 	sigset_t  uu_vforkmask;				/* saved signal mask during vfork */
 
 	TAILQ_ENTRY(uthread) uu_list;		/* List of uthreads in proc */
 
 	struct kaudit_record 		*uu_ar;		/* audit record */
 	struct task*	uu_aio_task;			/* target task for async io */
+
+  /* network support for dlil layer locking */
+	u_int32_t	dlil_incremented_read;
+	lck_mtx_t	*uu_mtx;
+
+        int		uu_lowpri_delay;
+
+	struct ucred	*uu_ucred;		/* per thread credential */
+        int		uu_defer_reclaims;
+        vnode_t		uu_vreclaims;
+
+#ifdef JOE_DEBUG
+        int		uu_iocount;
+        int		uu_vpindex;
+        void 	*	uu_vps[32];
+#endif
 };
 
 typedef struct uthread * uthread_t;
 
 /* Definition of uu_flag */
-#define	USAS_OLDMASK	0x1		/* need to restore mask before pause */
-#define UNO_SIGMASK		0x2		/* exited thread; invalid sigmask */
-/* Kept same as in proc */
-#define P_VFORK     0x2000000   /* process has vfork children */
+#define	UT_SAS_OLDMASK	0x00000001	/* need to restore mask before pause */
+#define	UT_NO_SIGMASK	0x00000002	/* exited thread; invalid sigmask */
+#define UT_NOTCANCELPT	0x00000004             /* not a cancelation point */
+#define UT_CANCEL	0x00000008             /* thread marked for cancel */
+#define UT_CANCELED	0x00000010            /* thread cancelled */
+#define UT_CANCELDISABLE 0x00000020            /* thread cancel disabled */
+
+#define	UT_VFORK	0x02000000	/* thread has vfork children */
+#define	UT_SETUID	0x04000000	/* thread is settugid() */
+#define UT_WASSETUID	0x08000000	/* thread was settugid() (in vfork) */
 
 #endif /* __APPLE_API_PRIVATE */
 

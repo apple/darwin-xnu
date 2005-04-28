@@ -166,22 +166,24 @@ static void
 bdg_promisc_off(int clear_used)
 {
     struct ifnet *ifp ;
-    TAILQ_FOREACH(ifp, &ifnet, if_link) {
-	if ( (ifp2sc[ifp->if_index].flags & IFF_BDG_PROMISC) ) {
-	    int s, ret ;
-	    s = splimp();
-	    ret = ifpromisc(ifp, 0);
-	    splx(s);
-	    ifp2sc[ifp->if_index].flags &= ~(IFF_BDG_PROMISC|IFF_MUTE) ;
-	    DEB(printf(">> now %s%d promisc OFF if_flags 0x%x bdg_flags 0x%x\n",
-		    ifp->if_name, ifp->if_unit,
-		    ifp->if_flags, ifp2sc[ifp->if_index].flags);)
-	}
-	if (clear_used) {
-	    ifp2sc[ifp->if_index].flags &= ~(IFF_USED) ;
-	    bdg_stats.s[ifp->if_index].name[0] = '\0';
-	}
+    ifnet_head_lock_shared();
+    TAILQ_FOREACH(ifp, &ifnet_head, if_link) {
+		if ( (ifp2sc[ifp->if_index].flags & IFF_BDG_PROMISC) ) {
+			int s, ret ;
+			s = splimp();
+			ret = ifnet_set_promiscuous(ifp, 0);
+			splx(s);
+			ifp2sc[ifp->if_index].flags &= ~(IFF_BDG_PROMISC|IFF_MUTE) ;
+			DEB(printf(">> now %s%d promisc OFF if_flags 0x%x bdg_flags 0x%x\n",
+				ifp->if_name, ifp->if_unit,
+				ifp->if_flags, ifp2sc[ifp->if_index].flags);)
+		}
+		if (clear_used) {
+			ifp2sc[ifp->if_index].flags &= ~(IFF_USED) ;
+			bdg_stats.s[ifp->if_index].name[0] = '\0';
+		}
     }
+    ifnet_head_done();
 }
 
 /*
@@ -193,29 +195,31 @@ bdg_promisc_on()
     struct ifnet *ifp ;
     int s ;
 
-    TAILQ_FOREACH(ifp, &ifnet, if_link) {
-	if ( !BDG_USED(ifp) )
-	    continue ;
-	if ( 0 == ( ifp->if_flags & IFF_UP) ) {
-	    s = splimp();
-	    if_up(ifp);
-	    splx(s);
-	}
-	if ( !(ifp2sc[ifp->if_index].flags & IFF_BDG_PROMISC) ) {
-	    int ret ;
-	    s = splimp();
-	    ret = ifpromisc(ifp, 1);
-	    splx(s);
-	    ifp2sc[ifp->if_index].flags |= IFF_BDG_PROMISC ;
-	    printf(">> now %s%d promisc ON if_flags 0x%x bdg_flags 0x%x\n",
-		    ifp->if_name, ifp->if_unit,
-		    ifp->if_flags, ifp2sc[ifp->if_index].flags);
-	}
-	if (BDG_MUTED(ifp)) {
-	    printf(">> unmuting %s%d\n", ifp->if_name, ifp->if_unit);
-	    BDG_UNMUTE(ifp) ;
-       }
+    ifnet_head_lock_shared();
+    TAILQ_FOREACH(ifp, &ifnet_head, if_link) {
+		if ( !BDG_USED(ifp) )
+			continue ;
+		if ( 0 == ( ifp->if_flags & IFF_UP) ) {
+			s = splimp();
+			if_up(ifp);
+			splx(s);
+		}
+		if ( !(ifp2sc[ifp->if_index].flags & IFF_BDG_PROMISC) ) {
+			int ret ;
+			s = splimp();
+			ret = ifnet_set_promiscuous(ifp, 1);
+			splx(s);
+			ifp2sc[ifp->if_index].flags |= IFF_BDG_PROMISC ;
+			printf(">> now %s%d promisc ON if_flags 0x%x bdg_flags 0x%x\n",
+				ifp->if_name, ifp->if_unit,
+				ifp->if_flags, ifp2sc[ifp->if_index].flags);
+		}
+		if (BDG_MUTED(ifp)) {
+			printf(">> unmuting %s%d\n", ifp->if_name, ifp->if_unit);
+			BDG_UNMUTE(ifp) ;
+		}
     }
+    ifnet_head_done();
 }
 
 static int
@@ -394,17 +398,6 @@ flush_table()
     splx(s);
 }
 
-/* wrapper for funnel */
-void
-bdg_timeout_funneled(void * dummy)
-{
-    boolean_t 	funnel_state;
-        
-    funnel_state = thread_funnel_set(network_flock, TRUE);
-    bdg_timeout(dummy);
-    funnel_state = thread_funnel_set(network_flock, FALSE);
-}
-
 /*
  * called periodically to flush entries etc.
  */
@@ -438,7 +431,7 @@ bdg_timeout(void *dummy)
 	    bdg_loops = 0 ;
 	}
     }
-    timeout(bdg_timeout_funneled, (void *)0, 2*hz );
+    timeout(bdg_timeout, (void *)0, 2*hz );
 }
 
 /*
@@ -477,7 +470,6 @@ bdgtakeifaces(void)
 {
     int i ;
     struct ifnet *ifp;
-    struct arpcom *ac ;
     bdg_addr *p = bdg_addresses ;
     struct bdg_softc *bp;
 
@@ -485,32 +477,32 @@ bdgtakeifaces(void)
     *bridge_cfg = '\0';
 
     printf("BRIDGE 010131, have %d interfaces\n", if_index);
+    ifnet_head_lock_shared();
     for (i = 0 , ifp = ifnet.tqh_first ; i < if_index ;
 		i++, ifp = TAILQ_NEXT(ifp, if_link) )
-	if (ifp->if_type == IFT_ETHER) { /* ethernet ? */
-	    bp = &ifp2sc[ifp->if_index] ;
-	    ac = (struct arpcom *)ifp;
-	    sprintf(bridge_cfg + strlen(bridge_cfg),
-		"%s%d:1,", ifp->if_name, ifp->if_unit);
-	    printf("-- index %d %s type %d phy %d addrl %d addr %6D\n",
-		    ifp->if_index,
-		    bdg_stats.s[ifp->if_index].name,
-		    (int)ifp->if_type, (int) ifp->if_physical,
-		    (int)ifp->if_addrlen,
-		    ac->ac_enaddr, "." );
-	    bcopy(ac->ac_enaddr, p->etheraddr, 6);
-	    p++ ;
-	    bp->ifp = ifp ;
-	    bp->flags = IFF_USED ;
-	    bp->cluster_id = htons(1) ;
-	    bp->magic = 0xDEADBEEF ;
-
-	    sprintf(bdg_stats.s[ifp->if_index].name,
-		"%s%d:%d", ifp->if_name, ifp->if_unit,
-		ntohs(bp->cluster_id));
-	    bdg_ports ++ ;
-	}
-
+		if (ifp->if_type == IFT_ETHER) { /* ethernet ? */
+			ifnet_lladdr_copy_bytes(ifp, p->etheraddr, ETHER_ADDR_LEN);
+			bp = &ifp2sc[ifp->if_index] ;
+			sprintf(bridge_cfg + strlen(bridge_cfg),
+			"%s%d:1,", ifp->if_name, ifp->if_unit);
+			printf("-- index %d %s type %d phy %d addrl %d addr %6D\n",
+				ifp->if_index,
+				bdg_stats.s[ifp->if_index].name,
+				(int)ifp->if_type, (int) ifp->if_physical,
+				(int)ifp->if_addrlen,
+				p->etheraddr, "." );
+			p++ ;
+			bp->ifp = ifp ;
+			bp->flags = IFF_USED ;
+			bp->cluster_id = htons(1) ;
+			bp->magic = 0xDEADBEEF ;
+	
+			sprintf(bdg_stats.s[ifp->if_index].name,
+			"%s%d:%d", ifp->if_name, ifp->if_unit,
+			ntohs(bp->cluster_id));
+			bdg_ports ++ ;
+		}
+	ifnet_head_done();
 }
 
 /*
@@ -666,27 +658,27 @@ bdg_forward(struct mbuf *m0, struct ether_header *const eh, struct ifnet *dst)
     bdg_thru++; /* only count once */
 
     if (src == NULL) /* packet from ether_output */
-	dst = bridge_dst_lookup(eh);
+		dst = bridge_dst_lookup(eh);
     if (dst == BDG_DROP) { /* this should not happen */
-	printf("xx bdg_forward for BDG_DROP\n");
-	m_freem(m0);
-	return NULL;
+		printf("xx bdg_forward for BDG_DROP\n");
+		m_freem(m0);
+		return NULL;
     }
     if (dst == BDG_LOCAL) { /* this should not happen as well */
-	printf("xx ouch, bdg_forward for local pkt\n");
-	return m0;
+		printf("xx ouch, bdg_forward for local pkt\n");
+		return m0;
     }
     if (dst == BDG_BCAST || dst == BDG_MCAST || dst == BDG_UNKNOWN) {
-	ifp = ifnet.tqh_first ; /* scan all ports */
-	once = 0 ;
-	if (dst != BDG_UNKNOWN) /* need a copy for the local stack */
-	    shared = 1 ;
+		ifp = ifnet_head.tqh_first ; /* scan all ports */
+		once = 0 ;
+		if (dst != BDG_UNKNOWN) /* need a copy for the local stack */
+			shared = 1 ;
     } else {
-	ifp = dst ;
-	once = 1 ;
+		ifp = dst ;
+		once = 1 ;
     }
     if ( (u_int)(ifp) <= (u_int)BDG_FORWARD )
-	panic("bdg_forward: bad dst");
+		panic("bdg_forward: bad dst");
 
 #ifdef IPFIREWALL
     /*

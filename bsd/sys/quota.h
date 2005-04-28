@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -62,6 +62,12 @@
 #define _SYS_QUOTA_H
 
 #include <sys/appleapiopts.h>
+#include <sys/cdefs.h>
+#ifdef KERNEL_PRIVATE
+#include <kern/locks.h>
+#endif
+
+#include <mach/boolean.h>
 
 #ifdef __APPLE_API_UNSTABLE
 /*
@@ -159,6 +165,34 @@ struct dqblk {
 	u_int32_t dqb_spare[4];		/* pad struct to power of 2 */
 };
 
+#ifdef KERNEL_PRIVATE
+#include <machine/types.h>	/* user_time_t */
+/* LP64 version of struct dqblk.  time_t is a long and must grow when 
+ * we're dealing with a 64-bit process.
+ * WARNING - keep in sync with struct dqblk
+ */
+
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=natural
+#endif
+
+struct user_dqblk {
+	u_int64_t dqb_bhardlimit;	/* absolute limit on disk bytes alloc */
+	u_int64_t dqb_bsoftlimit;	/* preferred limit on disk bytes */
+	u_int64_t dqb_curbytes;	        /* current byte count */
+	u_int32_t dqb_ihardlimit;	/* maximum # allocated inodes + 1 */
+	u_int32_t dqb_isoftlimit;	/* preferred inode limit */
+	u_int32_t dqb_curinodes;	/* current # allocated inodes */
+	user_time_t	  dqb_btime;		/* time limit for excessive disk use */
+	user_time_t	  dqb_itime;		/* time limit for excessive files */
+	u_int32_t dqb_id;		/* identifier (0 for empty entries) */
+	u_int32_t dqb_spare[4];		/* pad struct to power of 2 */
+};
+
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=reset
+#endif
+#endif  /* KERNEL_PRIVATE */
 
 #define INITQMAGICS { \
 	0xff31ff35,	/* USRQUOTA */ \
@@ -211,46 +245,41 @@ dqhashshift(u_long size)
 
 
 #ifndef KERNEL
-
-#include <sys/cdefs.h>
-
 __BEGIN_DECLS
-int quotactl __P((char *, int, int, caddr_t));
+int quotactl(char *, int, int, caddr_t);
 __END_DECLS
 #endif /* !KERNEL */
 
-#ifdef KERNEL
+#ifdef KERNEL_PRIVATE
 #include <sys/queue.h>
 
-/*
- * Macros to avoid subroutine calls to trivial functions.
- */
-#if DIAGNOSTIC
-#define	DQREF(dq)	dqref(dq)
-#else
-#define	DQREF(dq)	(dq)->dq_cnt++
-#endif
 
 
 /* Quota file info
  */
 struct quotafile {
+  	lck_mtx_t     qf_lock;	     /* quota file mutex */
 	struct vnode *qf_vp;         /* quota file vnode */
 	struct ucred *qf_cred;       /* quota file access cred */
 	int           qf_shift;      /* primary hash shift */
 	int           qf_maxentries; /* size of hash table (power of 2) */
-	int           qf_entrycnt;  /* count of active entries */
+	int           qf_entrycnt;   /* count of active entries */
 	time_t        qf_btime;      /* block quota time limit */
 	time_t        qf_itime;      /* inode quota time limit */
+
+                                     /* the following 2 fields are protected */
+                                     /* by the quota list lock  */
 	char          qf_qflags;     /* quota specific flags */
+        int	      qf_refcnt;     /* count of dquot refs on this file */
 };
 
 /*
  * Flags describing the runtime state of quotas.
  * (in qf_qflags)
  */
-#define	QTF_OPENING	0x01	/* Q_QUOTAON in progress */
+#define	QTF_OPENING	0x01	/* Q_QUOTAON  in progress */
 #define	QTF_CLOSING	0x02	/* Q_QUOTAOFF in progress */
+#define	QTF_WANTED	0x04	/* waiting for change of state */
 
 
 /*
@@ -264,22 +293,28 @@ struct dquot {
 	TAILQ_ENTRY(dquot) dq_freelist;	/* free list */
 	u_int16_t dq_flags;		/* flags, see below */
 	u_int16_t dq_cnt;		/* count of active references */
-	u_int16_t dq_spare;		/* unused spare padding */
+        u_int16_t dq_lflags;		/* protected by the quota list lock */
 	u_int16_t dq_type;		/* quota type of this dquot */
 	u_int32_t dq_id;		/* identifier this applies to */
 	u_int32_t dq_index;		/* index into quota file */
 	struct	quotafile *dq_qfile;	/* quota file that this is taken from */
 	struct	dqblk dq_dqb;		/* actual usage & quotas */
 };
+
 /*
- * Flag values.
+ * dq_lflags values
  */
-#define	DQ_LOCK		0x01		/* this quota locked (no MODS) */
-#define	DQ_WANT		0x02		/* wakeup on unlock */
-#define	DQ_MOD		0x04		/* this quota modified since read */
-#define	DQ_FAKE		0x08		/* no limits here, just usage */
-#define	DQ_BLKS		0x10		/* has been warned about blk limit */
-#define	DQ_INODS	0x20		/* has been warned about inode limit */
+#define	DQ_LLOCK	0x01		/* this quota locked (no MODS) */
+#define	DQ_LWANT	0x02		/* wakeup on unlock */
+
+/*
+ * dq_flags values
+ */
+#define	DQ_MOD		0x01		/* this quota modified since read */
+#define	DQ_FAKE		0x02		/* no limits here, just usage */
+#define	DQ_BLKS		0x04		/* has been warned about blk limit */
+#define	DQ_INODS	0x08		/* has been warned about inode limit */
+
 /*
  * Shorthand notation.
  */
@@ -311,19 +346,27 @@ struct dquot {
  * on-disk dqblk data structures.
  */
 __BEGIN_DECLS
+void	dqfileinit(struct quotafile *);
 int	dqfileopen(struct quotafile *, int);
 void	dqfileclose(struct quotafile *, int);
 void	dqflush(struct vnode *);
-int	dqget(struct vnode *, u_long, struct quotafile *, int, struct dquot **);
+int	dqget(u_long, struct quotafile *, int, struct dquot **);
 void	dqinit(void);
 void	dqref(struct dquot *);
-void	dqrele(struct vnode *, struct dquot *);
-void	dqreclaim(struct vnode *, struct dquot *);
-int	dqsync(struct vnode *, struct dquot *);
+void	dqrele(struct dquot *);
+void	dqreclaim(struct dquot *);
+int	dqsync(struct dquot *);
 void	dqsync_orphans(struct quotafile *);
+void	dqlock(struct dquot *);
+void	dqunlock(struct dquot *);
+
+int	qf_get(struct quotafile *, int type);
+void	qf_put(struct quotafile *, int type);
+
+__private_extern__ void  munge_dqblk(struct dqblk *dqblkp, struct user_dqblk *user_dqblkp, boolean_t to64);
 __END_DECLS
 
-#endif /* KERNEL */
+#endif /* KERNEL_PRIVATE */
 
 #endif /* __APPLE_API_UNSTABLE */
 

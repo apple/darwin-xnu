@@ -28,6 +28,8 @@
 #define _NETAT_RTMP_H_
 #include <sys/appleapiopts.h>
 
+#ifdef __APPLE_API_OBSOLETE
+
 /* Changed 03-22-94 for router support  LD */
 
 /* RTMP function codes */
@@ -62,4 +64,5 @@ typedef struct {
 	unsigned char	at_rtmp_data;
 } at_rtmp_tuple;
 
+#endif /* __APPLE_API_OBSOLETE */
 #endif /* _NETAT_RTMP_H_ */

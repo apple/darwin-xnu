@@ -88,18 +88,33 @@ typedef enum {
 struct fdescnode {
 	LIST_ENTRY(fdescnode) fd_hash;	/* Hash list */
 	struct vnode	*fd_vnode;	/* Back ptr to vnode */
-	fdntype		fd_type;	/* Type of this node */
-	unsigned	fd_fd;		/* Fd to be dup'ed */
-	char		*fd_link;	/* Link to fd/n */
-	int		fd_ix;		/* filesystem index */
+	fdntype			fd_type;	/* Type of this node */
+	unsigned		fd_fd;		/* Fd to be dup'ed */
+	char			*fd_link;	/* Link to fd/n */
+	int				fd_ix;		/* filesystem index */
 };
 
 #define VFSTOFDESC(mp)	((struct fdescmount *)((mp)->mnt_data))
 #define	VTOFDESC(vp) ((struct fdescnode *)(vp)->v_data)
 
-extern int fdesc_init __P((struct vfsconf *));
-extern int fdesc_root __P((struct mount *, struct vnode **));
-extern int fdesc_allocvp __P((fdntype, int, struct mount *, struct vnode **));
+extern int fdesc_allocvp(fdntype, int, struct mount *, struct vnode **, enum vtype);
+extern int fdesc_badop(void);
+extern int fdesc_getattr(struct vnop_getattr_args *ap);
+extern int fdesc_inactive(struct vnop_inactive_args *ap);
+extern int fdesc_init(struct vfsconf *);
+extern int fdesc_ioctl(struct vnop_ioctl_args *ap);
+extern int fdesc_lookup(struct vnop_lookup_args *ap);
+extern int fdesc_open(struct vnop_open_args *ap);
+extern int fdesc_pathconf(struct vnop_pathconf_args *ap);
+extern int fdesc_read(struct vnop_read_args *ap);
+extern int fdesc_readdir(struct vnop_readdir_args *ap);
+extern int fdesc_readlink(struct vnop_readlink_args *ap);
+extern int fdesc_reclaim(struct vnop_reclaim_args *ap);
+extern int fdesc_root(struct mount *, struct vnode **, vfs_context_t);
+extern int fdesc_select(struct vnop_select_args *ap);
+extern int fdesc_setattr(struct vnop_setattr_args *ap);
+extern int fdesc_write(struct vnop_write_args *ap);
+
 extern int (**fdesc_vnodeop_p)(void *);
 extern struct vfsops fdesc_vfsops;
 #endif /* KERNEL */

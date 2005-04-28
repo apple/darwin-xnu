@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -61,7 +61,6 @@
 #define _IPC_IPC_OBJECT_H_
 
 #include <mach_rt.h>
-#include <cpus.h>
 #include <mach_kdb.h>
 
 #include <mach/kern_return.h>
@@ -91,12 +90,8 @@ typedef natural_t ipc_object_type_t;
 struct ipc_object {
 	ipc_object_refs_t io_references;
 	ipc_object_bits_t io_bits;
-	port_name_t	  io_receiver_name;
-#if NCPUS == 1
-	usimple_lock_data_t	io_lock_data;
-#else
+	mach_port_name_t  io_receiver_name;
 	decl_mutex_data(,	io_lock_data)
-#endif
 };
 
 /*
@@ -150,7 +145,7 @@ extern void	io_free(
 
 #else	/* MACH_ASSERT */
 #define	io_free(otype, io)	\
-		zfree(ipc_object_zones[(otype)], (vm_offset_t) (io))
+		zfree(ipc_object_zones[(otype)], (io))
 #endif	/* MACH_ASSERT */
 
 /*
@@ -159,21 +154,8 @@ extern void	io_free(
  * within any kernel data structure needing to lock an ipc_object
  * (ipc_port and ipc_pset).
  */
-#if	NCPUS == 1
-
 #define io_lock_init(io) \
-	usimple_lock_init(&(io)-io_lock_data, ETAP_IPC_OBJECT)
-#define	io_lock(io) \
-	usimple_lock(&(io)->io_lock_data)
-#define	io_lock_try(io) \
-	usimple_lock_try(&(io)->io_lock_data)
-#define	io_unlock(io) \
-	usimple_unlock(&(io)->io_lock_data)
-
-#else	/* NCPUS == 1 */
-
-#define io_lock_init(io) \
-	mutex_init(&(io)->io_lock_data, ETAP_IPC_OBJECT)
+	mutex_init(&(io)->io_lock_data, 0)
 #define	io_lock(io) \
 	mutex_lock(&(io)->io_lock_data)
 #define	io_lock_try(io) \
@@ -181,13 +163,7 @@ extern void	io_free(
 #define	io_unlock(io) \
 	mutex_unlock(&(io)->io_lock_data)
 
-#endif	/* NCPUS == 1 */
-
-#if	NCPUS > 1
 #define _VOLATILE_ volatile
-#else	/* NCPUS > 1 */
-#define _VOLATILE_
-#endif	/* NCPUS > 1 */
 
 #define io_check_unlock(io) 						\
 MACRO_BEGIN								\

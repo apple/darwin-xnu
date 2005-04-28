@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -40,7 +40,7 @@ OSDefineMetaClassAndStructors(AppleCPU, IOCPU);
 bool AppleCPU::start(IOService *provider)
 {
   kern_return_t       result;
-  ml_processor_info_t processor_info;
+  ml_processor_info_t this_processor_info;
   
   if (!super::start(provider)) return false;
   
@@ -52,16 +52,18 @@ bool AppleCPU::start(IOService *provider)
   
   cpuIC->registerCPUInterruptController();
   
-  processor_info.cpu_id           = (cpu_id_t)this;
-  processor_info.boot_cpu         = true;
-  processor_info.start_paddr      = 0;
-  processor_info.supports_nap     = false;
-  processor_info.l2cr_value       = 0;
-  processor_info.time_base_enable = 0;
+  this_processor_info.cpu_id           = (cpu_id_t)this;
+  this_processor_info.boot_cpu         = true;
+  this_processor_info.start_paddr      = 0;
+  this_processor_info.supports_nap     = false;
+  this_processor_info.l2cr_value       = 0;
+  this_processor_info.time_base_enable = 0;
   
   // Register this CPU with mach.
-  result = ml_processor_register(&processor_info, &machProcessor,
-				 &ipi_handler);
+  result = ml_processor_register(
+				&this_processor_info,
+				&machProcessor,
+				&ipi_handler);
   if (result == KERN_FAILURE) return false;
   
   setCPUState(kIOCPUStateUninitalized);

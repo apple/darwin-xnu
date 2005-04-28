@@ -58,10 +58,10 @@ typedef struct {
 	u_int8_t	md5_buf[MD5_BUFLEN];
 } md5_ctxt;
 
-extern void md5_init __P((md5_ctxt *));
-extern void md5_loop __P((md5_ctxt *, u_int8_t *, u_int));
-extern void md5_pad __P((md5_ctxt *));
-extern void md5_result __P((u_int8_t *, md5_ctxt *));
+extern void md5_init(md5_ctxt *);
+extern void md5_loop(md5_ctxt *, u_int8_t *, u_int);
+extern void md5_pad(md5_ctxt *);
+extern void md5_result(u_int8_t *, md5_ctxt *);
 
 /* compatibility */
 #define MD5_CTX		md5_ctxt

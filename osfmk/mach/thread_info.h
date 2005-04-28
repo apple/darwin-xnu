@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -63,11 +63,10 @@
 #ifndef	_MACH_THREAD_INFO_H_
 #define _MACH_THREAD_INFO_H_
 
-#include <sys/appleapiopts.h>
-
 #include <mach/boolean.h>
 #include <mach/policy.h>
 #include <mach/time_value.h>
+#include <mach/message.h>
 #include <mach/machine/vm_types.h>
 
 /*
@@ -98,8 +97,8 @@ struct thread_basic_info {
 
 typedef struct thread_basic_info  thread_basic_info_data_t;
 typedef struct thread_basic_info  *thread_basic_info_t;
-#define THREAD_BASIC_INFO_COUNT   \
-                (sizeof(thread_basic_info_data_t) / sizeof(natural_t))
+#define THREAD_BASIC_INFO_COUNT   ((mach_msg_type_number_t) \
+                (sizeof(thread_basic_info_data_t) / sizeof(natural_t)))
 
 /*
  *	Scale factor for usage field.
@@ -125,12 +124,12 @@ typedef struct thread_basic_info  *thread_basic_info_t;
 #define TH_FLAGS_SWAPPED	0x1	/* thread is swapped out */
 #define TH_FLAGS_IDLE		0x2	/* thread is an idle thread */
 
-#ifdef	__APPLE_API_UNSTABLE
+/*
+ * Obsolete interfaces.
+ */
 
 #define THREAD_SCHED_TIMESHARE_INFO	10
 #define THREAD_SCHED_RR_INFO		11
 #define THREAD_SCHED_FIFO_INFO		12
-
-#endif	/* __APPLE_API_UNSTABLE */
 
 #endif	/* _MACH_THREAD_INFO_H_ */

@@ -16,6 +16,7 @@ MIG_DEFS = \
 MIG_USHDRS = \
 
 MIG_UUHDRS = \
+	default_pager_object.h
 
 
 MIGINCLUDES = ${MIG_UUHDRS} ${MIG_USHDRS}

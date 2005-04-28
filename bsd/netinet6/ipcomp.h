@@ -53,18 +53,18 @@ struct ipcomp {
 #define IPCOMP_CPI_NEGOTIATE_MIN	256
 
 #ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
+#ifdef KERNEL_PRIVATE
 struct ipcomp_algorithm {
-	int (*compress) __P((struct mbuf *, struct mbuf *, size_t *));
-	int (*decompress) __P((struct mbuf *, struct mbuf *, size_t *));
+	int (*compress)(struct mbuf *, struct mbuf *, size_t *);
+	int (*decompress)(struct mbuf *, struct mbuf *, size_t *);
 	size_t minplen;		/* minimum required length for compression */
 };
 
 struct ipsecrequest;
-extern const struct ipcomp_algorithm *ipcomp_algorithm_lookup __P((int));
-extern void ipcomp4_input __P((struct mbuf *, int));
-extern int ipcomp4_output __P((struct mbuf *, struct ipsecrequest *));
-#endif /* __APPLE_API_PRIVATE */
-#endif /*KERNEL*/
+extern const struct ipcomp_algorithm *ipcomp_algorithm_lookup(int);
+extern void ipcomp4_input(struct mbuf *, int);
+extern int ipcomp4_output(struct mbuf *, struct ipsecrequest *);
+#endif KERNEL_PRIVATE
+#endif KERNEL
 
-#endif /*_NETINET6_IPCOMP_H_*/
+#endif _NETINET6_IPCOMP_H_

@@ -140,7 +140,7 @@ int atp_open(gref, flag)
 	if (atp_rcb_data == NULL) {
 		if (kmem_alloc(kernel_map, &temp, sizeof(struct atp_rcb) * NATP_RCB) != KERN_SUCCESS) 
 			return(ENOMEM);
-		if (atp_rcb_data == NULL) {						/* in case we lost funnel while allocating */
+		if (atp_rcb_data == NULL) {						
 		        bzero((caddr_t)temp, sizeof(struct atp_rcb) * NATP_RCB);
 			atp_rcb_data = (struct atp_rcb*)temp;					
 			for (i = 0; i < NATP_RCB; i++) {

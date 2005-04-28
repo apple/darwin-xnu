@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2002-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -20,58 +20,39 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 ;
-;			Copy bytes of data around. handles overlapped data.
-;
-;			Change this to use Altivec later on, and maybe floating point.
+;			Copy bytes of data around. Handles overlapped data.
 ;
 ;
 #include <ppc/asm.h>
 #include <ppc/proc_reg.h>
 #include <assym.s>
 
-;		Use CR5_lt to indicate non-cached
+;       These routines use CR5 for certain flags:
+;		Use CR5_lt to indicate non-cached (in bcopy and memcpy)
 #define noncache 20
 
-;		Use CR5_gt to indicate that we need to turn data translation back on
-#define fixxlate 21
 
-;		Use CR5_eq to indicate that we need to invalidate bats (if 32-bit) or turn off
-;		64-bit mode (if 64-bit) before returning to our caller.  We overload the
-;		bit to reduce the number of conditional branches at bcopy exit.
-#define restorex 22
+;       The bcopy_phys variants use a stack frame so they can call bcopy as a subroutine.
+#define BCOPY_SF_SIZE   32      // total size
+#define BCOPY_SF_MSR    16      // we save caller's MSR here (possibly minus VEC and FP)
 
-;		Use CR5_so to indicate that we need to restore real-mode cachability
-;		Only needed on 64-bit machines
-#define flipcache 23
 
+#define kShort  32              // short operands are special cased
+
+
+; void bcopy_physvir_32(from, to, nbytes)
 ;
-; bcopy_nc(from, to, nbytes)
-;
-; bcopy_nc operates on non-cached memory so we can not use any kind
-; of cache instructions.
-;
-
-			.align	5
-			.globl	EXT(bcopy_nc)
-
-LEXT(bcopy_nc)
-			
-			crset	noncache					; Set non-cached
-			b		bcpswap
-
-;	
-; void bcopy_physvir(from, to, nbytes)
 ; Attempt to copy physically addressed memory with translation on if conditions are met.
 ; Otherwise do a normal bcopy_phys.  This routine is used because some 32-bit processors 
 ; are very slow doing real-mode (translation off) copies, so we set up temporary BATs
 ; for the passed phys addrs and do the copy with translation on.  
 ;
-; Rules are: neither source nor destination can cross a page. 
+; Rules are: - neither source nor destination can cross a page. 
+;            - Interrupts must be disabled when this routine is called.
+;            - Translation must be on when called.
 ;
-; Interrupts must be disabled throughout the copy when this is called.
-; To do this, we build a
-; 128 DBAT for both the source and sink.  If both are the same, only one is
-; loaded.  We do not touch the IBATs, so there is no issue if either physical page
+; To do the copy, we build a 128 DBAT for both the source and sink.  If both are the same, only one
+; is loaded.  We do not touch the IBATs, so there is no issue if either physical page
 ; address is the same as the virtual address of the instructions we are executing.
 ;
 ; At the end, we invalidate the used DBATs.
@@ -81,28 +62,31 @@ LEXT(bcopy_nc)
 ; passed in value.  This should be ok since we can not have any bigger than 32 bit addresses
 ; there anyhow.
 ;
-; Note, this one will not work in user state
-; 
+; Note also that this routine is used only on 32-bit machines. If you're contemplating use
+; on a 64-bit processor, use the physical memory window instead; please refer to copypv()
+; for an example of how this is done.
 
 			.align	5
-			.globl	EXT(bcopy_physvir)
+			.globl	EXT(bcopy_physvir_32)
 
-LEXT(bcopy_physvir)
-
-			crclr	flipcache					; (HACK) No cache flip needed
-            mfsprg	r8,2						; get processor feature flags
+LEXT(bcopy_physvir_32)
+            mflr    r0                          ; get return address
             rlwinm	r3,r3,0,1,0					; Duplicate high half of long long paddr into top of reg
-			addic.	r0,r7,-1					; Get length - 1
+            mfsprg	r8,2						; get processor feature flags
+            stw     r0,8(r1)                    ; save return address
 			rlwimi	r3,r4,0,0,31				; Combine bottom of long long to full 64-bits
-			add		r11,r3,r0					; Point to last byte of sink
-			rlwinm	r4,r5,0,1,0					; Duplicate high half of long long paddr into top of reg
+            stwu    r1,-BCOPY_SF_SIZE(r1)       ; push on a stack frame so we can call bcopy
             mtcrf	0x02,r8						; move pf64Bit to cr6 so we can test
-            rlwimi	r4,r6,0,0,31				; Combine bottom of long long to full 64-bits
+            subi    r0,r7,1                     ; get length - 1
+			rlwinm	r4,r5,0,1,0					; Duplicate high half of long long paddr into top of reg
+			add		r11,r3,r0					; Point to last byte of sink
 			mr		r5,r7						; Get the length into the right register
-			cmplw	cr1,r3,r4					; Does source == sink?	
-            bt++	pf64Bitb,bcopy_phys1		; if 64-bit processor, use standard routine (no BATs)
+            rlwimi	r4,r6,0,0,31				; Combine bottom of long long to full 64-bits
+
+; This test for page overflow may not work if the length is negative.  Negative lengths are invalid input
+; to bcopy_physvir() on 32-bit machines, and will result in a panic.
+            
 			add		r12,r4,r0					; Point to last byte of source
-			bltlr-								; Bail if length is 0 or way too big
 			xor		r7,r11,r3					; See if we went to next page
 			xor		r8,r12,r4					; See if we went to next page
 			or		r0,r7,r8					; Combine wrap
@@ -114,7 +98,6 @@ LEXT(bcopy_physvir)
 			li		r8,2						; Set validity flags
 			bne-	bcopy_phys1					; Overflowed page, do normal physical copy...
 
-			crset	restorex					; Remember to trash BATs on the way out
 			rlwimi	r11,r9,0,15,31				; Set sink lower DBAT value
 			rlwimi	r12,r9,0,15,31				; Set source lower DBAT value
 			rlwimi	r7,r11,0,0,14				; Set sink upper DBAT value
@@ -130,21 +113,30 @@ LEXT(bcopy_physvir)
 
 			mtdbatl	1,r12						; Set source lower DBAT 
 			mtdbatu	1,r8						; Set source upper DBAT
-
+            
 bcpvsame:	
-            sync                                ; wait for BAT to stabilize
+            sync                                ; wait for the BATs to stabilize
             isync
-            mr		r6,r3						; Set source
-			crclr	noncache					; Set cached
-			crclr	fixxlate					; Set translation already ok
-			
-			b		copyit32					; Go copy it...
+            
+            bl      EXT(bcopy)                  ; BATs set up, args in r3-r5, so do the copy with DR on
 
-;	
+            li		r0,0						; Get set to invalidate upper half of BATs
+			sync								; Make sure all is well
+			mtdbatu	0,r0						; Clear sink upper DBAT
+			mtdbatu	1,r0						; Clear source upper DBAT
+			sync
+			isync			
+            
+            lwz     r0,BCOPY_SF_SIZE+8(r1)      ; get return address
+            addi    r1,r1,BCOPY_SF_SIZE         ; pop off stack frame
+            mtlr    r0
+            blr
+
+
 ; void bcopy_phys(from, to, nbytes)
-; Turns off data translation before the copy.  Note, this one will
-; not work in user state.  This routine is used on 32 and 64-bit
-; machines.
+;
+; Turns off data translation before the copy.  This one will not work in user state.
+; This routine is used on 32 and 64-bit machines.
 ;
 ; Note that the address parameters are long longs.  We will transform these to 64-bit
 ; values.  Note that on 32-bit architectures that this will ignore the high half of the
@@ -155,209 +147,265 @@ bcpvsame:
 ; boundary between RAM and I/O space.  Good chance of hanging the machine and this code 
 ; will not check, so be careful.
 ;
+; NOTE: when called, translation must be on, and we must be in 32-bit mode.
+;       Interrupts may or may not be disabled.
 
 			.align	5
 			.globl	EXT(bcopy_phys)
 
 LEXT(bcopy_phys)
-			crclr	flipcache					; (HACK) No cache flip needed
+            mflr    r0                          ; get return address
             rlwinm	r3,r3,0,1,0					; Duplicate high half of long long paddr into top of reg
+            stw     r0,8(r1)                    ; save
             mfsprg	r8,2						; get processor feature flags
+            stwu    r1,-BCOPY_SF_SIZE(r1)       ; push on a stack frame so we can call bcopy
 			rlwimi	r3,r4,0,0,31				; Combine bottom of long long to full 64-bits
 			rlwinm	r4,r5,0,1,0					; Duplicate high half of long long paddr into top of reg
 			mtcrf	0x02,r8						; move pf64Bit to cr6 so we can test
 			rlwimi	r4,r6,0,0,31				; Combine bottom of long long to full 64-bits
 			mr		r5,r7						; Get the length into the right register
-            
-bcopy_phys1:									; enter from bcopy_physvir with pf64Bit already in cr6
+
+bcopy_phys1:									; enter from bcopy_physvir with pf64Bit in cr6 and parms in r3-r5
 			mfmsr	r9							; Get the MSR
-			crclr	noncache					; Set cached
+			lis		r6,hi16(MASK(MSR_VEC))		; Get vector enable            
+            ori     r6,r6,lo16(MASK(MSR_FP)|MASK(MSR_DR))	; Add in FP and DR
+            andc    r9,r9,r6                    ; unconditionally turn DR, VEC, and FP off
             bt++	pf64Bitb,bcopy_phys64		; skip if 64-bit (only they take hint)
 
 ; 32-bit CPUs
-            
-            sub.	r0,r3,r4					; to==from?
-			rlwinm	r8,r9,0,MSR_DR_BIT,MSR_DR_BIT	; was translation on?
-            cmpwi	cr1,r8,0					; set cr1 beq if translation was off
-			oris	r8,r8,hi16(MASK(MSR_VEC))	; Get vector enable
-			cmplwi	cr7,r5,0					; Check if we have a 0 length
-            beqlr-								; bail if to==from
-			ori		r8,r8,lo16(MASK(MSR_FP))	; Get FP
-			mr		r6,r3						; Set source
-			andc	r9,r9,r8					; Turn off translation if it is on (should be) and FP, VEC
-			beqlr-	cr7							; Bail if length is 0
-			
-			crclr	restorex					; Make sure we do not trash BATs on the way out
-			mtmsr	r9							; Set DR translation off
+
+			mtmsr	r9							; turn DR, FP, and VEC off
 			isync								; Wait for it
 			
-			crnot	fixxlate,cr1_eq				; Remember to turn on translation if it was
-			b		copyit32					; Go copy it...
+            bl      EXT(bcopy)                  ; do the copy with translation off and caching on
             
-; 64-bit: turn DR off and SF on, remember if we need to restore on way out.
+			mfmsr	r9							; Get the MSR
+            ori     r9,r9,lo16(MASK(MSR_DR))    ; turn translation back on (but leave VEC and FP off)
+            mtmsr   r9                          ; restore msr
+            isync                               ; wait for it to happen
+            lwz     r0,BCOPY_SF_SIZE+8(r1)      ; get return address once translation is back on
+            mtlr    r0
+            addi    r1,r1,BCOPY_SF_SIZE         ; pop off stack frame
+            blr
 
-bcopy_phys64:									; r9 = MSR
+            
+; 64-bit: turn DR off and SF on.
 
-			srdi	r2,r3,31					; (HACK) Get a 1 if source is in I/O memory
-            srdi.	r0,r9,63-MSR_SF_BIT			; set cr0 beq on if SF was off when we were called
-            rlwinm	r8,r9,MSR_DR_BIT+1,31,31	; r8 <- DR bit right justified
-            cmpld	cr1,r3,r4					; to==from?
+bcopy_phys64:									; r9 = MSR with DP, VEC, and FP off
+            ori     r8,r9,lo16(MASK(MSR_DR))    ; make a copy with DR back on... this is what we return to caller
+			srdi	r2,r3,31					; Get a 1 if source is in I/O memory
             li		r0,1						; Note - we use this in a couple places below
-			lis		r6,hi16(MASK(MSR_VEC))		; Get vector enable
-            cmpwi	cr7,r5,0					; length==0 ?
-            ori		r6,r6,lo16(MASK(MSR_FP)|MASK(MSR_DR))	; Add in FP and DR
-            beqlr--	cr1							; bail if to==from
-			srdi	r10,r4,31					; (HACK) Get a 1 if sink is in I/O memory
-            rldimi	r9,r0,63,MSR_SF_BIT			; set SF on
-            beqlr--	cr7							; bail if length==0
-            andc	r9,r9,r6					; turn DR, VEC, FP off
-            cmpwi	cr1,r8,0					; was DR on?
-            crmove	restorex,cr0_eq				; if SF was off, remember to turn back off before we return
+			srdi	r10,r4,31					; Get a 1 if sink is in I/O memory
+            std     r8,BCOPY_SF_MSR(r1)         ; save caller's MSR so we remember whether EE was on
+            rldimi	r9,r0,63,MSR_SF_BIT			; set SF on in MSR we will copy with
+			cmpldi	cr0,r2,1					; Is source in I/O memory?
+			cmpldi	cr7,r10,1					; Is sink in I/O memory?
             mtmsrd	r9							; turn 64-bit addressing on, data translation off
-			cmpldi	cr0,r2,1					; (HACK) Is source in I/O memory?
             isync								; wait for it to happen
-			mr		r6,r3						; Set source
-			cmpldi	cr7,r10,1					; (HACK) Is sink in I/O memory?
-            crnot	fixxlate,cr1_eq				; if DR was on, remember to turn back on before we return
-
-			cror	flipcache,cr0_eq,cr7_eq		; (HACK) See if either source or sink is in I/O area
-
-			rlwinm	r10,r9,MSR_EE_BIT+1,31,31	; (HACK GLORIOUS HACK) Isolate the EE bit
-			sldi	r11,r0,31-MSR_EE_BIT		; (HACK GLORIOUS HACK)) Get a mask for the EE bit
-			sldi	r0,r0,32+8					; (HACK) Get the right bit to turn off caching
-			bf++	flipcache,copyit64			; (HACK) No need to mess with caching...
-			
-;
-;			HACK GLORIOUS HACK - when we force of caching, we need to also force off
-;			interruptions.  We are out of CR bits, so we need to stash the entry EE
-;			somewheres.  It is in the XER....  We NEED to change this!!!!
-;
-
-			mtxer	r10							; (HACK GLORIOUS HACK) Remember EE
-			andc	r9,r9,r11					; (HACK GLORIOUS HACK) Turn off EE bit
-			mfspr	r2,hid4						; (HACK) Get HID4
-			crset	noncache					; (HACK) Set non-cached
-			mtmsrd	r9							; (HACK GLORIOUS HACK) Force off EE
-			or		r2,r2,r0					; (HACK) Set bit to make real accesses cache-inhibited
-			sync								; (HACK) Sync up
-			li		r0,1
-			mtspr	hid4,r2						; (HACK) Make real accesses cache-inhibited
-			isync								; (HACK) Toss prefetches
-
-			lis		r12,0xE000					; (HACK) Get the unlikeliest ESID possible
-			srdi	r12,r12,1					; (HACK) Make 0x7FFFFFFFF0000000
-			slbie	r12							; (HACK) Make sure the ERAT is cleared 
-			
-			sync								; (HACK)
-			isync								; (HACK)
-			
-            b		copyit64
+			cror	cr7_eq,cr0_eq,cr7_eq		; See if either source or sink is in I/O area
+            beq--   cr7,io_space_real_mode_copy ; an operand is in I/O space
             
+            bl      EXT(bcopy)                  ; do copy with DR off and SF on, cache enabled
+                        
+bcopy_phys64x:
+			mfmsr	r9							; Get the MSR we used to copy
+            rldicl	r9,r9,0,MSR_SF_BIT+1		; clear SF
+            ori     r9,r9,lo16(MASK(MSR_DR))    ; turn translation back on
+            mtmsrd  r9                          ; turn 64-bit mode off, translation back on
+            isync								; wait for it to happen
+            lwz     r0,BCOPY_SF_SIZE+8(r1)      ; get return address once translation is back on
+            ld      r8,BCOPY_SF_MSR(r1)         ; get caller's MSR once translation is back on
+            mtlr    r0
+            mtmsrd  r8,1                        ; turn EE back on if necessary
+            addi    r1,r1,BCOPY_SF_SIZE         ; pop off stack frame
+            blr
 
+;   We need to copy with DR off, but one of the operands is in I/O space.  To avoid wedging U3,
+;   which cannot handle a cache burst in I/O space, we must turn caching off for the real memory access.
+;   This can only be done by setting bits in HID4.  We cannot lose control and execute random code in
+;   this state, so we have to disable interrupts as well.  This is an unpleasant hack.
+
+io_space_real_mode_copy:                        ; r0=1, r9=MSR we want to copy with
+			sldi	r11,r0,31-MSR_EE_BIT		; Get a mask for the EE bit
+			sldi	r0,r0,32+8					; Get the right bit to turn off caching
+			andc	r9,r9,r11					; Turn off EE bit
+			mfspr	r2,hid4						; Get HID4
+			mtmsrd	r9,1                        ; Force off EE
+			or		r2,r2,r0					; Set bit to make real accesses cache-inhibited
+			sync								; Sync up
+			mtspr	hid4,r2						; Make real accesses cache-inhibited
+			isync								; Toss prefetches
+
+			lis		r12,0xE000					; Get the unlikeliest ESID possible
+			srdi	r12,r12,1					; Make 0x7FFFFFFFF0000000
+			slbie	r12							; Make sure the ERAT is cleared 
+			
+			sync
+			isync
+			
+            bl      EXT(bcopy_nc)               ; copy with SF on and EE, DR, VEC, and FP off, cache inhibited
+            
+			li		r0,1						; Get a 1
+			sldi	r0,r0,32+8					; Get the right bit to turn off caching
+			mfspr	r2,hid4						; Get HID4
+			andc	r2,r2,r0					; Clear bit to make real accesses cache-inhibited
+			sync								; Sync up
+			mtspr	hid4,r2						; Make real accesses not cache-inhibited
+			isync								; Toss prefetches
+	
+			lis		r12,0xE000					; Get the unlikeliest ESID possible
+			srdi	r12,r12,1					; Make 0x7FFFFFFFF0000000
+			slbie	r12							; Make sure the ERAT is cleared
+            b       bcopy_phys64x
+
+
+;
+; shortcopy
+;
+; Special case short operands (<32 bytes), which are very common.  Note that the check for
+; reverse vs normal moves isn't quite correct in 64-bit mode; in rare cases we will move in
+; reverse when it wasn't necessary to do so.  This is OK, since performance of the two cases
+; is similar.  We do get the direction right when it counts (ie, when the operands overlap.)
+; Also note that we use the G3/G4 "backend" code, even on G5.  This is OK too, since G5 has
+; plenty of load/store dispatch bandwidth in this case, the extra ops are hidden by latency,
+; and using word instead of doubleword moves reduces the possibility of unaligned accesses,
+; which cost about 20 cycles if they cross a 32-byte boundary on G5.  Finally, because we
+; might do unaligned accesses this code cannot be called from bcopy_nc().
+;           r4 = destination
+;           r5 = length (<32)
+;           r6 = source
+;           r12 = (dest - source)
+
+            .align  5
+shortcopy:
+            cmplw   r12,r5                      ; must move reverse if (dest-source)<length
+            mtcrf   2,r5                        ; move length to cr6 and cr7 one at a time...
+            mtcrf   1,r5                        ; ...which is faster on G4 and G5
+            bge++   backend                     ; handle forward moves (most common case)
+            add     r6,r6,r5                    ; point one past end of operands in reverse moves
+            add     r4,r4,r5
+            b       bbackend                    ; handle reverse moves
+            
 ;	
 ; void bcopy(from, to, nbytes)
 ;
+; NOTE: bcopy is called from copyin and copyout etc with the "thread_recover" ptr set.
+; This means bcopy must not set up a stack frame or touch non-volatile registers, and also means that it
+; cannot rely on turning off interrupts, because we expect to get DSIs and have execution aborted by a "longjmp"
+; to the thread_recover routine.  What this means is that it would be hard to use vector or floating point
+; registers to accelerate the copy.
+;
+; NOTE: this code can be called in any of three "modes":
+;       - on 32-bit processors (32-byte cache line)
+;       - on 64-bit processors running in 32-bit mode (128-byte cache line)
+;       - on 64-bit processors running in 64-bit mode (128-byte cache line)
 
 			.align	5
 			.globl	EXT(bcopy)
+            .globl  EXT(bcopy_nop_if_32bit)
 
 LEXT(bcopy)
-
+			cmplwi	cr1,r5,kShort               ; less than 32 bytes?
+            sub.    r12,r4,r3					; test for to==from in mode-independent way, start fwd/rev check
+			mr		r6,r3						; Set source (must preserve r3 for memcopy return)
+			blt     cr1,shortcopy               ; special case short operands
 			crclr	noncache					; Set cached
+LEXT(bcopy_nop_if_32bit)
+            bne++   copyit64                    ; handle 64-bit processor (patched to NOP if 32-bit processor)
+			bne+    copyit32					; handle 32-bit processor
+            blr                                 ; to==from so nothing to do
+	
+;
+; bcopy_nc(from, to, nbytes)
+;
+; bcopy_nc() operates on non-cached memory so we can not use any kind of cache instructions.
+; Furthermore, we must avoid all unaligned accesses on 64-bit machines, since they take
+; alignment exceptions.  Thus we cannot use "shortcopy", which could do unaligned lwz/stw.
+; Like bcopy(), bcopy_nc() can be called both in 32- and 64-bit mode.
 
-bcpswap:	
-			crclr	flipcache					; (HACK) No cache flip needed
-            mfsprg	r8,2						; get processor feature flags
-            sub.	r0,r4,r3					; test for to==from in mode-independent way
-            mtcrf	0x02,r8						; move pf64Bit to cr6 so we can test
+			.align	5
+			.globl	EXT(bcopy_nc)
+            .globl  EXT(bcopy_nc_nop_if_32bit)
+
+LEXT(bcopy_nc)
 			cmpwi	cr1,r5,0					; Check if we have a 0 length
-			crclr	restorex					; Make sure we do not trash BATs on the way out
-			mr		r6,r3						; Set source
-			crclr	fixxlate					; Set translation already ok
-			beqlr-								; Bail if "to" and "from" are the same	
-			beqlr-	cr1							; Bail if length is 0
-            bt++	pf64Bitb,copyit64			; handle 64-bit processor
-			b		copyit32					; Go copy it...
+            sub.	r12,r4,r3					; test for to==from in mode-independent way, start fwd/rev check
+			mr		r6,r3						; Set source (must preserve r3 for memcopy return)
+			crset	noncache					; Set non-cached
+			cror    cr0_eq,cr1_eq,cr0_eq        ; set cr0 beq if either length zero or to==from
+LEXT(bcopy_nc_nop_if_32bit)
+            bne++   copyit64                    ; handle 64-bit processor (patched to NOP if 32-bit processor)
+			bne+    copyit32					; handle 32-bit processor
+            blr                                 ; either zero length or to==from
 
+;
+; void* memcpy(to, from, nbytes)
+; void* memmove(to, from, nbytes)
+;
+; memcpy() and memmove() are only called in 32-bit mode, albeit on both 32- and 64-bit processors.
+; However, they would work correctly if called in 64-bit mode.
+
+			.align	5
+			.globl	EXT(memcpy)
+			.globl	EXT(memmove)
+            .globl  EXT(memcpy_nop_if_32bit)
+
+LEXT(memcpy)
+LEXT(memmove)
+			cmplwi	cr1,r5,kShort               ; less than 32 bytes?
+            sub.    r12,r3,r4					; test for to==from in mode-independent way, start fwd/rev check
+			mr		r6,r4						; Set source
+			mr		r4,r3						; Set the "to" (must preserve r3 for return value)
+			blt     cr1,shortcopy               ; special case short operands
+			crclr	noncache					; Set cached
+LEXT(memcpy_nop_if_32bit)
+            bne++   copyit64                    ; handle 64-bit processor (patched to NOP if 32-bit processor)
+			beqlr-                              ; exit if to==from
+
+
+;       Here to copy on 32-bit processors.
 ;
 ;			When we move the memory, forward overlays must be handled.  We
 ;			also can not use the cache instructions if we are from bcopy_nc.
 ;			We need to preserve R3 because it needs to be returned for memcpy.
 ;			We can be interrupted and lose control here.
 ;
-;			There is no stack, so in order to use vectors, we would
-;			need to take the vector exception. Any potential gains by using vectors 
-;			would be more than eaten up by this.
-;
-;			NOTE: this code is called in three "modes":
-;				- on 32-bit processors (32-byte cache line)
-;				- on 64-bit processors running in 32-bit mode (128-byte cache line)
-;				- on 64-bit processors running in 64-bit mode (128-byte cache line)
-;
-;			ALSO NOTE: bcopy is called from copyin and copyout etc
-;			with the "thread_recover" ptr set.  This means bcopy must not set up a
-;			stack frame or touch non-volatile registers, and also means that it
-;			cannot rely on turning off interrupts, because we expect to get DSIs
-;			and have execution aborted by a "longjmp" to the thread_recover
-;			routine.
-;
-	
-			.align	5
-			.globl	EXT(memcpy)
-            ; NB: memcpy is only called in 32-bit mode, albeit on both 32- and 64-bit
-            ; processors...
-LEXT(memcpy)
-			crclr	flipcache					; (HACK) No cache flip needed
-            mfsprg	r8,2						; get processor feature flags
-			cmplw	cr1,r3,r4					; "to" and "from" the same?
-            mtcrf	0x02,r8						; move pf64Bit to cr6 so we can test
-			mr		r6,r4						; Set the "from"
-			mr.		r5,r5						; Length zero?
-			crclr	noncache					; Set cached
-			mr		r4,r3						; Set the "to"
-			crclr	fixxlate					; Set translation already ok
-			beqlr-	cr1							; "to" and "from" are the same
-			beqlr-								; Length is 0
-			crclr	restorex					; Make sure we do not trash BATs on the way out
-            bt++	pf64Bitb,copyit64			; handle 64-bit processors
-			
-copyit32:	sub		r12,r4,r6					; Get potential overlap (negative if backward move)
-			lis		r8,0x7FFF					; Start up a mask
-			srawi	r11,r12,31					; Propagate the sign bit
-			dcbt	br0,r6						; Touch in the first source line
-			cntlzw	r7,r5						; Get the highest power of 2 factor of the length
-			ori		r8,r8,0xFFFF				; Make limit 0x7FFFFFFF
-			xor		r9,r12,r11					; If sink - source was negative, invert bits
-			srw		r8,r8,r7					; Get move length limitation
-			sub		r9,r9,r11					; If sink - source was negative, add 1 and get absolute value
-			cmplw	r12,r5						; See if we actually forward overlap
-			cmplwi	cr7,r9,32					; See if at least a line between  source and sink
-			dcbtst	br0,r4						; Touch in the first sink line
-			cmplwi	cr1,r5,32					; Are we moving more than a line?
-			cror	noncache,noncache,cr7_lt	; Set to not DCBZ output line if not enough space
-			blt-	fwdovrlap					; This is a forward overlapping area, handle it...
+;           When entered:
+;               r4 = destination
+;               r5 = length (>0)
+;               r6 = source
+;               r12 = (dest - source)
+;               cr5 = noncache flag
 
-;
-;			R4 = sink
-;			R5 = length
-;			R6 = source
-;
+copyit32:                                       ; WARNING! can drop down to this label
+            cmplw   cr1,r12,r5                  ; must move reverse if (dest-source)<length
+            cntlzw  r11,r5                      ; get magnitude of length
+            dcbt    0,r6                        ; start to touch in source
+            lis     r10,hi16(0x80000000)        ; get 0x80000000
+            neg     r9,r4                       ; start to get alignment for destination
+            dcbtst  0,r4                        ; start to touch in destination
+            sraw    r8,r10,r11                  ; get mask based on operand length, to limit alignment
+            blt-    cr1,reverse32bit            ; reverse move required
 			
-;
-;			Here we figure out how much we have to move to get the sink onto a
-;			cache boundary.  If we can, and there are still more that 32 bytes
-;			left to move, we can really speed things up by DCBZing the sink line.
-;			We can not do this if noncache is set because we will take an 
-;			alignment exception.
+; Forward moves on 32-bit machines, also word aligned uncached ops on 64-bit machines.
+; NOTE: we never do an unaligned access if the source and destination are "relatively"
+; word aligned.  We depend on this in the uncached case on 64-bit processors.
+;               r4 = destination
+;               r5 = length (>0)
+;               r6 = source
+;               r8 = inverse of largest mask smaller than operand length
+;               r9 = neg(dest), used to compute alignment
+;               cr5 = noncache flag
 
-G4word:											; enter from 64-bit case with word aligned uncached operands
-			neg		r0,r4						; Get the number of bytes to move to align to a line boundary
-			rlwinm.	r0,r0,0,27,31				; Clean it up and test it
-			and		r0,r0,r8					; limit to the maximum front end move
-			mtcrf	3,r0						; Make branch mask for partial moves
-			sub		r5,r5,r0					; Set the length left to move
+forward32bit:                                   ; enter from 64-bit CPUs with word aligned uncached operands
+			rlwinm	r7,r9,0,0x1F				; get bytes to 32-byte-align destination
+			andc.   r0,r7,r8					; limit to the maximum front end move
+            mtcrf   0x01,r0                     ; move length to cr6 and cr7 one cr at a time...
 			beq		alline						; Already on a line...
 			
+			mtcrf	0x02,r0						; ...since moving more than one is slower on G4 and G5
+			sub		r5,r5,r0					; Set the length left to move
+
 			bf		31,alhalf					; No single byte to do...
 			lbz		r7,0(r6)					; Get the byte
 			addi	r6,r6,1						; Point to the next
@@ -407,43 +455,45 @@ alquad:		bf		27,alline					; No quad to do...
 ;			Sink is line aligned here
 
 alline:		rlwinm.	r0,r5,27,5,31				; Get the number of full lines to move
-			mtcrf	3,r5						; Make branch mask for backend partial moves
-			rlwinm	r11,r5,0,0,26				; Get number of bytes we are going to move
+            mtcrf   0x02,r5                     ; move length to cr6 and cr7 one cr at a time...
+			mtcrf	0x01,r5						; ...since moving more than one is slower on G4 and G5			
 			beq-	backend						; No full lines to move
+            
+            mtctr   r0                          ; set up loop count
+			li		r0,96						; Stride for touch ahead
+            b       nxtline
 			
-			sub		r5,r5,r11					; Calculate the residual
-			li		r10,96						; Stride for touch ahead
-			
-nxtline:	subic.	r0,r0,1						; Account for the line now
-
+            .align  4
+nxtline:
+            lwz		r2,0(r6)					; Get the first word
+			lwz		r5,4(r6)					; Get the second word
+			lwz		r7,8(r6)					; Get the third word
+			lwz		r8,12(r6)					; Get the fourth word
+			lwz		r9,16(r6)					; Get the fifth word
+			lwz		r10,20(r6)					; Get the sixth word
+			lwz		r11,24(r6)					; Get the seventh word
+			lwz		r12,28(r6)					; Get the eighth word
 			bt-		noncache,skipz				; Skip if we are not cached...
-			dcbz	br0,r4						; Blow away the whole line because we are replacing it
-			dcbt	r6,r10						; Touch ahead a bit
-			
-skipz:		lwz		r7,0(r6)					; Get the first word
-			lwz		r8,4(r6)					; Get the second word
-			lwz		r9,8(r6)					; Get the third word
-			stw		r7,0(r4)					; Save the first word
-			lwz		r11,12(r6)					; Get the fourth word
-			stw		r8,4(r4)					; Save the second word
-			lwz		r7,16(r6)					; Get the fifth word
-			stw		r9,8(r4)					; Save the third word
-			lwz		r8,20(r6)					; Get the sixth word
-			stw		r11,12(r4)					; Save the fourth word
-			lwz		r9,24(r6)					; Get the seventh word
-			stw		r7,16(r4)					; Save the fifth word
-			lwz		r11,28(r6)					; Get the eighth word
+			dcbz	0,r4						; Blow away the whole line because we are replacing it
+			dcbt	r6,r0						; Touch ahead a bit
+skipz:
 			addi	r6,r6,32					; Point to the next
-			stw		r8,20(r4)					; Save the sixth word
-			stw		r9,24(r4)					; Save the seventh word
-			stw		r11,28(r4)					; Save the eighth word
+			stw		r2,0(r4)					; Save the first word
+			stw		r5,4(r4)					; Save the second word
+			stw		r7,8(r4)					; Save the third word
+			stw		r8,12(r4)					; Save the fourth word
+			stw		r9,16(r4)					; Save the fifth word
+			stw		r10,20(r4)					; Save the sixth word
+			stw		r11,24(r4)					; Save the seventh word
+			stw		r12,28(r4)					; Save the eighth word
 			addi	r4,r4,32					; Bump sink
-			bgt+	nxtline						; Do the next line, if any...
+			bdnz+	nxtline						; Do the next line, if any...
 
 	
 ;			Move backend quadword
 
-backend:	bf		27,noquad					; No quad to do...
+backend:                                        ; Join here from "shortcopy" for forward moves <32 bytes
+            bf		27,noquad					; No quad to do...
 			lwz		r7,0(r6)					; Get the first word
 			lwz		r8,4(r6)					; Get the second word
 			lwz		r9,8(r6)					; Get the third word
@@ -483,97 +533,33 @@ noword:		bf		30,nohalf					; No halfword to do...
 
 ;			Move backend byte
 
-nohalf:		bf		31,bcpydone					; Leave cuz we are all done...	
+nohalf:		bflr    31                          ; Leave cuz we are all done...	
 			lbz		r7,0(r6)					; Get the byte
 			stb		r7,0(r4)					; Save the single
-
-bcpydone:	
-			mfmsr	r9							; Get the MSR
-			bf++	flipcache,bcpydone0			; (HACK) No need to mess with caching...
-
-			li		r0,1						; (HACK) Get a 1
-			mfxer	r10							; (HACK GLORIOUS HACK) Get the entry EE
-			sldi	r0,r0,32+8					; (HACK) Get the right bit to turn off caching
-			mfspr	r2,hid4						; (HACK) Get HID4
-			rlwinm	r10,r10,31-MSR_EE_BIT,MSR_EE_BIT,MSR_EE_BIT	; (HACK GLORIOUS HACK) Set the EE bit
-			andc	r2,r2,r0					; (HACK) Clear bit to make real accesses cache-inhibited
-			or		r9,r9,r10					; (HACK GLORIOUS HACK) Set the EE in MSR
-			sync								; (HACK) Sync up
-			mtspr	hid4,r2						; (HACK) Make real accesses not cache-inhibited
-			isync								; (HACK) Toss prefetches
-	
-			lis		r12,0xE000					; (HACK) Get the unlikeliest ESID possible
-			srdi	r12,r12,1					; (HACK) Make 0x7FFFFFFFF0000000
-			slbie	r12							; (HACK) Make sure the ERAT is cleared 
-
-			mtmsr	r9							; (HACK GLORIOUS HACK) Set EE properly
-
-bcpydone0:
-			lis		r0,hi16(MASK(MSR_VEC))		; Get the vector bit
-			ori		r0,r0,lo16(MASK(MSR_FP))	; Get the float bit
-			bf++	fixxlate,bcpydone1			; skip if we do not need to fix translation...
-			ori		r9,r9,lo16(MASK(MSR_DR))	; Turn data translation on
-			andc	r9,r9,r0					; Make sure that FP and VEC are off
-			mtmsr	r9							; Just do it
-			isync								; Hang in there
-            
-bcpydone1:
-            bflr++	restorex					; done if we do not have to fix up addressing
-            mfsprg	r8,2						; get the feature flags again
-            mtcrf	0x02,r8						; put pf64Bit where we can test it
-            bt++	pf64Bitb,bcpydone2			; skip if 64-bit processor
-            
-            ; 32-bit processor, so clear out the BATs we set up for bcopy_physvir
-            
-            li		r0,0						; Get set to invalidate upper half
-			sync								; Make sure all is well
-			mtdbatu	0,r0						; Clear sink upper DBAT
-			mtdbatu	1,r0						; Clear source upper DBAT
-			sync
-			isync			
-			blr
-
-            ; 64-bit processor, so turn off 64-bit mode we turned on to do bcopy_phys
-            
-bcpydone2:
-            mfmsr	r9							; get MSR again
-			andc	r9,r9,r0					; Make sure that FP and VEC are off
-            rldicl	r9,r9,0,MSR_SF_BIT+1		; clear SF
-            mtmsrd	r9
-            isync
             blr
 
 
-;
-;			0123456789ABCDEF0123456789ABCDEF
-;			 0123456789ABCDEF0123456789ABCDEF
-;										    F
-;										  DE
-;									  9ABC
-;							  12345678
-;             123456789ABCDEF0	
-;            0
+; Reverse moves on 32-bit machines, also reverse word aligned uncached moves on 64-bit machines.
+; NOTE: we never do an unaligned access if the source and destination are "relatively"
+; word aligned.  We depend on this in the uncached case on 64-bit processors.
+; These are slower because we don't bother with dcbz.  Fortunately, reverse moves are uncommon.
+;               r4 = destination
+;               r5 = length (>0)
+;               r6 = source
+;               r8 = inverse of largest mask smaller than operand length
+;               cr5 = noncache flag (but we don't dcbz anyway)
 
-;
-;			Here is where we handle a forward overlapping move.  These will be slow
-;			because we can not kill the cache of the destination until after we have
-;			loaded/saved the source area.  Also, because reading memory backwards is
-;			slower when the cache line needs to be loaded because the critical 
-;			doubleword is loaded first, i.e., the last, then it goes back to the first,
-;			and on in order.  That means that when we are at the second to last DW we
-;			have to wait until the whole line is in cache before we can proceed.
-;
-
-G4reverseWord:									; here from 64-bit code with word aligned uncached operands
-fwdovrlap:	add		r4,r5,r4					; Point past the last sink byte
+reverse32bit:									; here from 64-bit code with word aligned uncached operands
+            add		r4,r5,r4					; Point past the last sink byte
 			add		r6,r5,r6					; Point past the last source byte 
-			and		r0,r4,r8					; Apply movement limit
-			li		r12,-1						; Make sure we touch in the actual line 			
-			mtcrf	3,r0						; Figure out the best way to move backwards			
+			rlwinm	r7,r4,0,0x1F				; Calculate the length to align dest on cache boundary
+			li		r12,-1						; Make sure we touch in the actual line
+			andc.   r0,r7,r8					; Apply movement limit
 			dcbt	r12,r6						; Touch in the last line of source
-			rlwinm.	r0,r0,0,27,31				; Calculate the length to adjust to cache boundary
+            mtcrf   0x01,r0                     ; move length to cr6 and cr7 one cr at a time...
 			dcbtst	r12,r4						; Touch in the last line of the sink
-			beq-	balline						; Aready on cache line boundary
+			mtcrf	0x02,r0						; ...since moving more than one is slower on G4 and G5			
+			beq-	balline						; Aready on cache line boundary (or too short to bother)
 			
 			sub		r5,r5,r0					; Precaculate move length left after alignment
 			
@@ -626,15 +612,14 @@ balquad:	bf		27,balline					; No quad to do...
 ;			Sink is line aligned here
 
 balline:	rlwinm.	r0,r5,27,5,31				; Get the number of full lines to move
-			mtcrf	3,r5						; Make branch mask for backend partial moves
+            mtcrf   0x02,r5                     ; move length to cr6 and cr7 one cr at a time...
+			mtcrf	0x01,r5						; ...since moving more than one is slower on G4 and G5			
 			beq-	bbackend					; No full lines to move
-
-
-;			Registers in use: R0, R1,     R3, R4, R5, R6
-;       Registers not in use:         R2,                 R7, R8, R9, R10, R11, R12 - Ok, we can make another free for 8 of them
+            mtctr   r0                          ; set up loop count
+            b       bnxtline
 			
-bnxtline:	subic.	r0,r0,1						; Account for the line now
-
+            .align  4
+bnxtline:
 			lwz		r7,-32(r6)					; Get the first word
 			lwz		r5,-28(r6)					; Get the second word
 			lwz		r2,-24(r6)					; Get the third word
@@ -646,10 +631,7 @@ bnxtline:	subic.	r0,r0,1						; Account for the line now
 			subi	r6,r6,32					; Point to the next
 			
 			stw		r7,-32(r4)					; Get the first word
-			ble-	bnotouch					; Last time, skip touch of source...
-			dcbt	br0,r6						; Touch in next source line
-			
-bnotouch:	stw		r5,-28(r4)					; Get the second word
+            stw		r5,-28(r4)					; Get the second word
 			stw		r2,-24(r4)					; Get the third word
 			stw		r12,-20(r4)					; Get the third word
 			stw		r11,-16(r4)					; Get the fifth word
@@ -658,7 +640,7 @@ bnotouch:	stw		r5,-28(r4)					; Get the second word
 			stw		r8,-4(r4)					; Get the eighth word
 			subi	r4,r4,32					; Bump sink
 			
-			bgt+	bnxtline					; Do the next line, if any...
+			bdnz+	bnxtline					; Do the next line, if any...
 
 ;
 ;			Note: We touched these lines in at the beginning
@@ -666,7 +648,8 @@ bnotouch:	stw		r5,-28(r4)					; Get the second word
 	
 ;			Move backend quadword
 
-bbackend:	bf		27,bnoquad					; No quad to do...
+bbackend:                                       ; Join here from "shortcopy" for reverse moves of <32 bytes
+            bf		27,bnoquad					; No quad to do...
 			lwz		r7,-16(r6)					; Get the first word
 			lwz		r8,-12(r6)					; Get the second word
 			lwz		r9,-8(r6)					; Get the third word
@@ -706,11 +689,10 @@ bnoword:	bf		30,bnohalf					; No halfword to do...
 
 ;			Move backend byte
 
-bnohalf:	bf		31,bcpydone					; Leave cuz we are all done...	
+bnohalf:	bflr    31                          ; Leave cuz we are all done...	
 			lbz		r7,-1(r6)					; Get the byte
 			stb		r7,-1(r4)					; Save the single
-			
-			b		bcpydone					; Go exit cuz we are all done...
+			blr
 
 
 // Here on 64-bit processors, which have a 128-byte cache line.  This can be
@@ -722,40 +704,38 @@ bnohalf:	bf		31,bcpydone					; Leave cuz we are all done...
 //		r4 = destination (32 or 64-bit ptr)
 //		r5 = length (always 32 bits)
 //		r6 = source (32 or 64-bit ptr)
-//		cr5 = noncache, fixxlate, flipcache, and restorex flags set
+//      r12 = (dest - source), reverse move required if (dest-source)<length
+//		cr5 = noncache flag
 
         .align	5
 copyit64:
-        lis		r2,0x4000			// r2 = 0x00000000 40000000
-        neg		r12,r4				// start to compute #bytes to align dest
-		bt--	noncache,noncache1	// (HACK) Do not even try anything cached...
+        rlwinm  r7,r5,0,0,31        // truncate length to 32-bit, in case we're running in 64-bit mode
+        cntlzw	r11,r5				// get magnitude of length
         dcbt	0,r6				// touch in 1st block of source
-noncache1:     
-        add.	r2,r2,r2			// if 0x00000000 80000000 < 0, we are in 32-bit mode
-        cntlzw	r9,r5				// get highest power-of-2 in length
-        rlwinm	r7,r12,0,25,31		// r7 <- bytes to 128-byte align dest
-		bt--	noncache,noncache2	// (HACK) Do not even try anything cached...
         dcbtst	0,r4				// touch in 1st destination cache block
-noncache2:
-        sraw	r2,r2,r9			// get mask with 1s for leading 0s in length, plus 1 more 1-bit
-        bge		copyit64a			// skip if we are running in 64-bit mode
-        rlwinm	r4,r4,0,0,31		// running in 32-bit mode, so truncate ptrs and lengths to 32 bits
-        rlwinm	r5,r5,0,0,31
-        rlwinm	r6,r6,0,0,31
-copyit64a:							// now we can use 64-bit compares even if running in 32-bit mode
-        sub		r8,r4,r6			// get (dest-source)
-        andc	r7,r7,r2			// limit bytes to align by operand length
-        cmpld	cr1,r8,r5			// if (dest-source)<length, must move reverse
-        bt--	noncache,c64uncached	// skip if uncached
-        blt--	cr1,c64rdouble		// handle cached reverse moves        
-        
+        subc    r7,r12,r7           // set Carry if (dest-source)>=length, in mode-independent way
+        li      r0,0                // get a 0
+        lis     r10,hi16(0x80000000)// get 0x80000000
+        addze.  r0,r0               // set cr0 on carry bit (beq if reverse move required)
+        neg     r9,r4               // start to get alignment for destination
+        sraw    r8,r10,r11          // get mask based on operand length, to limit alignment
+        bt--	noncache,c64uncached// skip if uncached
+        beq--	c64rdouble          // handle cached reverse moves        
+                
         
 // Forward, cached or doubleword aligned uncached.  This is the common case.
-//   r4-r6 = dest, length, source (as above)
-//		r7 = #bytes 128-byte align dest (limited by copy length)
-//     cr5 = flags, as above
+// NOTE: we never do an unaligned access if the source and destination are "relatively"
+// doubleword aligned.  We depend on this in the uncached case.
+//      r4 = destination
+//      r5 = length (>0)
+//      r6 = source
+//      r8 = inverse of largest mask smaller than operand length
+//      r9 = neg(dest), used to compute alignment
+//      cr5 = noncache flag
 
 c64double:
+        rlwinm  r7,r9,0,0x7F        // get #bytes to 128-byte align destination
+        andc    r7,r7,r8            // limit by operand length
         andi.	r8,r7,7				// r8 <- #bytes to doubleword align
         srwi	r9,r7,3				// r9 <- #doublewords to 128-byte align
         sub		r5,r5,r7			// adjust length remaining
@@ -774,7 +754,7 @@ c64double1:							// copy bytes until dest is doubleword aligned
         addi	r4,r4,1
         bdnz	c64double1
 
-c64double2:							// r9/cr1=doublewords, r10=128-byte chunks, cr7=blt if r5==0
+c64double2:							// r9/cr1=doublewords, r10/cr7=128-byte chunks
         beq		cr1,c64double4		// no doublewords to xfer in order to cache align
         mtctr	r9
         b		c64double3
@@ -787,23 +767,25 @@ c64double3:							// copy doublewords until dest is 128-byte aligned
         addi	r4,r4,8
         bdnz	c64double3
         
-// Here to xfer 128-byte chunks, if any.  Because the IBM 970 cannot issue two stores/cycle,
-// we pipeline the inner loop so we can pair loads and stores.  Since we only have 8 GPRs for
+// Here to xfer 128-byte chunks, if any.  Since we only have 8 GPRs for
 // data (64 bytes), we load/store each twice per 128-byte chunk.
 
 c64double4:							// r10/cr7=128-byte chunks
         rlwinm	r0,r5,29,28,31		// r0 <- count of leftover doublewords, after moving chunks
         cmpwi	cr1,r0,0			// set cr1 on leftover doublewords
         beq		cr7,c64double7		// no 128-byte chunks
-        sub		r8,r6,r4			// r8 <- (source - dest)
-        li		r9,128				// start at next cache line (we've already touched in 1st line)
-        cmpldi	cr7,r8,128			// if (source-dest)<128, cannot use dcbz128 beacause of overlap
-        cror	noncache,cr7_lt,noncache	// turn on "noncache" flag if (source-dest)<128
-		bt--	noncache,noncache3	// (HACK) Skip cache touch if noncachable
-        dcbt128	r9,r6,1				// start forward stream
-noncache3:
-        mtctr	r10
         
+        ; We must check for (source-dest)<128 in a mode-independent way.  If within 128 bytes,
+        ; turn on "noncache" because we cannot use dcbz128 even if operands are cacheable.
+        
+        sub		r8,r6,r4			// r8 <- (source - dest)
+        rldicr. r0,r8,0,63-7        // zero low 7 bits and check for 0, mode independent
+        cror	noncache,cr0_eq,noncache	// turn on "noncache" flag if (source-dest)<128
+        mtctr	r10
+        b		c64InnerLoop
+                
+        .align	5					// align inner loop
+c64InnerLoop:						// loop copying 128-byte cache lines to 128-aligned destination
         ld		r0,0(r6)			// start pipe: load 1st half-line
         ld		r2,8(r6)
         ld		r7,16(r6)
@@ -812,51 +794,30 @@ noncache3:
         ld		r10,40(r6)
         ld		r11,48(r6)
         ld		r12,56(r6)
-		b		c64InnerLoopEntryPt
-        
-        .align	5					// align inner loop
-c64InnerLoop:						// loop copying 128-byte cache lines to 128-aligned destination
-        std		r0,64(r4)			// store 2nd half of chunk n
-        ld		r0,0(r6)			// load 1st half of chunk n+1
-        std		r2,72(r4)
-        ld		r2,8(r6)
-        std		r7,80(r4)
-        ld		r7,16(r6)
-        std		r8,88(r4)
-        ld		r8,24(r6)
-        std		r9,96(r4)
-        ld		r9,32(r6)
-        std		r10,104(r4)
-        ld		r10,40(r6)
-        std		r11,112(r4)
-        ld		r11,48(r6)
-        std		r12,120(r4)
-        ld		r12,56(r6)
-        addi	r4,r4,128			// advance to next dest chunk
-c64InnerLoopEntryPt:				// initial entry into loop, with 1st halfline loaded        
         bt		noncache,c64InnerLoop1	// skip if uncached or overlap
         dcbz128	0,r4				// avoid prefetch of next cache line
 c64InnerLoop1:
-        std		r0,0(r4)			// store 1st half of chunk n
-        ld		r0,64(r6)			// load 2nd half of chunk n
+
+        std		r0,0(r4)
         std		r2,8(r4)
-        ld		r2,72(r6)
         std		r7,16(r4)
-        ld		r7,80(r6)
         std		r8,24(r4)
-        ld		r8,88(r6)
         std		r9,32(r4)
-        ld		r9,96(r6)
         std		r10,40(r4)
-        ld		r10,104(r6)
         std		r11,48(r4)
-        ld		r11,112(r6)
         std		r12,56(r4)
-        ld		r12,120(r6)
-        addi	r6,r6,128			// advance to next source chunk if any
-        bdnz	c64InnerLoop		// loop if more chunks
         
-        std		r0,64(r4)			// store 2nd half of last chunk
+        ld		r0,64(r6)			// load 2nd half of chunk
+        ld		r2,72(r6)
+        ld		r7,80(r6)
+        ld		r8,88(r6)
+        ld		r9,96(r6)
+        ld		r10,104(r6)
+        ld		r11,112(r6)
+        ld		r12,120(r6)
+        addi	r6,r6,128
+
+        std		r0,64(r4)
         std		r2,72(r4)
         std		r7,80(r4)
         std		r8,88(r4)
@@ -865,6 +826,9 @@ c64InnerLoop1:
         std		r11,112(r4)
         std		r12,120(r4)
         addi	r4,r4,128			// advance to next dest chunk
+
+        bdnz	c64InnerLoop		// loop if more chunks
+        
 
 c64double7:         	            // r5 <- leftover bytes, cr1 set on doubleword count
         rlwinm	r0,r5,29,28,31		// r0 <- count of leftover doublewords (0-15)
@@ -885,7 +849,7 @@ c64double8:							// loop copying leftover doublewords
 // Forward byte loop.
 
 c64byte:							// r5/cr0 <- byte count (can be big if unaligned uncached)
-		beq		bcpydone			// done if no leftover bytes
+		beqlr                       // done if no leftover bytes
         mtctr	r5
         b		c64byte1
         
@@ -897,36 +861,36 @@ c64byte1:
         addi	r4,r4,1
         bdnz	c64byte1
 
-        b		bcpydone
+        blr
 
 
 // Uncached copies.  We must avoid unaligned accesses, since they always take alignment
 // exceptions on uncached memory on 64-bit processors.  This may mean we copy long operands
 // a byte at a time, but that is still much faster than alignment exceptions.
-//   r4-r6 = dest, length, source (as above)
-//		r2 = mask of 1s for leading 0s in length, plus 1 extra 1
-//		r7 = #bytes to copy to 128-byte align dest (limited by operand length)
-//	   cr1 = blt if reverse move required
+//      r4 = destination
+//      r5 = length (>0)
+//      r6 = source
+//      r8 = inverse of largest mask smaller than operand length
+//      r9 = neg(dest), used to compute alignment
+//      r12 = (dest-source), used to test relative alignment
+//      cr0 = beq if reverse move required
+//      cr5 = noncache flag
 
 c64uncached:
-        xor		r0,r6,r4			// get relative alignment
-        rlwinm	r10,r0,0,29,31		// relatively doubleword aligned?
-        rlwinm	r11,r0,0,30,31		// relatively word aligned?
-        not		r8,r2				// get mask to limit initial length of copy for G4word
-        blt		cr1,c64reverseUncached
-        
-        cmpwi	cr0,r10,0			// set cr0 beq if doubleword aligned
+        rlwinm	r10,r12,0,29,31		// relatively doubleword aligned?
+        rlwinm	r11,r12,0,30,31		// relatively word aligned?
+        cmpwi	cr7,r10,0			// set cr7 beq if doubleword aligned
         cmpwi	cr1,r11,0			// set cr1 beq if word aligned
-        beq		cr0,c64double		// doubleword aligned
-        beq		cr1,G4word			// word aligned, use G3/G4 code
+        beq--   c64reverseUncached
+        
+        beq		cr7,c64double		// doubleword aligned
+        beq		cr1,forward32bit    // word aligned, use G3/G4 code
         cmpwi	r5,0				// set cr0 on byte count
         b		c64byte				// unaligned operands
 
 c64reverseUncached:
-        cmpwi	cr0,r10,0			// set cr0 beq if doubleword aligned
-        cmpwi	cr1,r11,0			// set cr1 beq if word aligned
-        beq		cr0,c64rdouble		// doubleword aligned so can use LD/STD
-        beq		cr1,G4reverseWord	// word aligned, use G3/G4 code
+        beq		cr7,c64rdouble		// doubleword aligned so can use LD/STD
+        beq		cr1,reverse32bit	// word aligned, use G3/G4 code
         add		r6,r6,r5			// point to (end+1) of source and dest
         add		r4,r4,r5
         cmpwi	r5,0				// set cr0 on length
@@ -936,19 +900,17 @@ c64reverseUncached:
 
 // Reverse doubleword copies.  This is used for all cached copies, and doubleword
 // aligned uncached copies.
-//		r4 = destination (32 or 64-bit ptr)
-//		r5 = length (always 32 bits)
-//		r6 = source (32 or 64-bit ptr)
-//		cr5 = noncache, fixxlate, and restorex flags set
+//      r4 = destination
+//      r5 = length (>0)
+//      r6 = source
+//      r8 = inverse of largest mask of low-order 1s smaller than operand length
+//      cr5 = noncache flag
 
 c64rdouble:
         add		r6,r6,r5			// point to (end+1) of source and dest
         add		r4,r4,r5
-        rlwinm.	r7,r4,0,29,31		// r7 <- #bytes to doubleword align dest
-        cmplw	cr1,r7,r5			// operand long enough to doubleword align?
-        blt		cr1,c64rd0			// yes
-        mr		r7,r5				// no
-c64rd0:
+        rlwinm	r7,r4,0,29,31		// r7 <- #bytes to doubleword align dest
+        andc.   r7,r7,r8            // limit by operand length
         sub		r5,r5,r7			// adjust length
         srwi	r8,r5,6				// r8 <- 64-byte chunks to xfer
         cmpwi	cr1,r8,0			// any chunks?
@@ -965,10 +927,7 @@ c64rd2:								// r8/cr1 <- count of 64-byte chunks
         andi.	r5,r5,7				// r5/cr0 <- count of leftover bytes
         cmpwi	cr7,r0,0			// leftover doublewords?
         beq		cr1,c64rd4			// no chunks to xfer
-        li		r9,-128				// start at next cache line
         mtctr	r8
-        bt		noncache,c64rd3		// (HACK) Do not start a stream if noncachable...
-        dcbt128	r9,r6,3				// start reverse stream
         b		c64rd3
         
         .align	5					// align inner loop
@@ -1004,7 +963,7 @@ c64rd5:								// loop copying leftover doublewords
 // Reverse byte loop.
 
 c64rbyte:							// r5/cr0 <- byte count (can be big if unaligned uncached)
-        beq		bcpydone			// done if no leftover bytes
+        beqlr                       // done if no leftover bytes
         mtctr	r5
         
 c64rbyte1:
@@ -1012,5 +971,5 @@ c64rbyte1:
         stbu	r0,-1(r4)
         bdnz	c64rbyte1
 
-        b		bcpydone
+        blr
 

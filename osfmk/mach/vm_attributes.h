@@ -61,8 +61,8 @@
  *
  */
 
-#ifndef	VM_ATTRIBUTES_H_
-#define	VM_ATTRIBUTES_H_
+#ifndef	_MACH_VM_ATTRIBUTES_H_
+#define	_MACH_VM_ATTRIBUTES_H_
 
 /*
  *	Types of machine-dependent attributes
@@ -90,4 +90,4 @@ typedef int		vm_machine_attribute_val_t;
 
 #define MATTR_VAL_GET_INFO	10	/* get page info (stats) */
 
-#endif	/* VM_ATTRIBUTES_H_ */
+#endif	/* _MACH_VM_ATTRIBUTES_H_ */

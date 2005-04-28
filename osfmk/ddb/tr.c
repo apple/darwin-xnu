@@ -88,7 +88,7 @@ tr_init(void)
 	    tr_indent[i]=0;
 #endif	/* NCPUS > 1 */
 
-	simple_lock_init(&trace_lock, ETAP_DIPC_TRACE);
+	simple_lock_init(&trace_lock, 0);
 }
 
 void

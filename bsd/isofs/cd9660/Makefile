@@ -26,9 +26,9 @@ INSTALL_MI_LIST	= ${DATAFILES}
 
 INSTALL_MI_DIR = isofs/cd9660
 
-EXPORT_MI_LIST	= ${DATAFILES}
+EXPORT_MI_LIST	= 
 
-EXPORT_MI_DIR = isofs/cd9660
+EXPORT_MI_DIR = 
 
 
 include $(MakeInc_rule)

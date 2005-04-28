@@ -23,6 +23,7 @@
 #include <mach/mach_types.h>
 #include <mach/machine.h>
 #include <mach/exception_types.h>
+#include <kern/cpu_data.h>
 #include <i386/trap.h>
 #include <i386/mp.h>
 #include <kdp/kdp_internal.h>
@@ -34,10 +35,21 @@
 #define dprintf(x)
 #endif
 
-void print_saved_state(void *);
-void kdp_call(void);
-void kdp_i386_trap(unsigned int, struct i386_saved_state *, kern_return_t, vm_offset_t);
-int kdp_getc(void);
+extern void	kdreboot(void);
+
+void		print_saved_state(void *);
+void		kdp_call(void);
+int		kdp_getc(void);
+boolean_t	kdp_call_kdb(void);
+void		kdp_getstate(i386_thread_state_t *);
+void		kdp_setstate(i386_thread_state_t *);
+void		kdp_print_phys(int);
+void		kdp_i386_backtrace(void *, int);
+void		kdp_i386_trap(
+			unsigned int,
+			struct i386_saved_state	*,
+			kern_return_t,
+			vm_offset_t);
 
 void
 kdp_exception(
@@ -81,7 +93,7 @@ kdp_exception_ack(
 {
     kdp_exception_ack_t	*rq = (kdp_exception_ack_t *)pkt;
 
-    if (len < sizeof (*rq))
+    if (((unsigned int) len) < sizeof (*rq))
 	return(FALSE);
 	
     if (!rq->hdr.is_reply || rq->hdr.request != KDP_EXCEPTION)
@@ -101,11 +113,12 @@ kdp_getstate(
     i386_thread_state_t		*state
 )
 {
+    static i386_thread_state_t	null_state;
     struct i386_saved_state	*saved_state;
     
     saved_state = (struct i386_saved_state *)kdp.saved_state;
     
-    *state = (i386_thread_state_t) { 0 };	
+    *state = null_state;	
     state->eax = saved_state->eax;
     state->ebx = saved_state->ebx;
     state->ecx = saved_state->ecx;
@@ -161,12 +174,14 @@ kdp_setstate(
 
 kdp_error_t
 kdp_machine_read_regs(
-    unsigned int cpu,
-    unsigned int flavor,
+    __unused unsigned int cpu,
+    __unused unsigned int flavor,
     char *data,
-    int *size
+    __unused int *size
 )
 {
+    static i386_thread_fpstate_t null_fpstate;
+
     switch (flavor) {
 
     case i386_THREAD_STATE:
@@ -177,22 +192,23 @@ kdp_machine_read_regs(
 	
     case i386_THREAD_FPSTATE:
 	dprintf(("kdp_readregs THREAD_FPSTATE\n"));
-	*(i386_thread_fpstate_t *)data = (i386_thread_fpstate_t) { 0 };	
+	*(i386_thread_fpstate_t *)data = null_fpstate;
 	*size = sizeof (i386_thread_fpstate_t);
 	return KDPERR_NO_ERROR;
 	
     default:
-	dprintf(("kdp_readregs bad flavor %d\n"));
+	dprintf(("kdp_readregs bad flavor %d\n", flavor));
+	*size = 0;
 	return KDPERR_BADFLAVOR;
     }
 }
 
 kdp_error_t
 kdp_machine_write_regs(
-    unsigned int cpu,
+    __unused unsigned int cpu,
     unsigned int flavor,
     char *data,
-    int *size
+    __unused int *size
 )
 {
     switch (flavor) {
@@ -219,14 +235,12 @@ kdp_machine_hostinfo(
     kdp_hostinfo_t *hostinfo
 )
 {
-    machine_slot_t	m;
     int			i;
 
     hostinfo->cpus_mask = 0;
 
     for (i = 0; i < machine_info.max_cpus; i++) {
-        m = &machine_slot[i];
-        if (!m->is_cpu)
+	if (cpu_data_ptr[i] == NULL)
             continue;
 	
         hostinfo->cpus_mask |= (1 << i);
@@ -242,7 +256,7 @@ kdp_panic(
     const char		*msg
 )
 {
-    printf("kdp panic: %s\n", msg);    
+    kprintf("kdp panic: %s\n", msg);    
     __asm__ volatile("hlt");	
 }
 
@@ -274,8 +288,6 @@ kdp_getc()
 void
 kdp_us_spin(int usec)
 {
-    extern void delay(int);
-
     delay(usec/100);
 }
 
@@ -285,10 +297,10 @@ void print_saved_state(void *state)
 
     saved_state = state;
 
-	printf("pc = 0x%x\n", saved_state->eip);
-	printf("cr3= 0x%x\n", saved_state->cr2);
-	printf("rp = TODO FIXME\n");
-	printf("sp = 0x%x\n", saved_state->esp);
+	kprintf("pc = 0x%x\n", saved_state->eip);
+	kprintf("cr3= 0x%x\n", saved_state->cr2);
+	kprintf("rp = TODO FIXME\n");
+	kprintf("sp = 0x%x\n", saved_state->esp);
 
 }
 
@@ -311,6 +323,29 @@ typedef struct _cframe_t {
     unsigned		args[0];
 } cframe_t;
 
+#include <i386/pmap.h>
+extern pt_entry_t *DMAP2;
+extern caddr_t DADDR2;
+
+void
+kdp_print_phys(int src)
+{
+	unsigned int   *iptr;
+	int             i;
+
+	*(int *) DMAP2 = 0x63 | (src & 0xfffff000);
+	invlpg((u_int) DADDR2);
+	iptr = (unsigned int *) DADDR2;
+	for (i = 0; i < 100; i++) {
+		kprintf("0x%x ", *iptr++);
+		if ((i % 8) == 0)
+			kprintf("\n");
+	}
+	kprintf("\n");
+	*(int *) DMAP2 = 0;
+
+}
+
 
 #define MAX_FRAME_DELTA		65536
 
@@ -325,9 +360,9 @@ kdp_i386_backtrace(void	*_frame, int nframes)
 	        (vm_offset_t)frame > VM_MAX_KERNEL_ADDRESS) {
 		goto invalid;
 	    }
-	    printf("frame %x called by %x ",
+	    kprintf("frame 0x%x called by 0x%x ",
 		frame, frame->caller);
-	    printf("args %x %x %x %x\n",
+	    kprintf("args 0x%x 0x%x 0x%x 0x%x\n",
 		frame->args[0], frame->args[1],
 		frame->args[2], frame->args[3]);
 	    if ((frame->prev < frame) ||	/* wrong direction */
@@ -338,7 +373,7 @@ kdp_i386_backtrace(void	*_frame, int nframes)
 	}
 	return;
 invalid:
-	printf("invalid frame pointer %x\n",frame);
+	kprintf("invalid frame pointer 0x%x\n",frame);
 }
 
 void
@@ -354,7 +389,8 @@ kdp_i386_trap(
     mp_kdp_enter();
 
     if (trapno != T_INT3 && trapno != T_DEBUG)
-    	printf("unexpected kernel trap %x eip %x\n", trapno, saved_state->eip);
+    	kprintf("unexpected kernel trap 0x%x eip 0x%x cr2 0x%x \n",
+		trapno, saved_state->eip, saved_state->esp);
 
     switch (trapno) {
     
@@ -419,7 +455,7 @@ kdp_i386_trap(
 	break;
     }
 
-//    kdp_i386_backtrace((void *) saved_state->ebp, 10);
+    kdp_i386_backtrace((void *) saved_state->ebp, 10);
 
     kdp_raise_exception(exception, code, subcode, saved_state);
 
@@ -433,7 +469,8 @@ kdp_call_kdb(
         return(FALSE);
 }
 
-unsigned int kdp_ml_get_breakinsn()
+unsigned int
+kdp_ml_get_breakinsn(void)
 {
   return 0xcc;
 }

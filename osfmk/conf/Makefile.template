@@ -47,15 +47,6 @@ COMP_SUBDIRS_I386 = \
 #
 .PRECIOUS: Makefile
 
-VERSION_FILES= \
-	$(SOURCE_DIR)/$(COMPONENT)/conf/version.major  \
-	$(SOURCE_DIR)/$(COMPONENT)/conf/version.minor   \
-	$(SOURCE_DIR)/$(COMPONENT)/conf/version.variant
-
-COPYRIGHT_FILES = \
-	$(SOURCE_DIR)/$(COMPONENT)/conf/copyright.osf \
-	$(SOURCE_DIR)/$(COMPONENT)/conf/copyright.cmu
-
 #
 #  Theses macros are filled in by the config program depending on the
 #  current configuration.  The MACHDEP macro is replaced by the
@@ -91,12 +82,13 @@ LDOBJS = $(OBJS)
 
 $(COMPONENT).o: $(LDOBJS) assym.s
 	@echo "[ creating $(COMPONENT).o ]"
-	$(RM) $(RMFLAGS) vers.c
-	$(COMPOBJROOT)/newvers \
-	`$(CAT) ${VERSION_FILES}` ${COPYRIGHT_FILES}
-	${KCC} $(CFLAGS) $(INCLUDES) -c vers.c
+	for hib_file in ${HIB_FILES};		\
+	do	\
+                $(SEG_HACK) __HIB $${hib_file} -o $${hib_file}__; \
+                mv $${hib_file}__ $${hib_file} ; \
+	done;
 	@echo [ updating $(COMPONENT).o ${OSFMK_KERNEL_CONFIG} ]
-	$(LD)  $(LDFLAGS_COMPONENT)  -o $(COMPONENT).o ${LDOBJS} vers.o 
+	$(LD)  $(LDFLAGS_COMPONENT)  -o $(COMPONENT).o ${LDOBJS}
 
 do_all: $(COMPONENT).o
 

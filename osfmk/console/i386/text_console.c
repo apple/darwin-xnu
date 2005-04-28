@@ -28,6 +28,7 @@
 
 #include <i386/pio.h>
 #include <console/video_console.h>
+#include "text_console.h"
 
 /*
  * Macros and typedefs.
@@ -47,6 +48,7 @@ typedef short  csrpos_t;    /* cursor position, ONE_SPACE bytes per char */
 /*
  * Commands sent to graphics adapter.
  */
+#define VGA_C_START         0x0a    /* cursor start position, on/off bit */
 #define VGA_C_LOW           0x0f    /* return low byte of cursor addr */
 #define VGA_C_HIGH          0x0e    /* high byte */
 
@@ -57,6 +59,12 @@ typedef short  csrpos_t;    /* cursor position, ONE_SPACE bytes per char */
 #define VGA_ATTR_REVERSE    0x70
 
 /*
+ * Cursor Start Register bit fields.
+ */
+#define VGA_CURSOR_CS       0x1F
+#define VGA_CURSOR_ON       0x20
+
+/*
  * Convert from XY coordinate to a location in display memory.
  */
 #define XY_TO_CSRPOS(x, y)    (((y) * vga_cols + (x)) * ONE_SPACE)
@@ -64,13 +72,14 @@ typedef short  csrpos_t;    /* cursor position, ONE_SPACE bytes per char */
 /*
  * Globals.
  */
-static short    vga_idx_reg     = 0;   /* location of VGA index register */
-static short    vga_io_reg      = 0;   /* location of VGA data register */
-static short    vga_cols        = 80;  /* number of columns */
-static short    vga_rows        = 25;  /* number of rows */
-static char     vga_attr        = 0;   /* current character attribute */
-static char     vga_attr_rev    = 0;   /* current reverse attribute */
-static char *   vram_start      = 0;   /* VM start of VGA frame buffer */
+static short     vga_idx_reg      = 0;   /* location of VGA index register */
+static short     vga_io_reg       = 0;   /* location of VGA data register */
+static short     vga_cols         = 80;  /* number of columns */
+static short     vga_rows         = 25;  /* number of rows */
+static char      vga_attr         = 0;   /* current character attribute */
+static char      vga_attr_rev     = 0;   /* current reverse attribute */
+static char      vga_cursor_start = 0;   /* cached cursor start scan line */
+static char *    vram_start       = 0;   /* VM start of VGA frame buffer */
 
 /*
  * Functions in kdasm.s.
@@ -140,6 +149,19 @@ set_cursor_position( csrpos_t newpos )
 }
 
 /*
+ * set_cursor_enable
+ *
+ * Allow the cursor to be turned on or off.
+ */
+static void
+set_cursor_enable( boolean_t enable )
+{
+    outb(vga_idx_reg, VGA_C_START);
+    outb(vga_io_reg, vga_cursor_start |
+                     (enable == TRUE ? VGA_CURSOR_ON : 0));
+}
+
+/*
  * display_char
  *
  * Display attributed character for VGA (mode 3).
@@ -169,7 +191,12 @@ vga_init(int cols, int rows, unsigned char * addr)
     vga_attr     = VGA_ATTR_NORMAL;
     vga_attr_rev = VGA_ATTR_REVERSE;
 
-    set_cursor_position(0);
+    /* cache cursor start position */
+    outb(vga_idx_reg, VGA_C_START);
+    vga_cursor_start = inb(vga_io_reg) & VGA_CURSOR_CS;
+
+    /* defaults to a hidden hw cursor */
+    set_cursor_enable( FALSE );
 }
 
 /*
@@ -178,7 +205,7 @@ vga_init(int cols, int rows, unsigned char * addr)
  * Scroll the screen up 'n' character lines.
  */
 void
-tc_scroll_up( int lines, int top, int bottom )
+tc_scroll_up( int lines, __unused int top, __unused int bottom )
 {
     csrpos_t  to;
     csrpos_t  from;
@@ -202,7 +229,7 @@ tc_scroll_up( int lines, int top, int bottom )
  * Scrolls the screen down 'n' character lines.
  */
 void
-tc_scroll_down( int lines, int top, int bottom )
+tc_scroll_down( int lines, __unused int top, __unused int bottom )
 {
     csrpos_t  to;
     csrpos_t  from;
@@ -284,6 +311,7 @@ void
 tc_show_cursor( int x, int y )
 {
     set_cursor_position( XY_TO_CSRPOS(x, y) );
+    set_cursor_enable( TRUE );
 }
 
 /*
@@ -292,9 +320,9 @@ tc_show_cursor( int x, int y )
  * Hide the hardware cursor.
  */
 void
-tc_hide_cursor( int x, int y )
+tc_hide_cursor( __unused int x, __unused int y )
 {
-    return;
+    set_cursor_enable( FALSE );
 }
 
 /*
@@ -304,7 +332,8 @@ tc_hide_cursor( int x, int y )
  * relative to the current cursor position.
  */
 void
-tc_clear_screen(int x, int y, int top, int bottom, int operation)
+tc_clear_screen(int x, int y, __unused int top, __unused int bottom,
+		int operation)
 {
     csrpos_t start;
     int      count;
@@ -335,7 +364,8 @@ tc_clear_screen(int x, int y, int top, int bottom, int operation)
  * and attributes.
  */
 void
-tc_paint_char( int x, int y, unsigned char ch, int attrs, unsigned char ch_previous, int attrs_previous )
+tc_paint_char(int x, int y, unsigned char ch, int attrs,
+	      __unused unsigned char ch_previous, __unused int attrs_previous)
 {
     char my_attr = vga_attr;
 
@@ -350,7 +380,7 @@ tc_paint_char( int x, int y, unsigned char ch, int attrs, unsigned char ch_previ
  * Enable / disable the console.
  */
 void
-tc_enable(boolean_t enable)
+tc_enable(__unused boolean_t enable)
 {
 
 }

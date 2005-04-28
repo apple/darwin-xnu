@@ -27,6 +27,7 @@
 unsigned kdp_vm_read( caddr_t, caddr_t, unsigned);
 unsigned kdp_vm_write( caddr_t, caddr_t, unsigned);
 unsigned kdp_copy_kmem( caddr_t, caddr_t, unsigned);
+int	 kern_dump(void);
 
 unsigned int not_in_kdp = 1; /* Cleared when we begin to access vm functions in kdp */
 
@@ -51,8 +52,9 @@ unsigned kdp_vm_write(
 {       
 	return kdp_copy_kmem(src, dst, len);
 }
+
 /* A stub until i386 support is added for remote kernel core dumps */
-int kern_dump()
+int kern_dump(void)
 {
   return 0;
 }

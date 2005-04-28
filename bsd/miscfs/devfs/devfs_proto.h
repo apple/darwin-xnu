@@ -33,19 +33,14 @@ int	dev_add_name(char * name, devnode_t * dirnode, devdirent_t * back,
 int	dev_add_node(int entrytype, devnode_type_t * typeinfo, devnode_t * proto,
 	     devnode_t * *dn_pp, struct devfsmount *dvm);
 void	devnode_free(devnode_t * dnp);
-void	devfs_dn_free(devnode_t * dnp);
-int	devfs_propogate(devdirent_t * parent,devdirent_t * child);
 int	dev_dup_plane(struct devfsmount *devfs_mp_p);
 void	devfs_free_plane(struct devfsmount *devfs_mp_p);
-int	dev_dup_entry(devnode_t * parent, devdirent_t * back, devdirent_t * *dnm_pp,
-	      struct devfsmount *dvm);
 int	dev_free_name(devdirent_t * dirent_p);
-void	dev_free_hier(devdirent_t * dirent_p);
 int	devfs_dntovn(devnode_t * dnp, struct vnode **vn_pp, struct proc * p);
 int	dev_add_entry(char *name, devnode_t * parent, int type, devnode_type_t * typeinfo,
 	      devnode_t * proto, struct devfsmount *dvm, devdirent_t * *nm_pp);
-int	devfs_mount(struct mount *mp, char *path, caddr_t data,
-	    struct nameidata *ndp, struct proc *p);
+int	devfs_mount(struct mount *mp, vnode_t devvp, user_addr_t data,
+	    vfs_context_t context);
 
 #endif /* __APPLE_API_PRIVATE */
 #endif /* __DEVFS_DEVFS_PROTO_H__ */

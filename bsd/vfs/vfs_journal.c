@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1995-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1995-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -34,19 +34,18 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
-#include <sys/file.h>
+#include <sys/file_internal.h>
 #include <sys/stat.h>
-#include <sys/buf.h>
-#include <sys/proc.h>
-#include <sys/mount.h>
+#include <sys/buf_internal.h>
+#include <sys/proc_internal.h>
+#include <sys/mount_internal.h>
 #include <sys/namei.h>
-#include <sys/vnode.h>
+#include <sys/vnode_internal.h>
 #include <sys/ioctl.h>
 #include <sys/tty.h>
 #include <sys/ubc.h>
 #include <sys/malloc.h>
-#include <sys/vnode.h>
-#include <kern/thread_act.h>
+#include <kern/thread.h>
 #include <sys/disk.h>
 #include <miscfs/specfs/specdev.h>
 
@@ -80,6 +79,13 @@ extern task_t kernel_task;
 static int  end_transaction(transaction *tr, int force_it);
 static void abort_transaction(journal *jnl, transaction *tr);
 static void dump_journal(journal *jnl);
+
+static __inline__ void  lock_journal(journal *jnl);
+static __inline__ void  unlock_journal(journal *jnl);
+static __inline__ void  lock_oldstart(journal *jnl);
+static __inline__ void  unlock_oldstart(journal *jnl);
+
+
 
 
 //
@@ -178,6 +184,49 @@ calc_checksum(char *ptr, int len)
     return (~cksum);
 }
 
+//
+// Journal Locking
+//
+lck_grp_attr_t *  jnl_group_attr;
+lck_attr_t *      jnl_lock_attr;
+lck_grp_t *       jnl_mutex_group;
+
+void
+journal_init()
+{
+	jnl_lock_attr    = lck_attr_alloc_init();
+	jnl_group_attr   = lck_grp_attr_alloc_init();
+	jnl_mutex_group  = lck_grp_alloc_init("jnl-mutex", jnl_group_attr);
+
+	/* Turn on lock debugging */
+	//lck_attr_setdebug(jnl_lock_attr);
+}
+
+static __inline__ void
+lock_journal(journal *jnl)
+{
+	lck_mtx_lock(&jnl->jlock);
+}
+
+static __inline__ void
+unlock_journal(journal *jnl)
+{
+	lck_mtx_unlock(&jnl->jlock);
+}
+
+static __inline__ void
+lock_oldstart(journal *jnl)
+{
+	lck_mtx_lock(&jnl->old_start_lock);
+}
+
+static __inline__ void
+unlock_oldstart(journal *jnl)
+{
+	lck_mtx_unlock(&jnl->old_start_lock);
+}
+
+
 
 #define JNL_WRITE    0x0001
 #define JNL_READ     0x0002
@@ -196,28 +245,22 @@ static size_t
 do_journal_io(journal *jnl, off_t *offset, void *data, size_t len, int direction)
 {
     int         err, io_sz=0, curlen=len;
-    struct buf *bp;
-	int max_iosize=0, max_vectors;
+    buf_t	bp;
+    int 	max_iosize = 128 * 1024;
+    struct vfsioattr ioattr;
 
     if (*offset < 0 || *offset > jnl->jhdr->size) {
 		panic("jnl: do_jnl_io: bad offset 0x%llx (max 0x%llx)\n", *offset, jnl->jhdr->size);
     }
+    vfs_ioattr(vnode_mount(jnl->jdev), &ioattr);
+
+    if (direction & JNL_WRITE)
+            max_iosize = ioattr.io_maxwritecnt;
+    else if (direction & JNL_READ)
+            max_iosize = ioattr.io_maxreadcnt;
 
   again:
     bp = alloc_io_buf(jnl->jdev, 1);
-
-    if (direction & JNL_WRITE) {
-		bp->b_flags  |= 0;   // don't have to set any flags (was: B_WRITEINPROG)
-		jnl->jdev->v_numoutput++;
-		vfs_io_attributes(jnl->jdev, B_WRITE, &max_iosize, &max_vectors);
-    } else if (direction & JNL_READ) {
-		bp->b_flags  |= B_READ;
-		vfs_io_attributes(jnl->jdev, B_READ, &max_iosize, &max_vectors);
-    }
-
-	if (max_iosize == 0) {
-		max_iosize = 128 * 1024;
-	}
 
     if (*offset + (off_t)curlen > jnl->jhdr->size && *offset != 0 && jnl->jhdr->size != 0) {
 		if (*offset == jnl->jhdr->size) {
@@ -239,21 +282,24 @@ do_journal_io(journal *jnl, off_t *offset, void *data, size_t len, int direction
 		panic("jnl: request for i/o to jnl-header without JNL_HEADER flag set! (len %d, data %p)\n", curlen, data);
 	}
 
-    bp->b_bufsize = curlen;
-    bp->b_bcount  = curlen;
-    bp->b_data    = data;
-    bp->b_blkno   = (daddr_t) ((jnl->jdev_offset + *offset) / (off_t)jnl->jhdr->jhdr_size);
-    bp->b_lblkno  = (daddr_t) ((jnl->jdev_offset + *offset) / (off_t)jnl->jhdr->jhdr_size);
-
-    err = VOP_STRATEGY(bp);
-    if (!err) {
-		err = biowait(bp);
+    if (direction & JNL_READ)
+            buf_setflags(bp, B_READ);
+    else {
+            /*
+	     * don't have to set any flags
+	     */
+            vnode_startwrite(jnl->jdev);
     }
-    
-    bp->b_data    = NULL;
-    bp->b_bufsize = bp->b_bcount = 0;
-    bp->b_blkno   = bp->b_lblkno = -1;
+    buf_setsize(bp, curlen);
+    buf_setcount(bp, curlen);
+    buf_setdataptr(bp, (uintptr_t)data);
+    buf_setblkno(bp, (daddr64_t) ((jnl->jdev_offset + *offset) / (off_t)jnl->jhdr->jhdr_size));
+    buf_setlblkno(bp, (daddr64_t) ((jnl->jdev_offset + *offset) / (off_t)jnl->jhdr->jhdr_size));
 
+    err = VNOP_STRATEGY(bp);
+    if (!err) {
+		err = (int)buf_biowait(bp);
+    }
     free_io_buf(bp);
 
     if (err) {
@@ -303,11 +349,14 @@ write_journal_header(journal *jnl)
 	static int num_err_prints = 0;
     int ret;
     off_t jhdr_offset = 0;
-    
+    struct vfs_context context;
+
+    context.vc_proc = current_proc();
+    context.vc_ucred = NOCRED;
     // 
     // XXXdbg note: this ioctl doesn't seem to do anything on firewire disks.
     //
-    ret = VOP_IOCTL(jnl->jdev, DKIOCSYNCHRONIZECACHE, NULL, FWRITE, NOCRED, current_proc());
+    ret = VNOP_IOCTL(jnl->jdev, DKIOCSYNCHRONIZECACHE, NULL, FWRITE, &context);
     if (ret != 0) {
 	//
 	// Only print this error if it's a different error than the
@@ -345,7 +394,7 @@ write_journal_header(journal *jnl)
     // on an IDE bus analyzer with Larry Barras so while it
     // may seem obscure, it's not.
     //
-    VOP_IOCTL(jnl->jdev, DKIOCSYNCHRONIZECACHE, NULL, FWRITE, NOCRED, current_proc());
+    VNOP_IOCTL(jnl->jdev, DKIOCSYNCHRONIZECACHE, NULL, FWRITE, &context);
 
     return 0;
 }
@@ -365,12 +414,16 @@ free_old_stuff(journal *jnl)
 {
     transaction *tr, *next;
 
-    for(tr=jnl->tr_freeme; tr; tr=next) {
-		next = tr->next;
-		FREE_ZONE(tr, sizeof(transaction), M_JNL_TR);
+    lock_oldstart(jnl);
+    tr = jnl->tr_freeme;
+    jnl->tr_freeme = NULL;
+    unlock_oldstart(jnl);
+
+    for(; tr; tr=next) {
+	next = tr->next;
+	FREE_ZONE(tr, sizeof(transaction), M_JNL_TR);
     }
 
-    jnl->tr_freeme = NULL;
 }
 
 
@@ -382,7 +435,7 @@ free_old_stuff(journal *jnl)
 // not initiate any new i/o's or allocate/free memory.
 //
 static void
-buffer_flushed_callback(struct buf *bp)
+buffer_flushed_callback(struct buf *bp, void *arg)
 {
     transaction  *tr;
     journal      *jnl;
@@ -390,29 +443,12 @@ buffer_flushed_callback(struct buf *bp)
     int           i, bufsize;
 
 
-    //printf("jnl: buf flush: bp @ 0x%x l/blkno %d/%d vp 0x%x tr @ 0x%x\n",
-    //	   bp, bp->b_lblkno, bp->b_blkno, bp->b_vp, bp->b_transaction);
+    //printf("jnl: buf flush: bp @ 0x%x l/blkno %qd/%qd vp 0x%x tr @ 0x%x\n",
+    //	   bp, buf_lblkno(bp), buf_blkno(bp), buf_vnode(bp), arg);
 
     // snarf out the bits we want
-    bufsize = bp->b_bufsize;
-    tr      = bp->b_transaction;
-
-    bp->b_iodone      = NULL;   // don't call us for this guy again
-    bp->b_transaction = NULL;
-
-    //
-    // This is what biodone() would do if it didn't call us.
-    // NOTE: THIS CODE *HAS* TO BE HERE!
-    //
-    if (ISSET(bp->b_flags, B_ASYNC)) {	/* if async, release it */
-		brelse(bp);
-    } else {		                        /* or just wakeup the buffer */	
-		CLR(bp->b_flags, B_WANTED);
-		wakeup(bp);
-    }
-
-    // NOTE: from here on out we do *NOT* touch bp anymore.
-
+    bufsize = buf_size(bp);
+    tr      = (transaction *)arg;
 
     // then we've already seen it
     if (tr == NULL) {
@@ -431,7 +467,7 @@ buffer_flushed_callback(struct buf *bp)
     // update the number of blocks that have been flushed.
     // this buf may represent more than one block so take
     // that into account.
-    tr->num_flushed += bufsize;
+    OSAddAtomic(bufsize, &tr->num_flushed);
 
 
     // if this transaction isn't done yet, just return as
@@ -440,11 +476,23 @@ buffer_flushed_callback(struct buf *bp)
 		return;
     }
 
+	// this will single thread checking the transaction
+	lock_oldstart(jnl);
+
+	if (tr->total_bytes == 0xfbadc0de) {
+		// then someone beat us to it...
+		unlock_oldstart(jnl);
+		return;
+	}
+
+    // mark this so that we're the owner of dealing with the
+	// cleanup for this transaction
+    tr->total_bytes = 0xfbadc0de;
+
     //printf("jnl: tr 0x%x (0x%llx 0x%llx) in jnl 0x%x completed.\n",
     //   tr, tr->journal_start, tr->journal_end, jnl);
 
 	// find this entry in the old_start[] index and mark it completed
-	simple_lock(&jnl->old_start_lock);
 	for(i=0; i < sizeof(jnl->old_start)/sizeof(jnl->old_start[0]); i++) {
 
 		if ((jnl->old_start[i] & ~(0x8000000000000000LL)) == tr->journal_start) {
@@ -456,7 +504,7 @@ buffer_flushed_callback(struct buf *bp)
 		panic("jnl: buffer_flushed: did not find tr w/start @ %lld (tr 0x%x, jnl 0x%x)\n",
 			  tr->journal_start, tr, jnl);
 	}
-	simple_unlock(&jnl->old_start_lock);
+	unlock_oldstart(jnl);
 
 
     // if we are here then we need to update the journal header
@@ -478,10 +526,12 @@ buffer_flushed_callback(struct buf *bp)
 				jnl->completed_trs = ctr->next;
 			}
 	    
+			lock_oldstart(jnl);
 			next           = jnl->completed_trs;   // this starts us over again
 			ctr->next      = jnl->tr_freeme;
 			jnl->tr_freeme = ctr;
 			ctr            = NULL;
+			unlock_oldstart(jnl);
 		} else if (tr->journal_end == ctr->journal_start) {
 			ctr->journal_start = tr->journal_start;
 			next               = jnl->completed_trs;  // this starts us over again
@@ -496,9 +546,6 @@ buffer_flushed_callback(struct buf *bp)
 		}
     }
     
-    // at this point no one should be using this guy anymore
-    tr->total_bytes = 0xfbadc0de;
-
     // if this is true then we didn't merge with anyone
     // so link ourselves in at the head of the completed
     // transaction list.
@@ -525,8 +572,10 @@ buffer_flushed_callback(struct buf *bp)
     } else {
 		// if we're here this tr got merged with someone else so
 		// put it on the list to be free'd
+		lock_oldstart(jnl);
 		tr->next       = jnl->tr_freeme;
 		jnl->tr_freeme = tr;
+		unlock_oldstart(jnl);
     }
 }
 
@@ -578,47 +627,47 @@ swap_block_list_header(journal *jnl, block_list_header *blhdr)
 static int
 update_fs_block(journal *jnl, void *block_ptr, off_t fs_block, size_t bsize)
 {
-    int         ret;
+    int		ret;
     struct buf *oblock_bp=NULL;
     
     // first read the block we want.
-    ret = meta_bread(jnl->fsdev, (daddr_t)fs_block, bsize, NOCRED, &oblock_bp);
+    ret = buf_meta_bread(jnl->fsdev, (daddr64_t)fs_block, bsize, NOCRED, &oblock_bp);
     if (ret != 0) {
 		printf("jnl: update_fs_block: error reading fs block # %lld! (ret %d)\n", fs_block, ret);
 
 		if (oblock_bp) {
-			brelse(oblock_bp);
+			buf_brelse(oblock_bp);
 			oblock_bp = NULL;
 		}
 
 		// let's try to be aggressive here and just re-write the block
-		oblock_bp = getblk(jnl->fsdev, (daddr_t)fs_block, bsize, 0, 0, BLK_META);
+		oblock_bp = buf_getblk(jnl->fsdev, (daddr64_t)fs_block, bsize, 0, 0, BLK_META);
 		if (oblock_bp == NULL) {
-			printf("jnl: update_fs_block: getblk() for %lld failed! failing update.\n", fs_block);
+			printf("jnl: update_fs_block: buf_getblk() for %lld failed! failing update.\n", fs_block);
 			return -1;
 		}
     }
 	    
     // make sure it's the correct size.
-    if (oblock_bp->b_bufsize != bsize) {
-		brelse(oblock_bp);
+    if (buf_size(oblock_bp) != bsize) {
+		buf_brelse(oblock_bp);
 		return -1;
     }
 
     // copy the journal data over top of it
-    memcpy(oblock_bp->b_data, block_ptr, bsize);
+    memcpy((void *)buf_dataptr(oblock_bp), block_ptr, bsize);
 
-    if ((ret = VOP_BWRITE(oblock_bp)) != 0) {
+    if ((ret = VNOP_BWRITE(oblock_bp)) != 0) {
 		printf("jnl: update_fs_block: failed to update block %lld (ret %d)\n", fs_block,ret);
 		return ret;
     }
 
     // and now invalidate it so that if someone else wants to read
     // it in a different size they'll be able to do it.
-    ret = meta_bread(jnl->fsdev, (daddr_t)fs_block, bsize, NOCRED, &oblock_bp);
+    ret = buf_meta_bread(jnl->fsdev, (daddr64_t)fs_block, bsize, NOCRED, &oblock_bp);
     if (oblock_bp) {
-		oblock_bp->b_flags |= B_INVAL;
-		brelse(oblock_bp);
+                buf_markinvalid(oblock_bp);
+		buf_brelse(oblock_bp);
     }
 	    
     return 0;
@@ -781,7 +830,8 @@ do_overlap(journal *jnl, struct bucket **buf_ptr, int blk_index, off_t block_num
 	    if (prev_block_end > block_end) {
 		off_t new_num = block_end / jhdr_size;
 		size_t new_size = prev_block_end - block_end;
-		size_t new_offset = (*buf_ptr)[blk_index-1].jnl_offset + (block_end - prev_block_start);
+
+		new_offset = (*buf_ptr)[blk_index-1].jnl_offset + (block_end - prev_block_start);
 		
 		err = insert_block(jnl, buf_ptr, blk_index, new_num, new_size, new_offset, num_buckets_ptr, num_full_ptr, 0);
 		if (err < 0) {
@@ -815,7 +865,7 @@ do_overlap(journal *jnl, struct bucket **buf_ptr, int blk_index, off_t block_num
 	    overlap = block_end - (*buf_ptr)[index].block_num*jhdr_size;
 	    if (overlap > 0) {
 		if (overlap % jhdr_size != 0) {
-		    panic("jnl: do_overlap: overlap of %d is not multiple of %d\n", overlap, jhdr_size);
+		    panic("jnl: do_overlap: overlap of %lld is not multiple of %d\n", overlap, jhdr_size);
 		}
 		
 		// if we partially overlap this entry, adjust its block number, jnl offset, and size
@@ -873,7 +923,6 @@ static int
 add_block(journal *jnl, struct bucket **buf_ptr, off_t block_num, size_t size, size_t offset, int *num_buckets_ptr, int *num_full_ptr)
 {
     int blk_index, overwriting;
-    size_t jhdr_size = jnl->jhdr->jhdr_size;
     
     // on return from lookup_bucket(), blk_index is the index into the table where block_num should be
     // inserted (or the index of the elem to overwrite). 
@@ -902,10 +951,9 @@ static int
 replay_journal(journal *jnl)
 {
     int i, ret, orig_checksum, checksum, max_bsize;
-    struct buf *oblock_bp;
     block_list_header *blhdr;
     off_t offset;
-    char *buf, *block_ptr=NULL;
+    char *buff, *block_ptr=NULL;
     struct bucket *co_buf;
     int num_buckets = STARTING_BUCKETS, num_full;
 
@@ -922,7 +970,7 @@ replay_journal(journal *jnl)
     }
 
     // allocate memory for the header_block.  we'll read each blhdr into this
-    if (kmem_alloc(kernel_map, (vm_offset_t *)&buf, jnl->jhdr->blhdr_size)) {
+    if (kmem_alloc(kernel_map, (vm_offset_t *)&buff, jnl->jhdr->blhdr_size)) {
 		printf("jnl: replay_journal: no memory for block buffer! (%d bytes)\n",
 			   jnl->jhdr->blhdr_size);
 		return -1;
@@ -946,13 +994,13 @@ replay_journal(journal *jnl)
 
     while(jnl->jhdr->start != jnl->jhdr->end) {
 		offset = jnl->jhdr->start;
-		ret = read_journal_data(jnl, &offset, buf, jnl->jhdr->blhdr_size);
+		ret = read_journal_data(jnl, &offset, buff, jnl->jhdr->blhdr_size);
 		if (ret != jnl->jhdr->blhdr_size) {
 			printf("jnl: replay_journal: Could not read block list header block @ 0x%llx!\n", offset);
 			goto bad_replay;
 		}
 
-		blhdr = (block_list_header *)buf;
+		blhdr = (block_list_header *)buff;
 		
 		orig_checksum = blhdr->checksum;
 		blhdr->checksum = 0;
@@ -966,15 +1014,15 @@ replay_journal(journal *jnl)
 			checksum = calc_checksum((char *)blhdr, BLHDR_CHECKSUM_SIZE);
 		}
 		if (checksum != orig_checksum) {
-				printf("jnl: replay_journal: bad block list header @ 0x%llx (checksum 0x%x != 0x%x)\n",
-					   offset, orig_checksum, checksum);
-				goto bad_replay;
-			}
+		    printf("jnl: replay_journal: bad block list header @ 0x%llx (checksum 0x%x != 0x%x)\n",
+			   offset, orig_checksum, checksum);
+		    goto bad_replay;
+		}
 		if (   blhdr->max_blocks <= 0 || blhdr->max_blocks > 2048
 			   || blhdr->num_blocks <= 0 || blhdr->num_blocks > blhdr->max_blocks) {
-			printf("jnl: replay_journal: bad looking journal entry: max: %d num: %d\n",
-				   blhdr->max_blocks, blhdr->num_blocks);
-			goto bad_replay;
+		    printf("jnl: replay_journal: bad looking journal entry: max: %d num: %d\n",
+			   blhdr->max_blocks, blhdr->num_blocks);
+		    goto bad_replay;
 		}
 	
 		for(i=1; i < blhdr->num_blocks; i++) {
@@ -1094,7 +1142,7 @@ replay_journal(journal *jnl)
     FREE(co_buf, M_TEMP);
     co_buf = NULL;
   
-    kmem_free(kernel_map, (vm_offset_t)buf, jnl->jhdr->blhdr_size);
+    kmem_free(kernel_map, (vm_offset_t)buff, jnl->jhdr->blhdr_size);
     return 0;
 
   bad_replay:
@@ -1104,7 +1152,7 @@ replay_journal(journal *jnl)
     if (co_buf) {
       FREE(co_buf, M_TEMP);
     }
-    kmem_free(kernel_map, (vm_offset_t)buf, jnl->jhdr->blhdr_size);
+    kmem_free(kernel_map, (vm_offset_t)buff, jnl->jhdr->blhdr_size);
 
     return -1;
 }
@@ -1190,10 +1238,14 @@ journal_create(struct vnode *jvp,
 			   void         *arg)
 {
     journal *jnl;
-    int      ret, phys_blksz;
+    int      phys_blksz;
+    struct vfs_context context;
+
+    context.vc_proc = current_proc();
+    context.vc_ucred = FSCRED;
 
     /* Get the real physical block size. */
-    if (VOP_IOCTL(jvp, DKIOCGETBLOCKSIZE, (caddr_t)&phys_blksz, 0, FSCRED, NULL)) {
+    if (VNOP_IOCTL(jvp, DKIOCGETBLOCKSIZE, (caddr_t)&phys_blksz, 0, &context)) {
 		return NULL;
     }
 
@@ -1218,7 +1270,7 @@ journal_create(struct vnode *jvp,
     jnl->flush        = flush;
     jnl->flush_arg    = arg;
     jnl->flags        = (flags & JOURNAL_OPTION_FLAGS_MASK);
-	simple_lock_init(&jnl->old_start_lock);
+    lck_mtx_init(&jnl->old_start_lock, jnl_mutex_group, jnl_lock_attr);
 	
     if (kmem_alloc(kernel_map, (vm_offset_t *)&jnl->header_buf, phys_blksz)) {
 		printf("jnl: create: could not allocate space for header buffer (%d bytes)\n", phys_blksz);
@@ -1242,7 +1294,7 @@ journal_create(struct vnode *jvp,
     // jnl->jhdr->start = jnl->jhdr->size - (phys_blksz*3);
     // jnl->jhdr->end   = jnl->jhdr->size - (phys_blksz*3);
     
-	lockinit(&jnl->jlock, PINOD, "journal", 0, 0);
+	lck_mtx_init(&jnl->jlock, jnl_mutex_group, jnl_lock_attr);
 
     if (write_journal_header(jnl) != 0) {
 		printf("jnl: journal_create: failed to write journal header.\n");
@@ -1273,11 +1325,15 @@ journal_open(struct vnode *jvp,
 			 void         *arg)
 {
     journal *jnl;
-    int      orig_blksz=0, phys_blksz, blhdr_size;
+    int      orig_blksz=0, phys_blksz;
 	int      orig_checksum, checksum;
+    struct vfs_context context;
+
+    context.vc_proc = current_proc();
+    context.vc_ucred = FSCRED;
 
     /* Get the real physical block size. */
-    if (VOP_IOCTL(jvp, DKIOCGETBLOCKSIZE, (caddr_t)&phys_blksz, 0, FSCRED, NULL)) {
+    if (VNOP_IOCTL(jvp, DKIOCGETBLOCKSIZE, (caddr_t)&phys_blksz, 0, &context)) {
 		return NULL;
     }
 
@@ -1302,7 +1358,7 @@ journal_open(struct vnode *jvp,
     jnl->flush        = flush;
     jnl->flush_arg    = arg;
     jnl->flags        = (flags & JOURNAL_OPTION_FLAGS_MASK);
-	simple_lock_init(&jnl->old_start_lock);
+    lck_mtx_init(&jnl->old_start_lock, jnl_mutex_group, jnl_lock_attr);
 
     if (kmem_alloc(kernel_map, (vm_offset_t *)&jnl->header_buf, phys_blksz)) {
 		printf("jnl: create: could not allocate space for header buffer (%d bytes)\n", phys_blksz);
@@ -1362,7 +1418,7 @@ journal_open(struct vnode *jvp,
 
 		orig_blksz = phys_blksz;
 		phys_blksz = jnl->jhdr->jhdr_size;
-		if (VOP_IOCTL(jvp, DKIOCSETBLOCKSIZE, (caddr_t)&phys_blksz, FWRITE, FSCRED, NULL)) {
+		if (VNOP_IOCTL(jvp, DKIOCSETBLOCKSIZE, (caddr_t)&phys_blksz, FWRITE, &context)) {
 			printf("jnl: could not set block size to %d bytes.\n", phys_blksz);
 			goto bad_journal;
 		}
@@ -1420,7 +1476,7 @@ journal_open(struct vnode *jvp,
     }
 
 	if (orig_blksz != 0) {
-		VOP_IOCTL(jvp, DKIOCSETBLOCKSIZE, (caddr_t)&orig_blksz, FWRITE, FSCRED, NULL);
+		VNOP_IOCTL(jvp, DKIOCSETBLOCKSIZE, (caddr_t)&orig_blksz, FWRITE, &context);
 		phys_blksz = orig_blksz;
 		if (orig_blksz < jnl->jhdr->jhdr_size) {
 			printf("jnl: open: jhdr_size is %d but orig phys blk size is %d.  switching.\n",
@@ -1436,14 +1492,14 @@ journal_open(struct vnode *jvp,
     // set this now, after we've replayed the journal
     size_up_tbuffer(jnl, tbuffer_size, phys_blksz);
 
-	lockinit(&jnl->jlock, PINOD, "journal", 0, 0);
+	lck_mtx_init(&jnl->jlock, jnl_mutex_group, jnl_lock_attr);
 
     return jnl;
 
   bad_journal:
 	if (orig_blksz != 0) {
 		phys_blksz = orig_blksz;
-		VOP_IOCTL(jvp, DKIOCSETBLOCKSIZE, (caddr_t)&orig_blksz, FWRITE, FSCRED, NULL);
+		VNOP_IOCTL(jvp, DKIOCSETBLOCKSIZE, (caddr_t)&orig_blksz, FWRITE, &context);
 	}
     kmem_free(kernel_map, (vm_offset_t)jnl->header_buf, phys_blksz);
   bad_kmem_alloc:
@@ -1464,14 +1520,8 @@ journal_close(journal *jnl)
 	//
 	jnl->flags |= JOURNAL_CLOSE_PENDING;
 
-    if (jnl->owner != current_act()) {
-		int ret;
-
-		ret = lockmgr(&jnl->jlock, LK_EXCLUSIVE|LK_RETRY, NULL, current_proc());
-		if (ret != 0) {
-			printf("jnl: close: locking the journal (0x%x) failed %d.\n", jnl, ret);
-			return;
-		}
+    if (jnl->owner != current_thread()) {
+		lock_journal(jnl);
     }
 
     //
@@ -1619,7 +1669,7 @@ check_free_space(journal *jnl, int desired_size)
 		// entries until there is enough space for the next transaction.
 		//
 		old_start_empty = 1;
-		simple_lock(&jnl->old_start_lock);
+		lock_oldstart(jnl);
 		for(i=0; i < sizeof(jnl->old_start)/sizeof(jnl->old_start[0]); i++) {
 			int   counter;
 
@@ -1630,12 +1680,12 @@ check_free_space(journal *jnl, int desired_size)
 						  jnl->old_start[i], jnl);
 				}
 				
-				simple_unlock(&jnl->old_start_lock);
+				unlock_oldstart(jnl);
 				if (jnl->flush) {
 					jnl->flush(jnl->flush_arg);
 				}
 				tsleep((caddr_t)jnl, PRIBIO, "check_free_space1", 1);
-				simple_lock(&jnl->old_start_lock);
+				lock_oldstart(jnl);
 			}
 
 			if (jnl->old_start[i] == 0) {
@@ -1646,11 +1696,13 @@ check_free_space(journal *jnl, int desired_size)
 			jnl->jhdr->start  = jnl->old_start[i];
 			jnl->old_start[i] = 0;
 			if (free_space(jnl) > desired_size) {
+				unlock_oldstart(jnl);
 				write_journal_header(jnl);
+				lock_oldstart(jnl);
 				break;
 			}
 		}
-		simple_unlock(&jnl->old_start_lock);
+		unlock_oldstart(jnl);
 		
 		// if we bumped the start, loop and try again
 		if (i < sizeof(jnl->old_start)/sizeof(jnl->old_start[0])) {
@@ -1691,7 +1743,6 @@ journal_start_transaction(journal *jnl)
 {
     int ret;
     transaction *tr;
-	int prev_priv;
 
     CHECK_JOURNAL(jnl);
     
@@ -1699,27 +1750,23 @@ journal_start_transaction(journal *jnl)
 		return EINVAL;
     }
 
-    if (jnl->owner == current_act()) {
+    if (jnl->owner == current_thread()) {
 		if (jnl->active_tr == NULL) {
-			panic("jnl: start_tr: active_tr is NULL (jnl @ 0x%x, owner 0x%x, current_act 0x%x\n",
-				  jnl, jnl->owner, current_act());
+			panic("jnl: start_tr: active_tr is NULL (jnl @ 0x%x, owner 0x%x, current_thread 0x%x\n",
+				  jnl, jnl->owner, current_thread());
 		}
 		jnl->nested_count++;
 		return 0;
     }
 
-	ret = lockmgr(&jnl->jlock, LK_EXCLUSIVE|LK_RETRY, NULL, current_proc());
-    if (ret != 0) {
-		printf("jnl: start_tr: locking the journal (0x%x) failed %d.\n", jnl, ret);
-		return EINVAL;
-    }
+    lock_journal(jnl);
 
     if (jnl->owner != NULL || jnl->nested_count != 0 || jnl->active_tr != NULL) {
 		panic("jnl: start_tr: owner 0x%x, nested count 0x%x, active_tr 0x%x jnl @ 0x%x\n",
 			  jnl->owner, jnl->nested_count, jnl->active_tr, jnl);
     }
 
-    jnl->owner        = current_act();
+    jnl->owner        = current_thread();
     jnl->nested_count = 1;
 
     free_old_stuff(jnl);
@@ -1743,15 +1790,13 @@ journal_start_transaction(journal *jnl)
     memset(tr, 0, sizeof(transaction));
 
     tr->tbuffer_size = jnl->tbuffer_size;
-	thread_wire_internal(host_priv_self(), current_act(), TRUE, &prev_priv);
+
     if (kmem_alloc(kernel_map, (vm_offset_t *)&tr->tbuffer, tr->tbuffer_size)) {
 		FREE_ZONE(tr, sizeof(transaction), M_JNL_TR);
 		printf("jnl: start transaction failed: no tbuffer mem\n");
 		ret = ENOMEM;
-		thread_wire_internal(host_priv_self(), current_act(), prev_priv, NULL);
 		goto bad_start;
     }
-	thread_wire_internal(host_priv_self(), current_act(), prev_priv, NULL);
 
     // journal replay code checksum check depends on this.
     memset(tr->tbuffer, 0, BLHDR_CHECKSUM_SIZE);
@@ -1774,7 +1819,7 @@ journal_start_transaction(journal *jnl)
   bad_start:
 	jnl->owner        = NULL;
 	jnl->nested_count = 0;
-	lockmgr(&jnl->jlock, LK_RELEASE, NULL, current_proc());
+	unlock_journal(jnl);
 	return ret;
 }
 
@@ -1792,35 +1837,35 @@ journal_modify_block_start(journal *jnl, struct buf *bp)
 
     // XXXdbg - for debugging I want this to be true.  later it may
     //          not be necessary.
-    if ((bp->b_flags & B_META) == 0) {
+    if ((buf_flags(bp) & B_META) == 0) {
 		panic("jnl: modify_block_start: bp @ 0x%x is not a meta-data block! (jnl 0x%x)\n", bp, jnl);
     }
 
     tr = jnl->active_tr;
     CHECK_TRANSACTION(tr);
 
-    if (jnl->owner != current_act()) {
+    if (jnl->owner != current_thread()) {
 		panic("jnl: modify_block_start: called w/out a transaction! jnl 0x%x, owner 0x%x, curact 0x%x\n",
-			  jnl, jnl->owner, current_act());
+			  jnl, jnl->owner, current_thread());
     }
 
     free_old_stuff(jnl);
 
-    //printf("jnl: mod block start (bp 0x%x vp 0x%x l/blkno %d/%d bsz %d; total bytes %d)\n",
-    //   bp, bp->b_vp, bp->b_lblkno, bp->b_blkno, bp->b_bufsize, tr->total_bytes);
+    //printf("jnl: mod block start (bp 0x%x vp 0x%x l/blkno %qd/%qd bsz %d; total bytes %d)\n",
+    //   bp, buf_vnode(bp), buf_lblkno(bp), buf_blkno(bp), buf_size(bp), tr->total_bytes);
 
     // can't allow blocks that aren't an even multiple of the
     // underlying block size.
-    if ((bp->b_bufsize % jnl->jhdr->jhdr_size) != 0) {
+    if ((buf_size(bp) % jnl->jhdr->jhdr_size) != 0) {
 		panic("jnl: mod block start: bufsize %d not a multiple of block size %d\n",
-			  bp->b_bufsize, jnl->jhdr->jhdr_size);
+			  buf_size(bp), jnl->jhdr->jhdr_size);
 		return -1;
     }
 
     // make sure that this transaction isn't bigger than the whole journal
-    if (tr->total_bytes+bp->b_bufsize >= (jnl->jhdr->size - jnl->jhdr->jhdr_size)) {
+    if (tr->total_bytes+buf_size(bp) >= (jnl->jhdr->size - jnl->jhdr->jhdr_size)) {
 		panic("jnl: transaction too big (%d >= %lld bytes, bufsize %d, tr 0x%x bp 0x%x)\n",
-			  tr->total_bytes, (tr->jnl->jhdr->size - jnl->jhdr->jhdr_size), bp->b_bufsize, tr, bp);
+			  tr->total_bytes, (tr->jnl->jhdr->size - jnl->jhdr->jhdr_size), buf_size(bp), tr, bp);
 		return -1;
     }
 
@@ -1828,14 +1873,17 @@ journal_modify_block_start(journal *jnl, struct buf *bp)
     // it out before we muck with it because it has data that belongs
     // (presumably) to another transaction.
     //
-    if ((bp->b_flags & B_DELWRI) && (bp->b_flags & B_LOCKED) == 0) {
+    if ((buf_flags(bp) & (B_DELWRI | B_LOCKED)) == B_DELWRI) {
 
-		// this will cause it to not be brelse()'d
-		bp->b_flags |= B_NORELSE;
-		VOP_BWRITE(bp);
+		if (buf_flags(bp) & B_ASYNC) {
+			panic("modify_block_start: bp @ 0x% has async flag set!\n", bp);
+		}
+
+		// this will cause it to not be buf_brelse()'d
+                buf_setflags(bp, B_NORELSE);
+		VNOP_BWRITE(bp);
     }
-
-    bp->b_flags |= B_LOCKED;
+    buf_setflags(bp, B_LOCKED);
 	
     return 0;
 }
@@ -1853,11 +1901,11 @@ journal_modify_block_abort(journal *jnl, struct buf *bp)
 	
 	//
 	// if there's no active transaction then we just want to
-	// call brelse() and return since this is just a block
+	// call buf_brelse() and return since this is just a block
 	// that happened to be modified as part of another tr.
 	//
 	if (tr == NULL) {
-		brelse(bp);
+		buf_brelse(bp);
 		return 0;
 	}
 
@@ -1867,9 +1915,9 @@ journal_modify_block_abort(journal *jnl, struct buf *bp)
 
     CHECK_TRANSACTION(tr);
     
-    if (jnl->owner != current_act()) {
+    if (jnl->owner != current_thread()) {
 		panic("jnl: modify_block_abort: called w/out a transaction! jnl 0x%x, owner 0x%x, curact 0x%x\n",
-			  jnl, jnl->owner, current_act());
+			  jnl, jnl->owner, current_thread());
     }
 
     free_old_stuff(jnl);
@@ -1880,9 +1928,9 @@ journal_modify_block_abort(journal *jnl, struct buf *bp)
     for(blhdr=tr->blhdr; blhdr; blhdr=(block_list_header *)((long)blhdr->binfo[0].bnum)) {
 		for(i=1; i < blhdr->num_blocks; i++) {
 			if (bp == blhdr->binfo[i].bp) {
-				if (bp->b_bufsize != blhdr->binfo[i].bsize) {
+				if (buf_size(bp) != blhdr->binfo[i].bsize) {
 					panic("jnl: bp @ 0x%x changed size on me! (%d vs. %d, jnl 0x%x)\n",
-						  bp, bp->b_bufsize, blhdr->binfo[i].bsize, jnl);
+						  bp, buf_size(bp), blhdr->binfo[i].bsize, jnl);
 				}
 				break;
 			}
@@ -1901,10 +1949,10 @@ journal_modify_block_abort(journal *jnl, struct buf *bp)
 	// on it and so we need to keep it locked in memory.
 	//
 	if (blhdr == NULL) { 
-		bp->b_flags &= ~(B_LOCKED);
+	          buf_clearflags(bp, B_LOCKED);
 	}
 
-    brelse(bp);
+    buf_brelse(bp);
     return 0;
 }
 
@@ -1926,19 +1974,18 @@ journal_modify_block_end(journal *jnl, struct buf *bp)
     tr = jnl->active_tr;
     CHECK_TRANSACTION(tr);
 
-    if (jnl->owner != current_act()) {
+    if (jnl->owner != current_thread()) {
 		panic("jnl: modify_block_end: called w/out a transaction! jnl 0x%x, owner 0x%x, curact 0x%x\n",
-			  jnl, jnl->owner, current_act());
+			  jnl, jnl->owner, current_thread());
     }
 
     free_old_stuff(jnl);
 
-    //printf("jnl: mod block end:  (bp 0x%x vp 0x%x l/blkno %d/%d bsz %d, total bytes %d)\n", 
-    //   bp, bp->b_vp, bp->b_lblkno, bp->b_blkno, bp->b_bufsize, tr->total_bytes);
+    //printf("jnl: mod block end:  (bp 0x%x vp 0x%x l/blkno %qd/%qd bsz %d, total bytes %d)\n", 
+    //   bp, buf_vnode(bp), buf_lblkno(bp), buf_blkno(bp), buf_size(bp), tr->total_bytes);
 
-    if ((bp->b_flags & B_LOCKED) == 0) {
+    if ((buf_flags(bp) & B_LOCKED) == 0) {
 		panic("jnl: modify_block_end: bp 0x%x not locked! jnl @ 0x%x\n", bp, jnl);
-		bp->b_flags |= B_LOCKED;
     }
 	 
     // first check if it's already part of this transaction
@@ -1947,9 +1994,9 @@ journal_modify_block_end(journal *jnl, struct buf *bp)
 
 		for(i=1; i < blhdr->num_blocks; i++) {
 			if (bp == blhdr->binfo[i].bp) {
-				if (bp->b_bufsize != blhdr->binfo[i].bsize) {
+				if (buf_size(bp) != blhdr->binfo[i].bsize) {
 					panic("jnl: bp @ 0x%x changed size on me! (%d vs. %d, jnl 0x%x)\n",
-						  bp, bp->b_bufsize, blhdr->binfo[i].bsize, jnl);
+						  bp, buf_size(bp), blhdr->binfo[i].bsize, jnl);
 				}
 				break;
 			}
@@ -1964,11 +2011,10 @@ journal_modify_block_end(journal *jnl, struct buf *bp)
     if (blhdr == NULL
 		&& prev
 		&& (prev->num_blocks+1) <= prev->max_blocks
-		&& (prev->bytes_used+bp->b_bufsize) <= tr->tbuffer_size) {
+		&& (prev->bytes_used+buf_size(bp)) <= tr->tbuffer_size) {
 		blhdr = prev;
     } else if (blhdr == NULL) {
 		block_list_header *nblhdr;
-		int prev_priv;
 
 		if (prev == NULL) {
 			panic("jnl: modify block end: no way man, prev == NULL?!?, jnl 0x%x, bp 0x%x\n", jnl, bp);
@@ -1981,12 +2027,10 @@ journal_modify_block_end(journal *jnl, struct buf *bp)
 		// through prev->binfo[0].bnum.  that's a skanky way to do things but
 		// avoids having yet another linked list of small data structures to manage.
 
-		thread_wire_internal(host_priv_self(), current_act(), TRUE, &prev_priv);
 		if (kmem_alloc(kernel_map, (vm_offset_t *)&nblhdr, tr->tbuffer_size)) {
 			panic("jnl: end_tr: no space for new block tr @ 0x%x (total bytes: %d)!\n",
 				  tr, tr->total_bytes);
 		}
-		thread_wire_internal(host_priv_self(), current_act(), prev_priv, NULL);
 
 		// journal replay code checksum check depends on this.
 		memset(nblhdr, 0, BLHDR_CHECKSUM_SIZE);
@@ -2015,23 +2059,27 @@ journal_modify_block_end(journal *jnl, struct buf *bp)
 
     // copy the data into the in-memory transaction buffer
     blkptr = (char *)&((char *)blhdr)[tbuffer_offset];
-    memcpy(blkptr, bp->b_data, bp->b_bufsize);
+    memcpy(blkptr, buf_dataptr(bp), buf_size(bp));
 
     // if this is true then this is a new block we haven't seen
     if (i >= blhdr->num_blocks) {
-		vget(bp->b_vp, 0, current_proc());
+                int	bsize;
+		vnode_t	vp;
 
-		blhdr->binfo[i].bnum  = (off_t)((unsigned)bp->b_blkno);
-		blhdr->binfo[i].bsize = bp->b_bufsize;
+		vp = buf_vnode(bp);
+		vnode_ref(vp);
+		bsize = buf_size(bp);
+
+		blhdr->binfo[i].bnum  = (off_t)(buf_blkno(bp));
+		blhdr->binfo[i].bsize = bsize;
 		blhdr->binfo[i].bp    = bp;
 
-		blhdr->bytes_used += bp->b_bufsize;
-		tr->total_bytes   += bp->b_bufsize;
+		blhdr->bytes_used += bsize;
+		tr->total_bytes   += bsize;
 
 		blhdr->num_blocks++;
     }
-
-    bdwrite(bp);
+    buf_bdwrite(bp);
 
     return 0;
 }
@@ -2040,6 +2088,7 @@ int
 journal_kill_block(journal *jnl, struct buf *bp)
 {
     int                i;
+    int		       bflags;
     block_list_header *blhdr;
     transaction       *tr;
 
@@ -2052,44 +2101,49 @@ journal_kill_block(journal *jnl, struct buf *bp)
     tr = jnl->active_tr;
     CHECK_TRANSACTION(tr);
 
-    if (jnl->owner != current_act()) {
+    if (jnl->owner != current_thread()) {
 		panic("jnl: modify_block_end: called w/out a transaction! jnl 0x%x, owner 0x%x, curact 0x%x\n",
-			  jnl, jnl->owner, current_act());
+			  jnl, jnl->owner, current_thread());
     }
 
     free_old_stuff(jnl);
 
-    if ((bp->b_flags & B_LOCKED) == 0) {
-		panic("jnl: kill block: bp 0x%x not locked! jnl @ 0x%x\n", bp, jnl);
-    }
+    bflags = buf_flags(bp);
 
+    if ( !(bflags & B_LOCKED))
+            panic("jnl: modify_block_end: called with bp not B_LOCKED");
+
+    /*
+     * bp must be BL_BUSY and B_LOCKED
+     */
     // first check if it's already part of this transaction
     for(blhdr=tr->blhdr; blhdr; blhdr=(block_list_header *)((long)blhdr->binfo[0].bnum)) {
 
 		for(i=1; i < blhdr->num_blocks; i++) {
 			if (bp == blhdr->binfo[i].bp) {
-				bp->b_flags &= ~B_LOCKED;
+			        vnode_t vp;
 
-				// this undoes the vget() in journal_modify_block_end()
-				vrele(bp->b_vp);
+				buf_clearflags(bp, B_LOCKED);
 
-				// if the block has the DELWRI and CALL bits sets, then
+				// this undoes the vnode_ref() in journal_modify_block_end()
+				vp = buf_vnode(bp);
+				vnode_rele_ext(vp, 0, 1);
+
+				// if the block has the DELWRI and FILTER bits sets, then
 				// things are seriously weird.  if it was part of another
 				// transaction then journal_modify_block_start() should
 				// have force it to be written.
 				//
-				if ((bp->b_flags & B_DELWRI) && (bp->b_flags & B_CALL)) {
-					panic("jnl: kill block: this defies all logic! bp 0x%x\n", bp);
-				} else {
-					tr->num_killed += bp->b_bufsize;
-				}
-
-				if (bp->b_flags & B_BUSY) {
-					brelse(bp);
-				}
-
+				//if ((bflags & B_DELWRI) && (bflags & B_FILTER)) {
+				//	panic("jnl: kill block: this defies all logic! bp 0x%x\n", bp);
+				//} else {
+					tr->num_killed += buf_size(bp);
+				//}
 				blhdr->binfo[i].bp   = NULL;
 				blhdr->binfo[i].bnum = (off_t)-1;
+
+				buf_brelse(bp);
+
 				break;
 			}
 		}
@@ -2106,9 +2160,9 @@ journal_kill_block(journal *jnl, struct buf *bp)
 static int
 journal_binfo_cmp(void *a, void *b)
 {
-    block_info *bi_a = (struct block_info *)a,
- *bi_b = (struct block_info *)b;
-    daddr_t res;
+    block_info *bi_a = (struct block_info *)a;
+    block_info *bi_b = (struct block_info *)b;
+    daddr64_t res;
 
     if (bi_a->bp == NULL) {
 		return 1;
@@ -2120,7 +2174,7 @@ journal_binfo_cmp(void *a, void *b)
     // don't have to worry about negative block
     // numbers so this is ok to do.
     //
-    res = (bi_a->bp->b_blkno - bi_b->bp->b_blkno);
+    res = (buf_blkno(bi_a->bp) - buf_blkno(bi_b->bp));
 
     return (int)res;
 }
@@ -2130,6 +2184,7 @@ static int
 end_transaction(transaction *tr, int force_it)
 {
     int                 i, j, ret, amt;
+    errno_t		errno;
     off_t               end;
     journal            *jnl = tr->jnl;
     struct buf         *bp;
@@ -2144,7 +2199,7 @@ end_transaction(transaction *tr, int force_it)
     // just save off the transaction pointer and return.
     if (tr->total_bytes == jnl->jhdr->blhdr_size) {
 		jnl->cur_tr = tr;
-		return;
+		return 0;
     }
 
     // if our transaction buffer isn't very full, just hang
@@ -2159,7 +2214,7 @@ end_transaction(transaction *tr, int force_it)
 		   && (tr->total_bytes <= ((tr->tbuffer_size*tr->num_blhdrs) - tr->tbuffer_size/8))) {
 
 		jnl->cur_tr = tr;
-		return;
+		return 0;
     }
 
 
@@ -2182,10 +2237,10 @@ end_transaction(transaction *tr, int force_it)
 	// file system flush routine until it is (or we panic).
 	//
 	i = 0;
-	simple_lock(&jnl->old_start_lock);
+	lock_oldstart(jnl);
 	while ((jnl->old_start[0] & 0x8000000000000000LL) != 0) {
 		if (jnl->flush) {
-			simple_unlock(&jnl->old_start_lock);
+			unlock_oldstart(jnl);
 
 			if (jnl->flush) {
 				jnl->flush(jnl->flush_arg);
@@ -2194,9 +2249,9 @@ end_transaction(transaction *tr, int force_it)
 			// yield the cpu so others can get in to clear the lock bit
 			(void)tsleep((void *)jnl, PRIBIO, "jnl-old-start-sleep", 1);
 
-			simple_lock(&jnl->old_start_lock);
+			lock_oldstart(jnl);
 		}
-		if (i++ >= 100) {
+		if (i++ >= 500) {
 			panic("jnl: transaction that started at 0x%llx is not completing! jnl 0x%x\n",
 				  jnl->old_start[0] & (~0x8000000000000000LL), jnl);
 		}
@@ -2209,14 +2264,17 @@ end_transaction(transaction *tr, int force_it)
 	memcpy(&jnl->old_start[0], &jnl->old_start[1], sizeof(jnl->old_start)-sizeof(jnl->old_start[0]));
 	jnl->old_start[sizeof(jnl->old_start)/sizeof(jnl->old_start[0]) - 1] = tr->journal_start | 0x8000000000000000LL;
 
-	simple_unlock(&jnl->old_start_lock);
+	unlock_oldstart(jnl);
 
 
     // for each block, make sure that the physical block # is set
     for(blhdr=tr->blhdr; blhdr; blhdr=next) {
 
 		for(i=1; i < blhdr->num_blocks; i++) {
-	    
+		        daddr64_t blkno;
+		        daddr64_t lblkno;
+			struct vnode *vp;
+
 			bp = blhdr->binfo[i].bp;
 			if (bp == NULL) {   // only true if a block was "killed" 
 				if (blhdr->binfo[i].bnum != (off_t)-1) {
@@ -2225,25 +2283,40 @@ end_transaction(transaction *tr, int force_it)
 				}
 				continue;
 			}
+			vp = buf_vnode(bp);
+			blkno = buf_blkno(bp);
+			lblkno = buf_lblkno(bp);
 
-			if (bp->b_vp == NULL && bp->b_lblkno == bp->b_blkno) {
-				panic("jnl: end_tr: DANGER! bp @ 0x%x w/null vp and l/blkno = %d/%d\n",
-					  bp, bp->b_lblkno, bp->b_blkno);
+			if (vp == NULL && lblkno == blkno) {
+			    printf("jnl: end_tr: bad news! bp @ 0x%x w/null vp and l/blkno = %qd/%qd.  aborting the transaction (tr 0x%x jnl 0x%x).\n",
+					  bp, lblkno, blkno, tr, jnl);
+			    goto bad_journal;
 			}
 	    
 			// if the lblkno is the same as blkno and this bp isn't
 			// associated with the underlying file system device then
 			// we need to call bmap() to get the actual physical block.
 			//
-			if ((bp->b_lblkno == bp->b_blkno) && (bp->b_vp != jnl->fsdev)) {
-				if (VOP_BMAP(bp->b_vp, bp->b_lblkno, NULL, &bp->b_blkno, NULL) != 0) {
-					printf("jnl: end_tr: can't bmap the bp @ 0x%x, jnl 0x%x\n", bp, jnl);
+			if ((lblkno == blkno) && (vp != jnl->fsdev)) {
+			        off_t	f_offset;
+				size_t 	contig_bytes;
+
+				if (VNOP_BLKTOOFF(vp, lblkno, &f_offset)) {
+					printf("jnl: end_tr: vnop_blktooff failed @ 0x%x, jnl 0x%x\n", bp, jnl);
 					goto bad_journal;
 				}
+				if (VNOP_BLOCKMAP(vp, f_offset, buf_count(bp), &blkno, &contig_bytes, NULL, 0, NULL)) {
+					printf("jnl: end_tr: can't blockmap the bp @ 0x%x, jnl 0x%x\n", bp, jnl);
+					goto bad_journal;
+				}
+				if ((uint32_t)contig_bytes < buf_count(bp)) {
+					printf("jnl: end_tr: blk not physically contiguous on disk@ 0x%x, jnl 0x%x\n", bp, jnl);
+					goto bad_journal;
+				}
+				buf_setblkno(bp, blkno);
 			}
-	    
 			// update this so we write out the correct physical block number!
-			blhdr->binfo[i].bnum = (off_t)((unsigned)bp->b_blkno);
+			blhdr->binfo[i].bnum = (off_t)(blkno);
 		}
 
 		next = (block_list_header *)((long)blhdr->binfo[0].bnum);
@@ -2301,53 +2374,52 @@ end_transaction(transaction *tr, int force_it)
 				continue;
 			}
 
-			ret = meta_bread(blhdr->binfo[i].bp->b_vp,
-							 (daddr_t)blhdr->binfo[i].bp->b_lblkno,
-							 blhdr->binfo[i].bp->b_bufsize,
+			errno = buf_meta_bread(buf_vnode(blhdr->binfo[i].bp),
+							 buf_lblkno(blhdr->binfo[i].bp),
+							 buf_size(blhdr->binfo[i].bp),
 							 NOCRED,
 							 &bp);
-			if (ret == 0 && bp != NULL) {
+			if (errno == 0 && bp != NULL) {
 				struct vnode *save_vp;
-		
+				void *cur_filter;
+
 				if (bp != blhdr->binfo[i].bp) {
 					panic("jnl: end_tr: got back a different bp! (bp 0x%x should be 0x%x, jnl 0x%x\n",
 						  bp, blhdr->binfo[i].bp, jnl);
 				}
 
-				if ((bp->b_flags & (B_LOCKED|B_DELWRI)) != (B_LOCKED|B_DELWRI)) {
+				if ((buf_flags(bp) & (B_LOCKED|B_DELWRI)) != (B_LOCKED|B_DELWRI)) {
 					if (jnl->flags & JOURNAL_CLOSE_PENDING) {
-						brelse(bp);
+					    buf_clearflags(bp, B_LOCKED);
+					    buf_brelse(bp);
 						continue;
 					} else {
-						panic("jnl: end_tr: !!!DANGER!!! bp 0x%x flags (0x%x) not LOCKED & DELWRI\n", bp, bp->b_flags);
+						panic("jnl: end_tr: !!!DANGER!!! bp 0x%x flags (0x%x) not LOCKED & DELWRI\n", bp, buf_flags(bp));
 					}
 				}
+				save_vp = buf_vnode(bp);
 
-				if (bp->b_iodone != NULL) {
-					panic("jnl: bp @ 0x%x (blkno %d, vp 0x%x) has non-null iodone (0x%x) buffflushcb 0x%x\n",
-						  bp, bp->b_blkno, bp->b_vp, bp->b_iodone, buffer_flushed_callback);
+				buf_setfilter(bp, buffer_flushed_callback, tr, &cur_filter, NULL);
+
+				if (cur_filter) {
+					panic("jnl: bp @ 0x%x (blkno %qd, vp 0x%x) has non-null iodone (0x%x) buffflushcb 0x%x\n",
+						  bp, buf_blkno(bp), save_vp, cur_filter, buffer_flushed_callback);
 				}
-
-				save_vp = bp->b_vp;
-
-				bp->b_iodone       = buffer_flushed_callback;
-				bp->b_transaction  = tr;
-				bp->b_flags       |= B_CALL;
-				bp->b_flags       &= ~(B_LOCKED);
+				buf_clearflags(bp, B_LOCKED);
 
 				// kicking off the write here helps performance
-				bawrite(bp);
-				// XXXdbg this is good for testing: bdwrite(bp);
-				//bdwrite(bp);
+				buf_bawrite(bp);
+				// XXXdbg this is good for testing: buf_bdwrite(bp);
+				//buf_bdwrite(bp);
 				
-				// this undoes the vget() in journal_modify_block_end()
-				vrele(save_vp);
-
+				// this undoes the vnode_ref() in journal_modify_block_end()
+				vnode_rele_ext(save_vp, 0, 1);
 			} else {
 				printf("jnl: end_transaction: could not find block %Ld vp 0x%x!\n",
 					   blhdr->binfo[i].bnum, blhdr->binfo[i].bp);
 				if (bp) {
-					brelse(bp);
+					buf_clearflags(bp, B_LOCKED);
+					buf_brelse(bp);
 				}
 			}
 		}
@@ -2366,6 +2438,7 @@ end_transaction(transaction *tr, int force_it)
 
   bad_journal:
     jnl->flags |= JOURNAL_INVALID;
+    jnl->old_start[sizeof(jnl->old_start)/sizeof(jnl->old_start[0]) - 1] &= ~0x8000000000000000LL;
     abort_transaction(jnl, tr);
     return -1;
 }
@@ -2373,7 +2446,8 @@ end_transaction(transaction *tr, int force_it)
 static void
 abort_transaction(journal *jnl, transaction *tr)
 {
-    int                i, ret;
+    int                i;
+    errno_t		errno;
     block_list_header *blhdr, *next;
     struct buf        *bp;
     struct vnode      *save_vp;
@@ -2389,33 +2463,35 @@ abort_transaction(journal *jnl, transaction *tr)
 			if (blhdr->binfo[i].bp == NULL) {
 				continue;
 			}
-	    
-			ret = meta_bread(blhdr->binfo[i].bp->b_vp,
-							 (daddr_t)blhdr->binfo[i].bp->b_lblkno,
-							 blhdr->binfo[i].bp->b_bufsize,
+			if ( (buf_vnode(blhdr->binfo[i].bp) == NULL) ||
+			     !(buf_flags(blhdr->binfo[i].bp) & B_LOCKED) ) {
+			        continue;
+			}
+
+			errno = buf_meta_bread(buf_vnode(blhdr->binfo[i].bp),
+							 buf_lblkno(blhdr->binfo[i].bp),
+							 buf_size(blhdr->binfo[i].bp),
 							 NOCRED,
 							 &bp);
-			if (ret == 0) {
+			if (errno == 0) {
 				if (bp != blhdr->binfo[i].bp) {
 					panic("jnl: abort_tr: got back a different bp! (bp 0x%x should be 0x%x, jnl 0x%x\n",
 						  bp, blhdr->binfo[i].bp, jnl);
 				}
 
-				// clear the locked bit and the delayed-write bit.  we
-				// don't want these blocks going to disk.
-				bp->b_flags &= ~(B_LOCKED|B_DELWRI);
-				bp->b_flags |= B_INVAL;
-				save_vp = bp->b_vp;
+				// releasing a bp marked invalid
+				// also clears the locked and delayed state
+				buf_markinvalid(bp);
+				save_vp = buf_vnode(bp);
 
-				brelse(bp);
+				buf_brelse(bp);
 
-				vrele(save_vp);
-
+				vnode_rele_ext(save_vp, 0, 1);
 			} else {
 				printf("jnl: abort_tr: could not find block %Ld vp 0x%x!\n",
 					   blhdr->binfo[i].bnum, blhdr->binfo[i].bp);
 				if (bp) {
-					brelse(bp);
+					buf_brelse(bp);
 				}
 			}
 		}
@@ -2438,7 +2514,7 @@ int
 journal_end_transaction(journal *jnl)
 {
     int ret;
-    transaction *tr;
+	transaction *tr;
     
     CHECK_JOURNAL(jnl);
 
@@ -2446,9 +2522,9 @@ journal_end_transaction(journal *jnl)
 		return 0;
 	}
 
-    if (jnl->owner != current_act()) {
+    if (jnl->owner != current_thread()) {
 		panic("jnl: end_tr: I'm not the owner! jnl 0x%x, owner 0x%x, curact 0x%x\n",
-			  jnl, jnl->owner, current_act());
+			  jnl, jnl->owner, current_thread());
     }
 
     free_old_stuff(jnl);
@@ -2462,8 +2538,6 @@ journal_end_transaction(journal *jnl)
     
     if (jnl->flags & JOURNAL_INVALID) {
 		if (jnl->active_tr) {
-			transaction *tr;
-
 			if (jnl->cur_tr != NULL) {
 				panic("jnl: journal @ 0x%x has active tr (0x%x) and cur tr (0x%x)\n",
 					  jnl, jnl->active_tr, jnl->cur_tr);
@@ -2475,7 +2549,7 @@ journal_end_transaction(journal *jnl)
 		}
 
 		jnl->owner = NULL;
-		lockmgr(&jnl->jlock, LK_RELEASE, NULL, current_proc());
+		unlock_journal(jnl);
 
 		return EINVAL;
     }
@@ -2492,7 +2566,7 @@ journal_end_transaction(journal *jnl)
     ret = end_transaction(tr, 0);
 
     jnl->owner = NULL;
-	lockmgr(&jnl->jlock, LK_RELEASE, NULL, current_proc());
+    unlock_journal(jnl);
 
     return ret;
 }
@@ -2509,14 +2583,10 @@ journal_flush(journal *jnl)
 		return -1;
     }
 
-    if (jnl->owner != current_act()) {
+    if (jnl->owner != current_thread()) {
 		int ret;
 
-		ret = lockmgr(&jnl->jlock, LK_EXCLUSIVE|LK_RETRY, NULL, current_proc());
-		if (ret != 0) {
-			printf("jnl: flush: locking the journal (0x%x) failed %d.\n", jnl, ret);
-			return -1;
-		}
+		lock_journal(jnl);
 		need_signal = 1;
     }
 
@@ -2531,7 +2601,7 @@ journal_flush(journal *jnl)
     }
 
     if (need_signal) {
-		lockmgr(&jnl->jlock, LK_RELEASE, NULL, current_proc());
+		unlock_journal(jnl);
     }
 
     return 0;
@@ -2545,4 +2615,10 @@ journal_active(journal *jnl)
     }
     
     return (jnl->active_tr == NULL) ? 0 : 1;
+}
+
+void *
+journal_owner(journal *jnl)
+{
+    return jnl->owner;
 }

@@ -25,19 +25,20 @@
  *	cpu specific routines
  */
 
-#include <kern/machine.h>
+#include <kern/kalloc.h>
 #include <kern/misc_protos.h>
-#include <kern/cpu_data.h>
-#include <kern/cpu_number.h>
-#include <kern/processor.h>
+#include <kern/machine.h>
 #include <mach/processor_info.h>
+#include <i386/mp.h>
 #include <i386/machine_cpu.h>
 #include <i386/machine_routines.h>
-#include <i386/mp_desc.h>
+#include <i386/pmap.h>
+#include <i386/misc_protos.h>
+#include <i386/cpu_threads.h>
+#include <vm/vm_kern.h>
 
-cpu_data_t	cpu_data[NCPUS];
-int		real_ncpus = 0;
-int		wncpu = NCPUS;
+
+struct processor	processor_master;
 
 /*ARGSUSED*/
 kern_return_t
@@ -46,15 +47,16 @@ cpu_control(
 	processor_info_t	info,
 	unsigned int		count)
 {
-	printf("cpu_control not implemented\n");
+	printf("cpu_control(%d,0x%x,%d) not implemented\n",
+		slot_num, info, count);
 	return (KERN_FAILURE);
 }
 
 /*ARGSUSED*/
 kern_return_t
 cpu_info_count(
-        processor_flavor_t      flavor,
-	unsigned int		*count)
+        __unused processor_flavor_t      flavor,
+	unsigned int			*count)
 {
 	*count = 0;
 	return (KERN_FAILURE);
@@ -68,80 +70,35 @@ cpu_info(
 	processor_info_t	info,
 	unsigned int		*count)
 {
-	printf("cpu_info not implemented\n");
+	printf("cpu_info(%d,%d,0x%x,0x%x) not implemented\n",
+		flavor, slot_num, info, count);
 	return (KERN_FAILURE);
 }
 
 void
-cpu_sleep()
+cpu_sleep(void)
 {
-	printf("cpu_sleep not implemented\n");
+	cpu_data_t	*proc_info = current_cpu_datap();
+
+	PE_cpu_machine_quiesce(proc_info->cpu_id);
+
+	cpu_thread_halt();
 }
 
 void
-cpu_init()
+cpu_init(void)
 {
-	int	my_cpu = get_cpu_number();
+	cpu_data_t	*cdp = current_cpu_datap();
 
-	machine_slot[my_cpu].is_cpu = TRUE;
-	machine_slot[my_cpu].running = TRUE;
 #ifdef	MACH_BSD
 	/* FIXME */
-	machine_slot[my_cpu].cpu_type = CPU_TYPE_I386;
-	machine_slot[my_cpu].cpu_subtype = CPU_SUBTYPE_PENTPRO;
+	cdp->cpu_type = CPU_TYPE_I386;
+	cdp->cpu_subtype = CPU_SUBTYPE_PENTPRO;
 #else
-	machine_slot[my_cpu].cpu_type = cpuid_cputype(0);
-	machine_slot[my_cpu].cpu_subtype = CPU_SUBTYPE_AT386;
+	cdp->cpu_type = cpuid_cputype(0);
+	cdp->cpu_subtype = CPU_SUBTYPE_AT386;
 #endif
-
-#if	NCPUS > 1
-	mp_desc_init(my_cpu);
-#endif	/* NCPUS */
-}
-
-kern_return_t
-cpu_register(
-	int *target_cpu)
-{
-	int cpu;
-
-	if (real_ncpus == 0) {
-		/*
-		 * Special case for the boot processor,
-		 * it has been pre-registered by cpu_init(); 
-		 */
-		*target_cpu = 0;
-		real_ncpus++;
-		return KERN_SUCCESS;
-	}
-
-	/* 
-	 * TODO: 
-	 * - Run cpu_register() in exclusion mode 
-	 */
-
-	*target_cpu = -1;
-	for(cpu=0; cpu < wncpu; cpu++) {
-		if(!machine_slot[cpu].is_cpu) {
-			machine_slot[cpu].is_cpu = TRUE;
-#ifdef	MACH_BSD
-			/* FIXME */
-			machine_slot[cpu].cpu_type = CPU_TYPE_I386;
-			machine_slot[cpu].cpu_subtype = CPU_SUBTYPE_PENTPRO;
-#else
-			machine_slot[cpu].cpu_type = cpuid_cputype(0);
-			machine_slot[cpu].cpu_subtype = CPU_SUBTYPE_AT386;
-#endif
-			*target_cpu = cpu;
-			break;
-		}
-	}
-
-	if (*target_cpu != -1) {
-		real_ncpus++;
-		return KERN_SUCCESS;
-	} else
-		return KERN_FAILURE;
+	cdp->cpu_running = TRUE;
 }
 
 kern_return_t
@@ -151,9 +108,7 @@ cpu_start(
 	kern_return_t		ret;
 
 	if (cpu == cpu_number()) {
-		PE_cpu_machine_init(cpu_data[cpu].cpu_id, TRUE);
-		ml_init_interrupt();
-		cpu_data[cpu].cpu_status = 1;
+		cpu_machine_init();
 		return KERN_SUCCESS;
 	} else {
 		/*
@@ -166,14 +121,101 @@ cpu_start(
 }
 
 void
+cpu_exit_wait(
+	__unused int cpu)
+{
+}
+
+void
 cpu_machine_init(
 	void)
 {
 	int	cpu;
 
 	cpu = get_cpu_number();
-	PE_cpu_machine_init(cpu_data[cpu].cpu_id, TRUE);
+	PE_cpu_machine_init(cpu_datap(cpu)->cpu_id, TRUE);
+
 	ml_init_interrupt();
-	cpu_data[cpu].cpu_status = 1;
 }
 
+processor_t
+cpu_processor_alloc(boolean_t is_boot_cpu)
+{
+	int		ret;
+	processor_t	proc;
+
+	if (is_boot_cpu)
+		return &processor_master;
+
+	ret = kmem_alloc(kernel_map, (vm_offset_t *) &proc, sizeof(*proc));
+	if (ret != KERN_SUCCESS)
+		return NULL;
+
+	bzero((void *) proc, sizeof(*proc));
+	return proc;
+}
+
+void
+cpu_processor_free(processor_t proc)
+{
+	if (proc != NULL && proc != &processor_master)
+		kfree((void *) proc, sizeof(*proc));
+}
+
+processor_t
+current_processor(void)
+{
+	return current_cpu_datap()->cpu_processor;
+}
+
+processor_t
+cpu_to_processor(
+	int			cpu)
+{
+	return cpu_datap(cpu)->cpu_processor;
+}
+
+ast_t *
+ast_pending(void)
+{
+	return (&current_cpu_datap()->cpu_pending_ast);
+}
+
+cpu_type_t
+slot_type(
+	int		slot_num)
+{
+	return (cpu_datap(slot_num)->cpu_type);
+}
+
+cpu_subtype_t
+slot_subtype(
+	int		slot_num)
+{
+	return (cpu_datap(slot_num)->cpu_subtype);
+}
+
+cpu_threadtype_t
+slot_threadtype(
+	int		slot_num)
+{
+	return (cpu_datap(slot_num)->cpu_threadtype);
+}
+
+cpu_type_t
+cpu_type(void)
+{
+	return (current_cpu_datap()->cpu_type);
+}
+
+cpu_subtype_t
+cpu_subtype(void)
+{
+	return (current_cpu_datap()->cpu_subtype);
+}
+
+cpu_threadtype_t
+cpu_threadtype(void)
+{
+	return (current_cpu_datap()->cpu_threadtype);
+}

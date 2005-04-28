@@ -29,26 +29,39 @@
 #define _BSD_I386_SETJMP_H
 
 #include <sys/cdefs.h>
-#include <i386/signal.h>
+#include <machine/signal.h>
 
+/*
+ * _JBLEN is number of ints required to save the following:
+ * eax, ebx, ecx, edx, edi, esi, ebp, esp, ss, eflags, eip,
+ * cs, de, es, fs, gs == 16 ints
+ * onstack, mask = 2 ints
+ */
+
+#if defined(KERNEL)
 typedef struct sigcontext jmp_buf[1];
-
 #define _JBLEN ((sizeof(struct sigcontext)) / sizeof(int))
 typedef int sigjmp_buf[_JBLEN+1];
+#else
+#define _JBLEN (18)
+typedef int jmp_buf[_JBLEN];
+typedef int sigjmp_buf[_JBLEN + 1];
+#endif
+
 
 __BEGIN_DECLS
-extern int setjmp __P((jmp_buf env));
-extern void longjmp __P((jmp_buf env, int val));
+extern int setjmp(jmp_buf env);
+extern void longjmp(jmp_buf env, int val);
 
 #ifndef _ANSI_SOURCE
-int sigsetjmp __P((sigjmp_buf env, int val));
-void siglongjmp __P((sigjmp_buf env, int val));
+int	_setjmp(jmp_buf env);
+void	_longjmp(jmp_buf, int val);
+int sigsetjmp(sigjmp_buf env, int val);
+void siglongjmp(sigjmp_buf env, int val);
 #endif /* _ANSI_SOURCE  */
 
-#if !defined(_ANSI_SOURCE) && !defined(_POSIX_SOURCE)
-int	_setjmp __P((jmp_buf env));
-void	_longjmp __P((jmp_buf, int val));
-void	longjmperror __P((void));
+#if !defined(_ANSI_SOURCE) && !defined(_POSIX_C_SOURCE)
+void	longjmperror(void);
 #endif /* neither ANSI nor POSIX */
 __END_DECLS
 #endif /* !_BSD_I386_SETJMP_H */

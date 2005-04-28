@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -19,23 +19,25 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
+
+#ifdef	KERNEL_PRIVATE
+
 #ifndef _KERN_WAIT_QUEUE_H_
 #define _KERN_WAIT_QUEUE_H_
 
-#include <sys/appleapiopts.h>
-
-#ifdef	__APPLE_API_PRIVATE
-
+#include <mach/mach_types.h>
 #include <mach/sync_policy.h>
 #include <mach/kern_return.h>		/* for kern_return_t */
 
 #include <kern/kern_types.h>		/* for wait_queue_t */
 
-#ifdef MACH_KERNEL_PRIVATE
+#include <sys/cdefs.h>
+
+#ifdef	MACH_KERNEL_PRIVATE
 
 #include <kern/lock.h>
 #include <kern/queue.h>
-
+#include <machine/cpu_number.h>
 
 /*
  *	wait_queue_t
@@ -169,6 +171,7 @@ __private_extern__ wait_result_t wait_queue_assert_wait64_locked(
 			wait_queue_t wait_queue,
 			event64_t wait_event,
 			wait_interrupt_t interruptible,
+			uint64_t deadline,
 			thread_t thread);
 
 /* peek to see which thread would be chosen for a wakeup - but keep on queue */
@@ -213,16 +216,24 @@ __private_extern__ kern_return_t wait_queue_wakeup64_thread_locked(
 			wait_result_t result,
 			boolean_t unlock);
 
-#endif /* MACH_KERNEL_PRIVATE */
+#endif	/* MACH_KERNEL_PRIVATE */
 
-#ifdef __APPLE_API_UNSTABLE
+__BEGIN_DECLS
+
 /******** Semi-Public interfaces (not a part of a higher construct) ************/
+
+extern unsigned int wait_queue_set_size(void);
+extern unsigned int wait_queue_link_size(void);
 
 extern kern_return_t wait_queue_init(
 			wait_queue_t wait_queue,
 			int policy);
 
 extern wait_queue_set_t wait_queue_set_alloc(
+			int policy);
+
+extern kern_return_t wait_queue_set_init(
+			wait_queue_set_t set_queue,
 			int policy);
 
 extern kern_return_t wait_queue_set_free(
@@ -234,17 +245,16 @@ extern wait_queue_link_t wait_queue_link_alloc(
 extern kern_return_t wait_queue_link_free(
 			wait_queue_link_t link_element);
 
-#endif /* __APPLE_API_UNSTABLE */
-
-#ifdef __APPLE_API_EVOLVING
-
-extern wait_queue_t wait_queue_alloc(
-			int policy);
-
-extern kern_return_t wait_queue_free(
-			wait_queue_t wait_queue);
-
 extern kern_return_t wait_queue_link(
+			wait_queue_t wait_queue,
+			wait_queue_set_t set_queue);
+
+extern kern_return_t wait_queue_link_noalloc(
+			wait_queue_t wait_queue,
+			wait_queue_set_t set_queue,
+			wait_queue_link_t link);
+
+extern boolean_t wait_queue_member(
 			wait_queue_t wait_queue,
 			wait_queue_set_t set_queue);
 
@@ -255,14 +265,35 @@ extern kern_return_t wait_queue_unlink(
 extern kern_return_t wait_queue_unlink_all(
 			wait_queue_t wait_queue);
 
+extern kern_return_t wait_queue_unlinkall_nofree(
+			wait_queue_t wait_queue);
+
 extern kern_return_t wait_queue_set_unlink_all(
 			wait_queue_set_t set_queue);
+
+/* legacy API */
+kern_return_t wait_queue_sub_init(
+			wait_queue_set_t set_queue,
+			int policy);
+
+kern_return_t wait_queue_sub_clearrefs(
+			wait_queue_set_t wq_set);
+
+extern kern_return_t wait_subqueue_unlink_all(
+			wait_queue_set_t set_queue);
+
+extern wait_queue_t wait_queue_alloc(
+			int policy);
+
+extern kern_return_t wait_queue_free(
+			wait_queue_t wait_queue);
 
 /* assert intent to wait on <wait_queue,event64> pair */
 extern wait_result_t wait_queue_assert_wait64(
 			wait_queue_t wait_queue,
 			event64_t wait_event,
-			wait_interrupt_t interruptible);
+			wait_interrupt_t interruptible,
+			uint64_t deadline);
 
 /* wakeup the most appropriate thread waiting on <wait_queue,event64> pair */
 extern kern_return_t wait_queue_wakeup64_one(
@@ -283,8 +314,6 @@ extern kern_return_t wait_queue_wakeup64_thread(
 			thread_t thread,
 			wait_result_t result);
 
-#endif  /* __APPLE_API_EVOLVING */
-
 /*
  * Compatibility Wait Queue APIs based on pointer events instead of 64bit
  * integer events.
@@ -294,7 +323,8 @@ extern kern_return_t wait_queue_wakeup64_thread(
 extern wait_result_t wait_queue_assert_wait(
 			wait_queue_t wait_queue,
 			event_t wait_event,
-			wait_interrupt_t interruptible);
+			wait_interrupt_t interruptible,
+			uint64_t deadline);
 
 /* wakeup the most appropriate thread waiting on <wait_queue,event> pair */
 extern kern_return_t wait_queue_wakeup_one(
@@ -315,6 +345,8 @@ extern kern_return_t wait_queue_wakeup_thread(
 			thread_t thread,
 			wait_result_t result);
 
-#endif	/* __APPLE_API_PRIVATE */
+__END_DECLS
 
-#endif /* _KERN_WAIT_QUEUE_H_ */
+#endif	/* _KERN_WAIT_QUEUE_H_ */
+
+#endif	/* KERNEL_PRIVATE */

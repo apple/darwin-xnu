@@ -53,12 +53,19 @@ consopen(dev, flag, devtype, pp)
 	struct proc *pp;
 {
 	dev_t device;
+	boolean_t funnel_state;
+	int error;
+	
+	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 
 	if (constty)
 	    device = constty->t_dev;
 	else
 	    device = cons.t_dev;
-	return ((*cdevsw[major(device)].d_open)(device, flag, devtype, pp));
+	error =  (*cdevsw[major(device)].d_open)(device, flag, devtype, pp);
+	thread_funnel_set(kernel_flock, funnel_state);
+
+	return(error);
 }
 
 /*ARGSUSED*/
@@ -69,12 +76,20 @@ consclose(dev, flag, mode, pp)
 	struct proc *pp;
 {
 	dev_t device;
+	boolean_t funnel_state;
+	int error;
 
+	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	if (constty)
 	    device = constty->t_dev;
 	else
 	    device = cons.t_dev;
-	return ((*cdevsw[major(device)].d_close)(device, flag, mode, pp));
+	error =  (*cdevsw[major(device)].d_close)(device, flag, mode, pp);
+	thread_funnel_set(kernel_flock, funnel_state);
+
+	return(error);
+
+
 }
 
 /*ARGSUSED*/
@@ -85,12 +100,18 @@ consread(dev, uio, ioflag)
 	int ioflag;
 {
 	dev_t device;
+	boolean_t funnel_state;
+	int error;
 
+	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	if (constty)
 	    device = constty->t_dev;
 	else
 	    device = cons.t_dev;
-	return ((*cdevsw[major(device)].d_read)(device, uio, ioflag));
+	error = (*cdevsw[major(device)].d_read)(device, uio, ioflag);
+	thread_funnel_set(kernel_flock, funnel_state);
+
+	return(error);
 }
 
 /*ARGSUSED*/
@@ -101,12 +122,18 @@ conswrite(dev, uio, ioflag)
 	int ioflag;
 {
     dev_t device;
+	boolean_t funnel_state;
+	int error;
 
+	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	if (constty)
 	    device = constty->t_dev;
 	else
 	    device = cons.t_dev;
-    return ((*cdevsw[major(device)].d_write)(device, uio, ioflag));
+    error =  (*cdevsw[major(device)].d_write)(device, uio, ioflag);
+	thread_funnel_set(kernel_flock, funnel_state);
+
+	return(error);
 }
 
 /*ARGSUSED*/
@@ -119,6 +146,10 @@ consioctl(dev, cmd, addr, flag, p)
 	struct proc *p;
 {
 	dev_t device;
+	boolean_t funnel_state;
+	int error;
+
+	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 
 	if (constty)
 	    device = constty->t_dev;
@@ -129,16 +160,23 @@ consioctl(dev, cmd, addr, flag, p)
 	 * output from the "virtual" console.
 	 */
 	if (cmd == TIOCCONS && constty) {
-		int error = suser(p->p_ucred, (u_short *) NULL);
-		if (error)
-			return (error);
+		error = proc_suser(p);
+		if (error) {
+			goto out;
+		}
 		constty = NULL;
-		return (0);
+		error = 0;
+		goto out;
 	}
-	return ((*cdevsw[major(device)].d_ioctl)(device, cmd, addr, flag, p));
+	error =  (*cdevsw[major(device)].d_ioctl)(device, cmd, addr, flag, p);
+out:
+	thread_funnel_set(kernel_flock, funnel_state);
+
+	return(error);
 }
 
 /*ARGSUSED*/
+/* called with funnel held */
 int
 consselect(dev, flag, wql, p)
 	dev_t dev;
@@ -159,12 +197,18 @@ int
 cons_getc()
 {
 	dev_t device;
+	boolean_t funnel_state;
+	int error;
 
+	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	if (constty)
 	    device = constty->t_dev;
 	else
 	    device = cons.t_dev;
-	return ((*cdevsw[major(device)].d_getc)(device));
+	error =  (*cdevsw[major(device)].d_getc)(device);
+	thread_funnel_set(kernel_flock, funnel_state);
+
+	return(error);
 }
 
 /*ARGSUSED*/
@@ -173,12 +217,18 @@ cons_putc(c)
 	char c;
 {
 	dev_t device;
+	boolean_t funnel_state;
+	int error;
 
+	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	if (constty)
 	    device = constty->t_dev;
 	else
 	    device = cons.t_dev;
-	return ((*cdevsw[major(device)].d_putc)(device, c));
+	error =  (*cdevsw[major(device)].d_putc)(device, c);
+	thread_funnel_set(kernel_flock, funnel_state);
+
+	return(error);
 }
 
 /*

@@ -104,13 +104,3 @@ WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 #define	SPL_CMP_GE(a, b)	((unsigned)(a) >= (unsigned)(b))
 #define	SPL_CMP_LE(a, b)	((unsigned)(a) <= (unsigned)(b))
 
-#ifdef	MACH_KERNEL
-#ifndef	ASSEMBLER
-
-#include <i386/AT386/misc_protos.h>
-
-extern i386_intr_t		ivect[];
-extern int		iunit[];
-extern unsigned char	intpri[];
-#endif	/* ASSEMBLER */
-#endif	/* MACH_KERNEL */

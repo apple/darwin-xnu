@@ -60,6 +60,7 @@
 #include <sys/socketvar.h>
 #include <sys/domain.h>
 #include <sys/protosw.h>
+#include <kern/locks.h>
 
 #include <net/raw_cb.h>
 
@@ -76,6 +77,7 @@ struct rawcb_list_head rawcb_list;
 
 static u_long	raw_sendspace = RAWSNDQ;
 static u_long	raw_recvspace = RAWRCVQ;
+extern lck_mtx_t 	*raw_mtx;	/*### global raw cb mutex for now */
 
 /*
  * Allocate a control block and a nominal amount
@@ -102,7 +104,9 @@ raw_attach(so, proto)
 	rp->rcb_socket = so;
 	rp->rcb_proto.sp_family = so->so_proto->pr_domain->dom_family;
 	rp->rcb_proto.sp_protocol = proto;
+	lck_mtx_lock(raw_mtx);
 	LIST_INSERT_HEAD(&rawcb_list, rp, list);
+	lck_mtx_unlock(raw_mtx);
 	return (0);
 }
 
@@ -117,13 +121,21 @@ raw_detach(rp)
 	struct socket *so = rp->rcb_socket;
 
 	so->so_pcb = 0;
+	so->so_flags |= SOF_PCBCLEARING;
 	sofree(so);
+	if (!lck_mtx_try_lock(raw_mtx)) {
+		socket_unlock(so, 0);
+		lck_mtx_lock(raw_mtx);
+		socket_lock(so, 0);
+	}
 	LIST_REMOVE(rp, list);
+	lck_mtx_unlock(raw_mtx);
 #ifdef notdef
 	if (rp->rcb_laddr)
 		m_freem(dtom(rp->rcb_laddr));
 	rp->rcb_laddr = 0;
 #endif
+	rp->rcb_socket = NULL;
 	FREE((caddr_t)(rp), M_PCB);
 }
 

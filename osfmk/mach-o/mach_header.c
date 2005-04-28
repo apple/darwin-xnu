@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -24,6 +24,14 @@
  *
  *	Functions for accessing mach-o headers.
  *
+ * NOTE:	This file supports only 32 bit mach headers at the present
+ *		time; it's primary use is by kld, and all externally
+ *		referenced routines at the present time operate against
+ *		the 32 bit mach header _mh_execute_header, which is the
+ *		header for the currently executing kernel.  Adding support
+ *		for 64 bit kernels is possible, but is not necessary at the
+ *		present time.
+ *
  * HISTORY
  * 27-MAR-97  Umesh Vaishampayan (umeshv@NeXT.com)
  *	Added getsegdatafromheader();
@@ -36,31 +44,27 @@
 #include <vm/vm_map.h>
 #include <vm/vm_kern.h>
 #include <mach-o/mach_header.h>
+#include <string.h>		// from libsa
 
 #ifdef __MACHO__
 
 extern struct mach_header _mh_execute_header;
 
-struct section *getsectbynamefromheader(
-	struct mach_header	*header,
-	char			*seg_name,
-	char			*sect_name);
-struct segment_command *getsegbynamefromheader(
-	struct mach_header	*header,
-	char			*seg_name);
-
 /*
  * return the last address (first avail)
+ *
+ * This routine operates against the currently executing kernel only
  */
 #ifdef	MACH_BSD
 __private_extern__
 #endif
-vm_offset_t getlastaddr(void)
+vm_offset_t
+getlastaddr(void)
 {
 	struct segment_command	*sgp;
 	vm_offset_t		last_addr = 0;
 	struct mach_header *header = &_mh_execute_header;
-	int i;
+	unsigned long i;
 
 	sgp = (struct segment_command *)
 		((char *)header + sizeof(struct mach_header));
@@ -77,10 +81,12 @@ vm_offset_t getlastaddr(void)
 #ifdef	XXX_MACH_BSD
 __private_extern__
 #endif
+/*
+ * This routine operates against the currently executing kernel only
+ */
 struct mach_header **
 getmachheaders(void)
 {
-	extern struct mach_header _mh_execute_header;
 	struct mach_header **tl;
 	
 	if (kmem_alloc(kernel_map, (vm_offset_t *) &tl, 2*sizeof(struct mach_header *)) != KERN_SUCCESS)
@@ -96,6 +102,8 @@ getmachheaders(void)
  * named segment if it exist in the mach header passed to it.  Also it returns
  * the size of the section data indirectly through the pointer size.  Otherwise
  *  it returns zero for the pointer and the size.
+ *
+ * This routine can operate against any 32 bit mach header.
  */
 #ifdef	MACH_BSD
 __private_extern__
@@ -103,8 +111,8 @@ __private_extern__
 void *
 getsectdatafromheader(
     struct mach_header *mhp,
-    char *segname,
-    char *sectname,
+    const char *segname,
+    const char *sectname,
     int *size)
 {		
 	const struct section *sp;
@@ -132,7 +140,7 @@ __private_extern__
 void *
 getsegdatafromheader(
     struct mach_header *mhp,
-	char *segname,
+	const char *segname,
 	int *size)
 {
 	const struct segment_command *sc;
@@ -152,6 +160,8 @@ getsegdatafromheader(
  * This routine returns the section structure for the named section in the
  * named segment for the mach_header pointer passed to it if it exist.
  * Otherwise it returns zero.
+ *
+ * This routine can operate against any 32 bit mach header.
  */
 #ifdef	MACH_BSD
 __private_extern__
@@ -159,12 +169,12 @@ __private_extern__
 struct section *
 getsectbynamefromheader(
     struct mach_header *mhp,
-    char *segname,
-    char *sectname)
+    const char *segname,
+    const char *sectname)
 {
 	struct segment_command *sgp;
 	struct section *sp;
-	long i, j;
+	unsigned long i, j;
 
 	sgp = (struct segment_command *)
 	      ((char *)mhp + sizeof(struct mach_header));
@@ -192,12 +202,16 @@ getsectbynamefromheader(
 #ifdef	MACH_BSD
 __private_extern__
 #endif
-struct segment_command *getsegbynamefromheader(
+/*
+ * This routine can operate against any 32 bit mach header.
+ */
+struct segment_command *
+getsegbynamefromheader(
 	struct mach_header	*header,
-	char			*seg_name)
+	const char		*seg_name)
 {
 	struct segment_command *sgp;
-	int i;
+	unsigned long i;
 
 	sgp = (struct segment_command *)
 		((char *)header + sizeof(struct mach_header));
@@ -243,7 +257,9 @@ static struct {
 		4,			// align
 		0,			// reloff
 		0,			// nreloc
-		0			// flags
+		0,			// flags
+		0,			// reserved1
+		0			// reserved2
 	}
 };
 
@@ -261,7 +277,8 @@ static vm_offset_t getsizeofmacho(struct mach_header *header);
 #ifdef	MACH_BSD
 __private_extern__
 #endif
-struct segment_command *firstseg(void)
+struct segment_command *
+firstseg(void)
 {
 	return firstsegfromheader(&_mh_execute_header);
 }
@@ -269,10 +286,11 @@ struct segment_command *firstseg(void)
 #ifdef	MACH_BSD
 __private_extern__
 #endif
-struct segment_command *firstsegfromheader(struct mach_header *header)
+struct segment_command *
+firstsegfromheader(struct mach_header *header)
 {
 	struct segment_command *sgp;
-	int i;
+	unsigned long i;
 
 	sgp = (struct segment_command *)
 		((char *)header + sizeof(struct mach_header));
@@ -287,7 +305,14 @@ struct segment_command *firstsegfromheader(struct mach_header *header)
 #ifdef	MACH_BSD
 __private_extern__
 #endif
-struct segment_command *nextseg(struct segment_command *sgp)
+/*
+ * This routine operates against a 32 bit mach segment_command structure
+ * pointer from the currently executing kernel only, to obtain the
+ * sequentially next segment_command structure in the currently executing
+ * kernel
+ */
+struct segment_command *
+nextseg(struct segment_command *sgp)
 {
 	struct segment_command *this;
 
@@ -306,12 +331,18 @@ struct segment_command *nextseg(struct segment_command *sgp)
 #ifdef	MACH_BSD
 __private_extern__
 #endif
-struct segment_command *nextsegfromheader(
+/*
+ * This routine operates against any 32 bit mach segment_command structure
+ * pointer and the provided 32 bit header, to obtain the sequentially next
+ * segment_command structure in that header.
+ */
+struct segment_command *
+nextsegfromheader(
 	struct mach_header	*header,
 	struct segment_command	*seg)
 {
 	struct segment_command *sgp;
-	int i;
+	unsigned long i;
 
 	sgp = (struct segment_command *)
 		((char *)header + sizeof(struct mach_header));
@@ -336,12 +367,14 @@ struct segment_command *nextsegfromheader(
 
 
 /*
- * Return the address of the named Mach-O segment, or NULL.
+ * Return the address of the named Mach-O segment from the currently
+ * executing 32 bit kernel, or NULL.
  */
 #ifdef	MACH_BSD
 __private_extern__
 #endif
-struct segment_command *getsegbyname(char *seg_name)
+struct segment_command *
+getsegbyname(const char *seg_name)
 {
 	struct segment_command *this;
 
@@ -359,16 +392,16 @@ struct segment_command *getsegbyname(char *seg_name)
 
 /*
  * This routine returns the a pointer the section structure of the named
- * section in the named segment if it exist in the mach executable it is
- * linked into.  Otherwise it returns zero.
+ * section in the named segment if it exists in the currently executing
+ * kernel, which it is presumed to be linked into.  Otherwise it returns NULL.
  */
 #ifdef	MACH_BSD
 __private_extern__
 #endif
 struct section *
 getsectbyname(
-    char *segname,
-    char *sectname)
+    const char *segname,
+    const char *sectname)
 {
 	return(getsectbynamefromheader(
 		(struct mach_header *)&_mh_execute_header, segname, sectname));
@@ -377,10 +410,15 @@ getsectbyname(
 #ifdef	MACH_BSD
 __private_extern__
 #endif
-struct section *firstsect(struct segment_command *sgp)
+/*
+ * This routine can operate against any 32 bit segment_command structure to
+ * return the first 32 bit section immediately following that structure.  If
+ * there are no sections associated with the segment_command structure, it
+ * returns NULL.
+ */
+struct section *
+firstsect(struct segment_command *sgp)
 {
-	struct section *sp;
-
 	if (!sgp || sgp->nsects == 0)
 		return (struct section *)0;
 
@@ -390,20 +428,33 @@ struct section *firstsect(struct segment_command *sgp)
 #ifdef	MACH_BSD
 __private_extern__
 #endif
-struct section *nextsect(struct segment_command *sgp, struct section *sp)
+/*
+ * This routine can operate against any 32 bit segment_command structure and
+ * 32 bit section to return the next consecutive  32 bit section immediately
+ * following the 32 bit section provided.  If there are no sections following
+ * the provided section, it returns NULL.
+ */
+struct section *
+nextsect(struct segment_command *sgp, struct section *sp)
 {
 	struct section *fsp = firstsect(sgp);
 
-	if (sp - fsp >= sgp->nsects-1)
+	if (((unsigned long)(sp - fsp) + 1) >= sgp->nsects)
 		return (struct section *)0;
 
 	return sp+1;
 }
 
-static struct fvmfile_command *fvmfilefromheader(struct mach_header *header)
+/*
+ * This routine can operate against any 32 bit mach header to return the
+ * first occurring 32 bit fvmfile_command section.  If one is not present,
+ * it returns NULL.
+ */
+static struct fvmfile_command *
+fvmfilefromheader(struct mach_header *header)
 {
 	struct fvmfile_command *fvp;
-	int i;
+	unsigned long i;
 
 	fvp = (struct fvmfile_command *)
 		((char *)header + sizeof(struct mach_header));
@@ -417,11 +468,14 @@ static struct fvmfile_command *fvmfilefromheader(struct mach_header *header)
 
 /*
  * Create a fake USER seg if a fvmfile_command is present.
+ *
+ * This routine operates against the currently executing kernel only
  */
 #ifdef	MACH_BSD
 __private_extern__
 #endif
-struct segment_command *getfakefvmseg(void)
+struct segment_command *
+getfakefvmseg(void)
 {
 	struct segment_command *sgp = getsegbyname("__USER");
 	struct fvmfile_command *fvp = fvmfilefromheader(&_mh_execute_header);
@@ -454,11 +508,13 @@ struct segment_command *getfakefvmseg(void)
 /*
  * Figure out the size the size of the data associated with a
  * loaded mach_header.
+ *
+ * This routine operates against the currently executing kernel only
  */
-static vm_offset_t getsizeofmacho(struct mach_header *header)
+static vm_offset_t
+getsizeofmacho(struct mach_header *header)
 {
 	struct segment_command	*sgp;
-	struct section		*sp;
 	vm_offset_t		last_addr;
 
 	last_addr = 0;
@@ -484,8 +540,7 @@ getsectcmdsymtabfromheader(
 	struct mach_header *mhp)
 {
 	struct segment_command *sgp;
-	struct section *sp;
-	long i;
+	unsigned long i;
 
 	sgp = (struct segment_command *)
 		((char *)mhp + sizeof(struct mach_header));

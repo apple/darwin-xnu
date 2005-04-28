@@ -93,7 +93,7 @@
 #ifdef KERNEL
 #define MINDEX(m, k) \
 { \
-	register int len = m->m_len; \
+	register unsigned int len = m->m_len; \
  \
 	while (k >= len) { \
 		k -= len; \
@@ -104,14 +104,11 @@
 	} \
 }
 
-static u_int16_t	m_xhalf __P((struct mbuf *m, bpf_u_int32 k, int *err));
-static u_int32_t	m_xword __P((struct mbuf *m, bpf_u_int32 k, int *err));
+static u_int16_t	m_xhalf(struct mbuf *m, bpf_u_int32 k, int *err);
+static u_int32_t	m_xword(struct mbuf *m, bpf_u_int32 k, int *err);
 
 static u_int32_t
-m_xword(m, k, err)
-	register struct mbuf *m;
-	register bpf_u_int32 k;
-	register int *err;
+m_xword(struct mbuf *m, bpf_u_int32 k, int *err)
 {
 	register size_t len;
 	register u_char *cp, *np;
@@ -164,10 +161,7 @@ m_xword(m, k, err)
 }
 
 static u_int16_t
-m_xhalf(m, k, err)
-	register struct mbuf *m;
-	register bpf_u_int32 k;
-	register int *err;
+m_xhalf(struct mbuf *m, bpf_u_int32 k, int *err)
 {
 	register size_t len;
 	register u_char *cp;
@@ -203,11 +197,7 @@ m_xhalf(m, k, err)
  * buflen is the amount of data present
  */
 u_int
-bpf_filter(pc, p, wirelen, buflen)
-	register const struct bpf_insn *pc;
-	register u_char *p;
-	u_int wirelen;
-	register u_int buflen;
+bpf_filter(const struct bpf_insn *pc, u_char *p, u_int wirelen, u_int buflen)
 {
 	register u_int32_t A = 0, X = 0;
 	register bpf_u_int32 k;
@@ -540,9 +530,7 @@ bpf_filter(pc, p, wirelen, buflen)
  * Otherwise, a bogus program could easily crash the system.
  */
 int
-bpf_validate(f, len)
-	const struct bpf_insn *f;
-	int len;
+bpf_validate(const struct bpf_insn *f, int len)
 {
 	register int i;
 	const struct bpf_insn *p;
@@ -557,7 +545,7 @@ bpf_validate(f, len)
 			register int from = i + 1;
 
 			if (BPF_OP(p->code) == BPF_JA) {
-				if (from >= len || p->k >= len - from)
+				if (from >= len || p->k >= (bpf_u_int32)(len - from))
 					return 0;
 			}
 			else if (from >= len || p->jt >= len - from ||

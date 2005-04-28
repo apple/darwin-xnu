@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -141,7 +141,9 @@
  */
 #define CR4_FXS 0x00000200    	/* SSE/SSE2 OS supports FXSave */
 #define CR4_XMM 0x00000400    	/* SSE/SSE2 instructions supported in OS */
+#define CR4_PGE 0x00000080    	/* p6:   Page Global Enable */
 #define	CR4_MCE	0x00000040	/* p5:   Machine Check Exceptions */
+#define CR4_PAE 0x00000020      /* p5:   Physical Address Extensions */
 #define	CR4_PSE	0x00000010	/* p5:   Page Size Extensions */
 #define	CR4_DE	0x00000008	/* p5:   Debugging Extensions */
 #define	CR4_TSD	0x00000004	/* p5:   Time Stamp Disable */
@@ -149,103 +151,89 @@
 #define	CR4_VME	0x00000001	/* p5:   Virtual-8086 Mode Extensions */
 
 #ifndef	ASSEMBLER
-extern unsigned int	get_cr0(void);
-extern void		set_cr0(
-				unsigned int		value);
-extern unsigned int	get_cr2(void);
-extern unsigned int	get_cr3(void);
-extern void		set_cr3(
-				unsigned int		value);
-extern unsigned int	get_cr4(void);
-extern void		set_cr4(
-				unsigned int		value);
+
+#include <sys/cdefs.h>
+__BEGIN_DECLS
 
 #define	set_ts() \
 	set_cr0(get_cr0() | CR0_TS)
-extern void		clear_ts(void);
 
-extern unsigned short	get_tr(void);
-extern void		set_tr(
-			       unsigned int		seg);
-
-extern unsigned short	get_ldt(void);
-extern void		set_ldt(
-				unsigned int		seg);
-#ifdef	__GNUC__
-extern __inline__ unsigned int get_cr0(void)
+static inline unsigned int get_cr0(void)
 {
 	register unsigned int cr0; 
 	__asm__ volatile("mov %%cr0, %0" : "=r" (cr0));
 	return(cr0);
 }
 
-extern __inline__ void set_cr0(unsigned int value)
+static inline void set_cr0(unsigned int value)
 {
 	__asm__ volatile("mov %0, %%cr0" : : "r" (value));
 }
 
-extern __inline__ unsigned int get_cr2(void)
+static inline unsigned int get_cr2(void)
 {
 	register unsigned int cr2;
 	__asm__ volatile("mov %%cr2, %0" : "=r" (cr2));
 	return(cr2);
 }
 
-#if	NCPUS > 1 && AT386
-/*
- * get_cr3 and set_cr3 are more complicated for the MPs. cr3 is where
- * the cpu number gets stored. The MP versions live in locore.s
- */
-#else	/* NCPUS > 1 && AT386 */
-extern __inline__ unsigned int get_cr3(void)
+static inline unsigned int get_cr3(void)
 {
 	register unsigned int cr3;
 	__asm__ volatile("mov %%cr3, %0" : "=r" (cr3));
 	return(cr3);
 }
 
-extern __inline__ void set_cr3(unsigned int value)
+static inline void set_cr3(unsigned int value)
 {
 	__asm__ volatile("mov %0, %%cr3" : : "r" (value));
 }
-#endif	/* NCPUS > 1 && AT386 */
 
-extern __inline__ void clear_ts(void)
+/* Implemented in locore: */
+extern uint32_t	get_cr4(void);
+extern void	set_cr4(uint32_t);
+
+static inline void clear_ts(void)
 {
 	__asm__ volatile("clts");
 }
 
-extern __inline__ unsigned short get_tr(void)
+static inline unsigned short get_tr(void)
 {
 	unsigned short seg; 
 	__asm__ volatile("str %0" : "=rm" (seg));
 	return(seg);
 }
 
-extern __inline__ void set_tr(unsigned int seg)
+static inline void set_tr(unsigned int seg)
 {
 	__asm__ volatile("ltr %0" : : "rm" ((unsigned short)(seg)));
 }
 
-extern __inline__ unsigned short get_ldt(void)
+static inline unsigned short get_ldt(void)
 {
 	unsigned short seg;
 	__asm__ volatile("sldt %0" : "=rm" (seg));
 	return(seg);
 }
 
-extern __inline__ void set_ldt(unsigned int seg)
+static inline void set_ldt(unsigned int seg)
 {
 	__asm__ volatile("lldt %0" : : "rm" ((unsigned short)(seg)));
 }
 
-extern __inline__ void flush_tlb(void)
+static inline void flush_tlb(void)
 {
 	unsigned long	cr3_temp;
 	__asm__ volatile("movl %%cr3, %0; movl %0, %%cr3" : "=r" (cr3_temp) :: "memory");
 }
 
-extern __inline__ void invlpg(unsigned long addr)
+static inline void wbinvd(void)
+{
+	__asm__ volatile("wbinvd");
+}
+
+static inline void invlpg(unsigned long addr)
 {
 	__asm__  volatile("invlpg (%0)" :: "r" (addr) : "memory");
 }
@@ -270,25 +258,34 @@ extern __inline__ void invlpg(unsigned long addr)
 #define rdpmc(counter,lo,hi) \
 	__asm__ volatile("rdpmc" : "=a" (lo), "=d" (hi) : "c" (counter))
 
-extern __inline__ uint64_t rdmsr64(uint32_t msr)
+static inline uint64_t rdmsr64(uint32_t msr)
 {
 	uint64_t ret;
 	__asm__ volatile("rdmsr" : "=A" (ret) : "c" (msr));
 	return ret;
 }
 
-extern __inline__ void wrmsr64(uint32_t msr, uint64_t val)
+static inline void wrmsr64(uint32_t msr, uint64_t val)
 {
 	__asm__ volatile("wrmsr" : : "c" (msr), "A" (val));
 }
 
-extern __inline__ uint64_t rdtsc64(void)
+static inline uint64_t rdtsc64(void)
 {
 	uint64_t ret;
 	__asm__ volatile("rdtsc" : "=A" (ret));
 	return ret;
 }
-#endif	/* __GNUC__ */
+
+/*
+ * rdmsr_carefully() returns 0 when the MSR has been read successfully,
+ * or non-zero (1) if the MSR does not exist.
+ * The implementation is in locore.s.
+ */
+extern int rdmsr_carefully(uint32_t msr, uint32_t *lo, uint32_t *hi);
+
+__END_DECLS
+
 #endif	/* ASSEMBLER */
 
 #define MSR_IA32_P5_MC_ADDR		0
@@ -316,15 +313,35 @@ extern __inline__ uint64_t rdtsc64(void)
 #define MSR_IA32_EVNTSEL0		0x186
 #define MSR_IA32_EVNTSEL1		0x187
 
+#define MSR_IA32_MISC_ENABLE		0x1a0
+
 #define MSR_IA32_DEBUGCTLMSR		0x1d9
 #define MSR_IA32_LASTBRANCHFROMIP	0x1db
 #define MSR_IA32_LASTBRANCHTOIP		0x1dc
 #define MSR_IA32_LASTINTFROMIP		0x1dd
 #define MSR_IA32_LASTINTTOIP		0x1de
 
+#define MSR_IA32_CR_PAT 		0x277	
+
 #define MSR_IA32_MC0_CTL		0x400
 #define MSR_IA32_MC0_STATUS		0x401
 #define MSR_IA32_MC0_ADDR		0x402
 #define MSR_IA32_MC0_MISC		0x403
+
+#define MSR_IA32_MTRRCAP		0xfe
+#define MSR_IA32_MTRR_DEF_TYPE		0x2ff
+#define MSR_IA32_MTRR_PHYSBASE(n)	(0x200 + 2*(n))
+#define MSR_IA32_MTRR_PHYSMASK(n)	(0x200 + 2*(n) + 1)
+#define MSR_IA32_MTRR_FIX64K_00000	0x250
+#define MSR_IA32_MTRR_FIX16K_80000	0x258
+#define MSR_IA32_MTRR_FIX16K_A0000	0x259
+#define MSR_IA32_MTRR_FIX4K_C0000	0x268
+#define MSR_IA32_MTRR_FIX4K_C8000	0x269
+#define MSR_IA32_MTRR_FIX4K_D0000	0x26a
+#define MSR_IA32_MTRR_FIX4K_D8000	0x26b
+#define MSR_IA32_MTRR_FIX4K_E0000	0x26c
+#define MSR_IA32_MTRR_FIX4K_E8000	0x26d
+#define MSR_IA32_MTRR_FIX4K_F0000	0x26e
+#define MSR_IA32_MTRR_FIX4K_F8000	0x26f
 
 #endif	/* _I386_PROC_REG_H_ */

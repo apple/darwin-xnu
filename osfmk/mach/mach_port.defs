@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -378,7 +378,7 @@ routine	mach_port_get_srights(
  */
 routine mach_port_space_info(
 		task		: ipc_space_t;
-	out	info		: ipc_info_space_t;
+	out	space_info	: ipc_info_space_t;
 	out	table_info	: ipc_info_name_array_t,
 					Dealloc;
 	out	tree_info	: ipc_info_tree_name_array_t,
@@ -393,8 +393,8 @@ routine mach_port_space_info(
 routine mach_port_dnrequest_info(
 		task		: ipc_space_t;
 		name		: mach_port_name_t;
-	out	total		: unsigned;	/* total size of table */
-	out	used		: unsigned);	/* amount used */
+	out	dnr_total	: unsigned;	/* total size of table */
+	out	dnr_used	: unsigned);	/* amount used */
 
 /*
  *	Return the type and address of the kernel object

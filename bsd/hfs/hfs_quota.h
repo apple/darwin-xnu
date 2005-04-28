@@ -74,23 +74,23 @@ struct mount;
 struct proc;
 struct ucred;
 __BEGIN_DECLS
-int	hfs_chkdq __P((struct cnode *, int64_t, struct ucred *, int));
-int	hfs_chkdqchg __P((struct cnode *, int64_t, struct ucred *, int));
-int	hfs_chkiq __P((struct cnode *, long, struct ucred *, int));
-int	hfs_chkiqchg __P((struct cnode *, long, struct ucred *, int));
-int	hfs_getinoquota __P((struct cnode *));
-int	hfs_getquota __P((struct mount *, u_long, int, caddr_t));
-int	hfs_qsync __P((struct mount *mp));
-int	hfs_quotaoff __P((struct proc *, struct mount *, int));
-int	hfs_quotaon __P((struct proc *, struct mount *, int, caddr_t, enum uio_seg));
-int	hfs_setquota __P((struct mount *, u_long, int, caddr_t));
-int	hfs_setuse __P((struct mount *, u_long, int, caddr_t));
-int	hfs_quotactl __P((struct mount *, int, uid_t, caddr_t, struct proc *));
+int	hfs_chkdq(struct cnode *, int64_t, struct ucred *, int);
+int	hfs_chkdqchg(struct cnode *, int64_t, struct ucred *, int);
+int	hfs_chkiq(struct cnode *, long, struct ucred *, int);
+int	hfs_chkiqchg(struct cnode *, long, struct ucred *, int);
+int	hfs_getinoquota(struct cnode *);
+int	hfs_getquota(struct mount *, u_long, int, caddr_t);
+int	hfs_qsync(struct mount *mp);
+int	hfs_quotaoff(struct proc *, struct mount *, int);
+int	hfs_quotaon(struct proc *, struct mount *, int, caddr_t);
+int hfs_quotastat(struct mount *, int, caddr_t);
+int	hfs_setquota(struct mount *, u_long, int, caddr_t);
+int	hfs_setuse(struct mount *, u_long, int, caddr_t);
 __END_DECLS
 
 #if DIAGNOSTIC
 __BEGIN_DECLS
-void	hfs_chkdquot __P((struct cnode *));
+void	hfs_chkdquot(struct cnode *);
 __END_DECLS
 #endif
 #endif /* __APPLE_API_PRIVATE */

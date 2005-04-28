@@ -61,8 +61,6 @@
 #ifndef	_MACH_TASK_SPECIAL_PORTS_H_
 #define _MACH_TASK_SPECIAL_PORTS_H_
 
-#include <sys/appleapiopts.h>
-
 typedef	int	task_special_port_t;
 
 #define TASK_KERNEL_PORT	1	/* Represents task to the outside
@@ -72,7 +70,9 @@ typedef	int	task_special_port_t;
 
 #define TASK_BOOTSTRAP_PORT	4	/* Bootstrap environment for task. */
 
-#ifdef  __APPLE_API_EVOLVING
+/*
+ * Evolving and likely to change.
+ */
 
 #define TASK_WIRED_LEDGER_PORT	5	/* Wired resource ledger for task. */
 
@@ -89,8 +89,6 @@ typedef	int	task_special_port_t;
 
 #define task_set_paged_ledger_port(task, port)	\
 		(task_set_special_port((task), TASK_PAGED_LEDGER_PORT, (port)))
-
-#endif  /* __APPLE_API_EVOLVING */
 
 /*
  *	Definitions for ease of use

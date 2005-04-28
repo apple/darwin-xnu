@@ -71,7 +71,9 @@
 #ifndef _NETINET6_IP6PROTOSW_H_
 #define _NETINET6_IP6PROTOSW_H_
 #include <sys/appleapiopts.h>
-#ifdef __APPLE_API_PRIVATE
+
+#ifdef KERNEL_PRIVATE
+#include <kern/locks.h>
 
 /*
  * Protocol switch table for IPv6.
@@ -124,27 +126,27 @@ struct ip6protosw {
 	short	pr_protocol;		/* protocol number */
         unsigned int pr_flags;          /* see below */
 /* protocol-protocol hooks */
-	int	(*pr_input) __P((struct mbuf **, int *));
+	int	(*pr_input)(struct mbuf **, int *);
 					/* input to protocol (from below) */
-	int	(*pr_output)	__P((struct mbuf *m, struct socket *so,
-				     struct sockaddr_in6 *, struct mbuf *));
+	int	(*pr_output)(struct mbuf *m, struct socket *so,
+				     struct sockaddr_in6 *, struct mbuf *);
 					/* output to protocol (from above) */
-	void	(*pr_ctlinput)__P((int, struct sockaddr *, void *));
+	void	(*pr_ctlinput)(int, struct sockaddr *, void *);
 					/* control input (from below) */
-	int	(*pr_ctloutput)__P((struct socket *, struct sockopt *));
+	int	(*pr_ctloutput)(struct socket *, struct sockopt *);
 					/* control output (from above) */
 /* user-protocol hook */
-	int	(*pr_usrreq)		/* user request: see list below */
-			__P((struct socket *, int, struct mbuf *,
-			     struct mbuf *, struct mbuf *, struct proc *));
+	int	(*pr_usrreq)(struct socket *, int, struct mbuf *,
+			     struct mbuf *, struct mbuf *, struct proc *);
+					/* user request: see list below */
 
 /* utility hooks */
-	void	(*pr_init) __P((void));	/* initialization hook */
-	void	(*pr_fasttimo) __P((void));
+	void	(*pr_init)(void);	/* initialization hook */
+	void	(*pr_fasttimo)(void);
 					/* fast timeout (200ms) */
-	void	(*pr_slowtimo) __P((void));
+	void	(*pr_slowtimo)(void);
 					/* slow timeout (500ms) */
-	void	(*pr_drain) __P((void));
+	void	(*pr_drain)(void);
 					/* flush any excess space possible */
 #ifdef __APPLE__
 	/* for compat. with IPv4 protosw */
@@ -153,12 +155,19 @@ struct ip6protosw {
 
 	struct	pr_usrreqs *pr_usrreqs;	/* supersedes pr_usrreq() */
 #ifdef __APPLE__
+	int     	(*pr_lock)      (struct socket *so, int locktype, int debug); /* lock function for protocol */
+	int     	(*pr_unlock)    (struct socket *so, int locktype, int debug); /* unlock for protocol */
+#ifdef _KERN_LOCKS_H_
+	lck_mtx_t *	(*pr_getlock)   (struct socket *so, int locktype); /* unlock for protocol */
+#else
+	void *	(*pr_getlock)   (struct socket *so, int locktype); /* unlock for protocol */
+#endif
 	/* Filter hooks */
 	TAILQ_HEAD(pr6_sfilter, NFDescriptor) pr_sfilter;
 	struct ip6protosw *pr_next;	/* Chain for domain */
-	u_long reserved[4];
+	u_long reserved[1];
 #endif
 };
 
-#endif /* __APPLE_API_PRIVATE */
-#endif
+#endif KERNEL_PRIVATE
+#endif _NETINET6_IP6PROTOSW_H_

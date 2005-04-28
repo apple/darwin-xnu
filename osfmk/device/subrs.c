@@ -166,6 +166,49 @@ strncmp(
         return 0;
 }
 
+
+//
+// Lame implementation just for use by strcasecmp/strncasecmp
+//
+static int
+tolower(unsigned char ch)
+{
+    if (ch >= 'A' && ch <= 'Z')
+	ch = 'a' + (ch - 'A');
+
+    return ch;
+}
+
+int
+strcasecmp(const char *s1, const char *s2)
+{
+    const unsigned char *us1 = (const u_char *)s1,
+                 *us2 = (const u_char *)s2;
+
+    while (tolower(*us1) == tolower(*us2++))
+	if (*us1++ == '\0')
+	    return (0);
+    return (tolower(*us1) - tolower(*--us2));
+}
+
+int
+strncasecmp(const char *s1, const char *s2, size_t n)
+{
+    if (n != 0) {
+	const unsigned char *us1 = (const u_char *)s1,
+                     *us2 = (const u_char *)s2;
+
+	do {
+	    if (tolower(*us1) != tolower(*us2++))
+		return (tolower(*us1) - tolower(*--us2));
+	    if (*us1++ == '\0')
+		break;
+	} while (--n != 0);
+    }
+    return (0);
+}
+
+
 /*
  * Abstract:
  *      strcpy copies the contents of the string "from" including

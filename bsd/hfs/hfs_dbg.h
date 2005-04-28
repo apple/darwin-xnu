@@ -98,7 +98,7 @@ extern int hfs_dbg_err;
 
 #define DBG_ERR(x)	{		\
 	if(hfs_dbg_all || hfs_dbg_err) {	\
-        PRINTIT("%X: ", current_proc()->p_pid); \
+        PRINTIT("%X: ", proc_selfpid()); \
 	    PRINTIT("HFS ERROR: "); \
 	    PRINTIT x;			\
 	    PRINT_DELAY;  \

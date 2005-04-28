@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -30,7 +30,6 @@
 #include <mach_kdb.h>
 #include <mach_kdp.h>
 #include <debug.h>
-#include <cpus.h>
 
 #include <mach/vm_types.h>
 #include <mach/vm_param.h>
@@ -38,6 +37,7 @@
 #include <kern/misc_protos.h>
 #include <kern/assert.h>
 #include <kern/cpu_number.h>
+#include <kern/thread.h>
 
 #include <ppc/proc_reg.h>
 #include <ppc/Firmware.h>
@@ -47,7 +47,6 @@
 #include <ppc/mem.h>
 #include <ppc/mappings.h>
 #include <ppc/exception.h>
-#include <ppc/mp.h>
 #include <ppc/lowglobals.h>
 
 #include <mach-o/mach_header.h>
@@ -55,11 +54,9 @@
 extern const char version[];
 extern const char version_variant[];
 
-extern unsigned int intstack[];			/* declared in aligned_data.s */
-extern unsigned int intstack_top_ss;	/* declared in aligned_data.s */
-
 addr64_t hash_table_base;				/* Hash table base */
 unsigned int hash_table_size;			/* Hash table size */
+int         hash_table_shift;           /* "ht_shift" boot arg, used to scale hash_table_size */
 vm_offset_t taproot_addr;				/* (BRINGUP) */
 unsigned int taproot_size;				/* (BRINGUP) */
 unsigned int serialmode;				/* Serial mode keyboard and console control */
@@ -99,6 +96,8 @@ vm_offset_t sectKLDB;
 int sectSizeKLD;
 vm_offset_t sectPRELINKB;
 int sectSizePRELINK;
+vm_offset_t sectHIBB;
+int sectSizeHIB;
 
 vm_offset_t end, etext, edata;
 
@@ -108,13 +107,8 @@ extern unsigned long exception_end;
 
 void ppc_vm_init(uint64_t mem_limit, boot_args *args)
 {
-	unsigned int htabmask;
-	unsigned int i, j, batsize, kmapsize, pvr;
-	vm_offset_t  addr, ioAddr, videoAddr;
-	int boot_task_end_offset;
-	const char *cpus;
-	mapping		*mp;
-	vm_offset_t		sizeadj, oldstart;
+	unsigned int i, kmapsize, pvr;
+	vm_offset_t  addr;
 	unsigned int *xtaproot, bank_shift;
 	uint64_t	cbsize, xhid0;
 
@@ -188,7 +182,7 @@ void ppc_vm_init(uint64_t mem_limit, boot_args *args)
 
 		pmap_mem_regions_count++;											/* Count this region */
 	}
-	
+
 	mem_size = (unsigned int)max_mem;										/* Get size of memory */
 	if(max_mem > 0x0000000080000000ULL) mem_size = 0x80000000;				/* Pin at 2 GB */
 
@@ -205,8 +199,9 @@ void ppc_vm_init(uint64_t mem_limit, boot_args *args)
 
 	first_avail = static_memory_end;
 
-/* Now retrieve addresses for end, edata, and etext 
- * from MACH-O headers.
+/*
+ * Now retrieve addresses for end, edata, and etext 
+ * from MACH-O headers for the currently running 32 bit kernel.
  */
 	sectTEXTB = (vm_offset_t)getsegdatafromheader(
 		&_mh_execute_header, "__TEXT", &sectSizeTEXT);
@@ -216,72 +211,88 @@ void ppc_vm_init(uint64_t mem_limit, boot_args *args)
 		&_mh_execute_header, "__LINKEDIT", &sectSizeLINK);
 	sectKLDB = (vm_offset_t)getsegdatafromheader(
 		&_mh_execute_header, "__KLD", &sectSizeKLD);
+	sectHIBB = (vm_offset_t)getsegdatafromheader(
+		&_mh_execute_header, "__HIB", &sectSizeHIB);
 	sectPRELINKB = (vm_offset_t)getsegdatafromheader(
 		&_mh_execute_header, "__PRELINK", &sectSizePRELINK);
 
 	etext = (vm_offset_t) sectTEXTB + sectSizeTEXT;
 	edata = (vm_offset_t) sectDATAB + sectSizeDATA;
-	end = round_page_32(getlastaddr());					/* Force end to next page */
+	end = round_page(getlastaddr());					/* Force end to next page */
 	
-	kmapsize = (round_page_32(exception_end) - trunc_page_32(exception_entry)) +	/* Get size we will map later */
-		(round_page_32(sectTEXTB+sectSizeTEXT) - trunc_page_32(sectTEXTB)) +
-		(round_page_32(sectDATAB+sectSizeDATA) - trunc_page_32(sectDATAB)) +
-		(round_page_32(sectLINKB+sectSizeLINK) - trunc_page_32(sectLINKB)) +
-		(round_page_32(sectKLDB+sectSizeKLD) - trunc_page_32(sectKLDB)) +
-		(round_page_32(sectPRELINKB+sectSizePRELINK) - trunc_page_32(sectPRELINKB)) +
-		(round_page_32(static_memory_end) - trunc_page_32(end));
+	kmapsize = (round_page(exception_end) - trunc_page(exception_entry)) +	/* Get size we will map later */
+		(round_page(sectTEXTB+sectSizeTEXT) - trunc_page(sectTEXTB)) +
+		(round_page(sectDATAB+sectSizeDATA) - trunc_page(sectDATAB)) +
+		(round_page(sectLINKB+sectSizeLINK) - trunc_page(sectLINKB)) +
+		(round_page(sectKLDB+sectSizeKLD) - trunc_page(sectKLDB)) +
+		(round_page_32(sectKLDB+sectSizeHIB) - trunc_page_32(sectHIBB)) +
+		(round_page(sectPRELINKB+sectSizePRELINK) - trunc_page(sectPRELINKB)) +
+		(round_page(static_memory_end) - trunc_page(end));
 
 	pmap_bootstrap(max_mem, &first_avail, kmapsize);
 
-	pmap_map(trunc_page_32(exception_entry), trunc_page_32(exception_entry), 
-		round_page_32(exception_end), VM_PROT_READ|VM_PROT_EXECUTE);
+	pmap_map(trunc_page(exception_entry), trunc_page(exception_entry), 
+		round_page(exception_end), VM_PROT_READ|VM_PROT_EXECUTE);
 
-	pmap_map(trunc_page_32(sectTEXTB), trunc_page_32(sectTEXTB), 
-		round_page_32(sectTEXTB+sectSizeTEXT), VM_PROT_READ|VM_PROT_EXECUTE);
+	pmap_map(trunc_page(sectTEXTB), trunc_page(sectTEXTB), 
+		round_page(sectTEXTB+sectSizeTEXT), VM_PROT_READ|VM_PROT_EXECUTE);
 
-	pmap_map(trunc_page_32(sectDATAB), trunc_page_32(sectDATAB), 
-		round_page_32(sectDATAB+sectSizeDATA), VM_PROT_READ|VM_PROT_WRITE);
+	pmap_map(trunc_page(sectDATAB), trunc_page(sectDATAB), 
+		round_page(sectDATAB+sectSizeDATA), VM_PROT_READ|VM_PROT_WRITE);
 
 /* The KLD and LINKEDIT segments are unloaded in toto after boot completes,
 * but via ml_static_mfree(), through IODTFreeLoaderInfo(). Hence, we have
 * to map both segments page-by-page.
 */
 	
-	for (addr = trunc_page_32(sectPRELINKB);
-             addr < round_page_32(sectPRELINKB+sectSizePRELINK);
+	for (addr = trunc_page(sectPRELINKB);
+             addr < round_page(sectPRELINKB+sectSizePRELINK);
              addr += PAGE_SIZE) {
 
-            pmap_enter(kernel_pmap, addr, addr>>12, 
+            pmap_enter(kernel_pmap, (vm_map_offset_t)addr, (ppnum_t)(addr>>12), 
 			VM_PROT_READ|VM_PROT_WRITE, 
 			VM_WIMG_USE_DEFAULT, TRUE);
 
 	}
 
-	for (addr = trunc_page_32(sectKLDB);
-             addr < round_page_32(sectKLDB+sectSizeKLD);
+	for (addr = trunc_page(sectKLDB);
+             addr < round_page(sectKLDB+sectSizeKLD);
              addr += PAGE_SIZE) {
 
-            pmap_enter(kernel_pmap, addr, addr>>12, 
+            pmap_enter(kernel_pmap, (vm_map_offset_t)addr, (ppnum_t)(addr>>12), 
 			VM_PROT_READ|VM_PROT_WRITE, 
 			VM_WIMG_USE_DEFAULT, TRUE);
 
 	}
 
-	for (addr = trunc_page_32(sectLINKB);
-             addr < round_page_32(sectLINKB+sectSizeLINK);
+	for (addr = trunc_page(sectLINKB);
+             addr < round_page(sectLINKB+sectSizeLINK);
              addr += PAGE_SIZE) {
 
-           pmap_enter(kernel_pmap, addr, addr>>12, 
+           pmap_enter(kernel_pmap, (vm_map_offset_t)addr,
+			(ppnum_t)(addr>>12), 
 			VM_PROT_READ|VM_PROT_WRITE, 
 			VM_WIMG_USE_DEFAULT, TRUE);
 
 	}
 
-	pmap_enter(kernel_pmap, &sharedPage, (unsigned int)&sharedPage >> 12,	/* Make sure the sharedPage is mapped */
+	for (addr = trunc_page_32(sectHIBB);
+             addr < round_page_32(sectHIBB+sectSizeHIB);
+             addr += PAGE_SIZE) {
+
+            pmap_enter(kernel_pmap, (vm_map_offset_t)addr, (ppnum_t)(addr>>12), 
+			VM_PROT_READ|VM_PROT_WRITE, 
+			VM_WIMG_USE_DEFAULT, TRUE);
+
+	}
+
+	pmap_enter(kernel_pmap, (vm_map_offset_t)&sharedPage,
+		(ppnum_t)&sharedPage >> 12, /* Make sure the sharedPage is mapped */
 		VM_PROT_READ|VM_PROT_WRITE, 
 		VM_WIMG_USE_DEFAULT, TRUE);
 
-	pmap_enter(kernel_pmap, &lowGlo, (unsigned int)&lowGlo >> 12,			/* Make sure the low memory globals are mapped */
+	pmap_enter(kernel_pmap, (vm_map_offset_t)&lowGlo.lgVerCode,
+		(ppnum_t)&lowGlo.lgVerCode >> 12,	/* Make sure the low memory globals are mapped */
 		VM_PROT_READ|VM_PROT_WRITE, 
 		VM_WIMG_USE_DEFAULT, TRUE);
 		
@@ -290,15 +301,23 @@ void ppc_vm_init(uint64_t mem_limit, boot_args *args)
  *	be released later, but not all.  Ergo, no block mapping here 
  */
 
-	for(addr = trunc_page_32(end); addr < round_page_32(static_memory_end); addr += PAGE_SIZE) {
+	for(addr = trunc_page(end); addr < round_page(static_memory_end); addr += PAGE_SIZE) {
 
-		pmap_enter(kernel_pmap, addr, addr>>12, 
+		pmap_enter(kernel_pmap, (vm_map_address_t)addr, (ppnum_t)addr>>12, 
 			VM_PROT_READ|VM_PROT_WRITE, 
 			VM_WIMG_USE_DEFAULT, TRUE);
 
 	}
+	
+/*
+ *	Here we map a window into the kernel address space that will be used to
+ *  access a slice of a user address space. Clients for this service include
+ *  copyin/out and copypv.
+ */
 
-	MapUserAddressSpaceInit();			/* Go initialize copy in/out */
+	lowGlo.lgUMWvaddr = USER_MEM_WINDOW_VADDR;
+										/* Initialize user memory window base address */
+	MapUserMemoryWindowInit();			/* Go initialize user memory window */
 
 /*
  *	At this point, there is enough mapped memory and all hw mapping structures are
@@ -336,7 +355,7 @@ void ppc_vm_init(uint64_t mem_limit, boot_args *args)
 	kprintf("version         = %s\n\n", version);
 	__asm__ ("mfpvr %0" : "=r" (pvr));
 	kprintf("proc version    = %08x\n", pvr);
-	if(per_proc_info[0].pf.Available & pf64Bit) {	/* 64-bit processor? */
+	if(getPerProc()->pf.Available & pf64Bit) {	/* 64-bit processor? */
 		xhid0 = hid0get64();			/* Get the hid0 */
 		if(xhid0 & (1ULL << (63 - 19))) kprintf("Time base is externally clocked\n");
 		else kprintf("Time base is internally clocked\n");
@@ -380,27 +399,21 @@ void ppc_vm_init(uint64_t mem_limit, boot_args *args)
 
 #if DEBUG
 	kprintf("Mapped memory:\n");
-	kprintf("   exception vector: %08X, %08X - %08X\n", trunc_page_32(exception_entry), 
-		trunc_page_32(exception_entry), round_page_32(exception_end));
-	kprintf("          sectTEXTB: %08X, %08X - %08X\n", trunc_page_32(sectTEXTB), 
-		trunc_page_32(sectTEXTB), round_page_32(sectTEXTB+sectSizeTEXT));
-	kprintf("          sectDATAB: %08X, %08X - %08X\n", trunc_page_32(sectDATAB), 
-		trunc_page_32(sectDATAB), round_page_32(sectDATAB+sectSizeDATA));
-	kprintf("          sectLINKB: %08X, %08X - %08X\n", trunc_page_32(sectLINKB), 
-		trunc_page_32(sectLINKB), round_page_32(sectLINKB+sectSizeLINK));
-	kprintf("           sectKLDB: %08X, %08X - %08X\n", trunc_page_32(sectKLDB), 
-		trunc_page_32(sectKLDB), round_page_32(sectKLDB+sectSizeKLD));
-	kprintf("                end: %08X, %08X - %08X\n", trunc_page_32(end), 
-		trunc_page_32(end), static_memory_end);
+	kprintf("   exception vector: %08X, %08X - %08X\n", trunc_page(exception_entry), 
+		trunc_page(exception_entry), round_page(exception_end));
+	kprintf("          sectTEXTB: %08X, %08X - %08X\n", trunc_page(sectTEXTB), 
+		trunc_page(sectTEXTB), round_page(sectTEXTB+sectSizeTEXT));
+	kprintf("          sectDATAB: %08X, %08X - %08X\n", trunc_page(sectDATAB), 
+		trunc_page(sectDATAB), round_page(sectDATAB+sectSizeDATA));
+	kprintf("          sectLINKB: %08X, %08X - %08X\n", trunc_page(sectLINKB), 
+		trunc_page(sectLINKB), round_page(sectLINKB+sectSizeLINK));
+	kprintf("           sectKLDB: %08X, %08X - %08X\n", trunc_page(sectKLDB), 
+		trunc_page(sectKLDB), round_page(sectKLDB+sectSizeKLD));
+	kprintf("               end: %08X, %08X - %08X\n", trunc_page(end), 
+		trunc_page(end), static_memory_end);
 
 #endif
 
 	return;
 }
 
-void ppc_vm_cpu_init(
-	struct per_proc_info *proc_info)
-{
-	hw_setup_trans();									/* Set up hardware needed for translation */
-	hw_start_trans();									/* Start translating */
-}

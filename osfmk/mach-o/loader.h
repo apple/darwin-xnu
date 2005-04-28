@@ -24,6 +24,10 @@
 
 /*
  * This file describes the format of mach object files.
+ *
+ * NOTE:	This header is used for manipulationg 32 bit mach object
+ *		withing a 32 bit mach_kernel for the purpose of dealing
+ *		with linking loadable kernel modules.
  */
 
 /*

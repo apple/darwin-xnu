@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -103,7 +103,7 @@ routine	host_kernel_version(
  */
 routine host_page_size(
 		host		: host_t;
-	out	page_size	: vm_size_t);
+	out	out_page_size	: vm_size_t);
 
 /*
  *	Allow pagers to create named entries that point to un-mapped
@@ -124,10 +124,10 @@ routine mach_memory_object_memory_entry(
  *	The returned data is an OOL array of processor info.
  */
 routine host_processor_info(
-		host		: host_t;
-                flavor          : processor_flavor_t;
-	out	processor_count : natural_t;
-        out     processor_info  : processor_info_array_t);
+		host			: host_t;
+                flavor          	: processor_flavor_t;
+	out	out_processor_count 	: natural_t;
+        out     out_processor_info  	: processor_info_array_t);
 
 /*
  * 	Return host IO master access port
@@ -238,3 +238,9 @@ routine host_request_notification(
 		host		: host_t;
 		notify_type	: host_flavor_t;
 		notify_port	: mach_port_make_send_once_t);
+
+routine host_lockgroup_info(
+		host		: host_t;
+	out	lockgroup_info	: lockgroup_info_array_t,
+					Dealloc);
+

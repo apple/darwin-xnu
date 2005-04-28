@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -54,11 +54,20 @@
  */
 
 #include "default_pager_internal.h"
+#include <default_pager/default_pager_object_server.h>
+#include <mach/memory_object_default_server.h>
+#include <mach/memory_object_control.h>
 #include <mach/memory_object_types.h>
 #include <mach/memory_object_server.h>
+#include <mach/upl.h>
+#include <mach/vm_map.h>
 #include <vm/memory_object.h>
 #include <vm/vm_pageout.h> 
+#include <vm/vm_map.h>
+#include <vm/vm_protos.h>
 
+/* forward declaration */
+vstruct_t vs_object_create(vm_size_t size);
 
 /*
  * List of all vstructs.  A specific vstruct is
@@ -104,7 +113,6 @@ static unsigned int	default_pager_total = 0;		/* debugging */
 static unsigned int	default_pager_wait_seqno = 0;		/* debugging */
 static unsigned int	default_pager_wait_read = 0;		/* debugging */
 static unsigned int	default_pager_wait_write = 0;		/* debugging */
-static unsigned int	default_pager_wait_refs = 0;		/* debugging */
 
 __private_extern__ void
 vs_async_wait(
@@ -347,7 +355,7 @@ kern_return_t
 dp_memory_object_init(
 	memory_object_t		mem_obj,
 	memory_object_control_t	control,
-	vm_size_t		pager_page_size)
+	__unused vm_size_t pager_page_size)
 {
 	vstruct_t		vs;
 
@@ -372,7 +380,7 @@ dp_memory_object_synchronize(
 	memory_object_t		mem_obj,
 	memory_object_offset_t	offset,
 	vm_size_t		length,
-	vm_sync_t		flags)
+	__unused vm_sync_t		flags)
 {
 	vstruct_t	vs;
 
@@ -387,7 +395,7 @@ dp_memory_object_synchronize(
 
 kern_return_t
 dp_memory_object_unmap(
-	memory_object_t		mem_obj)
+	__unused memory_object_t		mem_obj)
 {
 	panic("dp_memory_object_unmap");
 
@@ -400,7 +408,6 @@ dp_memory_object_terminate(
 {
 	memory_object_control_t	control;
 	vstruct_t		vs;
-	kern_return_t		kr;
 
 	/* 
 	 * control port is a receive right, not a send right.
@@ -461,9 +468,6 @@ dp_memory_object_reference(
 	VS_UNLOCK(vs);
 }
 
-extern ipc_port_t	max_pages_trigger_port;
-extern int		dp_pages_free;
-extern int		maximum_pages_free;
 void
 dp_memory_object_deallocate(
 	memory_object_t		mem_obj)
@@ -558,7 +562,7 @@ dp_memory_object_data_request(
 	memory_object_t		mem_obj,
 	memory_object_offset_t	offset,
 	vm_size_t		length,
-	vm_prot_t		protection_required)
+	__unused vm_prot_t		protection_required)
 {
 	vstruct_t		vs;
 
@@ -636,9 +640,9 @@ dp_memory_object_data_initialize(
 {
 	vstruct_t	vs;
 
-	DEBUG(DEBUG_MO_EXTERNAL,
-	      ("mem_obj=0x%x,offset=0x%x,cnt=0x%x\n",
-	       (int)mem_obj, (int)offset, (int)size));
+	DP_DEBUG(DEBUG_MO_EXTERNAL,
+		 ("mem_obj=0x%x,offset=0x%x,cnt=0x%x\n",
+		  (int)mem_obj, (int)offset, (int)size));
 	GSTAT(global_stats.gs_pages_init += atop_32(size));
 
 	vs_lookup(mem_obj, vs);
@@ -660,29 +664,33 @@ dp_memory_object_data_initialize(
 
 kern_return_t
 dp_memory_object_data_unlock(
-	memory_object_t		mem_obj,
-	memory_object_offset_t	offset,
-	vm_size_t		size,
-	vm_prot_t		desired_access)
+	__unused memory_object_t		mem_obj,
+	__unused memory_object_offset_t	offset,
+	__unused vm_size_t		size,
+	__unused vm_prot_t		desired_access)
 {
 	Panic("dp_memory_object_data_unlock: illegal");
 	return KERN_FAILURE;
 }
 
 
+/*ARGSUSED8*/
 kern_return_t
 dp_memory_object_data_return(
 	memory_object_t		mem_obj,
 	memory_object_offset_t	offset,
-	vm_size_t		size,
-	boolean_t		dirty,
-	boolean_t		kernel_copy)
+	vm_size_t			size,
+	__unused memory_object_offset_t	*resid_offset,
+	__unused int		*io_error,
+	__unused boolean_t	dirty,
+	__unused boolean_t	kernel_copy,
+	__unused int	upl_flags)
 {
 	vstruct_t	vs;
 
-	DEBUG(DEBUG_MO_EXTERNAL,
-	      ("mem_obj=0x%x,offset=0x%x,size=0x%x\n",
-	       (int)mem_obj, (int)offset, (int)size));
+	DP_DEBUG(DEBUG_MO_EXTERNAL,
+		 ("mem_obj=0x%x,offset=0x%x,size=0x%x\n",
+		  (int)mem_obj, (int)offset, (int)size));
 	GSTAT(global_stats.gs_pageout_calls++);
 
 	/* This routine is called by the pageout thread.  The pageout thread */
@@ -782,7 +790,7 @@ dp_memory_object_data_return(
  */
 kern_return_t
 default_pager_memory_object_create(
-	memory_object_default_t	dmm,
+	__unused memory_object_default_t	dmm,
 	vm_size_t		new_size,
 	memory_object_t		*new_mem_obj)
 {
@@ -819,16 +827,13 @@ default_pager_memory_object_create(
  */
 kern_return_t
 default_pager_object_create(
-	default_pager_t pager,
+	default_pager_t default_pager,
 	vm_size_t	size,
 	memory_object_t	*mem_objp)
 {
 	vstruct_t	vs;
-	kern_return_t	result;
-	struct vstruct_alias	*alias_struct;
 
-
-	if (pager != default_pager_object)
+	if (default_pager != default_pager_object)
 		return KERN_INVALID_ARGUMENT;
 
 	vs = vs_object_create(size);
@@ -847,95 +852,59 @@ default_pager_object_create(
 
 kern_return_t
 default_pager_objects(
-	default_pager_t			pager,
+	default_pager_t			default_pager,
 	default_pager_object_array_t	*objectsp,
 	mach_msg_type_number_t		*ocountp,
-	memory_object_array_t		*pagersp,
+	mach_port_array_t		*portsp,
 	mach_msg_type_number_t		*pcountp)
 {
 	vm_offset_t		oaddr = 0;	/* memory for objects */
 	vm_size_t		osize = 0;	/* current size */
 	default_pager_object_t	* objects;
-	unsigned int		opotential;
+	unsigned int		opotential = 0;
 
-	vm_offset_t		paddr = 0;	/* memory for pagers */
+	vm_map_copy_t		pcopy = 0;	/* copy handle for pagers */
 	vm_size_t		psize = 0;	/* current size */
 	memory_object_t		* pagers;
-	unsigned int		ppotential;
+	unsigned int		ppotential = 0;
 
 	unsigned int		actual;
 	unsigned int		num_objects;
 	kern_return_t		kr;
 	vstruct_t		entry;
-/*
-	if (pager != default_pager_default_port)
+
+	if (default_pager != default_pager_object)
 		return KERN_INVALID_ARGUMENT;
-*/
-
-	/* start with the inline memory */
-
-	kr = vm_map_copyout(ipc_kernel_map, (vm_offset_t *)&objects, 
-						(vm_map_copy_t) *objectsp);
-
-	if (kr != KERN_SUCCESS)
-		return kr;
-
-	osize = round_page_32(*ocountp * sizeof * objects);
-	kr = vm_map_wire(ipc_kernel_map, 
-			trunc_page_32((vm_offset_t)objects),
-			round_page_32(((vm_offset_t)objects) + osize), 
-			VM_PROT_READ|VM_PROT_WRITE, FALSE);
-	osize=0;
-
-	*objectsp = objects;
-	/* we start with the inline space */
-
-
-	num_objects = 0;
-	opotential = *ocountp;
-
-	pagers = (memory_object_t *) *pagersp;
-	ppotential = *pcountp;
-
-	VSL_LOCK();
 
 	/*
 	 * We will send no more than this many
 	 */
 	actual = vstruct_list.vsl_count;
-	VSL_UNLOCK();
 
-	if (opotential < actual) {
-		vm_offset_t	newaddr;
-		vm_size_t	newsize;
-
-		newsize = 2 * round_page_32(actual * sizeof * objects);
-
-		kr = vm_allocate(kernel_map, &newaddr, newsize, TRUE);
-		if (kr != KERN_SUCCESS)
-			goto nomemory;
-
-		oaddr = newaddr;
-		osize = newsize;
-		opotential = osize / sizeof * objects;
-		objects = (default_pager_object_t *)oaddr;
+	/*
+	 * Out out-of-line port arrays are simply kalloc'ed.
+	 */
+	psize = round_page(actual * sizeof * pagers);
+	ppotential = psize / sizeof * pagers;
+	pagers = (memory_object_t *)kalloc(psize);
+	if (0 == pagers)
+		return KERN_RESOURCE_SHORTAGE;
+		
+	/*
+	 * returned out of line data must be allocated out
+	 * the ipc_kernel_map, wired down, filled in, and
+	 * then "copied in" as if it had been sent by a
+	 * user process.
+	 */
+	osize = round_page(actual * sizeof * objects);
+	opotential = osize / sizeof * objects;
+	kr = kmem_alloc(ipc_kernel_map, &oaddr, osize);
+	if (KERN_SUCCESS != kr) {
+		kfree(pagers, psize);
+		return KERN_RESOURCE_SHORTAGE;
 	}
+	objects = (default_pager_object_t *)oaddr;
 
-	if (ppotential < actual) {
-		vm_offset_t	newaddr;
-		vm_size_t	newsize;
-
-		newsize = 2 * round_page_32(actual * sizeof * pagers);
-
-		kr = vm_allocate(kernel_map, &newaddr, newsize, TRUE);
-		if (kr != KERN_SUCCESS)
-			goto nomemory;
-
-		paddr = newaddr;
-		psize = newsize;
-		ppotential = psize / sizeof * pagers;
-		pagers = (memory_object_t *)paddr;
-	}
 
 	/*
 	 * Now scan the list.
@@ -946,8 +915,8 @@ default_pager_objects(
 	num_objects = 0;
 	queue_iterate(&vstruct_list.vsl_queue, entry, vstruct_t, vs_links) {
 
-		memory_object_t		pager;
-		vm_size_t		size;
+		memory_object_t			pager;
+		vm_size_t			size;
 
 		if ((num_objects >= opotential) ||
 		    (num_objects >= ppotential)) {
@@ -981,7 +950,8 @@ default_pager_objects(
 			VS_UNLOCK(entry);
 			goto not_this_one;
 		}
-		dp_memory_object_reference(vs_to_mem_obj(entry));
+		pager = vs_to_mem_obj(entry);
+		dp_memory_object_reference(pager);
 		VS_UNLOCK(entry);
 
 		/* the arrays are wired, so no deadlock worries */
@@ -1003,121 +973,52 @@ default_pager_objects(
 
 	VSL_UNLOCK();
 
-	/*
-	 * Deallocate and clear unused memory.
-	 * (Returned memory will automagically become pageable.)
-	 */
-
-	if (objects == *objectsp) {
-
-		/*
-		 * Our returned information fit inline.
-		 * Nothing to deallocate.
-		 */
-		*ocountp = num_objects;
-	} else if (actual == 0) {
-		(void) vm_deallocate(kernel_map, oaddr, osize);
-
-		/* return zero items inline */
-		*ocountp = 0;
-	} else {
-		vm_offset_t used;
-
-		used = round_page_32(actual * sizeof * objects);
-
-		if (used != osize)
-			(void) vm_deallocate(kernel_map,
-					     oaddr + used, osize - used);
-
-		*objectsp = objects;
-		*ocountp = num_objects;
+	/* clear out any excess allocation */
+	while (num_objects < opotential) {
+		objects[--opotential].dpo_object = (vm_offset_t) 0;
+		objects[opotential].dpo_size = 0;
+	}
+	while (num_objects < ppotential) {
+		pagers[--ppotential] = MEMORY_OBJECT_NULL;
 	}
 
-	if (pagers == (memory_object_t *)*pagersp) {
+	kr = vm_map_unwire(ipc_kernel_map, vm_map_trunc_page(oaddr),
+			   vm_map_round_page(oaddr + osize), FALSE);
+	assert(KERN_SUCCESS == kr);
+	kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)oaddr,
+			   (vm_map_size_t)osize, TRUE, &pcopy);
+	assert(KERN_SUCCESS == kr);
 
-		/*
-		 * Our returned information fit inline.
-		 * Nothing to deallocate.
-		 */
-
-		*pcountp = num_objects;
-	} else if (actual == 0) {
-		(void) vm_deallocate(kernel_map, paddr, psize);
-
-		/* return zero items inline */
-		*pcountp = 0;
-	} else {
-		vm_offset_t used;
-
-		used = round_page_32(actual * sizeof * pagers);
-
-		if (used != psize)
-			(void) vm_deallocate(kernel_map,
-					     paddr + used, psize - used);
-
-		*pagersp = (memory_object_array_t)pagers;
-		*pcountp = num_objects;
-	}
-	(void) vm_map_unwire(kernel_map, (vm_offset_t)objects, 
-			*ocountp + (vm_offset_t)objects, FALSE); 
-	(void) vm_map_copyin(kernel_map, (vm_offset_t)objects, 
-			*ocountp, TRUE, (vm_map_copy_t *)objectsp);
+	*objectsp = (default_pager_object_array_t)objects;
+	*ocountp = num_objects;
+	*portsp = (mach_port_array_t)pcopy;
+	*pcountp = num_objects;
 
 	return KERN_SUCCESS;
-
-    nomemory:
-	{
-		register int	i;
-		for (i = 0; i < num_objects; i++)
-			if (pagers[i] != MEMORY_OBJECT_NULL)
-				memory_object_deallocate(pagers[i]);
-	}
-
-	if (objects != *objectsp)
-		(void) vm_deallocate(kernel_map, oaddr, osize);
-
-	if (pagers != (memory_object_t *)*pagersp)
-		(void) vm_deallocate(kernel_map, paddr, psize);
-
-	return KERN_RESOURCE_SHORTAGE;
 }
 
 kern_return_t
 default_pager_object_pages(
-	default_pager_t			pager,
-	memory_object_t			object,
+	default_pager_t		default_pager,
+	mach_port_t			memory_object,
 	default_pager_page_array_t	*pagesp,
 	mach_msg_type_number_t		*countp)
 {
-	vm_offset_t			addr;	/* memory for page offsets */
+	vm_offset_t			addr = 0; /* memory for page offsets */
 	vm_size_t			size = 0; /* current memory size */
-	default_pager_page_t		* pages;
-	unsigned int			potential, actual;
+	vm_map_copy_t			copy;
+	default_pager_page_t		* pages = 0;
+	unsigned int			potential;
+	unsigned int			actual;
 	kern_return_t			kr;
+	memory_object_t			object;
 
-
-	if (pager != default_pager_object)
+	if (default_pager != default_pager_object)
 		return KERN_INVALID_ARGUMENT;
 
-	kr = vm_map_copyout(ipc_kernel_map, (vm_offset_t *)&pages, 
-						(vm_map_copy_t) *pagesp);
+	object = (memory_object_t) memory_object;
 
-	if (kr != KERN_SUCCESS)
-		return kr;
-
-	size = round_page_32(*countp * sizeof * pages);
-	kr = vm_map_wire(ipc_kernel_map, 
-			trunc_page_32((vm_offset_t)pages),
-			round_page_32(((vm_offset_t)pages) + size), 
-			VM_PROT_READ|VM_PROT_WRITE, FALSE);
-	size=0;
-
-	*pagesp = pages;
-	/* we start with the inline space */
-
-	addr = (vm_offset_t)pages;
-	potential = *countp;
-
+	potential = 0;
 	for (;;) {
 		vstruct_t	entry;
 
@@ -1134,9 +1035,9 @@ default_pager_object_pages(
 		VSL_UNLOCK();
 
 		/* did not find the object */
+		if (0 != addr)
+			kmem_free(ipc_kernel_map, addr, size);
 
-		if (pages != *pagesp)
-			(void) vm_deallocate(kernel_map, addr, size);
 		return KERN_INVALID_ARGUMENT;
 
 	    found_object:
@@ -1147,7 +1048,7 @@ default_pager_object_pages(
 
 			VS_UNLOCK(entry);
 
-			assert_wait_timeout( 1, THREAD_UNINT );
+			assert_wait_timeout((event_t)assert_wait_timeout, THREAD_UNINT, 1, 1000*NSEC_PER_USEC);
 			wresult = thread_block(THREAD_CONTINUE_NULL);
 			assert(wresult == THREAD_TIMED_OUT);
 			continue;
@@ -1161,50 +1062,33 @@ default_pager_object_pages(
 			break;
 
 		/* allocate more memory */
+		if (0 != addr)
+			kmem_free(ipc_kernel_map, addr, size);
 
-		if (pages != *pagesp)
-			(void) vm_deallocate(kernel_map, addr, size);
-		size = round_page_32(actual * sizeof * pages);
-		kr = vm_allocate(kernel_map, &addr, size, TRUE);
-		if (kr != KERN_SUCCESS)
-			return kr;
+		size = round_page(actual * sizeof * pages);
+		kr = kmem_alloc(ipc_kernel_map, &addr, size);
+		if (KERN_SUCCESS != kr)
+			return KERN_RESOURCE_SHORTAGE;
+
 		pages = (default_pager_page_t *)addr;
 		potential = size / sizeof * pages;
 	}
 
 	/*
-	 * Deallocate and clear unused memory.
-	 * (Returned memory will automagically become pageable.)
+	 * Clear unused memory.
 	 */
+	while (actual < potential)
+		pages[--potential].dpp_offset = 0;
 
-	if (pages == *pagesp) {
+	kr = vm_map_unwire(ipc_kernel_map, vm_map_trunc_page(addr),
+			   vm_map_round_page(addr + size), FALSE);
+	assert(KERN_SUCCESS == kr);
+	kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)addr,
+			   (vm_map_size_t)size, TRUE, &copy);
+	assert(KERN_SUCCESS == kr);
 
-		/*
-		 * Our returned information fit inline.
-		 * Nothing to deallocate.
-		 */
-
-		*countp = actual;
-	} else if (actual == 0) {
-		(void) vm_deallocate(kernel_map, addr, size);
-
-		/* return zero items inline */
-		*countp = 0;
-	} else {
-		vm_offset_t used;
-
-		used = round_page_32(actual * sizeof * pages);
-
-		if (used != size)
-			(void) vm_deallocate(kernel_map,
-					     addr + used, size - used);
-
-		*pagesp = pages;
-		*countp = actual;
-	}
-	(void) vm_map_unwire(kernel_map, (vm_offset_t)pages, 
-			*countp + (vm_offset_t)pages, FALSE); 
-	(void) vm_map_copyin(kernel_map, (vm_offset_t)pages, 
-			*countp, TRUE, (vm_map_copy_t *)pagesp);
+	
+	*pagesp = (default_pager_page_array_t)copy;
+	*countp = actual;
 	return KERN_SUCCESS;
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -70,8 +70,42 @@
 #include <mach/message.h>
 #include <mach/mig_errors.h>
 #include <mach/notify.h>
+#include <mach/ndr.h>
 
-#include <kern/etap_macros.h>
+#include <mach/mach_vm_server.h>
+#include <mach/mach_port_server.h>
+#include <mach/mach_host_server.h>
+#include <mach/host_priv_server.h>
+#include <mach/host_security_server.h>
+#include <mach/clock_server.h>
+#include <mach/clock_priv_server.h>
+#include <mach/ledger_server.h>
+#include <mach/lock_set_server.h>
+#include <default_pager/default_pager_object_server.h>
+#include <mach/memory_object_server.h>
+#include <mach/memory_object_control_server.h>
+#include <mach/memory_object_default_server.h>
+#include <mach/memory_object_name_server.h>
+#include <mach/processor_server.h>
+#include <mach/processor_set_server.h>
+#include <mach/semaphore_server.h>
+#include <mach/task_server.h>
+#include <mach/vm_map_server.h>
+#include <mach/thread_act_server.h>
+
+#include <device/device_types.h>
+#include <device/device_server.h>
+
+#include <UserNotification/UNDReplyServer.h>
+
+#if     MACH_MACHINE_ROUTINES
+#include <machine/machine_routines.h>
+#endif	/* MACH_MACHINE_ROUTINES */
+#if	XK_PROXY
+#include <uk_xkern/xk_uproxy_server.h>
+#endif	/* XK_PROXY */
+
+#include <kern/ipc_tt.h>
 #include <kern/ipc_mig.h>
 #include <kern/ipc_kobject.h>
 #include <kern/host_notify.h>
@@ -81,6 +115,8 @@
 #include <ipc/ipc_port.h>
 #include <kern/counters.h>
 
+#include <vm/vm_shared_memory_server.h>
+#include <vm/vm_protos.h>
 
 /*
  *	Routine:	ipc_kobject_notify
@@ -91,8 +127,6 @@ boolean_t
 ipc_kobject_notify(
         mach_msg_header_t *request_header,
         mach_msg_header_t *reply_header);
-
-#include <mach/ndr.h>
 
 typedef struct {
         mach_msg_id_t num;
@@ -115,72 +149,46 @@ int mig_table_max_displ;
 mach_msg_size_t mig_reply_size;
 
 
-#include <mach/mach_port_server.h>
-#include <mach/mach_host_server.h>
-#include <mach/host_priv_server.h>
-#include <mach/host_security_server.h>
-#include <mach/clock_server.h>
-#include <mach/clock_priv_server.h>
-#include <mach/ledger_server.h>
-#include <mach/lock_set_server.h>
-#include <default_pager/default_pager_object_server.h>
-#include <mach/memory_object_server.h>
-#include <mach/memory_object_control_server.h>
-#include <mach/memory_object_default_server.h>
-#include <mach/memory_object_name_server.h>
-#include <mach/processor_server.h>
-#include <mach/processor_set_server.h>
-#include <mach/semaphore_server.h>
-#include <mach/task_server.h>
-#include <mach/vm_map_server.h>
-#include <mach/thread_act_server.h>
-#include <device/device_server.h>
-#include <UserNotification/UNDReplyServer.h>
-
-#if     MACH_MACHINE_ROUTINES
-#include <machine/machine_routines.h>
-#endif	/* MACH_MACHINE_ROUTINES */
-#if	XK_PROXY
-#include <uk_xkern/xk_uproxy_server.h>
-#endif	/* XK_PROXY */
 
 
-mig_subsystem_t mig_e[] = {
-        (mig_subsystem_t)&mach_port_subsystem,
-        (mig_subsystem_t)&mach_host_subsystem,
-        (mig_subsystem_t)&host_priv_subsystem,
-        (mig_subsystem_t)&host_security_subsystem,
-        (mig_subsystem_t)&clock_subsystem,
-        (mig_subsystem_t)&clock_priv_subsystem,
-        (mig_subsystem_t)&processor_subsystem,
-        (mig_subsystem_t)&processor_set_subsystem,
-        (mig_subsystem_t)&is_iokit_subsystem,
-        (mig_subsystem_t)&memory_object_name_subsystem,
-	(mig_subsystem_t)&lock_set_subsystem,
-	(mig_subsystem_t)&ledger_subsystem,
-	(mig_subsystem_t)&semaphore_subsystem,
-	(mig_subsystem_t)&task_subsystem,
-	(mig_subsystem_t)&thread_act_subsystem,
-	(mig_subsystem_t)&vm_map_subsystem,
-	(mig_subsystem_t)&UNDReply_subsystem,
+const struct mig_subsystem *mig_e[] = {
+        (const struct mig_subsystem *)&mach_vm_subsystem,
+        (const struct mig_subsystem *)&mach_port_subsystem,
+        (const struct mig_subsystem *)&mach_host_subsystem,
+        (const struct mig_subsystem *)&host_priv_subsystem,
+        (const struct mig_subsystem *)&host_security_subsystem,
+        (const struct mig_subsystem *)&clock_subsystem,
+        (const struct mig_subsystem *)&clock_priv_subsystem,
+        (const struct mig_subsystem *)&processor_subsystem,
+        (const struct mig_subsystem *)&processor_set_subsystem,
+        (const struct mig_subsystem *)&is_iokit_subsystem,
+        (const struct mig_subsystem *)&memory_object_name_subsystem,
+	(const struct mig_subsystem *)&lock_set_subsystem,
+	(const struct mig_subsystem *)&ledger_subsystem,
+	(const struct mig_subsystem *)&semaphore_subsystem,
+	(const struct mig_subsystem *)&task_subsystem,
+	(const struct mig_subsystem *)&thread_act_subsystem,
+	(const struct mig_subsystem *)&vm_map_subsystem,
+	(const struct mig_subsystem *)&UNDReply_subsystem,
+	(const struct mig_subsystem *)&default_pager_object_subsystem,
 
 #if     XK_PROXY
-        (mig_subsystem_t)&do_uproxy_xk_uproxy_subsystem,
+        (const struct mig_subsystem *)&do_uproxy_xk_uproxy_subsystem,
 #endif /* XK_PROXY */
 #if     MACH_MACHINE_ROUTINES
-        (mig_subsystem_t)&MACHINE_SUBSYSTEM,
+        (const struct mig_subsystem *)&MACHINE_SUBSYSTEM,
 #endif  /* MACH_MACHINE_ROUTINES */
 #if     MCMSG && iPSC860
-	(mig_subsystem_t)&mcmsg_info_subsystem,
+	(const struct mig_subsystem *)&mcmsg_info_subsystem,
 #endif  /* MCMSG && iPSC860 */
 };
 
 void
 mig_init(void)
 {
-    register unsigned int i, n = sizeof(mig_e)/sizeof(mig_subsystem_t);
-    register unsigned int howmany;
-    register mach_msg_id_t j, pos, nentry, range;
+    unsigned int i, n = sizeof(mig_e)/sizeof(const struct mig_subsystem *);
+    int howmany;
+    mach_msg_id_t j, pos, nentry, range;
 	
     for (i = 0; i < n; i++) {
 	range = mig_e[i]->end - mig_e[i]->start;
@@ -235,24 +243,15 @@ ipc_kobject_server(
 	mach_msg_size_t reply_size;
 	ipc_kmsg_t reply;
 	kern_return_t kr;
-	mig_routine_t routine;
 	ipc_port_t *destp;
 	mach_msg_format_0_trailer_t *trailer;
 	register mig_hash_t *ptr;
-	unsigned int th;
 
-	/* Only fetch current thread if ETAP is configured */
-	ETAP_DATA_LOAD(th, current_thread());
-        ETAP_PROBE_DATA(ETAP_P_SYSCALL_MACH,
-                        EVENT_BEGIN,
-			((thread_t) th),
-                        &request->ikm_header.msgh_id,
-                        sizeof(int));
 	/*
-         * Find out corresponding mig_hash entry if any
-         */
+	 * Find out corresponding mig_hash entry if any
+	 */
 	{
-	    register int key = request->ikm_header.msgh_id;
+	    register int key = request->ikm_header->msgh_id;
 	    register int i = MIG_HASH(key);
 	    register int max_iter = mig_table_max_displ;
 	
@@ -285,8 +284,8 @@ ipc_kobject_server(
 	 * Initialize reply message.
 	 */
 	{
-#define	InP	((mach_msg_header_t *) &request->ikm_header)
-#define	OutP	((mig_reply_error_t *) &reply->ikm_header)
+#define	InP	((mach_msg_header_t *) request->ikm_header)
+#define	OutP	((mig_reply_error_t *) reply->ikm_header)
 
 	    OutP->NDR = NDR_record;
 	    OutP->Head.msgh_size = sizeof(mig_reply_error_t);
@@ -307,18 +306,18 @@ ipc_kobject_server(
 	 */
 	{
 	    if (ptr) {	
-		(*ptr->routine)(&request->ikm_header, &reply->ikm_header);
+		(*ptr->routine)(request->ikm_header, reply->ikm_header);
 		kernel_task->messages_received++;
 	    }
 	    else {
-		if (!ipc_kobject_notify(&request->ikm_header, &reply->ikm_header)){
+		if (!ipc_kobject_notify(request->ikm_header, reply->ikm_header)){
 #if	MACH_IPC_TEST
 		    printf("ipc_kobject_server: bogus kernel message, id=%d\n",
-			request->ikm_header.msgh_id);
+			request->ikm_header->msgh_id);
 #endif	/* MACH_IPC_TEST */
-		    _MIG_MSGID_INVALID(request->ikm_header.msgh_id);
+		    _MIG_MSGID_INVALID(request->ikm_header->msgh_id);
 
-		    ((mig_reply_error_t *) &reply->ikm_header)->RetCode
+		    ((mig_reply_error_t *) reply->ikm_header)->RetCode
 			= MIG_BAD_ID;
 		}
 		else
@@ -338,8 +337,8 @@ ipc_kobject_server(
 	 *	We set msgh_remote_port to IP_NULL so that the kmsg
 	 *	destroy routines don't try to destroy the port twice.
 	 */
-	destp = (ipc_port_t *) &request->ikm_header.msgh_remote_port;
-	switch (MACH_MSGH_BITS_REMOTE(request->ikm_header.msgh_bits)) {
+	destp = (ipc_port_t *) &request->ikm_header->msgh_remote_port;
+	switch (MACH_MSGH_BITS_REMOTE(request->ikm_header->msgh_bits)) {
 		case MACH_MSG_TYPE_PORT_SEND:
 		    ipc_port_release_send(*destp);
 		    break;
@@ -353,9 +352,9 @@ ipc_kobject_server(
 	}
 	*destp = IP_NULL;
 
-        if (!(reply->ikm_header.msgh_bits & MACH_MSGH_BITS_COMPLEX) &&
-           ((mig_reply_error_t *) &reply->ikm_header)->RetCode != KERN_SUCCESS)
-	 	kr = ((mig_reply_error_t *) &reply->ikm_header)->RetCode;
+        if (!(reply->ikm_header->msgh_bits & MACH_MSGH_BITS_COMPLEX) &&
+           ((mig_reply_error_t *) reply->ikm_header)->RetCode != KERN_SUCCESS)
+	 	kr = ((mig_reply_error_t *) reply->ikm_header)->RetCode;
 	else
 		kr = KERN_SUCCESS;
 
@@ -375,7 +374,7 @@ ipc_kobject_server(
 		 *	Destroy everthing except the reply port right,
 		 *	which is needed in the reply message.
 		 */
-		request->ikm_header.msgh_local_port = MACH_PORT_NULL;
+		request->ikm_header->msgh_local_port = MACH_PORT_NULL;
 		ipc_kmsg_destroy(request);
 	}
 
@@ -387,14 +386,8 @@ ipc_kobject_server(
 
 		ipc_kmsg_free(reply);
 
-		ETAP_PROBE_DATA(ETAP_P_SYSCALL_MACH,
-				EVENT_END,
-				((thread_t) th),
-				&request->ikm_header.msgh_id,
-				sizeof(int));
-
 		return IKM_NULL;
-	} else if (!IP_VALID((ipc_port_t)reply->ikm_header.msgh_remote_port)) {
+	} else if (!IP_VALID((ipc_port_t)reply->ikm_header->msgh_remote_port)) {
 		/*
 		 *	Can't queue the reply message if the destination
 		 *	(the reply port) isn't valid.
@@ -402,26 +395,15 @@ ipc_kobject_server(
 
 		ipc_kmsg_destroy(reply);
 
-		ETAP_PROBE_DATA(ETAP_P_SYSCALL_MACH,
-				EVENT_END,
-				((thread_t) th),
-				&request->ikm_header.msgh_id,
-				sizeof(int));
-
 		return IKM_NULL;
 	}
 
  	trailer = (mach_msg_format_0_trailer_t *)
-		((vm_offset_t)&reply->ikm_header + (int)reply->ikm_header.msgh_size);                
+		((vm_offset_t)reply->ikm_header + (int)reply->ikm_header->msgh_size);
+
  	trailer->msgh_sender = KERNEL_SECURITY_TOKEN;
  	trailer->msgh_trailer_type = MACH_MSG_TRAILER_FORMAT_0;
  	trailer->msgh_trailer_size = MACH_MSG_TRAILER_MINIMUM_SIZE;
-
-        ETAP_PROBE_DATA(ETAP_P_SYSCALL_MACH,
-                        EVENT_END,
-			((thread_t) th),
-                        &request->ikm_header.msgh_id,
-                        sizeof(int));
 
 	return reply;
 }
@@ -500,16 +482,12 @@ ipc_kobject_destroy(
 }
 
 
-extern int vnode_pager_workaround;
-
 boolean_t
 ipc_kobject_notify(
 	mach_msg_header_t *request_header,
 	mach_msg_header_t *reply_header)
 {
 	ipc_port_t port = (ipc_port_t) request_header->msgh_remote_port;
-	mig_subsystem_t		paging_subsystem_object;
-	mach_port_seqno_t	seqno;
 
 	((mig_reply_error_t *) reply_header)->RetCode = MIG_NO_REPLY;
 	switch (request_header->msgh_id) {
@@ -528,7 +506,7 @@ ipc_kobject_notify(
 		   }
 		   if (ip_kotype(port) == IKOT_UPL) {
 			   upl_no_senders(
-				(ipc_port_t)request_header->msgh_remote_port, 
+				request_header->msgh_remote_port, 
 				(mach_port_mscount_t) 
 				((mach_no_senders_notification_t *) 
 				 request_header)->not_count);
@@ -555,8 +533,6 @@ ipc_kobject_notify(
 		case IKOT_IOKIT_CONNECT:
 		case IKOT_IOKIT_SPARE:
 		{
-                extern boolean_t iokit_notify( mach_msg_header_t *msg);
-
                 return iokit_notify(request_header);
 		}
 #endif
@@ -593,7 +569,7 @@ kobjserver_stats_clear(void)
 void
 kobjserver_stats(void)
 {
-    register unsigned int i, n = sizeof(mig_e)/sizeof(mig_subsystem_t);
+    register unsigned int i, n = sizeof(mig_e)/sizeof(struct mig_subsystem);
     register unsigned int howmany;
     register mach_msg_id_t j, pos, nentry, range;
 	

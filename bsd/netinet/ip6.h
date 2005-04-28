@@ -237,8 +237,7 @@ struct ip6_frag {
 #define IPV6_MMTU	1280	/* minimal MTU and reassembly. 1024 + 256 */
 #define IPV6_MAXPACKET	65535	/* ip6 max packet size without Jumbo payload*/
 
-#ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
+#ifdef KERNEL_PRIVATE
 /*
  * IP6_EXTHDR_CHECK ensures that region between the IP6 header and the
  * target header (including IPv6 itself, extension headers and
@@ -248,25 +247,25 @@ struct ip6_frag {
  * supposed to never be matched but is prepared just in case.
  */
 
-#define IP6_EXTHDR_CHECK(m, off, hlen, ret)				\
+#define IP6_EXTHDR_CHECK(m, off, hlen, action)				\
 do {									\
     if ((m)->m_next != NULL) {						\
 	if (((m)->m_flags & M_LOOP) &&					\
 	    ((m)->m_len < (off) + (hlen)) &&				\
 	    (((m) = m_pullup((m), (off) + (hlen))) == NULL)) {		\
 		ip6stat.ip6s_exthdrtoolong++;				\
-		return ret;						\
+		action;							\
 	} else if ((m)->m_flags & M_EXT) {				\
 		if ((m)->m_len < (off) + (hlen)) {			\
 			ip6stat.ip6s_exthdrtoolong++;			\
 			m_freem(m);					\
-			return ret;					\
+			action;						\
 		}							\
 	} else {							\
 		if ((m)->m_len < (off) + (hlen)) {			\
 			ip6stat.ip6s_exthdrtoolong++;			\
 			m_freem(m);					\
-			return ret;					\
+			action;						\
 		}							\
 	}								\
     } else {								\
@@ -274,7 +273,7 @@ do {									\
 		ip6stat.ip6s_tooshort++;				\
 		in6_ifstat_inc(m->m_pkthdr.rcvif, ifs6_in_truncated);	\
 		m_freem(m);						\
-		return ret;						\
+		action;							\
 	}								\
     }									\
 } while (0)
@@ -325,7 +324,6 @@ do {									\
 		}							\
 	}								\
 } while (0)
-#endif /* __APPLE_API_PRIVATE */
-#endif /*KERNEL*/
 
-#endif /* not _NETINET_IP6_H_ */
+#endif KERNEL_PRIVATE
+#endif !_NETINET_IP6_H_

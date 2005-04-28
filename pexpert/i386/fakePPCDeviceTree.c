@@ -24,21 +24,12 @@
 
 #include "fakePPCStructs.h"
 
-boot_args fakePPCBootArgs = {
-    0,                // Revision
-    kBootArgsVersion, // Version
-    "",               // CommandLine
-    {{0}},            // PhysicalDRAM
-    {0},              // machine_type
-    0,                // deviceTreeP
-    0,                // deviceTreeLength
-    0,                // topOfKernelData
-};
+boot_args fakePPCBootArgs = { .Version = kBootArgsVersion };
 
 void * createdt(dt_init * template, long * retSize)
 {
     dt_init *    next;
-    int          size, allocSize;
+    size_t       size, allocSize;
     vm_address_t out, saveout;
     void *       source;
     
@@ -56,12 +47,17 @@ void * createdt(dt_init * template, long * retSize)
         {
             allocSize += *(next->dataInit.length);
         }
+        else if ( next->stringInit.two == 2 )
+        {
+            dt_data *dp = (dt_data *)(next->stringInit.data);
+            allocSize += (32 + 4 + 3 + dp->length) & (-4);
+        }
         else
         {
             allocSize += (32 + 4 + 3 + next->propInit.length) & (-4);
         }
     }
-    saveout = out = kalloc(allocSize);
+    saveout = out = (vm_address_t) kalloc(allocSize);
     if ( out == 0 ) return 0;
 
     // copy out
@@ -75,13 +71,24 @@ void * createdt(dt_init * template, long * retSize)
         }
         else if ( next->dataInit.one == 1 )
         {
-            *(next->dataInit.address) = out;
+            *((long *)next->dataInit.address) = out;
             source = 0;
             size   = *(next->dataInit.length);
         }
+        else if ( next->stringInit.two == 2 )
+        {
+            dt_data *dp = (dt_data *)next->stringInit.data;
+            bcopy( (void *)(uintptr_t)next->stringInit.name, (void *)out, 32);
+            out += 32;
+            size = dp->length;
+            *(long *)out = size;
+            out += sizeof(long);
+            source = (char *)dp->address;
+            size = (size + 3) & (-4);
+        }
         else
         {
-            bcopy( next->propInit.name, (void *)out, 32);
+            bcopy( (void *)(uintptr_t)next->propInit.name, (void *)out, 32);
             out += 32;
             size = next->propInit.length;
             *(long *)out = size;
@@ -125,14 +132,14 @@ typedef struct node_t {
 } node_t;
 
 
-int indent = 0;
+unsigned int indent = 0;
 
 void printdt()
 {
     node_t *nodeptr = (node_t *)nptr;
-    long num_props    = nodeptr->nProperties;
-    long len;
-    int i, j;
+    unsigned long num_props    = nodeptr->nProperties;
+    unsigned long len;
+    unsigned int i, j;
     unsigned char *sptr;
 
     nptr = (unsigned char *)&nodeptr->props;
@@ -143,7 +150,7 @@ void printdt()
         printf("'");
         printf("%s", nptr);
         nptr+=32;
-        len = *((long*)nptr);
+        len = *((unsigned long*)nptr);
         nptr += 4;
         printf("'\t\t(%ld)  '", len);
         sptr = nptr;

@@ -12,8 +12,6 @@ MIG_DEFS =	\
 MIG_HDRS = \
 
 DATAFILES = \
-	nlist.h stab.h \
-	${MIG_DEFS}
 
 MIGINCLUDES = \
 

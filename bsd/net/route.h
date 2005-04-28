@@ -58,6 +58,8 @@
 #ifndef _NET_ROUTE_H_
 #define _NET_ROUTE_H_
 #include <sys/appleapiopts.h>
+#include <sys/types.h>
+#include <sys/socket.h>
 
 /*
  * Kernel resident routing tables.
@@ -71,7 +73,8 @@
  * to a routing entry.  These are often held by protocols
  * in their control blocks, e.g. inpcb.
  */
-#if !defined(KERNEL) || defined(__APPLE_API_PRIVATE)
+#ifdef PRIVATE
+struct  rtentry;
 struct route {
 	struct	rtentry *ro_rt;
 	struct	sockaddr ro_dst;
@@ -79,7 +82,7 @@ struct route {
 };
 #else
 struct route;
-#endif
+#endif /* PRIVATE */
 
 /*
  * These numbers are used by reliable protocols for determining
@@ -89,7 +92,7 @@ struct rt_metrics {
 	u_long	rmx_locks;	/* Kernel must leave these values alone */
 	u_long	rmx_mtu;	/* MTU for this path */
 	u_long	rmx_hopcount;	/* max hops expected */
-	u_long	rmx_expire;	/* lifetime for route, e.g. redirect */
+	int32_t	rmx_expire;	/* lifetime for route, e.g. redirect */
 	u_long	rmx_recvpipe;	/* inbound delay-bandwidth product */
 	u_long	rmx_sendpipe;	/* outbound delay-bandwidth product */
 	u_long	rmx_ssthresh;	/* outbound gateway buffer limit */
@@ -110,7 +113,6 @@ struct rt_metrics {
 /*
  * XXX kernel function pointer `rt_output' is visible to applications.
  */
-struct mbuf;
 
 /*
  * We distinguish between routes to hosts and routes to networks,
@@ -120,10 +122,10 @@ struct mbuf;
  * gateways are marked so that the output routines know to address the
  * gateway rather than the ultimate destination.
  */
+#ifdef PRIVATE
 #ifndef RNF_NORMAL
 #include <net/radix.h>
 #endif
-#ifdef __APPLE_API_UNSTABLE
 struct rtentry {
 	struct	radix_node rt_nodes[2];	/* tree glue, and other values */
 #define	rt_key(r)	((struct sockaddr *)((r)->rt_nodes->rn_key))
@@ -138,14 +140,15 @@ struct rtentry {
 	caddr_t	rt_llinfo;		/* pointer to link level info cache */
 	struct	rt_metrics rt_rmx;	/* metrics used by rx'ing protocols */
 	struct	rtentry *rt_gwroute;	/* implied entry for gatewayed routes */
-	int	(*rt_output) __P((struct ifnet *, struct mbuf *,
-				  struct sockaddr *, struct rtentry *));
+	int	(*rt_output)(struct ifnet *, struct mbuf *,
+				  struct sockaddr *, struct rtentry *);
 					/* output routine for this (rt,if) */
 	struct	rtentry *rt_parent; 	/* cloning parent of this route */
 	u_long	generation_id;		/* route generation id */
 };
-#endif /* __APPLE_API_UNSTABLE */
+#endif /* PRIVATE */
 
+#ifdef __APPLE_API_OBSOLETE
 /*
  * Following structure necessary for 4.3 compatibility;
  * We should eventually move it to a compat file.
@@ -159,8 +162,11 @@ struct ortentry {
 	u_long	rt_use;			/* raw # packets forwarded */
 	struct	ifnet *rt_ifp;		/* the answer: interface to use */
 };
+#endif /* __APPLE_API_OBSOLETE */
 
+#ifdef PRIVATE
 #define rt_use rt_rmx.rmx_pksent
+#endif /* PRIVATE */
 
 #define	RTF_UP		0x1		/* route usable */
 #define	RTF_GATEWAY	0x2		/* destination is a gateway */
@@ -181,7 +187,7 @@ struct ortentry {
 #define RTF_PRCLONING	0x10000		/* protocol requires cloning */
 #define RTF_WASCLONED	0x20000		/* route generated through cloning */
 #define RTF_PROTO3	0x40000		/* protocol specific routing flag */
-/*			0x80000		   unused */
+					/* 0x80000 unused */
 #define RTF_PINNED	0x100000	/* future use */
 #define	RTF_LOCAL	0x200000 	/* route represents a local address */
 #define	RTF_BROADCAST	0x400000	/* route represents a bcast address */
@@ -198,6 +204,7 @@ struct	rtstat {
 	short	rts_unreach;		/* lookups which failed */
 	short	rts_wildcard;		/* lookups satisfied by a wildcard */
 };
+
 /*
  * Structures for routing messages.
  */
@@ -208,13 +215,29 @@ struct rt_msghdr {
 	u_short	rtm_index;	/* index for associated ifp */
 	int	rtm_flags;	/* flags, incl. kern & message, e.g. DONE */
 	int	rtm_addrs;	/* bitmask identifying sockaddrs in msg */
-	pid_t	rtm_pid;	/* identify sender */
-	int	rtm_seq;	/* for sender to identify action */
-	int	rtm_errno;	/* why failed */
+	pid_t   rtm_pid;	/* identify sender */
+	int     rtm_seq;	/* for sender to identify action */
+	int     rtm_errno;	/* why failed */
 	int	rtm_use;	/* from rtentry */
 	u_long	rtm_inits;	/* which metrics we are initializing */
 	struct	rt_metrics rtm_rmx; /* metrics themselves */
 };
+
+struct rt_msghdr2 {
+        u_short rtm_msglen;     /* to skip over non-understood messages */
+        u_char  rtm_version;    /* future binary compatibility */
+        u_char  rtm_type;       /* message type */
+        u_short rtm_index;      /* index for associated ifp */
+        int     rtm_flags;      /* flags, incl. kern & message, e.g. DONE */
+        int     rtm_addrs;      /* bitmask identifying sockaddrs in msg */
+	int32_t rtm_refcnt;         /* reference count */
+	int     rtm_parentflags;      /* flags of the parent route */
+        int     rtm_reserved;      /* reserved field set to 0 */
+        int     rtm_use;        /* from rtentry */
+        u_long  rtm_inits;      /* which metrics we are initializing */
+        struct  rt_metrics rtm_rmx; /* metrics themselves */
+};
+
 
 #define RTM_VERSION	5	/* Up the ante and ignore older versions */
 
@@ -237,9 +260,12 @@ struct rt_msghdr {
 #define RTM_IFINFO	0xe	/* iface going up/down etc. */
 #define	RTM_NEWMADDR	0xf	/* mcast group membership being added to if */
 #define	RTM_DELMADDR	0x10	/* mcast group membership being deleted */
-#ifdef KERNEL_PRIVATE
+#ifdef PRIVATE
 #define RTM_GET_SILENT	0x11
-#endif
+#endif PRIVATE
+#define RTM_IFINFO2	0x12	/* */
+#define RTM_NEWMADDR2	0x13	/* */
+#define RTM_GET2	0x14	/* */
 
 /*
  * Bitmask values for rtm_inits and rmx_locks.
@@ -292,53 +318,45 @@ struct route_cb {
 	int	any_count;
 };
 
-#ifdef KERNEL
-#ifndef __APPLE__
-#define	RTFREE(rt) \
-	do { \
-		if ((rt)->rt_refcnt <= 1) \
-			rtfree(rt); \
-		else \
-			(rt)->rt_refcnt--; \
-	} while (0)
-#else
+#ifdef KERNEL_PRIVATE
 #define RTFREE(rt)	rtfree(rt)
-#endif
-
-#ifdef __APPLE_API_PRIVATE
 extern struct route_cb route_cb;
 extern struct radix_node_head *rt_tables[AF_MAX+1];
 
 struct ifmultiaddr;
 struct proc;
 
-void	 route_init __P((void));
-void	 rt_ifmsg __P((struct ifnet *));
-void	 rt_missmsg __P((int, struct rt_addrinfo *, int, int));
-void	 rt_newaddrmsg __P((int, struct ifaddr *, int, struct rtentry *));
-void	 rt_newmaddrmsg __P((int, struct ifmultiaddr *));
-int	 rt_setgate __P((struct rtentry *,
-	    struct sockaddr *, struct sockaddr *));
-void	 rtalloc __P((struct route *));
-void	 rtalloc_ign __P((struct route *, u_long));
+void	 route_init(void);
+void	 rt_ifmsg(struct ifnet *);
+void	 rt_missmsg(int, struct rt_addrinfo *, int, int);
+void	 rt_newaddrmsg(int, struct ifaddr *, int, struct rtentry *);
+void	 rt_newmaddrmsg(int, struct ifmultiaddr *);
+int	 rt_setgate(struct rtentry *, struct sockaddr *, struct sockaddr *);
+void	 rtalloc(struct route *);
+void	 rtalloc_ign(struct route *, u_long);
 struct rtentry *
-	 rtalloc1 __P((struct sockaddr *, int, u_long));
-void	rtfree __P((struct rtentry *));
-void	rtref __P((struct rtentry *));
+	 rtalloc1(struct sockaddr *, int, u_long);
+struct rtentry *
+	 rtalloc1_locked(const struct sockaddr *, int, u_long);
+void	rtfree(struct rtentry *);
+void	rtfree_locked(struct rtentry *);
+void	rtref(struct rtentry *);
 /*
  * rtunref will decrement the refcount, rtfree will decrement and free if
  * the refcount has reached zero and the route is not up.
  * Unless you have good reason to do otherwise, use rtfree.
  */
-void	rtunref __P((struct rtentry *));
-void	rtsetifa __P((struct rtentry *, struct ifaddr *));
-int	 rtinit __P((struct ifaddr *, int, int));
-int	 rtioctl __P((int, caddr_t, struct proc *));
-void	 rtredirect __P((struct sockaddr *, struct sockaddr *,
-	    struct sockaddr *, int, struct sockaddr *, struct rtentry **));
-int	 rtrequest __P((int, struct sockaddr *,
-	    struct sockaddr *, struct sockaddr *, int, struct rtentry **));
-#endif /* __APPLE_API_PRIVATE */
-#endif
+void	rtunref(struct rtentry *);
+void	rtsetifa(struct rtentry *, struct ifaddr *);
+int	 rtinit(struct ifaddr *, int, int);
+int	 rtinit_locked(struct ifaddr *, int, int);
+int	 rtioctl(int, caddr_t, struct proc *);
+void	 rtredirect(struct sockaddr *, struct sockaddr *,
+	    struct sockaddr *, int, struct sockaddr *, struct rtentry **);
+int	 rtrequest(int, struct sockaddr *,
+	    struct sockaddr *, struct sockaddr *, int, struct rtentry **);
+int	 rtrequest_locked(int, struct sockaddr *,
+	    struct sockaddr *, struct sockaddr *, int, struct rtentry **);
+#endif KERNEL_PRIVATE
 
 #endif

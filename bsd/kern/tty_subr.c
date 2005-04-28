@@ -56,7 +56,6 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/buf.h>
 #include <sys/ioctl.h>
 #include <sys/tty.h>
 #include <sys/malloc.h>
@@ -89,7 +88,7 @@
  * Initialize clists.
  */
 void
-cinit()
+cinit(void)
 {
 }
 
@@ -346,10 +345,7 @@ out:
  *	clrbit(cp, off + len);
  */
 void
-clrbits(cp, off, len)
-	u_char *cp;
-	int off;
-	int len;
+clrbits(u_char *cp, int off, int len)
 {
 	int sby, sbi, eby, ebi;
 	register int i;
@@ -385,13 +381,10 @@ clrbits(cp, off, len)
  * Return number of bytes not transfered.
  */
 int
-b_to_q(cp, count, clp)
-	u_char *cp;
-	int count;
-	struct clist *clp;
+b_to_q(const u_char *cp, int count, struct clist *clp)
 {
-	register int cc;
-	register u_char *p = cp;
+	int cc;
+	const u_char *p = cp;
 	int s;
 
 	if (count <= 0)

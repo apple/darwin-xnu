@@ -19,6 +19,8 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
+#ifdef	KERNEL_PRIVATE
+
 #ifndef _MACHINE_IO_MAP_ENTRIES_H_
 #define _MACHINE_IO_MAP_ENTRIES_H_
 
@@ -33,3 +35,5 @@
 
 
 #endif /* _MACHINE_IO_MAP_ENTRIES_H_ */
+
+#endif	/* KERNEL_PRIVATE */

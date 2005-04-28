@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -18,17 +18,6 @@
  * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
- */
-/*
- * Copyright (c) 2000 Apple Computer, Inc.  All rights reserved.
- *
- * HISTORY
- *
- * 10 October 2000 (debo)
- *  Created.
- *
- * 30 November 2000 (debo)
- *	Final resolution of review feedback.
  */
 
 #ifndef _MACH_THREAD_POLICY_H_
@@ -58,13 +47,13 @@ typedef integer_t	*thread_policy_t;
 
 /*
 kern_return_t	thread_policy_set(
-					thread_act_t				thread,
+					thread_t					thread,
 					thread_policy_flavor_t		flavor,
 					thread_policy_t				policy_info,
 					mach_msg_type_number_t		count);
 
 kern_return_t	thread_policy_get(
-					thread_act_t				thread,
+					thread_t					thread,
 					thread_policy_flavor_t		flavor,
 					thread_policy_t				policy_info,
 					mach_msg_type_number_t		*count,
@@ -118,8 +107,8 @@ struct thread_extended_policy {
 typedef struct thread_extended_policy	thread_extended_policy_data_t;
 typedef struct thread_extended_policy	*thread_extended_policy_t;
 
-#define THREAD_EXTENDED_POLICY_COUNT	\
-	(sizeof (thread_extended_policy_data_t) / sizeof (integer_t))
+#define THREAD_EXTENDED_POLICY_COUNT	((mach_msg_type_number_t) \
+	(sizeof (thread_extended_policy_data_t) / sizeof (integer_t)))
 
 /*
  * THREAD_TIME_CONSTRAINT_POLICY:
@@ -162,8 +151,8 @@ typedef struct thread_time_constraint_policy	\
 typedef struct thread_time_constraint_policy	\
 									*thread_time_constraint_policy_t;
 
-#define THREAD_TIME_CONSTRAINT_POLICY_COUNT	\
-	(sizeof (thread_time_constraint_policy_data_t) / sizeof (integer_t))
+#define THREAD_TIME_CONSTRAINT_POLICY_COUNT	((mach_msg_type_number_t) \
+	(sizeof (thread_time_constraint_policy_data_t) / sizeof (integer_t)))
 
 /*
  * THREAD_PRECEDENCE_POLICY:
@@ -185,7 +174,7 @@ struct thread_precedence_policy {
 typedef struct thread_precedence_policy		thread_precedence_policy_data_t;
 typedef struct thread_precedence_policy		*thread_precedence_policy_t;
 
-#define THREAD_PRECEDENCE_POLICY_COUNT	\
-	(sizeof (thread_precedence_policy_data_t) / sizeof (integer_t))
+#define THREAD_PRECEDENCE_POLICY_COUNT	((mach_msg_type_number_t) \
+	(sizeof (thread_precedence_policy_data_t) / sizeof (integer_t)))
 
 #endif	/* _MACH_THREAD_POLICY_H_ */

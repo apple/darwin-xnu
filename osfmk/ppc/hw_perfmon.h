@@ -77,7 +77,7 @@ typedef enum {                        /* SPECSEL[0:1]  TD_CP_DBGxSEL[0:1]  TTM3S
 int perfmon_acquire_facility(task_t task);
 int perfmon_release_facility(task_t task);
 
-extern int perfmon_disable(thread_act_t thr_act);
+extern int perfmon_disable(thread_t thr_act);
 extern int perfmon_init(void);
 extern int perfmon_control(struct savearea *save);
 extern int perfmon_handle_pmi(struct savearea *ssp);

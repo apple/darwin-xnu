@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -23,8 +23,8 @@
  * @OSF_COPYRIGHT@
  */
 
-#ifndef _EXCEPTION_H_
-#define _EXCEPTION_H_
+#ifndef _KERN_EXCEPTION_H_
+#define _KERN_EXCEPTION_H_
 
 #include <mach/mach_types.h>
 #include <mach/thread_status.h>
@@ -42,7 +42,7 @@ struct exception_action {
 };
 
 /* Make an up-call to a thread's exception server */
-extern void exception(
+extern void exception_triage(
 	exception_type_t	exception,
 	exception_data_t	code,
 	mach_msg_type_number_t	codeCnt);
@@ -52,4 +52,4 @@ extern kern_return_t sys_perf_notify(struct task *task,
 	exception_data_t	code,
 	mach_msg_type_number_t  codeCnt);
 
-#endif	/* _EXCEPTION_H_ */
+#endif	/* _KERN_EXCEPTION_H_ */

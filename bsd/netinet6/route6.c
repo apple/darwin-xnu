@@ -44,8 +44,8 @@
 
 #include <netinet/icmp6.h>
 
-static int ip6_rthdr0 __P((struct mbuf *, struct ip6_hdr *,
-    struct ip6_rthdr0 *));
+static int ip6_rthdr0(struct mbuf *, struct ip6_hdr *,
+    struct ip6_rthdr0 *);
 
 int
 route6_input(mp, offp)
@@ -70,7 +70,7 @@ route6_input(mp, offp)
 	}
 
 #ifndef PULLDOWN_TEST
-	IP6_EXTHDR_CHECK(m, off, sizeof(*rh), IPPROTO_DONE);
+	IP6_EXTHDR_CHECK(m, off, sizeof(*rh), return IPPROTO_DONE);
 	ip6 = mtod(m, struct ip6_hdr *);
 	rh = (struct ip6_rthdr *)((caddr_t)ip6 + off);
 #else
@@ -91,7 +91,7 @@ route6_input(mp, offp)
 		 * due to IP6_EXTHDR_CHECK assumption, we cannot handle
 		 * very big routing header (max rhlen == 2048).
 		 */
-		IP6_EXTHDR_CHECK(m, off, rhlen, IPPROTO_DONE);
+		IP6_EXTHDR_CHECK(m, off, rhlen, return IPPROTO_DONE);
 #else
 		/*
 		 * note on option length:
@@ -207,11 +207,11 @@ ip6_rthdr0(m, ip6, rh0)
 
 #if COMPAT_RFC1883
 	if (rh0->ip6r0_slmap[index / 8] & (1 << (7 - (index % 8))))
-		ip6_forward(m, IPV6_SRCRT_NEIGHBOR);
+		ip6_forward(m, IPV6_SRCRT_NEIGHBOR, 0);
 	else
-		ip6_forward(m, IPV6_SRCRT_NOTNEIGHBOR);
+		ip6_forward(m, IPV6_SRCRT_NOTNEIGHBOR, 0);
 #else
-	ip6_forward(m, 1);
+	ip6_forward(m, 1, 0);
 #endif
 
 	return(-1);			/* m would be freed in ip6_forward() */

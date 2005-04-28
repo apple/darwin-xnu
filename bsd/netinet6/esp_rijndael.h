@@ -31,12 +31,13 @@
  */
 #include <sys/appleapiopts.h>
 
-#ifdef __APPLE_API_PRIVATE
-int esp_rijndael_schedlen __P((const struct esp_algorithm *));
-int esp_rijndael_schedule __P((const struct esp_algorithm *,
-	struct secasvar *));
-int esp_rijndael_blockdecrypt __P((const struct esp_algorithm *,
-	struct secasvar *, u_int8_t *, u_int8_t *));
-int esp_rijndael_blockencrypt __P((const struct esp_algorithm *,
-	struct secasvar *, u_int8_t *, u_int8_t *));
-#endif /* __APPLE_API_PRIVATE */
+#ifdef KERNEL_PRIVATE
+int esp_aes_schedlen(const struct esp_algorithm *);
+int esp_aes_schedule(const struct esp_algorithm *, struct secasvar *);
+int esp_cbc_decrypt_aes(struct mbuf *, size_t, struct secasvar *, 
+	const struct esp_algorithm *, int);
+int
+esp_cbc_encrypt_aes(struct mbuf *, size_t, size_t, struct secasvar *, 
+	const struct esp_algorithm *, int);
+
+#endif KERNEL_PRIVATE

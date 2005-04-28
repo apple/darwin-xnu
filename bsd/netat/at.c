@@ -34,6 +34,7 @@
 #include <sys/socket.h>
 #include <sys/socketvar.h>
 #include <sys/file.h>
+#include <sys/kauth.h>
 
 #include <net/if.h>
 #include <net/if_dl.h>
@@ -124,7 +125,8 @@ static int set_zones(ifz)
   * ifp is 0 if not an interface-specific ioctl.
   */
 
-int at_control(so, cmd, data, ifp)
+int
+at_control(so, cmd, data, ifp)
      struct socket *so;
      u_long cmd;
      caddr_t data;
@@ -137,15 +139,18 @@ int at_control(so, cmd, data, ifp)
 	struct ifaddr *ifa;
 	struct sockaddr_dl *sdl;
 
-	if (cmd == 0x2000ff99) {
+    if ((cmd & 0xffff) == 0xff99) {
+		u_long 	fixed_command;
+		char ioctl_buffer[32];
 		/* *** this is a temporary hack to get at_send_to_dev() to
 		   work with BSD-style sockets instead of the special purpose 
 		   system calls, ATsocket() and ATioctl().
 		   *** */
-		if ((error = at_ioctl((struct atpcb *)so->so_pcb, cmd, data, 0))) {
+		fixed_command = _IOW(0, 0xff99, user_addr_t); 
+		if ((error = at_ioctl((struct atpcb *)so->so_pcb, fixed_command, data, 0))) {
 		  if (((struct atpcb *)so->so_pcb)->proto != ATPROTO_LAP) {
 		    ((struct atpcb *)so->so_pcb)->proto = ATPROTO_LAP;
-		    error = at_ioctl((struct atpcb *)so->so_pcb, cmd, data, 0);
+		    error = at_ioctl((struct atpcb *)so->so_pcb, fixed_command, data , 0);
 		  }
 		}
 		return(error);
@@ -216,7 +221,7 @@ int at_control(so, cmd, data, ifp)
 	  	at_def_zone_t *defzonep = (at_def_zone_t *)data;
 
 		/* check for root access */
-		if (error = suser(p->p_ucred, &p->p_acflag))
+		if (error = suser(kauth_cred_get(), 0))
 			return(EACCES);
 
 		ifID = 0;
@@ -326,7 +331,7 @@ int at_control(so, cmd, data, ifp)
 	  {
 	  	at_nbp_reg_t *nbpP = (at_nbp_reg_t *)data;
 		nve_entry_t nve;
-		int error;
+		int error2;
 
 		if (!(at_state.flags & AT_ST_STARTED) || !ifID_home)
 			return(ENOTREADY);
@@ -382,14 +387,14 @@ int at_control(so, cmd, data, ifp)
 		 * this tuple in the registry and return ok response.
 		 */
 		ATDISABLE(nve_lock, NVE_LOCK);
-		if ((error = nbp_new_nve_entry(&nve, ifID)) == 0) {
+		if ((error2 = nbp_new_nve_entry(&nve, ifID)) == 0) {
 			nbpP->addr.net = ifID->ifThisNode.s_net;
 			nbpP->addr.node = ifID->ifThisNode.s_node;
 			nbpP->unique_nbp_id = nve.unique_nbp_id;
 		}
 		ATENABLE(nve_lock, NVE_LOCK);
 
-		return(error);
+		return(error2);
 		break;
 	  }
 
@@ -463,7 +468,7 @@ int at_control(so, cmd, data, ifp)
 	  	at_router_params_t *rt = (at_router_params_t *)data;
 
 		/* check for root access */
-		if (error = suser(p->p_ucred, &p->p_acflag))
+		if (error = suser(kauth_cred_get(), 0))
 			return(EACCES);
 
 		/* when in routing/multihome mode the AIOCSETROUTER IOCTL 
@@ -503,7 +508,7 @@ int at_control(so, cmd, data, ifp)
 	  	at_kern_err_t *keP = (at_kern_err_t *)data;
 
 		/* check for root access */
-		if (suser(p->p_ucred, &p->p_acflag))
+		if (suser(kauth_cred_get(), 0))
 			return(EACCES);
 
 		if (!(at_state.flags & AT_ST_STARTED))
@@ -534,7 +539,7 @@ int at_control(so, cmd, data, ifp)
 		    ret;
 
 		/* check for root access */
-		if (error = suser(p->p_ucred, &p->p_acflag))
+		if (error = suser(kauth_cred_get(), 0))
 			return(EACCES);
 
 		ret = ddp_shutdown(*count_only);
@@ -561,7 +566,7 @@ int at_control(so, cmd, data, ifp)
 
 	case SIOCSIFADDR:
 		/* check for root access */
-		if (error = suser(p->p_ucred, &p->p_acflag))
+		if (error = suser(kauth_cred_get(), 0))
 			error = EACCES;
 		else if (ifID)
 			error = EEXIST;
@@ -579,6 +584,7 @@ int at_control(so, cmd, data, ifp)
 
 			ifID->aa_ifp = ifp;
 			ifa = &ifID->aa_ifa;
+			ifnet_lock_exclusive(ifp);
 			TAILQ_FOREACH(ifa, &ifp->if_addrhead, ifa_link) 
 				if ((sdl = (struct sockaddr_dl *)ifa->ifa_addr) &&
 				      (sdl->sdl_family == AF_LINK)) {
@@ -599,14 +605,14 @@ int at_control(so, cmd, data, ifp)
 			ifID->ifNodeAddress.sat_family =  AF_APPLETALK;
 			/* the address itself will be filled in when ifThisNode
 			   is set */
-			s = splnet();
-			TAILQ_INSERT_TAIL(&ifp->if_addrhead, ifa, ifa_link);
-			splx(s);
+			if_attach_ifa(ifp, ifa);
+			ifnet_lock_done(ifp);
 
 			switch (ifp->if_type) {
 			case IFT_ETHER:
-				ether_attach_at(ifp, &ifID->at_dl_tag, 
-						&ifID->aarp_dl_tag);
+                        case IFT_L2VLAN:
+                        case IFT_IEEE8023ADLAG: /* bonded ethernet */
+				ether_attach_at(ifp);
 				error = 0;
 				ifID->cable_multicast_addr = etalk_multicast_addr;
 
@@ -649,7 +655,7 @@ int at_control(so, cmd, data, ifp)
 	       deletion of interfaces *** */
 	case SIOCDIFADDR:
 		/* check for root access */
-		if (error = suser(p->p_ucred, &p->p_acflag))
+		if (error = suser(kauth_cred_get(), 0))
 			error = EACCES;
 		else if (!ifID) 
 			error = EINVAL;
@@ -669,13 +675,11 @@ int at_control(so, cmd, data, ifp)
         /* let's make sure it's either -1 or a valid file descriptor */
         if (cloned_fd != -1) {
             struct socket	*cloned_so;
-            struct file     *cloned_fp;
-            error = getsock(p->p_fd, cloned_fd, &cloned_fp);
+			error = file_socket(cloned_fd, &cloned_so);
             if (error){
                 splx(s);	/* XXX */
                 break;
             }
-            cloned_so = (struct socket *)cloned_fp->f_data;
             clonedat_pcb = sotoatpcb(cloned_so);
         } else {
             clonedat_pcb = NULL;
@@ -687,6 +691,7 @@ int at_control(so, cmd, data, ifp)
             at_pcb->ddp_flags = clonedat_pcb->ddp_flags;
         }
         splx(s);		/* XXX */
+		file_drop(cloned_fd);
         break;
     }
         

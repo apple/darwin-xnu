@@ -16,8 +16,6 @@ OPTIONS/dynamic_num_nodes	optional dynamic_num_nodes
 OPTIONS/vtoc_compat	optional vtoc_compat
 OPTIONS/fddi		optional fddi
 
-
-
 osfmk/i386/hi_res_clock_map.c 	optional hi_res_clock
 
 osfmk/i386/pmap.c		standard
@@ -35,14 +33,16 @@ osfmk/i386/bcopy.s		standard
 osfmk/i386/bzero.s		standard
 osfmk/i386/cpu.c		standard
 osfmk/i386/cpuid.c		standard
+osfmk/i386/cpu_threads.c	standard
 osfmk/i386/db_disasm.c	optional mach_kdb
 osfmk/i386/db_interface.c	optional mach_kdb
 osfmk/i386/db_trace.c		optional mach_kdb
 osfmk/i386/fpu.c		standard
 osfmk/i386/gcc.s		standard
 osfmk/i386/gdt.c		standard
-osfmk/i386/hardclock.c	standard
 osfmk/i386/i386_lock.s	standard
+osfmk/i386/i386_init.c		standard
+osfmk/i386/i386_vm_init.c	standard
 osfmk/i386/idt.s		standard
 osfmk/i386/io_emulate.c	standard
 osfmk/i386/io_map.c		standard
@@ -50,6 +50,7 @@ osfmk/i386/iopb.c		standard
 osfmk/i386/ktss.c		standard
 osfmk/i386/ldt.c		standard
 osfmk/i386/loose_ends.c	standard
+osfmk/i386/locks_i386.c	standard
 osfmk/i386/locore.s	standard
 osfmk/i386/start.s	standard
 osfmk/i386/cswitch.s	standard
@@ -58,15 +59,15 @@ osfmk/i386/machine_routines_asm.s	standard
 osfmk/i386/mcount.s		optional profile
 osfmk/i386/mp_desc.c		standard
 osfmk/i386/ntoh.s		standard
+osfmk/i386/perfmon.c		standard
 osfmk/i386/pcb.c		standard
 osfmk/i386/phys.c		standard
 osfmk/i386/rtclock.c		standard
 osfmk/i386/trap.c		standard
 osfmk/i386/user_ldt.c		standard
-osfmk/i386/i386_init.c		standard
-osfmk/i386/i386_vm_init.c	standard
 
 osfmk/i386/commpage/commpage.c	standard
+osfmk/i386/commpage/atomic.s	standard
 osfmk/i386/commpage/commpage_mach_absolute_time.s	standard
 osfmk/i386/commpage/spinlocks.s	standard
 osfmk/i386/commpage/pthreads.s	standard
@@ -74,7 +75,6 @@ osfmk/i386/commpage/cacheflush.s	standard
 osfmk/i386/commpage/commpage_gettimeofday.s	standard
 osfmk/i386/commpage/bcopy_scalar.s	standard
 osfmk/i386/commpage/bzero_scalar.s	standard
-osfmk/i386/commpage/commpage_sigs.s	standard
 
 osfmk/i386/AT386/autoconf.c	standard
 osfmk/i386/AT386/bbclock.c	standard
@@ -85,6 +85,11 @@ osfmk/i386/AT386/physmem.c	optional physmem device-driver
 
 osfmk/i386/mp.c			standard
 osfmk/i386/mp_slave_boot.s	standard
+
+osfmk/i386/acpi.c		standard
+osfmk/i386/acpi_wakeup.s	standard
+
+osfmk/i386/mtrr.c		standard
 
 osfmk/console/i386/serial_console.c  optional  com device-driver
 
@@ -97,14 +102,15 @@ osfmk/console/i386/video_scroll.c    optional  vc device-driver
 
 osfmk/kern/etap_map.c		optional etap device-driver
 
-osfmk/profiling/i386/profile-md.c	optional gprof
-osfmk/profiling/i386/profile-asm.s	optional gprof
-osfmk/profiling/profile-kgmon.c		optional gprof
+#osfmk/profiling/i386/profile-md.c	optional gprof
+#osfmk/profiling/i386/profile-asm.s	optional gprof
+#osfmk/profiling/profile-kgmon.c		optional gprof
 #osfmk/profiling/profile-mk.c		optional gprof
 
 osfmk/kdp/ml/i386/kdp_machdep.c	optional	mach_kdp
 
 osfmk/kdp/ml/i386/kdp_vm.c	optional	mach_kdp
+
 
 # DUMMIES TO FORCE GENERATION OF .h FILES
 osfmk/OPTIONS/ln		optional ln
@@ -112,3 +118,4 @@ osfmk/OPTIONS/eisa		optional eisa
 osfmk/OPTIONS/himem		optional himem
 osfmk/OPTIONS/ec		optional ec
 osfmk/OPTIONS/hi_res_clock	optional hi_res_clock
+

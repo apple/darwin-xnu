@@ -58,6 +58,10 @@
 #ifndef _NETINET_IP_H_
 #define _NETINET_IP_H_
 #include <sys/appleapiopts.h>
+#include <sys/types.h>>		/* XXX temporary hack to get u_ types */
+#include <netinet/in.h>
+#include <netinet/in_systm.h>
+
 
 /*
  * Definitions for internet protocol version 4.

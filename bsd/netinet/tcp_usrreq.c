@@ -104,17 +104,15 @@
  */
 extern	char *tcpstates[];	/* XXX ??? */
 
-static int	tcp_attach __P((struct socket *, struct proc *));
-static int	tcp_connect __P((struct tcpcb *, struct sockaddr *, 
-				 struct proc *));
+static int	tcp_attach(struct socket *, struct proc *);
+static int	tcp_connect(struct tcpcb *, struct sockaddr *, struct proc *);
 #if INET6
-static int	tcp6_connect __P((struct tcpcb *, struct sockaddr *,
-				 struct proc *));
+static int	tcp6_connect(struct tcpcb *, struct sockaddr *, struct proc *);
 #endif /* INET6 */
 static struct tcpcb *
-		tcp_disconnect __P((struct tcpcb *));
+		tcp_disconnect(struct tcpcb *);
 static struct tcpcb *
-		tcp_usrclosed __P((struct tcpcb *));
+		tcp_usrclosed(struct tcpcb *);
 
 #if TCPDEBUG
 #define	TCPDEBUG0	int ostate = 0
@@ -134,7 +132,6 @@ static struct tcpcb *
 static int
 tcp_usr_attach(struct socket *so, int proto, struct proc *p)
 {
-	int s = splnet();
 	int error;
 	struct inpcb *inp = sotoinpcb(so);
 	struct tcpcb *tp = 0;
@@ -155,7 +152,6 @@ tcp_usr_attach(struct socket *so, int proto, struct proc *p)
 	tp = sototcpcb(so);
 out:
 	TCPDEBUG2(PRU_ATTACH);
-	splx(s);
 	return error;
 }
 
@@ -169,16 +165,17 @@ out:
 static int
 tcp_usr_detach(struct socket *so)
 {
-	int s = splnet();
 	int error = 0;
 	struct inpcb *inp = sotoinpcb(so);
 	struct tcpcb *tp;
 	TCPDEBUG0;
 
-	if (inp == 0) {
-		splx(s);
+	if (inp == 0 || (inp->inp_state == INPCB_STATE_DEAD)) {
 		return EINVAL;	/* XXX */
 	}
+#if 1
+	lck_mtx_assert(((struct inpcb *)so->so_pcb)->inpcb_mtx, LCK_MTX_ASSERT_OWNED);
+#endif
 	tp = intotcpcb(inp);
 	/* In case we got disconnected from the peer */
         if (tp == 0) 
@@ -187,21 +184,19 @@ tcp_usr_detach(struct socket *so)
 	tp = tcp_disconnect(tp);
 out:
 	TCPDEBUG2(PRU_DETACH);
-	splx(s);
 	return error;
 }
 
 #define	COMMON_START()	TCPDEBUG0; \
 			do { \
-				     if (inp == 0) { \
-					     splx(s); \
+				     if (inp == 0 || (inp->inp_state == INPCB_STATE_DEAD)) { \
 					     return EINVAL; \
 				     } \
 				     tp = intotcpcb(inp); \
 				     TCPDEBUG1(); \
 		     } while(0)
 			     
-#define COMMON_END(req)	out: TCPDEBUG2(req); splx(s); return error; goto out
+#define COMMON_END(req)	out: TCPDEBUG2(req); return error; goto out
 
 
 /*
@@ -210,7 +205,6 @@ out:
 static int
 tcp_usr_bind(struct socket *so, struct sockaddr *nam, struct proc *p)
 {
-	int s = splnet();
 	int error = 0;
 	struct inpcb *inp = sotoinpcb(so);
 	struct tcpcb *tp;
@@ -239,7 +233,6 @@ tcp_usr_bind(struct socket *so, struct sockaddr *nam, struct proc *p)
 static int
 tcp6_usr_bind(struct socket *so, struct sockaddr *nam, struct proc *p)
 {
-	int s = splnet();
 	int error = 0;
 	struct inpcb *inp = sotoinpcb(so);
 	struct tcpcb *tp;
@@ -285,7 +278,6 @@ tcp6_usr_bind(struct socket *so, struct sockaddr *nam, struct proc *p)
 static int
 tcp_usr_listen(struct socket *so, struct proc *p)
 {
-	int s = splnet();
 	int error = 0;
 	struct inpcb *inp = sotoinpcb(so);
 	struct tcpcb *tp;
@@ -302,7 +294,6 @@ tcp_usr_listen(struct socket *so, struct proc *p)
 static int
 tcp6_usr_listen(struct socket *so, struct proc *p)
 {
-	int s = splnet();
 	int error = 0;
 	struct inpcb *inp = sotoinpcb(so);
 	struct tcpcb *tp;
@@ -330,7 +321,6 @@ tcp6_usr_listen(struct socket *so, struct proc *p)
 static int
 tcp_usr_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 {
-	int s = splnet();
 	int error = 0;
 	struct inpcb *inp = sotoinpcb(so);
 	struct tcpcb *tp;
@@ -362,7 +352,6 @@ tcp_usr_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 static int
 tcp6_usr_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 {
-	int s = splnet();
 	int error = 0;
 	struct inpcb *inp = sotoinpcb(so);
 	struct tcpcb *tp;
@@ -419,11 +408,13 @@ tcp6_usr_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 static int
 tcp_usr_disconnect(struct socket *so)
 {
-	int s = splnet();
 	int error = 0;
 	struct inpcb *inp = sotoinpcb(so);
 	struct tcpcb *tp;
-
+	
+#if 1
+	lck_mtx_assert(((struct inpcb *)so->so_pcb)->inpcb_mtx, LCK_MTX_ASSERT_OWNED);
+#endif
 	COMMON_START();
         /* In case we got disconnected from the peer */
         if (tp == 0)
@@ -440,7 +431,6 @@ tcp_usr_disconnect(struct socket *so)
 static int
 tcp_usr_accept(struct socket *so, struct sockaddr **nam)
 {
-	int s = splnet();
 	int error = 0;
 	struct inpcb *inp = sotoinpcb(so);
 	struct tcpcb *tp = NULL;
@@ -450,8 +440,7 @@ tcp_usr_accept(struct socket *so, struct sockaddr **nam)
 		error = ECONNABORTED;
 		goto out;
 	}
-	if (inp == 0) {
-		splx(s);
+	if (inp == 0 || (inp->inp_state == INPCB_STATE_DEAD)) {
 		return (EINVAL);
 	}
 	tp = intotcpcb(inp);
@@ -464,7 +453,6 @@ tcp_usr_accept(struct socket *so, struct sockaddr **nam)
 static int
 tcp6_usr_accept(struct socket *so, struct sockaddr **nam)
 {
-	int s = splnet();
 	int error = 0;
 	struct inpcb *inp = sotoinpcb(so);
 	struct tcpcb *tp = NULL;
@@ -474,8 +462,7 @@ tcp6_usr_accept(struct socket *so, struct sockaddr **nam)
 		error = ECONNABORTED;
 		goto out;
 	}
-	if (inp == 0) {
-		splx(s);
+	if (inp == 0 || (inp->inp_state == INPCB_STATE_DEAD)) {
 		return (EINVAL);
 	}
 	tp = intotcpcb(inp);
@@ -490,7 +477,6 @@ tcp6_usr_accept(struct socket *so, struct sockaddr **nam)
 static int
 tcp_usr_shutdown(struct socket *so)
 {
-	int s = splnet();
 	int error = 0;
 	struct inpcb *inp = sotoinpcb(so);
 	struct tcpcb *tp;
@@ -512,7 +498,6 @@ tcp_usr_shutdown(struct socket *so)
 static int
 tcp_usr_rcvd(struct socket *so, int flags)
 {
-	int s = splnet();
 	int error = 0;
 	struct inpcb *inp = sotoinpcb(so);
 	struct tcpcb *tp;
@@ -536,7 +521,6 @@ static int
 tcp_usr_send(struct socket *so, int flags, struct mbuf *m, 
 	     struct sockaddr *nam, struct mbuf *control, struct proc *p)
 {
-	int s = splnet();
 	int error = 0;
 	struct inpcb *inp = sotoinpcb(so);
 	struct tcpcb *tp;
@@ -545,7 +529,7 @@ tcp_usr_send(struct socket *so, int flags, struct mbuf *m,
 #endif
 	TCPDEBUG0;
 
-	if (inp == NULL) {
+	if (inp == NULL || inp->inp_state == INPCB_STATE_DEAD) {
 		/*
 		 * OOPS! we lost a race, the TCP session got reset after
 		 * we checked SS_CANTSENDMORE, eg: while doing uiomove or a
@@ -660,7 +644,6 @@ tcp_usr_send(struct socket *so, int flags, struct mbuf *m,
 static int
 tcp_usr_abort(struct socket *so)
 {
-	int s = splnet();
 	int error = 0;
 	struct inpcb *inp = sotoinpcb(so);
 	struct tcpcb *tp;
@@ -670,6 +653,7 @@ tcp_usr_abort(struct socket *so)
         if (tp == 0)
             goto out;
 	tp = tcp_drop(tp, ECONNABORTED);
+	so->so_usecount--;
 	COMMON_END(PRU_ABORT);
 }
 
@@ -679,7 +663,6 @@ tcp_usr_abort(struct socket *so)
 static int
 tcp_usr_rcvoob(struct socket *so, struct mbuf *m, int flags)
 {
-	int s = splnet();
 	int error = 0;
 	struct inpcb *inp = sotoinpcb(so);
 	struct tcpcb *tp;
@@ -709,7 +692,7 @@ struct pr_usrreqs tcp_usrreqs = {
 	tcp_usr_connect, pru_connect2_notsupp, in_control, tcp_usr_detach,
 	tcp_usr_disconnect, tcp_usr_listen, in_setpeeraddr, tcp_usr_rcvd,
 	tcp_usr_rcvoob, tcp_usr_send, pru_sense_null, tcp_usr_shutdown,
-	in_setsockaddr, sosend, soreceive, sopoll
+	in_setsockaddr, sosend, soreceive, pru_sopoll_notsupp
 };
 
 #if INET6
@@ -718,7 +701,7 @@ struct pr_usrreqs tcp6_usrreqs = {
 	tcp6_usr_connect, pru_connect2_notsupp, in6_control, tcp_usr_detach,
 	tcp_usr_disconnect, tcp6_usr_listen, in6_mapped_peeraddr, tcp_usr_rcvd,
 	tcp_usr_rcvoob, tcp_usr_send, pru_sense_null, tcp_usr_shutdown,
-	in6_mapped_sockaddr, sosend, soreceive, sopoll
+	in6_mapped_sockaddr, sosend, soreceive, pru_sopoll_notsupp
 };
 #endif /* INET6 */
 
@@ -761,29 +744,51 @@ tcp_connect(tp, nam, p)
 	error = in_pcbladdr(inp, nam, &ifaddr);
 	if (error)
 		return error;
+
+	tcp_unlock(inp->inp_socket, 0, 0);
 	oinp = in_pcblookup_hash(inp->inp_pcbinfo,
 	    sin->sin_addr, sin->sin_port,
 	    inp->inp_laddr.s_addr != INADDR_ANY ? inp->inp_laddr
 						: ifaddr->sin_addr,
 	    inp->inp_lport,  0, NULL);
+
+	tcp_lock(inp->inp_socket, 0, 0);
 	if (oinp) {
+		tcp_lock(oinp->inp_socket, 1, 0);
+		if (in_pcb_checkstate(oinp, WNT_RELEASE, 1) == WNT_STOPUSING) {
+			tcp_unlock(oinp->inp_socket, 1, 0);
+			goto skip_oinp;
+		}
+
 		if (oinp != inp && (otp = intotcpcb(oinp)) != NULL &&
 		otp->t_state == TCPS_TIME_WAIT &&
 		    otp->t_starttime < tcp_msl &&
 		    (otp->t_flags & TF_RCVD_CC))
 			otp = tcp_close(otp);
-		else
+		else {
+			printf("tcp_connect: inp=%x err=EADDRINUSE\n", inp);
+			tcp_unlock(oinp->inp_socket, 1, 0);
 			return EADDRINUSE;
+		}
+		tcp_unlock(oinp->inp_socket, 1, 0);
 	}
+skip_oinp:
 	if ((inp->inp_laddr.s_addr == INADDR_ANY ? ifaddr->sin_addr.s_addr :
 		 inp->inp_laddr.s_addr) == sin->sin_addr.s_addr &&
 	    inp->inp_lport == sin->sin_port)
 			return EINVAL;
+	if (!lck_rw_try_lock_exclusive(inp->inp_pcbinfo->mtx)) {
+		/*lock inversion issue, mostly with udp multicast packets */
+		socket_unlock(inp->inp_socket, 0);
+		lck_rw_lock_exclusive(inp->inp_pcbinfo->mtx);
+		socket_lock(inp->inp_socket, 0);
+	}
 	if (inp->inp_laddr.s_addr == INADDR_ANY)
 		inp->inp_laddr = ifaddr->sin_addr;
 	inp->inp_faddr = sin->sin_addr;
 	inp->inp_fport = sin->sin_port;
 	in_pcbrehash(inp);
+	lck_rw_done(inp->inp_pcbinfo->mtx);
 
 	/* Compute window scaling to request.  */
 	while (tp->request_r_scale < TCP_MAX_WINSHIFT &&
@@ -829,7 +834,7 @@ tcp6_connect(tp, nam, p)
 	struct socket *so = inp->inp_socket;
 	struct tcpcb *otp;
 	struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)nam;
-	struct in6_addr *addr6;
+	struct in6_addr addr6;
 	struct rmxp_tao *taop;
 	struct rmxp_tao tao_noncached;
 	int error;
@@ -848,12 +853,14 @@ tcp6_connect(tp, nam, p)
 	error = in6_pcbladdr(inp, nam, &addr6);
 	if (error)
 		return error;
+	tcp_unlock(inp->inp_socket, 0, 0);
 	oinp = in6_pcblookup_hash(inp->inp_pcbinfo,
 				  &sin6->sin6_addr, sin6->sin6_port,
 				  IN6_IS_ADDR_UNSPECIFIED(&inp->in6p_laddr)
-				  ? addr6
+				  ? &addr6
 				  : &inp->in6p_laddr,
 				  inp->inp_lport,  0, NULL);
+	tcp_lock(inp->inp_socket, 0, 0);
 	if (oinp) {
 		if (oinp != inp && (otp = intotcpcb(oinp)) != NULL &&
 		    otp->t_state == TCPS_TIME_WAIT &&
@@ -863,13 +870,20 @@ tcp6_connect(tp, nam, p)
 		else
 			return EADDRINUSE;
 	}
+	if (!lck_rw_try_lock_exclusive(inp->inp_pcbinfo->mtx)) {
+		/*lock inversion issue, mostly with udp multicast packets */
+		socket_unlock(inp->inp_socket, 0);
+		lck_rw_lock_exclusive(inp->inp_pcbinfo->mtx);
+		socket_lock(inp->inp_socket, 0);
+	}
 	if (IN6_IS_ADDR_UNSPECIFIED(&inp->in6p_laddr))
-		inp->in6p_laddr = *addr6;
+		inp->in6p_laddr = addr6;
 	inp->in6p_faddr = sin6->sin6_addr;
 	inp->inp_fport = sin6->sin6_port;
 	if ((sin6->sin6_flowinfo & IPV6_FLOWINFO_MASK) != NULL)
 		inp->in6p_flowinfo = sin6->sin6_flowinfo;
 	in_pcbrehash(inp);
+	lck_rw_done(inp->inp_pcbinfo->mtx);
 
 	/* Compute window scaling to request.  */
 	while (tp->request_r_scale < TCP_MAX_WINSHIFT &&
@@ -917,15 +931,13 @@ tcp_ctloutput(so, sopt)
 	struct socket *so;
 	struct sockopt *sopt;
 {
-	int	error, opt, optval, s;
+	int	error, opt, optval;
 	struct	inpcb *inp;
 	struct	tcpcb *tp;
 
 	error = 0;
-	s = splnet();		/* XXX */
 	inp = sotoinpcb(so);
 	if (inp == NULL) {
-		splx(s);
 		return (ECONNRESET);
 	}
 	if (sopt->sopt_level != IPPROTO_TCP) {
@@ -935,12 +947,10 @@ tcp_ctloutput(so, sopt)
 		else
 #endif /* INET6 */
 		error = ip_ctloutput(so, sopt);
-		splx(s);
 		return (error);
 	}
 	tp = intotcpcb(inp);
         if (tp == NULL) {
-                splx(s);
                 return (ECONNRESET);
         }
 
@@ -1031,7 +1041,6 @@ tcp_ctloutput(so, sopt)
 			error = sooptcopyout(sopt, &optval, sizeof optval);
 		break;
 	}
-	splx(s);
 	return (error);
 }
 

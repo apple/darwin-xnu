@@ -44,17 +44,18 @@
 
 #ifdef __APPLE_API_UNSTABLE
 struct hfs_mount_args {
+#ifndef KERNEL
 	char	*fspec;			/* block special device to mount */
-	struct	export_args export;	/* network export information */
+#endif
 	uid_t	hfs_uid;		/* uid that owns hfs files (standard HFS only) */
 	gid_t	hfs_gid;		/* gid that owns hfs files (standard HFS only) */
 	mode_t	hfs_mask;		/* mask to be applied for hfs perms  (standard HFS only) */
-	u_long	hfs_encoding;		/* encoding for this volume (standard HFS only) */
+	uint32_t hfs_encoding;		/* encoding for this volume (standard HFS only) */
 	struct	timezone hfs_timezone;	/* user time zone info (standard HFS only) */
-	int	flags;			/* mounting flags, see below */
+	int		flags;			/* mounting flags, see below */
 	int     journal_tbuffer_size;   /* size in bytes of the journal transaction buffer */
-	int	journal_flags;          /* flags to pass to journal_open/create */
-	int	journal_disable;        /* don't use journaling (potentially dangerous) */
+	int		journal_flags;          /* flags to pass to journal_open/create */
+	int		journal_disable;        /* don't use journaling (potentially dangerous) */
 };
 
 #define HFSFSMNT_NOXONFILES	0x1	/* disable execute permissions for files */

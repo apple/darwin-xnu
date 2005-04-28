@@ -10,16 +10,17 @@ include $(MakeInc_def)
 
 EXPORT_ONLY_FILES = 		\
 	asm.h 			\
-	cpu_capabilities.h	\
 	cpu_number.h		\
-	lock.h			\
-	hw_lock_types.h		\
+	cpu_capabilities.h	\
+	Diagnostics.h		\
 	io_map_entries.h	\
+	lock.h			\
+	locks.h			\
 	proc_reg.h		\
 	machine_routines.h	\
-	Diagnostics.h		\
+	mappings.h		\
 	savearea.h		\
-	mappings.h
+	simple_lock.h
 
 INSTALL_MD_DIR = ppc
 

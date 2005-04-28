@@ -52,7 +52,6 @@
 #include <mach_kdb.h>
 #include <mach_kgdb.h>
 #include <mach_kdp.h>
-#include <cpus.h>
 
 #include <kern/cpu_number.h>
 #include <kern/lock.h>
@@ -62,6 +61,7 @@
 #include <kern/sched_prim.h>
 #include <kern/misc_protos.h>
 #include <vm/vm_kern.h>
+#include <vm/pmap.h>
 #include <stdarg.h>
 
 #ifdef	__ppc__
@@ -77,11 +77,7 @@ unsigned int	debug_mode=0;
 unsigned int 	disableDebugOuput = TRUE;
 unsigned int 	systemLogDiags = FALSE;
 unsigned int    logPanicDataToScreen = FALSE;
-#ifdef __ppc__
-        unsigned int 	panicDebugging = FALSE;
-#else
-        unsigned int 	panicDebugging = TRUE;
-#endif
+unsigned int 	panicDebugging = FALSE;
 
 int mach_assert = 1;
 
@@ -89,12 +85,13 @@ const char		*panicstr = (char *) 0;
 decl_simple_lock_data(,panic_lock)
 int			paniccpu;
 volatile int		panicwait;
-volatile int		nestedpanic= 0;
+volatile unsigned int	nestedpanic= 0;
 unsigned int		panic_is_inited = 0;
 unsigned int		return_on_panic = 0;
-wait_queue_t		save_waits[NCPUS];
+unsigned long		panic_caller;
 
 char *debug_buf;
+ppnum_t debug_buf_page;
 char *debug_buf_ptr;
 unsigned int debug_buf_size = 0;
 
@@ -133,8 +130,9 @@ MACRO_END
 void
 panic_init(void)
 {
-	simple_lock_init(&panic_lock, ETAP_NO_TRACE);
+	simple_lock_init(&panic_lock, 0);
 	panic_is_inited = 1;
+	panic_caller = 0;
 }
 
 void
@@ -143,6 +141,7 @@ panic(const char *str, ...)
 	va_list	listp;
 	spl_t	s;
 	thread_t thread;
+	wait_queue_t wq;
 
 	s = splhigh();
 	disable_preemption();
@@ -152,13 +151,18 @@ panic(const char *str, ...)
 #endif
 
 	thread = current_thread();		/* Get failing thread */
-	save_waits[cpu_number()] = thread->wait_queue;	/* Save the old value */
+	wq = thread->wait_queue;		/* Save the old value */
 	thread->wait_queue = 0;			/* Clear the wait so we do not get double panics when we try locks */
 
 	if( logPanicDataToScreen )
 		disableDebugOuput = FALSE;
 		
 	debug_mode = TRUE;
+
+	/* panic_caller is initialized to 0.  If set, don't change it */
+	if ( ! panic_caller )
+		panic_caller = (unsigned long) __builtin_return_address(0);
+	
 restart:
 	PANIC_LOCK();
 	if (panicstr) {
@@ -185,7 +189,7 @@ restart:
 	panicwait = 1;
 
 	PANIC_UNLOCK();
-	kdb_printf("panic(cpu %d): ", (unsigned) paniccpu);
+	kdb_printf("panic(cpu %d caller 0x%08X): ", (unsigned) paniccpu, panic_caller);
 	va_start(listp, str);
 	_doprnt(str, &listp, consdebug_putc, 0);
 	va_end(listp);
@@ -202,7 +206,7 @@ restart:
 	PANIC_LOCK();
 	panicstr = (char *)0;
 	PANIC_UNLOCK();
-	thread->wait_queue = save_waits[cpu_number()]; 	/* Restore the wait queue */
+	thread->wait_queue = wq; 	/* Restore the wait queue */
 	if (return_on_panic) {
 		enable_preemption();
 		splx(s);
@@ -239,6 +243,7 @@ debug_log_init(void)
 		panic("cannot allocate debug_buf \n");
 	debug_buf_ptr = debug_buf;
 	debug_buf_size = PAGE_SIZE;
+        debug_buf_page = pmap_find_phys(kernel_pmap, (addr64_t)(uintptr_t)debug_buf_ptr);
 }
 
 void

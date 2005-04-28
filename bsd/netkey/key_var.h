@@ -32,7 +32,6 @@
 #ifndef _NETKEY_KEY_VAR_H_
 #define _NETKEY_KEY_VAR_H_
 #include <sys/appleapiopts.h>
-#ifdef __APPLE_API_PRIVATE
 
 /* sysctl */
 #define KEYCTL_DEBUG_LEVEL		1
@@ -47,9 +46,11 @@
 #define KEYCTL_ESP_AUTH			10
 #define KEYCTL_AH_KEYMIN		11
 #define KEYCTL_PREFERED_OLDSA		12
-#define KEYCTL_NATT_KEEPALIVE_INTERVAL 13
-#define KEYCTL_MAXID			14
+#define KEYCTL_NATT_KEEPALIVE_INTERVAL	13
+#define KEYCTL_PFKEYSTAT		14
+#define KEYCTL_MAXID			15
 
+#ifdef KERNEL_PRIVATE
 #define KEYCTL_NAMES { \
 	{ 0, 0 }, \
 	{ "debug", CTLTYPE_INT }, \
@@ -65,6 +66,7 @@
 	{ "ah_keymin", CTLTYPE_INT }, \
 	{ "prefered_oldsa", CTLTYPE_INT }, \
 	{ "natt_keepalive_interval", CTLTYPE_INT }, \
+	{ "pfkeystat", CTLTYPE_STRUCT }, \
 }
 
 #define KEYCTL_VARS { \
@@ -90,5 +92,6 @@
 #define _KEYBUF(key) ((caddr_t)((caddr_t)(key) + sizeof(struct sadb_key)))
 #endif /*KERNEL*/
 
-#endif /* __APPLE_API_PRIVATE */
+#endif /* KERNEL_PRIVATE */
 #endif /* _NETKEY_KEY_VAR_H_ */
+

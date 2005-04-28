@@ -58,7 +58,6 @@
 #define	_NETINET_IP_VAR_H_
 #include <sys/appleapiopts.h>
 
-#ifdef __APPLE_API_PRIVATE
 /*
  * Overlay for ip header used by other protocols (tcp, udp).
  */
@@ -70,6 +69,7 @@ struct ipovly {
 	struct	in_addr ih_dst;		/* destination internet address */
 };
 
+#ifdef KERNEL_PRIVATE
 /*
  * Ip reassembly queue structure.  Each fragment
  * being reassembled is attached to one of these structures.
@@ -84,7 +84,8 @@ struct ipq {
 	struct mbuf *ipq_frags;		/* to ip headers of fragments */
 	struct	in_addr ipq_src,ipq_dst;
 	u_long	ipq_nfrags;
-	u_long	reserved[3];		/* for future use */
+	TAILQ_ENTRY(ipq) ipq_list;
+	u_long	reserved[1];		/* for future use */
 #if IPDIVERT
 #ifdef IPDIVERT_44
 	u_int32_t ipq_div_info;		/* ipfw divert port & flags */
@@ -101,7 +102,9 @@ struct ipq {
  * The actual length of the options (including ipopt_dst)
  * is in m_len.
  */
+#endif /* KERNEL_PRIVATE */
 #define MAX_IPOPTLEN	40
+#ifdef KERNEL_PRIVATE
 
 struct ipoption {
 	struct	in_addr ipopt_dst;	/* first-hop dst if source routed */
@@ -121,9 +124,14 @@ struct ip_moptions {
 	u_long	imo_multicast_vif;	/* vif num outgoing multicasts */
 	struct	in_addr imo_multicast_addr; /* ifindex/addr on MULTICAST_IF */
 };
-#endif /* __APPLE_API_PRIVATE */
 
-#ifdef __APPLE_API_UNSTABLE
+/* mbuf tag for ip_forwarding info */
+struct ip_fwd_tag {
+	struct sockaddr_in *next_hop;	/* next_hop */
+};
+
+#endif /* KERNEL_PRIVATE */
+
 struct	ipstat {
 	u_long	ips_total;		/* total packets received */
 	u_long	ips_badsum;		/* checksum bad */
@@ -155,10 +163,6 @@ struct	ipstat {
 	u_long	ips_nogif;		/* no match gif found */
 	u_long	ips_badaddr;		/* invalid address on header */
 };
-#endif /* __APPLE_API_UNSTABLE */
-
-#ifdef __APPLE_API_PRIVATE
-#ifdef KERNEL
 
 struct ip_linklocal_stat {
 	u_long iplls_in_total;
@@ -167,6 +171,7 @@ struct ip_linklocal_stat {
 	u_long iplls_out_badttl;
 };
 
+#ifdef KERNEL_PRIVATE
 /* flags passed to ip_output as last parameter */
 #define	IP_FORWARDING		0x1		/* most of ip header exists */
 #define	IP_RAWOUTPUT		0x2		/* raw ip header exists */
@@ -188,55 +193,48 @@ extern int	ipforwarding;			/* ip forwarding */
 extern struct protosw *ip_protox[];
 extern struct socket *ip_rsvpd;	/* reservation protocol daemon */
 extern struct socket *ip_mrouter; /* multicast routing daemon */
-extern int	(*legal_vif_num) __P((int));
-extern u_long	(*ip_mcast_src) __P((int));
+extern int	(*legal_vif_num)(int);
+extern u_long	(*ip_mcast_src)(int);
 extern int rsvp_on;
 extern struct	pr_usrreqs rip_usrreqs;
 
-int	 ip_ctloutput __P((struct socket *, struct sockopt *sopt));
-void	 ip_drain __P((void));
-void	 ip_freemoptions __P((struct ip_moptions *));
-void	 ip_init __P((void));
-extern int	 (*ip_mforward) __P((struct ip *, struct ifnet *, struct mbuf *,
-			  struct ip_moptions *));
-int	 ip_output __P((struct mbuf *,
-	    struct mbuf *, struct route *, int, struct ip_moptions *));
-void	 ip_savecontrol __P((struct inpcb *, struct mbuf **, struct ip *,
-		struct mbuf *));
-void	 ip_slowtimo __P((void));
+int	 ip_ctloutput(struct socket *, struct sockopt *sopt);
+void	 ip_drain(void);
+void	 ip_freemoptions(struct ip_moptions *);
+void	 ip_init(void);
+extern int	 (*ip_mforward)(struct ip *, struct ifnet *, struct mbuf *,
+			  struct ip_moptions *);
+int	 ip_output(struct mbuf *,
+	    struct mbuf *, struct route *, int, struct ip_moptions *);
+int	 ip_output_list(struct mbuf *, int,
+	    struct mbuf *, struct route *, int, struct ip_moptions *);
+struct in_ifaddr *
+	 ip_rtaddr(struct in_addr, struct route *);
+void	 ip_savecontrol(struct inpcb *, struct mbuf **, struct ip *,
+		struct mbuf *);
+void	 ip_slowtimo(void);
 struct mbuf *
-	 ip_srcroute __P((void));
-void	 ip_stripoptions __P((struct mbuf *, struct mbuf *));
+	 ip_srcroute(void);
+void	 ip_stripoptions(struct mbuf *, struct mbuf *);
 #if RANDOM_IP_ID
 u_int16_t	
-	 ip_randomid __P((void));
+	 ip_randomid(void);
 #endif
-int	 rip_ctloutput __P((struct socket *, struct sockopt *));
-void	 rip_ctlinput __P((int, struct sockaddr *, void *));
-void	 rip_init __P((void));
-void	 rip_input __P((struct mbuf *, int));
-int	 rip_output __P((struct mbuf *, struct socket *, u_long));
-void	ipip_input __P((struct mbuf *, int));
-void	rsvp_input __P((struct mbuf *, int));
-int	ip_rsvp_init __P((struct socket *));
-int	ip_rsvp_done __P((void));
-int	ip_rsvp_vif_init __P((struct socket *, struct sockopt *));
-int	ip_rsvp_vif_done __P((struct socket *, struct sockopt *));
-void	ip_rsvp_force_done __P((struct socket *));
-
-#if IPDIVERT
-void	div_init __P((void));
-void	div_input __P((struct mbuf *, int));
-void	divert_packet __P((struct mbuf *, int, int));
-extern struct pr_usrreqs div_usrreqs;
-extern u_int16_t ip_divert_cookie;
-#endif
-
-extern struct sockaddr_in *ip_fw_fwd_addr;
+int	rip_ctloutput(struct socket *, struct sockopt *);
+void	rip_ctlinput(int, struct sockaddr *, void *);
+void	rip_init(void);
+void	rip_input(struct mbuf *, int);
+int	rip_output(struct mbuf *, struct socket *, u_long);
+int	rip_unlock(struct socket *, int, int);
+void	ipip_input(struct mbuf *, int);
+void	rsvp_input(struct mbuf *, int);
+int	ip_rsvp_init(struct socket *);
+int	ip_rsvp_done(void);
+int	ip_rsvp_vif_init(struct socket *, struct sockopt *);
+int	ip_rsvp_vif_done(struct socket *, struct sockopt *);
+void	ip_rsvp_force_done(struct socket *);
 
 void	in_delayed_cksum(struct mbuf *m);
 
-#endif /* _KERNEL */
-#endif /* __APPLE_API_PRIVATE */
-
-#endif /* !_NETINET_IP_VAR_H_ */
+#endif KERNEL_PRIVATE
+#endif !_NETINET_IP_VAR_H_

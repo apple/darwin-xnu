@@ -45,10 +45,10 @@
 #  Standard Apple Research Configurations:
 #  -------- ----- -------- ---------------
 #
-#  RELEASE = [ppc mach medium vol pst gdb simple_clock kernstack nfsclient nfsserver quota fifo fdesc union ffs cd9660 compat_43 revfs noprofiling hfs volfs devfs synthfs netat mrouting ipdivert ipfirewall ktrace inet6 ipsec tcpdrop_synfin gif stf vlan]
+#  RELEASE = [ppc mach medium vol pst gdb simple_clock kernstack nfsclient nfsserver quota fifo fdesc union ffs cd9660 compat_oldsock revfs noprofiling hfs volfs devfs netat mrouting ipdivert ipfirewall ipfw2 dummynet ktrace inet6 ipv6firewall ipsec tcpdrop_synfin gif stf compat_43_tty compat_43_socket vlan bond netmibs]
 #  RELEASE_TRACE = [RELEASE kdebug]
-#  PROFILE = [ppc mach medium vol pst gdb simple_clock kernstack nfsclient nfsserver quota fifo fdesc union ffs cd9660 compat_43 revfs profile hfs volfs devfs synthfs netat mrouting ipdivert ipfirewall ktrace inet6 ipsec tcpdrop_synfin gif stf vlan]
-#  DEBUG = [ppc mach medium vol pst gdb debug simple_clock kernstack nfsclient nfsserver quota fifo fdesc union ffs cd9660 compat_43 revfs profiling hfs volfs devfs synthfs netat mrouting mach_assert ipdivert ipfirewall ktrace inet6 ipsec tcpdrop_synfin gif stf vlan]
+#  PROFILE = [ppc mach medium vol pst gdb simple_clock kernstack nfsclient nfsserver quota fifo fdesc union ffs cd9660 compat_oldsock revfs profile hfs volfs devfs netat mrouting ipdivert ipfirewall ipfw2 dummynet ktrace inet6 ipv6firewall ipsec tcpdrop_synfin gif stf compat_43_tty compat_43_socket vlan bond]
+#  DEBUG = [ppc mach medium vol pst gdb debug simple_clock kernstack nfsclient nfsserver quota fifo fdesc union ffs cd9660 compat_oldsock revfs profiling hfs volfs devfs netat mrouting mach_assert ipdivert ipfirewall ipfw2 dummynet ktrace inet6 ipv6firewall ipsec tcpdrop_synfin gif stf compat_43_tty compat_43_socket vlan bond netmibs]
 #  DEBUG_TRACE = [DEBUG kdebug]
 #
 ######################################################################

@@ -68,10 +68,11 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/proc.h>
+#include <sys/kauth.h>
 #include <sys/time.h>
 #include <sys/types.h>
 #include <sys/vnode.h>
-#include <sys/mount.h>
+#include <sys/mount_internal.h>
 #include <sys/namei.h>
 #include <sys/malloc.h>
 #include <miscfs/nullfs/null.h>
@@ -79,16 +80,15 @@
 /*
  * Mount null layer
  */
-int
-nullfs_mount(mp, path, data, ndp, p)
+static int
+nullfs_mount(mp, devvp, data, context)
 	struct mount *mp;
-	char *path;
-	caddr_t data;
-	struct nameidata *ndp;
-	struct proc *p;
+	vnode_t devvp;
+	user_addr_t data;
+	vfs_context_t context;
 {
 	int error = 0;
-	struct null_args args;
+	struct user_null_args args;
 	struct vnode *lowerrootvp, *vp;
 	struct vnode *nullm_rootvp;
 	struct null_mount *xmp;
@@ -102,30 +102,38 @@ nullfs_mount(mp, path, data, ndp, p)
 	 * Update is a no-op
 	 */
 	if (mp->mnt_flag & MNT_UPDATE) {
-		return (EOPNOTSUPP);
-		/* return VFS_MOUNT(MOUNTTONULLMOUNT(mp)->nullm_vfs, path, data, ndp, p);*/
+		return (ENOTSUP);
+		/* return VFS_MOUNT(MOUNTTONULLMOUNT(mp)->nullm_vfs, devvp, data,  p);*/
 	}
 
 	/*
 	 * Get argument
 	 */
-	if (error = copyin(data, (caddr_t)&args, sizeof(struct null_args)))
+	if (vfs_context_is64bit(context)) {
+		error = copyin(data, (caddr_t)&args, sizeof (args));
+	}
+	else {
+		struct null_args temp;
+		error = copyin(data, (caddr_t)&temp, sizeof (temp));
+		args.target = CAST_USER_ADDR_T(temp.target);
+	}
+	if (error)
 		return (error);
 
 	/*
 	 * Find lower node
 	 */
 	NDINIT(ndp, LOOKUP, FOLLOW|WANTPARENT|LOCKLEAF,
-		UIO_USERSPACE, args.target, p);
+		UIO_USERSPACE, args.target, context);
 	if (error = namei(ndp))
 		return (error);
-
+	nameidone(ndp);
 	/*
 	 * Sanity check on lower vnode
 	 */
 	lowerrootvp = ndp->ni_vp;
 
-	vrele(ndp->ni_dvp);
+	vnode_put(ndp->ni_dvp);
 	ndp->ni_dvp = NULL;
 
 	xmp = (struct null_mount *) _MALLOC(sizeof(struct null_mount),
@@ -142,21 +150,17 @@ nullfs_mount(mp, path, data, ndp, p)
 	 */
 	error = null_node_create(mp, lowerrootvp, &vp);
 	/*
-	 * Unlock the node (either the lower or the alias)
-	 */
-	VOP_UNLOCK(vp, 0, p);
-	/*
 	 * Make sure the node alias worked
 	 */
 	if (error) {
-		vrele(lowerrootvp);
+		vnode_put(lowerrootvp);
 		FREE(xmp, M_UFSMNT);	/* XXX */
 		return (error);
 	}
 
 	/*
 	 * Keep a held reference to the root vnode.
-	 * It is vrele'd in nullfs_unmount.
+	 * It is vnode_put'd in nullfs_unmount.
 	 */
 	nullm_rootvp = vp;
 	nullm_rootvp->v_flag |= VROOT;
@@ -166,14 +170,12 @@ nullfs_mount(mp, path, data, ndp, p)
 	mp->mnt_data = (qaddr_t) xmp;
 	vfs_getnewfsid(mp);
 
-	(void) copyinstr(path, mp->mnt_stat.f_mntonname, MNAMELEN - 1, &size);
-	bzero(mp->mnt_stat.f_mntonname + size, MNAMELEN - size);
-	(void) copyinstr(args.target, mp->mnt_stat.f_mntfromname, MNAMELEN - 1, 
+	(void) copyinstr(args.target, mp->mnt_vfsstat.f_mntfromname, MAXPATHLEN - 1, 
 	    &size);
-	bzero(mp->mnt_stat.f_mntfromname + size, MNAMELEN - size);
+	bzero(mp->mnt_vfsstat.f_mntfromname + size, MNAMELEN - size);
 #ifdef NULLFS_DIAGNOSTIC
 	printf("nullfs_mount: lower %s, alias at %s\n",
-		mp->mnt_stat.f_mntfromname, mp->mnt_stat.f_mntonname);
+		mp->mnt_vfsstat.f_mntfromname, mp->mnt_vfsstat.f_mntonname);
 #endif
 	return (0);
 }
@@ -183,24 +185,24 @@ nullfs_mount(mp, path, data, ndp, p)
  * on the underlying filesystem will have been called
  * when that filesystem was mounted.
  */
-int
-nullfs_start(mp, flags, p)
+static int
+nullfs_start(mp, flags, context)
 	struct mount *mp;
 	int flags;
-	struct proc *p;
+	vfs_context_t context;
 {
 	return (0);
-	/* return VFS_START(MOUNTTONULLMOUNT(mp)->nullm_vfs, flags, p); */
+	/* return VFS_START(MOUNTTONULLMOUNT(mp)->nullm_vfs, flags, context); */
 }
 
 /*
  * Free reference to null layer
  */
-int
-nullfs_unmount(mp, mntflags, p)
+static int
+nullfs_unmount(mp, mntflags, context)
 	struct mount *mp;
 	int mntflags;
-	struct proc *p;
+	vfs_context_t context;
 {
 	struct vnode *nullm_rootvp = MOUNTTONULLMOUNT(mp)->nullm_rootvp;
 	int error;
@@ -227,11 +229,11 @@ nullfs_unmount(mp, mntflags, p)
 	/*
 	 * Release reference on underlying root vnode
 	 */
-	vrele(nullm_rootvp);
+	vnode_put(nullm_rootvp);
 	/*
 	 * And blow it away for future re-use
 	 */
-	vgone(nullm_rootvp);
+	vnode_reclaim(nullm_rootvp);
 	/*
 	 * Finally, throw away the null_mount structure
 	 */
@@ -240,10 +242,11 @@ nullfs_unmount(mp, mntflags, p)
 	return 0;
 }
 
-int
-nullfs_root(mp, vpp)
+static int
+nullfs_root(mp, vpp, context)
 	struct mount *mp;
 	struct vnode **vpp;
+	vfs_context_t context;
 {
 	struct proc *p = curproc;	/* XXX */
 	struct vnode *vp;
@@ -259,31 +262,30 @@ nullfs_root(mp, vpp)
 	 * Return locked reference to root.
 	 */
 	vp = MOUNTTONULLMOUNT(mp)->nullm_rootvp;
-	VREF(vp);
-	vn_lock(vp, LK_EXCLUSIVE | LK_RETRY, p);
+	vnode_get(vp);
 	*vpp = vp;
 	return 0;
 }
 
-int
-nullfs_quotactl(mp, cmd, uid, arg, p)
+static int
+nullfs_quotactl(mp, cmd, uid, datap, context)
 	struct mount *mp;
 	int cmd;
 	uid_t uid;
-	caddr_t arg;
-	struct proc *p;
+	caddr_t datap;
+	vfs_context_t context;
 {
-	return VFS_QUOTACTL(MOUNTTONULLMOUNT(mp)->nullm_vfs, cmd, uid, arg, p);
+	return VFS_QUOTACTL(MOUNTTONULLMOUNT(mp)->nullm_vfs, cmd, uid, datap, context);
 }
 
-int
-nullfs_statfs(mp, sbp, p)
+static int
+nullfs_statfs(mp, sbp, context)
 	struct mount *mp;
-	struct statfs *sbp;
-	struct proc *p;
+	struct vfsstatfs *sbp;
+	vfs_context_t context;
 {
 	int error;
-	struct statfs mstat;
+	struct vfsstatfs mstat;
 
 #ifdef NULLFS_DIAGNOSTIC
 	printf("nullfs_statfs(mp = %x, vp = %x->%x)\n", mp,
@@ -294,12 +296,12 @@ nullfs_statfs(mp, sbp, p)
 
 	bzero(&mstat, sizeof(mstat));
 
-	error = VFS_STATFS(MOUNTTONULLMOUNT(mp)->nullm_vfs, &mstat, p);
+	error = VFS_STATFS(MOUNTTONULLMOUNT(mp)->nullm_vfs, &mstat, context);
 	if (error)
 		return (error);
 
 	/* now copy across the "interesting" information and fake the rest */
-	sbp->f_type = mstat.f_type;
+	//sbp->f_type = mstat.f_type;
 	sbp->f_flags = mstat.f_flags;
 	sbp->f_bsize = mstat.f_bsize;
 	sbp->f_iosize = mstat.f_iosize;
@@ -308,20 +310,12 @@ nullfs_statfs(mp, sbp, p)
 	sbp->f_bavail = mstat.f_bavail;
 	sbp->f_files = mstat.f_files;
 	sbp->f_ffree = mstat.f_ffree;
-	if (sbp != &mp->mnt_stat) {
-		bcopy(&mp->mnt_stat.f_fsid, &sbp->f_fsid, sizeof(sbp->f_fsid));
-		bcopy(mp->mnt_stat.f_mntonname, sbp->f_mntonname, MNAMELEN);
-		bcopy(mp->mnt_stat.f_mntfromname, sbp->f_mntfromname, MNAMELEN);
-	}
 	return (0);
 }
 
-int
-nullfs_sync(mp, waitfor, cred, p)
-	struct mount *mp;
-	int waitfor;
-	struct ucred *cred;
-	struct proc *p;
+static int
+nullfs_sync(__unused struct mount *mp, __unused int waitfor,
+	__unused kauth_cred_t cred, __unused vfs_context_t context)
 {
 	/*
 	 * XXX - Assumes no data cached at null layer.
@@ -329,41 +323,42 @@ nullfs_sync(mp, waitfor, cred, p)
 	return (0);
 }
 
-int
-nullfs_vget(mp, ino, vpp)
+static int
+nullfs_vget(mp, ino, vpp, context)
 	struct mount *mp;
-	ino_t ino;
+	ino64_t ino;
 	struct vnode **vpp;
+	vfs_context_t context;
 {
 	
-	return VFS_VGET(MOUNTTONULLMOUNT(mp)->nullm_vfs, ino, vpp);
+	return VFS_VGET(MOUNTTONULLMOUNT(mp)->nullm_vfs, ino, vpp, context);
 }
 
-int
-nullfs_fhtovp(mp, fidp, nam, vpp, exflagsp, credanonp)
+static int
+nullfs_fhtovp(mp, fhlen, fhp, vpp, context)
 	struct mount *mp;
-	struct fid *fidp;
-	struct mbuf *nam;
+	int fhlen;
+	unsigned char *fhp;
 	struct vnode **vpp;
-	int *exflagsp;
-	struct ucred**credanonp;
+	vfs_context_t context;
 {
 
-	return VFS_FHTOVP(MOUNTTONULLMOUNT(mp)->nullm_vfs, fidp, nam, vpp, exflagsp,credanonp);
+	return VFS_FHTOVP(MOUNTTONULLMOUNT(mp)->nullm_vfs, fhlen, fhp, vpp, context);
 }
 
-int
-nullfs_vptofh(vp, fhp)
+static int
+nullfs_vptofh(vp, fhlenp, fhp, context)
 	struct vnode *vp;
-	struct fid *fhp;
+	int *fhlenp;
+	unsigned char *fhp;
+	vfs_context_t context;
 {
-	return VFS_VPTOFH(NULLVPTOLOWERVP(vp), fhp);
+	return VFS_VPTOFH(NULLVPTOLOWERVP(vp), fhlenp, fhp, context);
 }
 
-int nullfs_init __P((struct vfsconf *));
+int nullfs_init (struct vfsconf *);
 
-#define nullfs_sysctl ((int (*) __P((int *, u_int, void *, size_t *, void *, \
-	    size_t, struct proc *)))eopnotsupp)
+#define nullfs_sysctl (int (*) (int *, u_int, user_addr_t, size_t *, user_addr_t, size_t, proc_t))eopnotsupp
 
 struct vfsops null_vfsops = {
 	nullfs_mount,
@@ -377,5 +372,5 @@ struct vfsops null_vfsops = {
 	nullfs_fhtovp,
 	nullfs_vptofh,
 	nullfs_init,
-	nullfs_sysctl,
+	nullfs_sysctl
 };

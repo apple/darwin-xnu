@@ -100,6 +100,7 @@
  */
 #define MLD6_UNSOLICITED_REPORT_INTERVAL	10
 
+extern lck_mtx_t *nd6_mutex;
 static struct ip6_pktopts ip6_opts;
 static int mld6_timers_are_running;
 static int mld6_init_done = 0 ;
@@ -107,7 +108,7 @@ static int mld6_init_done = 0 ;
 static struct in6_addr mld6_all_nodes_linklocal = IN6ADDR_LINKLOCAL_ALLNODES_INIT;
 static struct in6_addr mld6_all_routers_linklocal = IN6ADDR_LINKLOCAL_ALLROUTERS_INIT;
 
-static void mld6_sendpkt __P((struct in6_multi *, int, const struct in6_addr *));
+static void mld6_sendpkt(struct in6_multi *, int, const struct in6_addr *);
 
 void
 mld6_init()
@@ -137,8 +138,8 @@ mld6_init()
 }
 
 void
-mld6_start_listening(in6m)
-	struct in6_multi *in6m;
+mld6_start_listening(
+	struct in6_multi *in6m)
 {
 	int s = splnet();
 
@@ -166,8 +167,8 @@ mld6_start_listening(in6m)
 }
 
 void
-mld6_stop_listening(in6m)
-	struct in6_multi *in6m;
+mld6_stop_listening(
+	struct in6_multi *in6m)
 {
 	mld6_all_nodes_linklocal.s6_addr16[1] =
 		htons(in6m->in6m_ifp->if_index); /* XXX */
@@ -182,9 +183,9 @@ mld6_stop_listening(in6m)
 }
 
 void
-mld6_input(m, off)
-	struct mbuf *m;
-	int off;
+mld6_input(
+	struct mbuf *m,
+	int off)
 {
 	struct ip6_hdr *ip6 = mtod(m, struct ip6_hdr *);
 	struct mld6_hdr *mldh;
@@ -195,7 +196,7 @@ mld6_input(m, off)
 	int timer;		/* timer value in the MLD query header */
 
 #ifndef PULLDOWN_TEST
-	IP6_EXTHDR_CHECK(m, off, sizeof(*mldh),);
+	IP6_EXTHDR_CHECK(m, off, sizeof(*mldh), return);
 	mldh = (struct mld6_hdr *)(mtod(m, caddr_t) + off);
 #else
 	IP6_EXTHDR_GET(mldh, struct mld6_hdr *, m, off, sizeof(*mldh));
@@ -255,6 +256,7 @@ mld6_input(m, off)
 		 * - Use the value specified in the query message as
 		 *   the maximum timeout.
 		 */
+		ifnet_lock_exclusive(ifp);
 		IFP_TO_IA6(ifp, ia);
 		if (ia == NULL)
 			break;
@@ -301,6 +303,7 @@ mld6_input(m, off)
 				}
 			}
 		}
+		ifnet_lock_done(ifp);
 
 		if (IN6_IS_ADDR_MC_LINKLOCAL(&mldh->mld6_addr))
 			mldh->mld6_addr.s6_addr16[1] = 0; /* XXX */
@@ -328,11 +331,13 @@ mld6_input(m, off)
 		 * If we belong to the group being reported, stop
 		 * our timer for that group.
 		 */
+		ifnet_lock_shared(ifp);
 		IN6_LOOKUP_MULTI(mldh->mld6_addr, ifp, in6m);
 		if (in6m) {
 			in6m->in6m_timer = 0; /* transit to idle state */
 			in6m->in6m_state = MLD6_OTHERLISTENER; /* clear flag */
 		}
+		ifnet_lock_done(ifp);
 
 		if (IN6_IS_ADDR_MC_LINKLOCAL(&mldh->mld6_addr))
 			mldh->mld6_addr.s6_addr16[1] = 0; /* XXX */
@@ -350,7 +355,6 @@ mld6_fasttimeo()
 {
 	struct in6_multi *in6m;
 	struct in6_multistep step;
-	int s;
 
 	/*
 	 * Quick check to see if any work needs to be done, in order
@@ -359,7 +363,7 @@ mld6_fasttimeo()
 	if (!mld6_timers_are_running)
 		return;
 
-	s = splnet();
+	lck_mtx_lock(nd6_mutex);
 	mld6_timers_are_running = 0;
 	IN6_FIRST_MULTI(step, in6m);
 	while (in6m != NULL) {
@@ -373,14 +377,14 @@ mld6_fasttimeo()
 		}
 		IN6_NEXT_MULTI(step, in6m);
 	}
-	splx(s);
+	lck_mtx_unlock(nd6_mutex);
 }
 
 static void
-mld6_sendpkt(in6m, type, dst)
-	struct in6_multi *in6m;
-	int type;
-	const struct in6_addr *dst;
+mld6_sendpkt(
+	struct in6_multi *in6m,
+	int type,
+	const struct in6_addr *dst)
 {
 	struct mbuf *mh, *md;
 	struct mld6_hdr *mldh;
@@ -458,7 +462,7 @@ mld6_sendpkt(in6m, type, dst)
 	/* increment output statictics */
 	icmp6stat.icp6s_outhist[type]++;
 
-	ip6_output(mh, &ip6_opts, NULL, 0, &im6o, &outif);
+	ip6_output(mh, &ip6_opts, NULL, 0, &im6o, &outif, 0);
 	if (outif) {
 		icmp6_ifstat_inc(outif, ifs6_out_msg);
 		switch (type) {

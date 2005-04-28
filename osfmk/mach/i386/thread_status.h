@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -61,6 +61,7 @@
 #ifndef	_MACH_I386_THREAD_STATUS_H_
 #define _MACH_I386_THREAD_STATUS_H_
 
+#include <mach/message.h>
 #include <mach/i386/fp_reg.h>
 #include <mach/i386/thread_state.h>
 #include <architecture/i386/frame.h>	/* FIXME */
@@ -133,8 +134,8 @@ struct i386_new_thread_state {
 	unsigned int	uesp;
 	unsigned int	ss;
 };
-#define i386_NEW_THREAD_STATE_COUNT	\
-		(sizeof (struct i386_new_thread_state)/sizeof(unsigned int))
+#define i386_NEW_THREAD_STATE_COUNT	((mach_msg_type_number_t) \
+		(sizeof (struct i386_new_thread_state)/sizeof(unsigned int)))
 
 /*
  * Subset of saved state stored by processor on kernel-to-kernel
@@ -202,7 +203,8 @@ struct i386_saved_state {
 					 * function call args from the stack, for
 					 * efficient syscall exceptions */
 };
-#define i386_SAVED_STATE_COUNT	(sizeof (struct i386_saved_state)/sizeof(unsigned int))
+#define i386_SAVED_STATE_COUNT	((mach_msg_type_number_t) \
+	(sizeof (struct i386_saved_state)/sizeof(unsigned int)))
 #define i386_REGS_SEGS_STATE_COUNT	i386_SAVED_STATE_COUNT
 
 /*
@@ -251,12 +253,12 @@ struct i386_float_state {
 	unsigned char	hw_state[FP_STATE_BYTES]; /* actual "hardware" state */
 	int		exc_status;		/* exception status (readonly) */
 };
-#define i386_FLOAT_STATE_COUNT \
-		(sizeof(struct i386_float_state)/sizeof(unsigned int))
+#define i386_FLOAT_STATE_COUNT ((mach_msg_type_number_t) \
+		(sizeof(struct i386_float_state)/sizeof(unsigned int)))
 
 
-#define FP_old_STATE_BYTES \
-	(sizeof (struct i386_fp_save) + sizeof (struct i386_fp_regs))
+#define FP_old_STATE_BYTES ((mach_msg_type_number_t) \
+	(sizeof (struct i386_fp_save) + sizeof (struct i386_fp_regs)))
 
 struct i386_old_float_state {
 	int		fpkind;			/* FP_NO..FP_387 (readonly) */
@@ -264,8 +266,8 @@ struct i386_old_float_state {
 	unsigned char	hw_state[FP_old_STATE_BYTES]; /* actual "hardware" state */
 	int		exc_status;		/* exception status (readonly) */
 };
-#define i386_old_FLOAT_STATE_COUNT \
-		(sizeof(struct i386_old_float_state)/sizeof(unsigned int))
+#define i386_old_FLOAT_STATE_COUNT ((mach_msg_type_number_t) \
+		(sizeof(struct i386_old_float_state)/sizeof(unsigned int)))
 
 
 #define PORT_MAP_BITS 0x400
@@ -273,8 +275,8 @@ struct i386_isa_port_map_state {
 	unsigned char	pm[PORT_MAP_BITS>>3];
 };
 
-#define i386_ISA_PORT_MAP_STATE_COUNT \
-		(sizeof(struct i386_isa_port_map_state)/sizeof(unsigned int))
+#define i386_ISA_PORT_MAP_STATE_COUNT ((mach_msg_type_number_t) \
+		(sizeof(struct i386_isa_port_map_state)/sizeof(unsigned int)))
 
 /*
  * V8086 assist supplies a pointer to an interrupt
@@ -291,8 +293,8 @@ struct v86_interrupt_table {
 	unsigned short	vec;	/* vector to take */
 };
 
-#define	i386_V86_ASSIST_STATE_COUNT \
-	    (sizeof(struct i386_v86_assist_state)/sizeof(unsigned int))
+#define	i386_V86_ASSIST_STATE_COUNT ((mach_msg_type_number_t) \
+	    (sizeof(struct i386_v86_assist_state)/sizeof(unsigned int)))
 
 struct thread_syscall_state {
 	unsigned eax;
@@ -302,8 +304,8 @@ struct thread_syscall_state {
 	unsigned esp;
 };
 
-#define i386_THREAD_SYSCALL_STATE_COUNT \
-		(sizeof(struct thread_syscall_state) / sizeof(unsigned int))
+#define i386_THREAD_SYSCALL_STATE_COUNT ((mach_msg_type_number_t) \
+		(sizeof(struct thread_syscall_state) / sizeof(unsigned int)))
 
 /*
  * Main thread state consists of
@@ -332,8 +334,8 @@ typedef struct {
     unsigned int	gs;
 } i386_thread_state_t;
 
-#define i386_THREAD_STATE_COUNT		\
-    ( sizeof (i386_thread_state_t) / sizeof (int) )
+#define i386_THREAD_STATE_COUNT	((mach_msg_type_number_t) \
+    ( sizeof (i386_thread_state_t) / sizeof (int) ))
 
 /*
  * Default segment register values.
@@ -357,8 +359,8 @@ typedef struct {
     fp_stack_t		stack;
 } i386_thread_fpstate_t;
 
-#define i386_THREAD_FPSTATE_COUNT 	\
-    ( sizeof (i386_thread_fpstate_t) / sizeof (int) )
+#define i386_THREAD_FPSTATE_COUNT ((mach_msg_type_number_t)	\
+    ( sizeof (i386_thread_fpstate_t) / sizeof (int) ))
 
 /*
  * Extra state that may be
@@ -372,8 +374,8 @@ typedef struct {
     err_code_t		err;
 } i386_thread_exceptstate_t;
 
-#define i386_THREAD_EXCEPTSTATE_COUNT	\
-    ( sizeof (i386_thread_exceptstate_t) / sizeof (int) )
+#define i386_THREAD_EXCEPTSTATE_COUNT	((mach_msg_type_number_t) \
+    ( sizeof (i386_thread_exceptstate_t) / sizeof (int) ))
 
 /*
  * Per-thread variable used
@@ -386,7 +388,7 @@ typedef struct {
     unsigned int	self;
 } i386_thread_cthreadstate_t;
 
-#define i386_THREAD_CTHREADSTATE_COUNT	\
-    ( sizeof (i386_thread_cthreadstate_t) / sizeof (int) )
+#define i386_THREAD_CTHREADSTATE_COUNT	((mach_msg_type_number_t) \
+    ( sizeof (i386_thread_cthreadstate_t) / sizeof (int) ))
 
 #endif	/* _MACH_I386_THREAD_STATUS_H_ */

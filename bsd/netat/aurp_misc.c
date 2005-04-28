@@ -84,15 +84,14 @@ void AURPupdate(arg)
 	void *arg;
 {
 	unsigned char node;
-	boolean_t 	funnel_state;
         aurp_state_t *state;
         
-	funnel_state = thread_funnel_set(network_flock, TRUE);
+	atalk_lock();
 	
         state = (aurp_state_t *)&aurp_state[1];
 
 	if (aurp_gref == 0) {
-                (void) thread_funnel_set(network_flock, FALSE);
+		atalk_unlock();
 		return;
         }
 	/*
@@ -110,7 +109,7 @@ void AURPupdate(arg)
 	timeout(AURPupdate, arg, AURP_UpdateRate*10*HZ);
 	update_tmo = 1;
         
-        (void) thread_funnel_set(network_flock, FALSE);
+	atalk_unlock();
 }
 
 /* */

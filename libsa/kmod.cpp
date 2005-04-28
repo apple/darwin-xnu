@@ -588,7 +588,7 @@ unsigned long alloc_for_kmod(
     headers_pad = round_headers_size - headers_size;
 
     k_result = vm_allocate(kernel_map, (vm_offset_t *)&buffer,
-        round_size, TRUE);
+        round_size, VM_FLAGS_ANYWHERE);
     if (k_result != KERN_SUCCESS) {
         IOLog("alloc_for_kmod(): Can't allocate memory.\n");
         LOG_DELAY();

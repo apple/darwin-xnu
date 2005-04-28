@@ -28,8 +28,15 @@
 
 typedef UInt32 IOMessage;
 
-#define iokit_common_msg(message)     (UInt32)(sys_iokit|sub_iokit_common|message)
-#define iokit_family_msg(sub,message) (UInt32)(sys_iokit|sub|message)
+#define iokit_common_msg(message)          (UInt32)(sys_iokit|sub_iokit_common|message)
+#define iokit_family_msg(sub,message)      (UInt32)(sys_iokit|sub|message)
+
+/*! @defined iokit_vendor_specific_msg
+    @discussion iokit_vendor_specific_msg passes messages in the sub_iokit_vendor_specific
+    subsystem. It can be used to be generate messages that are used for private 
+    communication between vendor specific code with the  IOService::message() etc. APIs.
+*/
+#define iokit_vendor_specific_msg(message) (UInt32)(sys_iokit|sub_iokit_vendor_specific|message)
 
 #define kIOMessageServiceIsTerminated      iokit_common_msg(0x010)
 #define kIOMessageServiceIsSuspended       iokit_common_msg(0x020)

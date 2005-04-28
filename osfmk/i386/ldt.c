@@ -55,6 +55,7 @@
  * same LDT.
  */
 #include <i386/seg.h>
+#include <i386/pmap.h>
 #include <mach/i386/vm_types.h>
 #include <mach/i386/vm_param.h>
 
@@ -73,18 +74,31 @@ struct fake_descriptor	ldt[LDTSZ] = {
           ACC_P|ACC_PL_U|ACC_CALL_GATE
         },				/* call gate for mach rpc */
 /*017*/	{ 0,
-	  (VM_MAX_ADDRESS-VM_MIN_ADDRESS-1)>>12,
-	  SZ_32|SZ_G,
+	  0xfffff,
+ 	  SZ_32|SZ_G,
 	  ACC_P|ACC_PL_U|ACC_CODE_R
 	},				/* user code segment */
 /*01F*/	{ 0,
-	  (VM_MAX_ADDRESS-VM_MIN_ADDRESS-1)>>12,
+	  0xfffff,
 	  SZ_32|SZ_G,
 	  ACC_P|ACC_PL_U|ACC_DATA_W
 	},				/* user data segment */
 /*027*/	{ 0,
-	  (VM_MAX_ADDRESS-VM_MIN_ADDRESS-1)>>12,
+	  0xfffff,
 	  SZ_32|SZ_G,
 	  ACC_P|ACC_PL_U|ACC_DATA_W
 	},				/* user cthread segment */
+// Storage space for user ldt entries we will make room for 10 entries initially
+// as we will probably never need many more than that
+/*02F*/	{ 0, 0, 0, 0},
+/*037*/	{ 0, 0, 0, 0},
+/*03F*/	{ 0, 0, 0, 0},
+/*047*/	{ 0, 0, 0, 0},
+/*04F*/	{ 0, 0, 0, 0},
+/*057*/	{ 0, 0, 0, 0},
+/*05F*/	{ 0, 0, 0, 0},
+/*067*/	{ 0, 0, 0, 0},
+/*06F*/	{ 0, 0, 0, 0},
+/*077*/	{ 0, 0, 0, 0},
+
 };

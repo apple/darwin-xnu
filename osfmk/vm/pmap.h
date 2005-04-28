@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -61,16 +61,14 @@
 #ifndef	_VM_PMAP_H_
 #define _VM_PMAP_H_
 
-#include <sys/appleapiopts.h>
-
-#ifdef __APPLE_API_PRIVATE
-
 #include <mach/kern_return.h>
 #include <mach/vm_param.h>
 #include <mach/vm_types.h>
 #include <mach/vm_attributes.h>
 #include <mach/boolean.h>
 #include <mach/vm_prot.h>
+
+#ifdef	KERNEL_PRIVATE
 
 /*
  *	The following is a description of the interface to the
@@ -85,26 +83,28 @@
  */
 
 /* Copy between a physical page and a virtual address */
+/* LP64todo - switch to vm_map_offset_t when it grows */
 extern kern_return_t 	copypv(
 				addr64_t source, 
 				addr64_t sink, 
 				unsigned int size, 
 				int which);	
-#define cppvPsnk 	1
-#define cppvPsrc 	2
-#define cppvFsnk 	4
-#define cppvFsrc 	8
+#define cppvPsnk        1
+#define cppvPsnkb      31
+#define cppvPsrc        2
+#define cppvPsrcb      30
+#define cppvFsnk        4
+#define cppvFsnkb      29
+#define cppvFsrc        8
+#define cppvFsrcb      28
 #define cppvNoModSnk   16
+#define cppvNoModSnkb  27
 #define cppvNoRefSrc   32
-#define cppvKmap   	64	/* User the kernel's vm_map */
+#define cppvNoRefSrcb  26
+#define cppvKmap       64	/* Use the kernel's vm_map */
+#define cppvKmapb      25
 
-#if !defined(MACH_KERNEL_PRIVATE)
-
-typedef void *pmap_t;
-
-#else /* MACH_KERNEL_PRIVATE */
-
-typedef struct pmap *pmap_t;
+#ifdef	MACH_KERNEL_PRIVATE
 
 #include <machine/pmap.h>
 
@@ -113,9 +113,14 @@ typedef struct pmap *pmap_t;
  *	There is traditionally also a pmap_bootstrap,
  *	used very early by machine-dependent code,
  *	but it is not part of the interface.
+ *
+ *	LP64todo -
+ *	These interfaces are tied to the size of the
+ *	kernel pmap - and therefore use the "local"
+ *	vm_offset_t, etc... types.
  */
 
-extern vm_offset_t	pmap_steal_memory(vm_size_t size);
+extern void 		*pmap_steal_memory(vm_size_t size);
 						/* During VM initialization,
 						 * steal a chunk of memory.
 						 */
@@ -134,6 +139,10 @@ extern void		pmap_init(void);	/* Initialization,
 						 * after kernel runs
 						 * in virtual memory.
 						 */
+
+extern void 		mapping_adjust(void);	/* Adjust free mapping count */
+
+extern void 		mapping_free_prime(void); /* Primes the mapping block release list */
 
 #ifndef	MACHINE_PAGES
 /*
@@ -169,7 +178,7 @@ extern void		pmap_virtual_space(
 /*
  *	Routines to manage the physical map data structure.
  */
-extern pmap_t		pmap_create(vm_size_t size);	/* Create a pmap_t. */
+extern pmap_t		pmap_create(vm_map_size_t size);	/* Create a pmap_t. */
 extern pmap_t		(pmap_kernel)(void);	/* Return the kernel's pmap */
 extern void		pmap_reference(pmap_t pmap);	/* Gain a reference. */
 extern void		pmap_destroy(pmap_t pmap); /* Release a reference. */
@@ -178,7 +187,7 @@ extern void		pmap_switch(pmap_t);
 
 extern void		pmap_enter(	/* Enter a mapping */
 				pmap_t		pmap,
-				vm_offset_t	v,
+				vm_map_offset_t	v,
 				ppnum_t		pn,
 				vm_prot_t	prot,
 				unsigned int	flags,
@@ -227,6 +236,17 @@ extern void		(pmap_copy_part_rpage)(
 				vm_offset_t	src_offset,
 				vm_offset_t	dst,
 				vm_size_t	len);
+				
+extern unsigned int (pmap_disconnect)(	/* disconnect mappings and return reference and change */
+				ppnum_t		phys);
+
+extern kern_return_t	(pmap_attribute_cache_sync)(  /* Flush appropriate 
+						       * cache based on
+						       * page number sent */
+				ppnum_t		pn, 
+				vm_size_t	size, 
+				vm_machine_attribute_t attribute, 
+				vm_machine_attribute_val_t* value);
 
 /*
  * debug/assertions. pmap_verify_free returns true iff
@@ -245,20 +265,6 @@ extern int		(pmap_resident_count)(pmap_t pmap);
 extern void		pmap_collect(pmap_t pmap);/* Perform garbage
 						 * collection, if any */
 
-
-extern vm_offset_t	(pmap_phys_address)(	/* Transform address returned
-						 * by device driver mapping
-						 * function to physical address
-						 * known to this module.  */
-				int		frame);
-
-extern int		(pmap_phys_to_frame)(	/* Inverse of pmap_phys_addess,
-						 * for use by device driver
-						 * mapping function in
-						 * machine-independent
-						 * pseudo-devices.  */
-				vm_offset_t	phys);
-
 /*
  *	Optional routines
  */
@@ -266,57 +272,65 @@ extern void		(pmap_copy)(		/* Copy range of mappings,
 						 * if desired. */
 				pmap_t		dest,
 				pmap_t		source,
-				vm_offset_t	dest_va,
-				vm_size_t	size,
-				vm_offset_t	source_va);
+				vm_map_offset_t	dest_va,
+				vm_map_size_t	size,
+				vm_map_offset_t	source_va);
 
 extern kern_return_t	(pmap_attribute)(	/* Get/Set special memory
 						 * attributes */
 				pmap_t		pmap,
-				vm_offset_t	va,
-				vm_size_t	size,
+				vm_map_offset_t	va,
+				vm_map_size_t	size,
 				vm_machine_attribute_t  attribute,
-				vm_machine_attribute_val_t* value);
-
-extern kern_return_t	(pmap_attribute_cache_sync)(  /* Flush appropriate 
-						       * cache based on
-						       * page number sent */
-				ppnum_t		pn, 
-				vm_size_t	size, 
-				vm_machine_attribute_t attribute, 
 				vm_machine_attribute_val_t* value);
 
 /*
  * Routines defined as macros.
  */
 #ifndef PMAP_ACTIVATE_USER
-#define PMAP_ACTIVATE_USER(act, cpu) {				\
+#ifndef	PMAP_ACTIVATE
+#define PMAP_ACTIVATE_USER(thr, cpu)
+#else	/* PMAP_ACTIVATE */
+#define PMAP_ACTIVATE_USER(thr, cpu) {			\
 	pmap_t  pmap;						\
 								\
-	pmap = (act)->map->pmap;				\
+	pmap = (thr)->map->pmap;				\
 	if (pmap != pmap_kernel())				\
-		PMAP_ACTIVATE(pmap, (act), (cpu));		\
+		PMAP_ACTIVATE(pmap, (thr), (cpu));		\
 }
+#endif  /* PMAP_ACTIVATE */
 #endif  /* PMAP_ACTIVATE_USER */
 
 #ifndef PMAP_DEACTIVATE_USER
-#define PMAP_DEACTIVATE_USER(act, cpu) {			\
+#ifndef PMAP_DEACTIVATE
+#define PMAP_DEACTIVATE_USER(thr, cpu)
+#else	/* PMAP_DEACTIVATE */
+#define PMAP_DEACTIVATE_USER(thr, cpu) {			\
 	pmap_t  pmap;						\
 								\
-	pmap = (act)->map->pmap;				\
-	if ((pmap) != pmap_kernel())				\
-		PMAP_DEACTIVATE(pmap, (act), (cpu));		\
+	pmap = (thr)->map->pmap;				\
+	if ((pmap) != pmap_kernel())			\
+		PMAP_DEACTIVATE(pmap, (thr), (cpu));	\
 }
+#endif	/* PMAP_DEACTIVATE */
 #endif  /* PMAP_DEACTIVATE_USER */
 
 #ifndef	PMAP_ACTIVATE_KERNEL
+#ifndef PMAP_ACTIVATE
+#define	PMAP_ACTIVATE_KERNEL(cpu)
+#else	/* PMAP_ACTIVATE */
 #define	PMAP_ACTIVATE_KERNEL(cpu)			\
-		PMAP_ACTIVATE(pmap_kernel(), THR_ACT_NULL, cpu)
+		PMAP_ACTIVATE(pmap_kernel(), THREAD_NULL, cpu)
+#endif	/* PMAP_ACTIVATE */
 #endif	/* PMAP_ACTIVATE_KERNEL */
 
 #ifndef	PMAP_DEACTIVATE_KERNEL
+#ifndef PMAP_DEACTIVATE
+#define	PMAP_DEACTIVATE_KERNEL(cpu)
+#else	/* PMAP_DEACTIVATE */
 #define	PMAP_DEACTIVATE_KERNEL(cpu)			\
-		PMAP_DEACTIVATE(pmap_kernel(), THR_ACT_NULL, cpu)
+		PMAP_DEACTIVATE(pmap_kernel(), THREAD_NULL, cpu)
+#endif	/* PMAP_DEACTIVATE */
 #endif	/* PMAP_DEACTIVATE_KERNEL */
 
 #ifndef	PMAP_ENTER
@@ -324,16 +338,20 @@ extern kern_return_t	(pmap_attribute_cache_sync)(  /* Flush appropriate
  *	Macro to be used in place of pmap_enter()
  */
 #define PMAP_ENTER(pmap, virtual_address, page, protection, flags, wired) \
-		MACRO_BEGIN					\
-		pmap_enter(					\
-			(pmap),					\
-			(virtual_address),			\
-			(page)->phys_page,			\
-			(protection) & ~(page)->page_lock,	\
-			flags,					\
-			(wired)					\
-		 );						\
-		MACRO_END
+	MACRO_BEGIN							\
+	pmap_t		__pmap = (pmap);				\
+	vm_page_t	__page = (page);				\
+									\
+	if (__pmap != kernel_pmap) {					\
+		ASSERT_PAGE_DECRYPTED(__page);				\
+	}								\
+	pmap_enter(__pmap,						\
+		   (virtual_address),					\
+		   __page->phys_page,					\
+		   (protection) & ~__page->page_lock,			\
+		   (flags),						\
+		   (wired));						\
+	MACRO_END
 #endif	/* !PMAP_ENTER */
 
 /*
@@ -351,23 +369,29 @@ extern void             pmap_set_modify(ppnum_t	 pn);
 extern void		pmap_clear_modify(ppnum_t pn);
 				/* Return modify bit */
 extern boolean_t	pmap_is_modified(ppnum_t pn);
+				/* Return modified and referenced bits */
+extern unsigned int pmap_get_refmod(ppnum_t pn);
+				/* Clear modified and referenced bits */
+extern void			pmap_clear_refmod(ppnum_t pn, unsigned int mask);
+#define VM_MEM_MODIFIED		0x01	/* Modified bit */
+#define VM_MEM_REFERENCED	0x02	/* Referenced bit */
 
 /*
  *	Routines that operate on ranges of virtual addresses.
  */
 extern void		pmap_protect(	/* Change protections. */
 				pmap_t		map,
-				vm_offset_t	s,
-				vm_offset_t	e,
+				vm_map_offset_t	s,
+				vm_map_offset_t	e,
 				vm_prot_t	prot);
 
 extern void		(pmap_pageable)(
 				pmap_t		pmap,
-				vm_offset_t	start,
-				vm_offset_t	end,
+				vm_map_offset_t	start,
+				vm_map_offset_t	end,
 				boolean_t	pageable);
 
-#endif /* MACH_KERNEL_PRIVATE */
+#endif	/* MACH_KERNEL_PRIVATE */
 
 /*
  * JMM - This portion is exported to other kernel components right now,
@@ -375,40 +399,39 @@ extern void		(pmap_pageable)(
  * is provided in a cleaner manner.
  */
 
-#define PMAP_NULL  ((pmap_t) 0)
-
 extern pmap_t	kernel_pmap;			/* The kernel's map */
 #define		pmap_kernel()	(kernel_pmap)
 
 /* machine independent WIMG bits */
 
-#define VM_MEM_GUARDED 		0x1
-#define VM_MEM_COHERENT		0x2
-#define VM_MEM_NOT_CACHEABLE	0x4
-#define VM_MEM_WRITE_THROUGH	0x8
+#define VM_MEM_GUARDED 		0x1		/* (G) Guarded Storage */
+#define VM_MEM_COHERENT		0x2		/* (M) Memory Coherency */
+#define VM_MEM_NOT_CACHEABLE	0x4		/* (I) Cache Inhibit */
+#define VM_MEM_WRITE_THROUGH	0x8		/* (W) Write-Through */
 
 #define VM_WIMG_MASK		0xFF
 #define VM_WIMG_USE_DEFAULT	0x80000000
 
 extern void		pmap_modify_pages(	/* Set modify bit for pages */
 				pmap_t		map,
-				vm_offset_t	s,
-				vm_offset_t	e);
+				vm_map_offset_t	s,
+				vm_map_offset_t	e);
 
 extern vm_offset_t	pmap_extract(pmap_t pmap,
-				vm_offset_t va);
+				vm_map_offset_t va);
 
 extern void		pmap_change_wiring(	/* Specify pageability */
 				pmap_t		pmap,
-				vm_offset_t	va,
+				vm_map_offset_t	va,
 				boolean_t	wired);
 
+/* LP64todo - switch to vm_map_offset_t when it grows */
 extern void		pmap_remove(	/* Remove mappings. */
 				pmap_t		map,
 				addr64_t	s,
 				addr64_t	e);
 
 
-#endif  /* __APPLE_API_PRIVATE */
+#endif  /* KERNEL_PRIVATE */
 
 #endif	/* _VM_PMAP_H_ */

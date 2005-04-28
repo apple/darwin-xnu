@@ -53,15 +53,17 @@
 #ifndef _NETINET_IN_GIF_H_
 #define _NETINET_IN_GIF_H_
 #include <sys/appleapiopts.h>
-#ifdef __APPLE_API_PRIVATE
+#ifdef KERNEL
+#ifdef KERNEL_PRIVATE
 
 #define GIF_TTL		30
 
 extern int ip_gif_ttl;
 
-void in_gif_input __P((struct mbuf *, int));
-int in_gif_output __P((struct ifnet *, int, struct mbuf *, struct rtentry *));
-int gif_encapcheck4 __P((const struct mbuf *, int, int, void *));
+void in_gif_input(struct mbuf *, int);
+int in_gif_output(struct ifnet *, int, struct mbuf *, struct rtentry *);
+int gif_encapcheck4(const struct mbuf *, int, int, void *);
 
-#endif /* __APPLE_API_PRIVATE */
-#endif /*_NETINET_IN_GIF_H_*/
+#endif KERNEL_PRIVATE
+#endif KERNEL
+#endif _NETINET_IN_GIF_H_

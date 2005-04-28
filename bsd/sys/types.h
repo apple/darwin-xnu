@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -70,96 +70,205 @@
 
 /* Machine type dependent parameters. */
 #include <machine/types.h>
+#include <sys/_types.h>
 
-#include <machine/ansi.h>
 #include <machine/endian.h>
 
-#ifndef _POSIX_SOURCE
-typedef	unsigned char	u_char;
-typedef	unsigned short	u_short;
-typedef	unsigned int	u_int;
-typedef	unsigned long	u_long;
-typedef	unsigned short	ushort;		/* Sys V compatibility */
-typedef	unsigned int	uint;		/* Sys V compatibility */
+#ifndef _POSIX_C_SOURCE
+typedef	unsigned char		u_char;
+typedef	unsigned short		u_short;
+typedef	unsigned int		u_int;
+#ifndef _U_LONG
+typedef	unsigned long		u_long;
+#define _U_LONG
+#endif
+typedef	unsigned short		ushort;		/* Sys V compatibility */
+typedef	unsigned int		uint;		/* Sys V compatibility */
 #endif
 
-typedef	u_int64_t	u_quad_t;	/* quads */
-typedef	int64_t		quad_t;
-typedef	quad_t *	qaddr_t;
+typedef	u_int64_t		u_quad_t;	/* quads */
+typedef	int64_t			quad_t;
+typedef	quad_t *		qaddr_t;
 
-typedef	char *		caddr_t;	/* core address */
-typedef	int32_t		daddr_t;	/* disk address */
-typedef	int32_t		dev_t;		/* device number */
-typedef	u_int32_t	fixpt_t;	/* fixed point number */
-typedef	u_int32_t	gid_t;		/* group id */
-typedef	u_int32_t	in_addr_t;	/* base type for internet address */
-typedef	u_int16_t	in_port_t;
-typedef	u_int32_t	ino_t;		/* inode number */
-typedef	long		key_t;		/* IPC key (for Sys V IPC) */
-typedef	u_int16_t	mode_t;		/* permissions */
-typedef	u_int16_t	nlink_t;	/* link count */
-typedef	quad_t		off_t;		/* file offset */
-typedef	int32_t		pid_t;		/* process id */
-typedef quad_t		rlim_t;		/* resource limit */
-typedef	int32_t		segsz_t;	/* segment size */
-typedef	int32_t		swblk_t;	/* swap offset */
-typedef	u_int32_t	uid_t;		/* user id */
-typedef u_int32_t	useconds_t;	/* microseconds (unsigned) */
+typedef	char *			caddr_t;	/* core address */
+typedef	int32_t			daddr_t;	/* disk address */
 
-#ifndef _POSIX_SOURCE
+#ifndef _DEV_T
+typedef	__darwin_dev_t		dev_t;		/* device number */
+#define _DEV_T
+#endif
+
+typedef	u_int32_t		fixpt_t;	/* fixed point number */
+
+#ifndef _BLKCNT_T
+typedef	__darwin_blkcnt_t	blkcnt_t;
+#define	_BLKCNT_T
+#endif
+
+#ifndef _BLKSIZE_T
+typedef	__darwin_blksize_t	blksize_t;
+#define	_BLKSIZE_T
+#endif
+
+#ifndef _GID_T
+typedef __darwin_gid_t		gid_t;
+#define _GID_T
+#endif
+
+#ifndef _IN_ADDR_T
+#define _IN_ADDR_T
+typedef	__uint32_t		in_addr_t;	/* base type for internet address */
+#endif
+
+#ifndef _IN_PORT_T
+#define _IN_PORT_T
+typedef	__uint16_t		in_port_t;
+#endif
+
+#ifndef	_INO_T
+typedef	__darwin_ino_t		ino_t;		/* inode number */
+#define _INO_T
+#endif
+
+#ifndef _KEY_T
+#define _KEY_T
+typedef	__int32_t		key_t;		/* IPC key (for Sys V IPC) */
+#endif
+
+#ifndef	_MODE_T
+typedef	__darwin_mode_t		mode_t;
+#define _MODE_T
+#endif
+
+#ifndef _NLINK_T
+typedef	__uint16_t		nlink_t;	/* link count */
+#define	_NLINK_T
+#endif
+
+#ifndef _ID_T
+#define _ID_T
+typedef __darwin_id_t		id_t;		/* can hold pid_t, gid_t, or uid_t */
+#endif
+
+#ifndef _PID_T
+typedef __darwin_pid_t		pid_t;
+#define _PID_T
+#endif
+
+#ifndef _OFF_T
+typedef __darwin_off_t		off_t;
+#define _OFF_T
+#endif
+
+typedef	int32_t			segsz_t;	/* segment size */
+typedef	int32_t			swblk_t;	/* swap offset */
+
+#ifndef _UID_T
+typedef __darwin_uid_t		uid_t;		/* user id */
+#define _UID_T
+#endif
+
+#ifndef _ID_T
+typedef __darwin_id_t		id_t;
+#define _ID_T
+#endif
+
+#ifndef _POSIX_C_SOURCE
 /* Major, minor numbers, dev_t's. */
 #define	major(x)	((int32_t)(((u_int32_t)(x) >> 24) & 0xff))
 #define	minor(x)	((int32_t)((x) & 0xffffff))
 #define	makedev(x,y)	((dev_t)(((x) << 24) | (y)))
 #endif
 
-#ifndef	_BSD_CLOCK_T_DEFINED_
-#define	_BSD_CLOCK_T_DEFINED_
-typedef	_BSD_CLOCK_T_	clock_t;
+#ifndef	_CLOCK_T
+#define	_CLOCK_T
+typedef	__darwin_clock_t	clock_t;
 #endif
 
-#ifndef	_BSD_SIZE_T_DEFINED_
-#define	_BSD_SIZE_T_DEFINED_
-typedef	_BSD_SIZE_T_	size_t;
+#ifndef _SIZE_T
+#define _SIZE_T
+/* DO NOT REMOVE THIS COMMENT: fixincludes needs to see
+ * _GCC_SIZE_T */
+typedef __darwin_size_t		size_t;
 #endif
 
-#ifndef	_BSD_SSIZE_T_DEFINED_
-#define	_BSD_SSIZE_T_DEFINED_
-typedef	_BSD_SSIZE_T_	ssize_t;
+#ifndef	_SSIZE_T
+#define	_SSIZE_T
+typedef	__darwin_ssize_t	ssize_t;
 #endif
 
-#ifndef	_BSD_TIME_T_DEFINED_
-#define	_BSD_TIME_T_DEFINED_
-typedef	_BSD_TIME_T_	time_t;
+#ifndef	_TIME_T
+#define	_TIME_T
+typedef	__darwin_time_t		time_t;
 #endif
 
-#ifndef _POSIX_SOURCE
-#define	NBBY	8		/* number of bits in a byte */
+#ifndef _USECONDS_T
+#define _USECONDS_T
+typedef __darwin_useconds_t	useconds_t;
+#endif
+
+#ifndef _SUSECONDS_T
+#define _SUSECONDS_T
+typedef __darwin_suseconds_t	suseconds_t;
+#endif
+
+#ifndef _POSIX_C_SOURCE
+/*
+ * This code is present here in order to maintain historical backward
+ * compatability, and is intended to be removed at some point in the
+ * future; please include <sys/select.h> instead.
+ */
+#define	NBBY		8				/* bits in a byte */
+#define NFDBITS	(sizeof(__int32_t) * NBBY)		/* bits per mask */
+#define	howmany(x, y)	(((x) + ((y) - 1)) / (y))	/* # y's == x bits? */
+typedef __int32_t	fd_mask;
+
+
+/*
+ * Note:	We use _FD_SET to protect all select related
+ *		types and macros
+ */
+#ifndef _FD_SET
+#define	_FD_SET
 
 /*
  * Select uses bit masks of file descriptors in longs.  These macros
- * manipulate such bit fields (the filesystem macros use chars).
+ * manipulate such bit fields (the filesystem macros use chars).  The
+ * extra protection here is to permit application redefinition above
+ * the default size.
  */
 #ifndef	FD_SETSIZE
 #define	FD_SETSIZE	1024
 #endif
 
-typedef int32_t	fd_mask;
-#define NFDBITS	(sizeof(fd_mask) * NBBY)	/* bits per mask */
+#define	__DARWIN_NBBY	8				/* bits in a byte */
+#define __DARWIN_NFDBITS	(sizeof(__int32_t) * __DARWIN_NBBY) /* bits per mask */
+#define	__DARWIN_howmany(x, y) (((x) + ((y) - 1)) / (y))	/* # y's == x bits? */
 
-#ifndef howmany
-#define	howmany(x, y)	(((x) + ((y) - 1)) / (y))
-#endif
-
+__BEGIN_DECLS
 typedef	struct fd_set {
-	fd_mask	fds_bits[howmany(FD_SETSIZE, NFDBITS)];
+	__int32_t	fds_bits[__DARWIN_howmany(FD_SETSIZE, __DARWIN_NFDBITS)];
 } fd_set;
+__END_DECLS
 
-#define	FD_SET(n, p)	((p)->fds_bits[(n)/NFDBITS] |= (1 << ((n) % NFDBITS)))
-#define	FD_CLR(n, p)	((p)->fds_bits[(n)/NFDBITS] &= ~(1 << ((n) % NFDBITS)))
-#define	FD_ISSET(n, p)	((p)->fds_bits[(n)/NFDBITS] & (1 << ((n) % NFDBITS)))
-#define	FD_COPY(f, t)	bcopy(f, t, sizeof(*(f)))
+#define	FD_SET(n, p)	((p)->fds_bits[(n)/__DARWIN_NFDBITS] |= (1<<((n) % __DARWIN_NFDBITS)))
+#define	FD_CLR(n, p)	((p)->fds_bits[(n)/__DARWIN_NFDBITS] &= ~(1<<((n) % __DARWIN_NFDBITS)))
+#define	FD_ISSET(n, p)	((p)->fds_bits[(n)/__DARWIN_NFDBITS] & (1<<((n) % __DARWIN_NFDBITS)))
+#if __GNUC__ > 3 || __GNUC__ == 3 && __GNUC_MINOR__ >= 3
+/*
+ * Use the built-in bzero function instead of the library version so that
+ * we do not pollute the namespace or introduce prototype warnings.
+ */
+#define	FD_ZERO(p)	__builtin_bzero(p, sizeof(*(p)))
+#else
 #define	FD_ZERO(p)	bzero(p, sizeof(*(p)))
+#endif
+#ifndef _POSIX_C_SOURCE
+#define	FD_COPY(f, t)	bcopy(f, t, sizeof(*(f)))
+#endif	/* !_POSIX_C_SOURCE */
+
+#endif	/* !_FD_SET */
+
 
 #if defined(__STDC__) && defined(KERNEL)
 /*
@@ -177,49 +286,64 @@ struct	tty;
 struct	uio;
 #endif
 
-#endif /* !_POSIX_SOURCE */
+#endif /* !_POSIX_C_SOURCE */
 #endif /* __ASSEMBLER__ */
-
-struct _pthread_handler_rec
-{
-	void           (*routine)(void *);  /* Routine to call */
-	void           *arg;                 /* Argument to pass */
-	struct _pthread_handler_rec *next;
-};
 
 #ifndef __POSIX_LIB__
 
-#define __PTHREAD_SIZE__           596 
-#define __PTHREAD_ATTR_SIZE__      36
-#define __PTHREAD_MUTEXATTR_SIZE__ 8
-#define __PTHREAD_MUTEX_SIZE__     40
-#define __PTHREAD_CONDATTR_SIZE__  4
-#define __PTHREAD_COND_SIZE__      24
-#define __PTHREAD_ONCE_SIZE__      4
-#define __PTHREAD_RWLOCK_SIZE__    124
-#define __PTHREAD_RWLOCKATTR_SIZE__ 12
-
-
-typedef struct _opaque_pthread_t { long sig; struct _pthread_handler_rec  *cleanup_stack; char opaque[__PTHREAD_SIZE__];} *pthread_t;
-
-typedef struct _opaque_pthread_attr_t { long sig; char opaque[__PTHREAD_ATTR_SIZE__]; } pthread_attr_t;
-
-typedef struct _opaque_pthread_mutexattr_t { long sig; char opaque[__PTHREAD_MUTEXATTR_SIZE__]; } pthread_mutexattr_t;
-
-typedef struct _opaque_pthread_mutex_t { long sig; char opaque[__PTHREAD_MUTEX_SIZE__]; } pthread_mutex_t;
-
-typedef struct _opaque_pthread_condattr_t { long sig; char opaque[__PTHREAD_CONDATTR_SIZE__]; } pthread_condattr_t;
-
-typedef struct _opaque_pthread_cond_t { long sig;  char opaque[__PTHREAD_COND_SIZE__]; } pthread_cond_t;
-
-typedef struct _opaque_pthread_rwlockattr_t { long sig; char opaque[__PTHREAD_RWLOCKATTR_SIZE__]; } pthread_rwlockattr_t;
-
-typedef struct _opaque_pthread_rwlock_t { long sig;  char opaque[__PTHREAD_RWLOCK_SIZE__]; } pthread_rwlock_t;
-
-typedef struct { long sig; char opaque[__PTHREAD_ONCE_SIZE__]; } pthread_once_t;
+#ifndef _PTHREAD_ATTR_T
+#define _PTHREAD_ATTR_T
+typedef __darwin_pthread_attr_t		pthread_attr_t;
+#endif
+#ifndef _PTHREAD_COND_T
+#define _PTHREAD_COND_T
+typedef __darwin_pthread_cond_t		pthread_cond_t;
+#endif
+#ifndef _PTHREAD_CONDATTR_T
+#define _PTHREAD_CONDATTR_T
+typedef __darwin_pthread_condattr_t	pthread_condattr_t;
+#endif
+#ifndef _PTHREAD_MUTEX_T
+#define _PTHREAD_MUTEX_T
+typedef __darwin_pthread_mutex_t	pthread_mutex_t;
+#endif
+#ifndef _PTHREAD_MUTEXATTR_T
+#define _PTHREAD_MUTEXATTR_T
+typedef __darwin_pthread_mutexattr_t	pthread_mutexattr_t;
+#endif
+#ifndef _PTHREAD_ONCE_T
+#define _PTHREAD_ONCE_T
+typedef __darwin_pthread_once_t		pthread_once_t;
+#endif
+#ifndef _PTHREAD_RWLOCK_T
+#define _PTHREAD_RWLOCK_T
+typedef __darwin_pthread_rwlock_t	pthread_rwlock_t;
+#endif
+#ifndef _PTHREAD_RWLOCKATTR_T
+#define _PTHREAD_RWLOCKATTR_T
+typedef __darwin_pthread_rwlockattr_t	pthread_rwlockattr_t;
+#endif
+#ifndef _PTHREAD_T
+#define _PTHREAD_T
+typedef __darwin_pthread_t		pthread_t;
+#endif
 
 #endif /* __POSIX_LIB__ */
 
-typedef unsigned long pthread_key_t;    /* Opaque 'pointer' */
+#ifndef _PTHREAD_KEY_T
+#define _PTHREAD_KEY_T
+typedef __darwin_pthread_key_t		pthread_key_t;
+#endif
+
+/* statvfs and fstatvfs */
+#ifndef _FSBLKCNT_T
+#define _FSBLKCNT_T
+typedef __darwin_fsblkcnt_t		fsblkcnt_t;
+#endif
+
+#ifndef _FSFILCNT_T
+#define _FSFILCNT_T
+typedef __darwin_fsfilcnt_t		fsfilcnt_t;
+#endif
 
 #endif /* !_SYS_TYPES_H_ */

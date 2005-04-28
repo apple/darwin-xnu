@@ -36,25 +36,31 @@
 #include <kern/thread.h>
 #include <kern/debug.h>
 #include <kern/lock.h>
+#include <mach/mach_traps.h>
 #include <mach/time_value.h>
+#include <mach/vm_map.h>
 #include <mach/vm_param.h>
 #include <mach/vm_prot.h>
 #include <mach/port.h>
 
+#include <sys/file_internal.h>
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/dir.h>
 #include <sys/namei.h>
-#include <sys/proc.h>
+#include <sys/proc_internal.h>
+#include <sys/kauth.h>
 #include <sys/vm.h>
 #include <sys/file.h>
-#include <sys/vnode.h>
-#include <sys/buf.h>
+#include <sys/vnode_internal.h>
 #include <sys/mount.h>
 #include <sys/trace.h>
 #include <sys/kernel.h>
-#include <sys/ubc.h>
+#include <sys/ubc_internal.h>
+#include <sys/user.h>
 #include <sys/stat.h>
+#include <sys/sysproto.h>
+#include <sys/mman.h>
 
 #include <bsm/audit_kernel.h>
 #include <bsm/audit_kevents.h>
@@ -68,27 +74,29 @@
 #include <mach/shared_memory_server.h>
 #include <vm/vm_shared_memory_server.h>
 
+#include <vm/vm_protos.h>
 
-extern zone_t lsf_zone;
 
-useracc(addr, len, prot)
-	caddr_t	addr;
-	u_int	len;
-	int	prot;
+int
+useracc(
+	user_addr_t	addr,
+	user_size_t	len,
+	int	prot)
 {
 	return (vm_map_check_protection(
 			current_map(),
-			trunc_page_32((unsigned int)addr), round_page_32((unsigned int)(addr+len)),
+			vm_map_trunc_page(addr), vm_map_round_page(addr+len),
 			prot == B_READ ? VM_PROT_READ : VM_PROT_WRITE));
 }
 
-vslock(addr, len)
-	caddr_t	addr;
-	int	len;
+int
+vslock(
+	user_addr_t	addr,
+	user_size_t	len)
 {
-kern_return_t kret;
-	kret = vm_map_wire(current_map(), trunc_page_32((unsigned int)addr),
-			round_page_32((unsigned int)(addr+len)), 
+	kern_return_t kret;
+	kret = vm_map_wire(current_map(), vm_map_trunc_page(addr),
+			vm_map_round_page(addr+len), 
 			VM_PROT_READ | VM_PROT_WRITE ,FALSE);
 
 	switch (kret) {
@@ -104,22 +112,25 @@ kern_return_t kret;
 	}
 }
 
-vsunlock(addr, len, dirtied)
-	caddr_t	addr;
-	int	len;
-	int dirtied;
+int
+vsunlock(
+	user_addr_t addr,
+	user_size_t len,
+	__unused int dirtied)
 {
-	pmap_t		pmap;
 #if FIXME  /* [ */
+	pmap_t		pmap;
 	vm_page_t	pg;
+	vm_map_offset_t	vaddr;
+	ppnum_t		paddr;
 #endif  /* FIXME ] */
-	vm_offset_t	vaddr, paddr;
 	kern_return_t kret;
 
 #if FIXME  /* [ */
 	if (dirtied) {
 		pmap = get_task_pmap(current_task());
-		for (vaddr = trunc_page((unsigned int)(addr)); vaddr < round_page((unsigned int)(addr+len));
+		for (vaddr = vm_map_trunc_page(addr);
+		     vaddr < vm_map_round_page(addr+len);
 				vaddr += PAGE_SIZE) {
 			paddr = pmap_extract(pmap, vaddr);
 			pg = PHYS_TO_VM_PAGE(paddr);
@@ -130,8 +141,8 @@ vsunlock(addr, len, dirtied)
 #ifdef	lint
 	dirtied++;
 #endif	/* lint */
-	kret = vm_map_unwire(current_map(), trunc_page_32((unsigned int)(addr)),
-				round_page_32((unsigned int)(addr+len)), FALSE);
+	kret = vm_map_unwire(current_map(), vm_map_trunc_page(addr),
+				vm_map_round_page(addr+len), FALSE);
 	switch (kret) {
 	case KERN_SUCCESS:
 		return (0);
@@ -145,11 +156,10 @@ vsunlock(addr, len, dirtied)
 	}
 }
 
-#if	defined(sun) || BALANCE || defined(m88k)
-#else	/*defined(sun) || BALANCE || defined(m88k)*/
-subyte(addr, byte)
-	void * addr;
-	int byte;
+int
+subyte(
+	user_addr_t addr,
+	int byte)
 {
 	char character;
 	
@@ -157,18 +167,18 @@ subyte(addr, byte)
 	return (copyout((void *)&(character), addr, sizeof(char)) == 0 ? 0 : -1);
 }
 
-suibyte(addr, byte)
-	void * addr;
-	int byte;
+int
+suibyte(
+	user_addr_t addr,
+	int byte)
 {
 	char character;
 	
 	character = (char)byte;
-	return (copyout((void *) &(character), addr, sizeof(char)) == 0 ? 0 : -1);
+	return (copyout((void *)&(character), addr, sizeof(char)) == 0 ? 0 : -1);
 }
 
-int fubyte(addr)
-	void * addr;
+int fubyte(user_addr_t addr)
 {
 	unsigned char byte;
 
@@ -177,8 +187,7 @@ int fubyte(addr)
 	return(byte);
 }
 
-int fuibyte(addr)
-	void * addr;
+int fuibyte(user_addr_t addr)
 {
 	unsigned char byte;
 
@@ -187,15 +196,15 @@ int fuibyte(addr)
 	return(byte);
 }
 
-suword(addr, word)
-	void * addr;
-	long word;
+int
+suword(
+	user_addr_t addr,
+	long word)
 {
 	return (copyout((void *) &word, addr, sizeof(int)) == 0 ? 0 : -1);
 }
 
-long fuword(addr)
-	void * addr;
+long fuword(user_addr_t addr)
 {
 	long word;
 
@@ -206,15 +215,15 @@ long fuword(addr)
 
 /* suiword and fuiword are the same as suword and fuword, respectively */
 
-suiword(addr, word)
-	void * addr;
-	long word;
+int
+suiword(
+	user_addr_t addr,
+	long word)
 {
 	return (copyout((void *) &word, addr, sizeof(int)) == 0 ? 0 : -1);
 }
 
-long fuiword(addr)
-	void * addr;
+long fuiword(user_addr_t addr)
 {
 	long word;
 
@@ -222,23 +231,76 @@ long fuiword(addr)
 		return(-1);
 	return(word);
 }
-#endif	/* defined(sun) || BALANCE || defined(m88k) || defined(i386) */
+
+/*
+ * With a 32-bit kernel and mixed 32/64-bit user tasks, this interface allows the
+ * fetching and setting of process-sized size_t and pointer values.
+ */
+int
+sulong(user_addr_t addr, int64_t word)
+{
+
+	if (IS_64BIT_PROCESS(current_proc())) {
+		return(copyout((void *)&word, addr, sizeof(word)) == 0 ? 0 : -1);
+	} else {
+		return(suiword(addr, (long)word));
+	}
+}
+
+int64_t
+fulong(user_addr_t addr)
+{
+	int64_t longword;
+
+	if (IS_64BIT_PROCESS(current_proc())) {
+		if (copyin(addr, (void *)&longword, sizeof(longword)) != 0)
+			return(-1);
+		return(longword);
+	} else {
+		return((int64_t)fuiword(addr));
+	}
+}
 
 int
-swapon()
+suulong(user_addr_t addr, uint64_t uword)
 {
-	return(EOPNOTSUPP);
+
+	if (IS_64BIT_PROCESS(current_proc())) {
+		return(copyout((void *)&uword, addr, sizeof(uword)) == 0 ? 0 : -1);
+	} else {
+		return(suiword(addr, (u_long)uword));
+	}
+}
+
+uint64_t
+fuulong(user_addr_t addr)
+{
+	uint64_t ulongword;
+
+	if (IS_64BIT_PROCESS(current_proc())) {
+		if (copyin(addr, (void *)&ulongword, sizeof(ulongword)) != 0)
+			return(-1ULL);
+		return(ulongword);
+	} else {
+		return((uint64_t)fuiword(addr));
+	}
+}
+
+int
+swapon(__unused struct proc *procp, __unused struct swapon_args *uap, __unused int *retval)
+{
+	return(ENOTSUP);
 }
 
 
 kern_return_t
-pid_for_task(t, x)
-	mach_port_t	t;
-	int	*x;
+pid_for_task(
+	struct pid_for_task_args *args)
 {
+	mach_port_name_t	t = args->t;
+	user_addr_t		pid_addr  = args->pid;  
 	struct proc * p;
 	task_t		t1;
-	extern task_t port_name_to_task(mach_port_t t);
 	int	pid = -1;
 	kern_return_t	err = KERN_SUCCESS;
 	boolean_t funnel_state;
@@ -255,7 +317,7 @@ pid_for_task(t, x)
 	} else {
 		p = get_bsdtask_info(t1);
 		if (p) {
-			pid  = p->p_pid;
+			pid  = proc_pid(p);
 			err = KERN_SUCCESS;
 		} else {
 			err = KERN_FAILURE;
@@ -264,7 +326,7 @@ pid_for_task(t, x)
 	task_deallocate(t1);
 pftout:
 	AUDIT_ARG(pid, pid);
-	(void) copyout((char *) &pid, (char *) x, sizeof(*x));
+	(void) copyout((char *) &pid, pid_addr, sizeof(int));
 	thread_funnel_set(kernel_flock, funnel_state);
 	AUDIT_MACH_SYSCALL_EXIT(err);
 	return(err);
@@ -278,18 +340,21 @@ pftout:
  *
  *		Only permitted to privileged processes, or processes
  *		with the same user ID.
+ *
+ * XXX This should be a BSD system call, not a Mach trap!!!
  */
 kern_return_t
-task_for_pid(target_tport, pid, t)
-	mach_port_t	target_tport;
-	int		pid;
-	mach_port_t	*t;
+task_for_pid(
+	struct task_for_pid_args *args)
 {
+	mach_port_name_t	target_tport = args->target_tport;
+	int			pid = args->pid;
+	user_addr_t		task_addr = args->t;
+	struct uthread		*uthread;
 	struct proc	*p;
 	struct proc *p1;
 	task_t		t1;
-	mach_port_t	tret;
-	extern task_t port_name_to_task(mach_port_t tp);
+	mach_port_name_t	tret;
 	void * sright;
 	int error = 0;
 	boolean_t funnel_state;
@@ -300,45 +365,59 @@ task_for_pid(target_tport, pid, t)
 
 	t1 = port_name_to_task(target_tport);
 	if (t1 == TASK_NULL) {
-		(void ) copyout((char *)&t1, (char *)t, sizeof(mach_port_t));
+		(void ) copyout((char *)&t1, task_addr, sizeof(mach_port_name_t));
 		AUDIT_MACH_SYSCALL_EXIT(KERN_FAILURE);
 		return(KERN_FAILURE);
 	} 
 
 	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 
- restart:
-	p1 = get_bsdtask_info(t1);
+	p1 = get_bsdtask_info(t1);	/* XXX current proc */
+
+	/*
+	 * Delayed binding of thread credential to process credential, if we
+	 * are not running with an explicitly set thread credential.
+	 */
+	uthread = get_bsdthread_info(current_thread());
+	if (uthread->uu_ucred != p1->p_ucred &&
+	    (uthread->uu_flag & UT_SETUID) == 0) {
+		kauth_cred_t old = uthread->uu_ucred;
+		proc_lock(p1);
+		uthread->uu_ucred = p1->p_ucred;
+		kauth_cred_ref(uthread->uu_ucred);
+		proc_unlock(p1);
+		if (old != NOCRED)
+			kauth_cred_rele(old);
+	}
+
 	p = pfind(pid);
 	AUDIT_ARG(process, p);
+
 	if (
 		(p != (struct proc *) 0)
 		&& (p1 != (struct proc *) 0)
-		&& (((p->p_ucred->cr_uid == p1->p_ucred->cr_uid) && 
-			((p->p_cred->p_ruid == p1->p_cred->p_ruid)))
-		|| !(suser(p1->p_ucred, &p1->p_acflag)))
+		&& (((kauth_cred_getuid(p->p_ucred) == kauth_cred_getuid(kauth_cred_get())) && 
+			((p->p_ucred->cr_ruid == kauth_cred_get()->cr_ruid)))
+		|| !(suser(kauth_cred_get(), 0)))
 		&& (p->p_stat != SZOMB)
 		) {
 			if (p->task != TASK_NULL) {
-				if (!task_reference_try(p->task)) {
-					mutex_pause(); /* temp loss of funnel */
-					goto restart;
-				}
+				task_reference(p->task);
 				sright = (void *)convert_task_to_port(p->task);
-				tret = (void *)
-					ipc_port_copyout_send(sright, 
-					   get_task_ipcspace(current_task()));
+				tret = ipc_port_copyout_send(
+					sright, 
+					get_task_ipcspace(current_task()));
 			} else
 				tret  = MACH_PORT_NULL;
 			AUDIT_ARG(mach_port2, tret);
-			(void ) copyout((char *)&tret, (char *) t, sizeof(mach_port_t));
+			(void ) copyout((char *)&tret, task_addr, sizeof(mach_port_name_t));
 	        task_deallocate(t1);
 			error = KERN_SUCCESS;
 			goto tfpout;
 	}
     task_deallocate(t1);
 	tret = MACH_PORT_NULL;
-	(void) copyout((char *) &tret, (char *) t, sizeof(mach_port_t));
+	(void) copyout((char *) &tret, task_addr, sizeof(mach_port_name_t));
 	error = KERN_FAILURE;
 tfpout:
 	thread_funnel_set(kernel_flock, funnel_state);
@@ -347,23 +426,483 @@ tfpout:
 }
 
 
-struct load_shared_file_args {
-		char		*filename;
-		caddr_t		mfa;
-		u_long		mfs;
-		caddr_t		*ba;
-		int		map_cnt;
-		sf_mapping_t	*mappings;
-		int		*flags;
-};
+/*
+ * shared_region_make_private_np:
+ *
+ * This system call is for "dyld" only.
+ * 
+ * It creates a private copy of the current process's "shared region" for
+ * split libraries.  "dyld" uses this when the shared region is full or
+ * it needs to load a split library that conflicts with an already loaded one
+ * that this process doesn't need.  "dyld" specifies a set of address ranges
+ * that it wants to keep in the now-private "shared region".  These cover
+ * the set of split libraries that the process needs so far.  The kernel needs
+ * to deallocate the rest of the shared region, so that it's available for 
+ * more libraries for this process.
+ */
+int
+shared_region_make_private_np(
+	struct proc					*p,
+	struct shared_region_make_private_np_args	*uap,
+	__unused int					*retvalp)
+{
+	int				error;
+	kern_return_t			kr;
+	boolean_t			using_shared_regions;
+	user_addr_t			user_ranges;
+	unsigned int			range_count;
+	struct shared_region_range_np	*ranges;
+	shared_region_mapping_t 	shared_region;
+	struct shared_region_task_mappings	task_mapping_info;
+	shared_region_mapping_t		next;
 
-int	ws_disabled = 1;
+	ranges = NULL;
+
+	range_count = uap->rangeCount;
+	user_ranges = uap->ranges;
+
+	/* allocate kernel space for the "ranges" */
+	if (range_count != 0) {
+		kr = kmem_alloc(kernel_map,
+				(vm_offset_t *) &ranges,
+				(vm_size_t) (range_count * sizeof (ranges[0])));
+		if (kr != KERN_SUCCESS) {
+			error = ENOMEM;
+			goto done;
+		}
+
+		/* copy "ranges" from user-space */
+		error = copyin(user_ranges,
+			       ranges,
+			       (range_count * sizeof (ranges[0])));
+		if (error) {
+			goto done;
+		}
+	}
+
+	if (p->p_flag & P_NOSHLIB) {
+		/* no split library has been mapped for this process so far */
+		using_shared_regions = FALSE;
+	} else {
+		/* this process has already mapped some split libraries */
+		using_shared_regions = TRUE;
+	}
+
+	/*
+	 * Get a private copy of the current shared region.
+	 * Do not chain it to the system-wide shared region, as we'll want
+	 * to map other split libraries in place of the old ones.  We want
+	 * to completely detach from the system-wide shared region and go our
+	 * own way after this point, not sharing anything with other processes.
+	 */
+	error = clone_system_shared_regions(using_shared_regions,
+					    FALSE, /* chain_regions */
+					    ENV_DEFAULT_ROOT);
+	if (error) {
+		goto done;
+	}
+
+	/* get info on the newly allocated shared region */
+	vm_get_shared_region(current_task(), &shared_region);
+	task_mapping_info.self = (vm_offset_t) shared_region;
+	shared_region_mapping_info(shared_region,
+				   &(task_mapping_info.text_region),
+				   &(task_mapping_info.text_size),
+				   &(task_mapping_info.data_region),
+				   &(task_mapping_info.data_size),
+				   &(task_mapping_info.region_mappings),
+				   &(task_mapping_info.client_base),
+				   &(task_mapping_info.alternate_base),
+				   &(task_mapping_info.alternate_next),
+				   &(task_mapping_info.fs_base),
+				   &(task_mapping_info.system),
+				   &(task_mapping_info.flags),
+				   &next);
+
+	/*
+	 * We now have our private copy of the shared region, as it was before
+	 * the call to clone_system_shared_regions().  We now need to clean it
+	 * up and keep only the memory areas described by the "ranges" array.
+	 */
+	kr = shared_region_cleanup(range_count, ranges, &task_mapping_info);
+	switch (kr) {
+	case KERN_SUCCESS:
+		error = 0;
+		break;
+	default:
+		error = EINVAL;
+		goto done;
+	}
+
+done:
+	if (ranges != NULL) {
+		kmem_free(kernel_map,
+			  (vm_offset_t) ranges,
+			  range_count * sizeof (ranges[0]));
+		ranges = NULL;
+	}
+	
+	return error;
+}
+
+
+/*
+ * shared_region_map_file_np:
+ *
+ * This system call is for "dyld" only.
+ *
+ * "dyld" wants to map parts of a split library in the shared region.
+ * We get a file descriptor on the split library to be mapped and a set
+ * of mapping instructions, describing which parts of the file to map in\
+ * which areas of the shared segment and with what protection.
+ * The "shared region" is split in 2 areas:
+ * 0x90000000 - 0xa0000000 : read-only area (for TEXT and LINKEDIT sections), 
+ * 0xa0000000 - 0xb0000000 : writable area (for DATA sections).
+ *
+ */
+int
+shared_region_map_file_np(
+	struct proc				*p,
+	struct shared_region_map_file_np_args	*uap,
+	__unused int				*retvalp)
+{
+	int					error;
+	kern_return_t				kr;
+	int					fd;
+	unsigned int				mapping_count;
+	user_addr_t				user_mappings; /* 64-bit */
+	user_addr_t				user_slide_p;  /* 64-bit */
+	struct shared_file_mapping_np 		*mappings;
+	struct fileproc				*fp;
+	mach_vm_offset_t 			slide;
+	struct vnode				*vp;
+	struct vfs_context 			context;
+	memory_object_control_t 		file_control;
+	memory_object_size_t			file_size;
+	shared_region_mapping_t 		shared_region;
+	struct shared_region_task_mappings	task_mapping_info;
+	shared_region_mapping_t			next;
+	shared_region_mapping_t			default_shared_region;
+	boolean_t				using_default_region;
+	unsigned int				j;
+	vm_prot_t				max_prot;
+	mach_vm_offset_t			base_offset, end_offset;
+	mach_vm_offset_t			original_base_offset;
+	boolean_t				mappings_in_segment;
+#define SFM_MAX_STACK	6
+	struct shared_file_mapping_np		stack_mappings[SFM_MAX_STACK];
+
+	mappings = NULL;
+	mapping_count = 0;
+	fp = NULL;
+	vp = NULL;
+
+	/* get file descriptor for split library from arguments */
+	fd = uap->fd;
+
+	/* get file structure from file descriptor */
+	error = fp_lookup(p, fd, &fp, 0);
+	if (error) {
+		goto done;
+	}
+
+	/* make sure we're attempting to map a vnode */
+	if (fp->f_fglob->fg_type != DTYPE_VNODE) {
+		error = EINVAL;
+		goto done;
+	}
+
+	/* we need at least read permission on the file */
+	if (! (fp->f_fglob->fg_flag & FREAD)) {
+		error = EPERM;
+		goto done;
+	}
+
+	/* get vnode from file structure */
+	error = vnode_getwithref((vnode_t)fp->f_fglob->fg_data);
+	if (error) {
+		goto done;
+	}
+	vp = (struct vnode *) fp->f_fglob->fg_data;
+
+	/* make sure the vnode is a regular file */
+	if (vp->v_type != VREG) {
+		error = EINVAL;
+		goto done;
+	}
+
+	/* get vnode size */
+	{
+		off_t	fs;
+		
+		context.vc_proc = p;
+		context.vc_ucred = kauth_cred_get();
+		if ((error = vnode_size(vp, &fs, &context)) != 0)
+			goto done;
+		file_size = fs;
+	}
+
+	/*
+	 * Get the list of mappings the caller wants us to establish.
+	 */
+	mapping_count = uap->mappingCount; /* the number of mappings */
+	if (mapping_count == 0) {
+		error = 0;	/* no mappings: we're done ! */
+		goto done;
+	} else if (mapping_count <= SFM_MAX_STACK) {
+		mappings = &stack_mappings[0];
+	} else {
+		kr = kmem_alloc(kernel_map,
+				(vm_offset_t *) &mappings,
+				(vm_size_t) (mapping_count *
+					     sizeof (mappings[0])));
+		if (kr != KERN_SUCCESS) {
+			error = ENOMEM;
+			goto done;
+		}
+	}
+
+	user_mappings = uap->mappings;	   /* the mappings, in user space */
+	error = copyin(user_mappings,
+		       mappings,
+		       (mapping_count * sizeof (mappings[0])));
+	if (error != 0) {
+		goto done;
+	}
+
+	/*
+	 * If the caller provides a "slide" pointer, it means they're OK
+	 * with us moving the mappings around to make them fit.
+	 */
+	user_slide_p = uap->slide_p;
+
+	/*
+	 * Make each mapping address relative to the beginning of the
+	 * shared region.  Check that all mappings are in the shared region.
+	 * Compute the maximum set of protections required to tell the
+	 * buffer cache how we mapped the file (see call to ubc_map() below).
+	 */
+	max_prot = VM_PROT_NONE;
+	base_offset = -1LL;
+	end_offset = 0;
+	mappings_in_segment = TRUE;
+	for (j = 0; j < mapping_count; j++) {
+		mach_vm_offset_t segment;
+		segment = (mappings[j].sfm_address &
+			   GLOBAL_SHARED_SEGMENT_MASK);
+		if (segment != GLOBAL_SHARED_TEXT_SEGMENT &&
+		    segment != GLOBAL_SHARED_DATA_SEGMENT) {
+			/* this mapping is not in the shared region... */
+			if (user_slide_p == NULL) {
+				/* ... and we can't slide it in: fail */
+				error = EINVAL;
+				goto done;
+			}
+			if (j == 0) {
+				/* expect all mappings to be outside */
+				mappings_in_segment = FALSE;
+			} else if (mappings_in_segment != FALSE) {
+				/* other mappings were not outside: fail */
+				error = EINVAL;
+				goto done;
+			}
+			/* we'll try and slide that mapping in the segments */
+		} else {
+			if (j == 0) {
+				/* expect all mappings to be inside */
+				mappings_in_segment = TRUE;
+			} else if (mappings_in_segment != TRUE) {
+				/* other mappings were not inside: fail */
+				error = EINVAL;
+				goto done;
+			}
+			/* get a relative offset inside the shared segments */
+			mappings[j].sfm_address -= GLOBAL_SHARED_TEXT_SEGMENT;
+		}
+		if ((mappings[j].sfm_address & SHARED_TEXT_REGION_MASK)
+		    < base_offset) {
+			base_offset = (mappings[j].sfm_address &
+				       SHARED_TEXT_REGION_MASK);
+		}
+		if ((mappings[j].sfm_address & SHARED_TEXT_REGION_MASK) +
+		    mappings[j].sfm_size > end_offset) {
+			end_offset =
+				(mappings[j].sfm_address &
+				 SHARED_TEXT_REGION_MASK) +
+				mappings[j].sfm_size;
+		}
+		max_prot |= mappings[j].sfm_max_prot;
+	}
+	/* Make all mappings relative to the base_offset */
+	base_offset = vm_map_trunc_page(base_offset);
+	end_offset = vm_map_round_page(end_offset);
+	for (j = 0; j < mapping_count; j++) {
+		mappings[j].sfm_address -= base_offset;
+	}
+	original_base_offset = base_offset;
+	if (mappings_in_segment == FALSE) {
+		/*
+		 * We're trying to map a library that was not pre-bound to
+		 * be in the shared segments.  We want to try and slide it
+		 * back into the shared segments but as far back as possible,
+		 * so that it doesn't clash with pre-bound libraries.  Set
+		 * the base_offset to the end of the region, so that it can't
+		 * possibly fit there and will have to be slid.
+		 */
+		base_offset = SHARED_TEXT_REGION_SIZE - end_offset;
+	}
+
+	/* get the file's memory object handle */
+	UBCINFOCHECK("shared_region_map_file_np", vp);
+	file_control = ubc_getobject(vp, UBC_HOLDOBJECT);
+	if (file_control == MEMORY_OBJECT_CONTROL_NULL) {
+		error = EINVAL;
+		goto done;
+	}
+
+	/*
+	 * Get info about the current process's shared region.
+	 * This might change if we decide we need to clone the shared region.
+	 */
+	vm_get_shared_region(current_task(), &shared_region);
+	task_mapping_info.self = (vm_offset_t) shared_region;
+	shared_region_mapping_info(shared_region,
+				   &(task_mapping_info.text_region),
+				   &(task_mapping_info.text_size),
+				   &(task_mapping_info.data_region),
+				   &(task_mapping_info.data_size),
+				   &(task_mapping_info.region_mappings),
+				   &(task_mapping_info.client_base),
+				   &(task_mapping_info.alternate_base),
+				   &(task_mapping_info.alternate_next),
+				   &(task_mapping_info.fs_base),
+				   &(task_mapping_info.system),
+				   &(task_mapping_info.flags),
+				   &next);
+
+	/*
+	 * Are we using the system's current shared region
+	 * for this environment ?
+	 */
+	default_shared_region =
+		lookup_default_shared_region(ENV_DEFAULT_ROOT,
+					     task_mapping_info.system);
+	if (shared_region == default_shared_region) {
+		using_default_region = TRUE;
+	} else {
+		using_default_region = FALSE;
+	}
+	shared_region_mapping_dealloc(default_shared_region);
+
+	if (vp->v_mount != rootvnode->v_mount &&
+	    using_default_region) {
+		/*
+		 * The split library is not on the root filesystem.  We don't
+		 * want to polute the system-wide ("default") shared region
+		 * with it.
+		 * Reject the mapping.  The caller (dyld) should "privatize"
+		 * (via shared_region_make_private()) the shared region and
+		 * try to establish the mapping privately for this process.
+		 */
+		error = EXDEV;
+		goto done;
+	}
+
+
+	/*
+	 * Map the split library.
+	 */
+	kr = map_shared_file(mapping_count,
+			     mappings,
+			     file_control,
+			     file_size,
+			     &task_mapping_info,
+			     base_offset,
+			     (user_slide_p) ? &slide : NULL);
+
+	switch (kr) {
+	case KERN_SUCCESS:
+		/*
+		 * The mapping was successful.  Let the buffer cache know
+		 * that we've mapped that file with these protections.  This
+		 * prevents the vnode from getting recycled while it's mapped.
+		 */
+		(void) ubc_map(vp, max_prot);
+		error = 0;
+		break;
+	case KERN_INVALID_ADDRESS:
+		error = EFAULT;
+		goto done;
+	case KERN_PROTECTION_FAILURE:
+		error = EPERM;
+		goto done;
+	case KERN_NO_SPACE:
+		error = ENOMEM;
+		goto done;
+	case KERN_FAILURE:
+	case KERN_INVALID_ARGUMENT:
+	default:
+		error = EINVAL;
+		goto done;
+	}
+
+	if (p->p_flag & P_NOSHLIB) {
+		/* signal that this process is now using split libraries */
+		p->p_flag &= ~P_NOSHLIB;
+	}
+
+	if (user_slide_p) {
+		/*
+		 * The caller provided a pointer to a "slide" offset.  Let
+		 * them know by how much we slid the mappings.
+		 */
+		if (mappings_in_segment == FALSE) {
+			/*
+			 * We faked the base_offset earlier, so undo that
+			 * and take into account the real base_offset.
+			 */
+			slide += SHARED_TEXT_REGION_SIZE - end_offset;
+			slide -= original_base_offset;
+			/*
+			 * The mappings were slid into the shared segments
+			 * and "slide" is relative to the beginning of the
+			 * shared segments.  Adjust it to be absolute.
+			 */
+			slide += GLOBAL_SHARED_TEXT_SEGMENT;
+		}
+		error = copyout(&slide,
+				user_slide_p,
+				sizeof (int64_t));
+	}
+
+done:
+	if (vp != NULL) {
+		/*
+		 * release the vnode...
+		 * ubc_map() still holds it for us in the non-error case
+		 */
+		(void) vnode_put(vp);
+		vp = NULL;
+	}
+	if (fp != NULL) {
+		/* release the file descriptor */
+		fp_drop(p, fd, fp, 0);
+		fp = NULL;
+	}
+	if (mappings != NULL &&
+	    mappings != &stack_mappings[0]) {
+		kmem_free(kernel_map,
+			  (vm_offset_t) mappings,
+			  mapping_count * sizeof (mappings[0]));
+	}
+	mappings = NULL;
+
+	return error;
+}
 
 int
-load_shared_file(
-	struct proc 		*p,
-	struct load_shared_file_args *uap,
-	register		*retval)
+load_shared_file(struct proc *p, struct load_shared_file_args *uap,
+					__unused int *retval)
 {
 	caddr_t		mapped_file_addr=uap->mfa;
 	u_long		mapped_file_size=uap->mfs;
@@ -378,7 +917,8 @@ load_shared_file(
 	register int		error;
 	kern_return_t		kr;
 
-	struct vattr	vattr;
+	struct vfs_context context;
+	off_t		file_size;
 	memory_object_control_t file_control;
         sf_mapping_t    *map_list;
         caddr_t		local_base;
@@ -393,16 +933,19 @@ load_shared_file(
 	struct shared_region_task_mappings	task_mapping_info;
 	shared_region_mapping_t	next;
 
+	context.vc_proc = p;
+	context.vc_ucred = kauth_cred_get();
+
 	ndp = &nd;
 
-	AUDIT_ARG(addr, base_address);
+	AUDIT_ARG(addr, CAST_USER_ADDR_T(base_address));
 	/* Retrieve the base address */
-	if (error = copyin(base_address, &local_base, sizeof (caddr_t))) {
-			goto lsf_bailout;
-        }
-	if (error = copyin(flags, &local_flags, sizeof (int))) {
-			goto lsf_bailout;
-        }
+	if ( (error = copyin(CAST_USER_ADDR_T(base_address), &local_base, sizeof (caddr_t))) ) {
+		goto lsf_bailout;
+	}
+	if ( (error = copyin(CAST_USER_ADDR_T(flags), &local_flags, sizeof (int))) ) {
+		goto lsf_bailout;
+	}
 
 	if(local_flags & QUERY_IS_SYSTEM_REGION) {
 			shared_region_mapping_t	default_shared_region;
@@ -433,7 +976,7 @@ load_shared_file(
 			}
 			shared_region_mapping_dealloc(default_shared_region);
 			error = 0;
-			error = copyout(&local_flags, flags, sizeof (int));
+			error = copyout(&local_flags, CAST_USER_ADDR_T(flags), sizeof (int));
 			goto lsf_bailout;
 	}
 	caller_flags = local_flags;
@@ -452,27 +995,27 @@ load_shared_file(
 			goto lsf_bailout;
 		}
 
-	if (error = 
-		copyin(mappings, map_list, (map_cnt*sizeof(sf_mapping_t)))) {
+	if ( (error = copyin(CAST_USER_ADDR_T(mappings), map_list, (map_cnt*sizeof(sf_mapping_t)))) ) {
 		goto lsf_bailout_free;
 	}
 
-	if (error = copyinstr(filename, 
-			filename_str, MAXPATHLEN, (size_t *)&dummy)) {
+	if ( (error = copyinstr(CAST_USER_ADDR_T(filename), filename_str, 
+							MAXPATHLEN, (size_t *)&dummy)) ) {
 		goto lsf_bailout_free;
 	}
 
 	/*
 	 * Get a vnode for the target file
 	 */
-	NDINIT(ndp, LOOKUP, FOLLOW | LOCKLEAF | AUDITVNPATH1, UIO_SYSSPACE,
-	    filename_str, p);
+	NDINIT(ndp, LOOKUP, FOLLOW | LOCKLEAF | AUDITVNPATH1, UIO_SYSSPACE32,
+	    CAST_USER_ADDR_T(filename_str), &context);
 
 	if ((error = namei(ndp))) {
 		goto lsf_bailout_free;
 	}
-
 	vp = ndp->ni_vp;
+
+	nameidone(ndp);
 
 	if (vp->v_type != VREG) {
 		error = EINVAL;
@@ -481,10 +1024,8 @@ load_shared_file(
 
 	UBCINFOCHECK("load_shared_file", vp);
 
-	if (error = VOP_GETATTR(vp, &vattr, p->p_ucred, p)) {
+	if ((error = vnode_size(vp, &file_size, &context)) != 0)
 		goto lsf_bailout_free_vput;
-	}
-
 
 	file_control = ubc_getobject(vp, UBC_HOLDOBJECT);
 	if (file_control == MEMORY_OBJECT_CONTROL_NULL) {
@@ -493,7 +1034,7 @@ load_shared_file(
 	}
 
 #ifdef notdef
-	if(vattr.va_size != mapped_file_size) {
+	if(file_size != mapped_file_size) {
 		error = EINVAL;
 		goto lsf_bailout_free_vput;
 	}
@@ -505,7 +1046,9 @@ load_shared_file(
 	/* load alternate regions if the caller has requested.  */
 	/* Note: the new regions are "clean slates" */
 	if (local_flags & NEW_LOCAL_SHARED_REGIONS) {
-		error = clone_system_shared_regions(FALSE, ENV_DEFAULT_ROOT);
+		error = clone_system_shared_regions(FALSE,
+						    TRUE, /* chain_regions */
+						    ENV_DEFAULT_ROOT);
 		if (error) {
 			goto lsf_bailout_free_vput;
 		}
@@ -546,13 +1089,12 @@ load_shared_file(
 				/* We don't want to run out of shared memory */
 				/* map entries by starting too many private versions */
 				/* of the shared library structures */
-		int	error;
-       		if(p->p_flag & P_NOSHLIB) {
-				error = clone_system_shared_regions(FALSE, ENV_DEFAULT_ROOT);
-       		} else {
-				error = clone_system_shared_regions(TRUE, ENV_DEFAULT_ROOT);
-       		}
-		if (error) {
+		int	error2;
+
+		error2 = clone_system_shared_regions(!(p->p_flag & P_NOSHLIB),
+						     TRUE, /* chain_regions */
+						     ENV_DEFAULT_ROOT);
+		if (error2) {
 			goto lsf_bailout_free_vput;
 		}
 		local_flags = local_flags & ~NEW_LOCAL_SHARED_REGIONS;
@@ -611,7 +1153,7 @@ load_shared_file(
 				error = EINVAL;
 				break;
 			case KERN_INVALID_ADDRESS:
-				error = EACCES;
+				error = EFAULT;
 				break;
 			case KERN_PROTECTION_FAILURE:
 				/* save EAUTH for authentication in this */
@@ -637,14 +1179,14 @@ load_shared_file(
 	} else {
 		if(default_regions)
 			local_flags |= SYSTEM_REGION_BACKED;
-		if(!(error = copyout(&local_flags, flags, sizeof (int)))) {
+		if(!(error = copyout(&local_flags, CAST_USER_ADDR_T(flags), sizeof (int)))) {
 			error = copyout(&local_base, 
-				base_address, sizeof (caddr_t));
+				CAST_USER_ADDR_T(base_address), sizeof (caddr_t));
 		}
 	}
 
 lsf_bailout_free_vput:
-	vput(vp);
+	vnode_put(vp);
 
 lsf_bailout_free:
 	kmem_free(kernel_map, (vm_offset_t)filename_str, 
@@ -656,33 +1198,24 @@ lsf_bailout:
 	return error;
 }
 
-struct reset_shared_file_args {
-		caddr_t		*ba;
-		int		map_cnt;
-		sf_mapping_t	*mappings;
-};
-
 int
-reset_shared_file(
-	struct proc 		*p,
-	struct reset_shared_file_args *uap,
-	register		*retval)
+reset_shared_file(__unused struct proc *p, struct reset_shared_file_args *uap,
+					__unused register int *retval)
 {
-        caddr_t		*base_address=uap->ba;
-        int             map_cnt=uap->map_cnt;
-        sf_mapping_t       *mappings=uap->mappings;
+	caddr_t				*base_address=uap->ba;
+	int             	map_cnt=uap->map_cnt;
+	sf_mapping_t		*mappings=uap->mappings;
 	register int		error;
-	kern_return_t		kr;
 
-        sf_mapping_t    *map_list;
-        caddr_t		local_base;
-	vm_offset_t	map_address;
-	int		i;
-	kern_return_t	kret;
+	sf_mapping_t    	*map_list;
+	caddr_t				local_base;
+	vm_offset_t			map_address;
+	int					i;
+	kern_return_t		kret;
 
-	AUDIT_ARG(addr, base_address);
+	AUDIT_ARG(addr, CAST_DOWN(user_addr_t, base_address));
 	/* Retrieve the base address */
-	if (error = copyin(base_address, &local_base, sizeof (caddr_t))) {
+	if ( (error = copyin(CAST_USER_ADDR_T(base_address), &local_base, sizeof (caddr_t))) ) {
 			goto rsf_bailout;
         }
 
@@ -699,8 +1232,8 @@ reset_shared_file(
 			goto rsf_bailout;
 		}
 
-	if (error = 
-		copyin(mappings, map_list, (map_cnt*sizeof(sf_mapping_t)))) {
+	if ( (error = 
+		  copyin(CAST_USER_ADDR_T(mappings), map_list, (map_cnt*sizeof(sf_mapping_t)))) ) {
 
 		kmem_free(kernel_map, (vm_offset_t)map_list, 
 				(vm_size_t)(map_cnt*sizeof(sf_mapping_t)));
@@ -715,7 +1248,8 @@ reset_shared_file(
 				map_address,
 				map_list[i].size);
 			vm_map(current_map(), &map_address,
-				map_list[i].size, 0, SHARED_LIB_ALIAS,
+				map_list[i].size, 0,
+			        SHARED_LIB_ALIAS | VM_FLAGS_FIXED,
 				shared_data_region_handle, 
 				((unsigned int)local_base 
 				   & SHARED_DATA_REGION_MASK) +
@@ -733,19 +1267,11 @@ rsf_bailout:
 	return error;
 }
 
-struct new_system_shared_regions_args {
-	int dummy;
-};
-
 int
-new_system_shared_regions(
-	struct proc 		*p,
-	struct new_system_shared_regions_args *uap,
-	register		*retval)
+new_system_shared_regions(__unused struct proc *p,
+			  __unused struct new_system_shared_regions_args *uap,
+			  register int *retval)
 {
-	shared_region_mapping_t	regions;
-	shared_region_mapping_t	new_regions;
-
 	if(!(is_suser())) {
 	 	*retval = EINVAL;
 		return EINVAL;
@@ -761,15 +1287,16 @@ new_system_shared_regions(
 
 
 int
-clone_system_shared_regions(shared_regions_active, base_vnode)
+clone_system_shared_regions(
+	int		shared_regions_active,
+	int		chain_regions,
+	int		base_vnode)
 {
 	shared_region_mapping_t	new_shared_region;
 	shared_region_mapping_t	next;
 	shared_region_mapping_t	old_shared_region;
 	struct shared_region_task_mappings old_info;
 	struct shared_region_task_mappings new_info;
-
-	struct proc	*p;
 
 	vm_get_shared_region(current_task(), &old_shared_region);
 	old_info.self = (vm_offset_t)old_shared_region;
@@ -827,8 +1354,25 @@ clone_system_shared_regions(shared_regions_active, base_vnode)
 		shared_region_mapping_dealloc(new_shared_region);
 		return(EINVAL);
 	   }
-	   shared_region_object_chain_attach(
-				new_shared_region, old_shared_region);
+	   if (chain_regions) {
+		   /*
+		    * We want a "shadowed" clone, a private superset of the old
+		    * shared region.  The info about the old mappings is still
+		    * valid for us.
+		    */
+		   shared_region_object_chain_attach(
+			   new_shared_region, old_shared_region);
+	   } else {
+		   /*
+		    * We want a completely detached clone with no link to
+		    * the old shared region.  We'll be removing some mappings
+		    * in our private, cloned, shared region, so the old mappings
+		    * will become irrelevant to us.  Since we have a private
+		    * "shared region" now, it isn't going to be shared with
+		    * anyone else and we won't need to maintain mappings info.
+		    */
+		   shared_region_object_chain_detached(new_shared_region);
+	   }
 	}
 	if (vm_map_region_replace(current_map(), old_info.text_region, 
 			new_info.text_region, old_info.client_base, 
@@ -850,14 +1394,12 @@ clone_system_shared_regions(shared_regions_active, base_vnode)
 
 	/* consume the reference which wasn't accounted for in object */
 	/* chain attach */
-	if(!shared_regions_active)
+	if (!shared_regions_active || !chain_regions)
 		shared_region_mapping_dealloc(old_shared_region);
 
 	return(0);
 
 }
-
-extern vm_map_t bsd_pageable_map;
 
 /* header for the profile name file.  The profiled app info is held */
 /* in the data file and pointed to by elements in the name file     */
@@ -895,10 +1437,23 @@ struct global_profile_cache {
 	struct global_profile	profiles[3];
 };
 
+/* forward declarations */
+int bsd_open_page_cache_files(unsigned int user,
+			      struct global_profile **profile);
+void bsd_close_page_cache_files(struct global_profile *profile);
+int bsd_search_page_cache_data_base(
+	struct	vnode			*vp,
+	struct profile_names_header	*database,
+	char				*app_name,
+	unsigned int			mod_date,
+	unsigned int			inode,
+	off_t				*profile,
+	unsigned int			*profile_size);
+
 struct global_profile_cache global_user_profile_cache =
-	{3, 0, NULL, NULL, NULL, 0, 0, 0,
-		NULL, NULL, NULL, 0, 0, 0,
-		NULL, NULL, NULL, 0, 0, 0 };
+	{3, 0, {{NULL, NULL, 0, 0, 0, 0},
+		    {NULL, NULL, 0, 0, 0, 0},
+		    {NULL, NULL, 0, 0, 0, 0}} };
 
 /* BSD_OPEN_PAGE_CACHE_FILES:                                 */
 /* Caller provides a user id.  This id was used in            */
@@ -914,10 +1469,10 @@ bsd_open_page_cache_files(
 	unsigned int	user,
 	struct global_profile **profile)
 {
-	char		*cache_path = "/var/vm/app_profile/";
+	const char *cache_path = "/var/vm/app_profile/";
 	struct proc	*p;
 	int		error;
-	int		resid;
+	vm_size_t	resid;
 	off_t		resid_off;
 	unsigned int	lru;
 	vm_size_t	size;
@@ -933,18 +1488,20 @@ bsd_open_page_cache_files(
 	char		*profile_names_string;
 	char		*substring;
 
-	struct vattr	vattr;
+	off_t		file_size;
+	struct vfs_context  context;
 
-	struct	profile_names_header *profile_header;
 	kern_return_t	ret;
 
 	struct nameidata nd_names;
 	struct nameidata nd_data;
-
 	int		i;
 
 
 	p = current_proc();
+
+	context.vc_proc = p;
+	context.vc_ucred = kauth_cred_get();
 
 restart:
 	for(i = 0; i<global_user_profile_cache.max_ele; i++) {
@@ -964,6 +1521,37 @@ restart:
 			}
 			(*profile)->busy = 1;
 			(*profile)->age = global_user_profile_cache.age;
+
+			/*
+			 * entries in cache are held with a valid
+			 * usecount... take an iocount which will
+			 * be dropped in "bsd_close_page_cache_files"
+			 * which is called after the read or writes to
+			 * these files are done
+			 */
+			if ( (vnode_getwithref((*profile)->data_vp)) ) {
+			  
+			        vnode_rele((*profile)->data_vp);
+			        vnode_rele((*profile)->names_vp);
+
+				(*profile)->data_vp = NULL;
+				(*profile)->busy = 0;
+				wakeup(*profile);
+
+				goto restart;
+			}
+			if ( (vnode_getwithref((*profile)->names_vp)) ) {
+
+			        vnode_put((*profile)->data_vp);
+			        vnode_rele((*profile)->data_vp);
+			        vnode_rele((*profile)->names_vp);
+
+				(*profile)->data_vp = NULL;
+				(*profile)->busy = 0;
+				wakeup(*profile);
+
+				goto restart;
+			}
 			global_user_profile_cache.age+=1;
 			return 0;
 		}
@@ -1051,10 +1639,10 @@ restart:
 		kmem_free(kernel_map, 
 				(*profile)->buf_ptr, 4 * PAGE_SIZE);
 		if ((*profile)->names_vp) {
-			vrele((*profile)->names_vp);
+			vnode_rele((*profile)->names_vp);
 			(*profile)->names_vp = NULL;
 		}
-		vrele(data_vp);
+		vnode_rele(data_vp);
 	}
 	
 	/* Try to open the appropriate users profile files */
@@ -1102,10 +1690,11 @@ restart:
 	}
 
 	NDINIT(&nd_names, LOOKUP, FOLLOW | LOCKLEAF, 
-			UIO_SYSSPACE, profile_names_string, p);
+			UIO_SYSSPACE32, CAST_USER_ADDR_T(profile_names_string), &context);
 	NDINIT(&nd_data, LOOKUP, FOLLOW | LOCKLEAF, 
-			UIO_SYSSPACE, profile_data_string, p);
-	if (error = vn_open(&nd_data, FREAD | FWRITE, 0)) {
+			UIO_SYSSPACE32, CAST_USER_ADDR_T(profile_data_string), &context);
+
+	if ( (error = vn_open(&nd_data, FREAD | FWRITE, 0)) ) {
 #ifdef notdef
 		printf("bsd_open_page_cache_files: CacheData file not found %s\n",
 			profile_data_string);
@@ -1119,18 +1708,19 @@ restart:
 		wakeup(*profile);
 		return error;
 	}
-
 	data_vp = nd_data.ni_vp;
-	VOP_UNLOCK(data_vp, 0, p);
 
-	if (error = vn_open(&nd_names, FREAD | FWRITE, 0)) {
+	if ( (error = vn_open(&nd_names, FREAD | FWRITE, 0)) ) {
 		printf("bsd_open_page_cache_files: NamesData file not found %s\n",
 			profile_data_string);
 		kmem_free(kernel_map, 
 				(vm_offset_t)names_buf, 4 * PAGE_SIZE);
 		kmem_free(kernel_map, 
 			(vm_offset_t)profile_data_string, PATH_MAX);
-		vrele(data_vp);
+
+		vnode_rele(data_vp);
+		vnode_put(data_vp);
+
 		(*profile)->data_vp = NULL;
 		(*profile)->busy = 0;
 		wakeup(*profile);
@@ -1138,21 +1728,25 @@ restart:
 	}
 	names_vp = nd_names.ni_vp;
 
-	if(error = VOP_GETATTR(names_vp, &vattr, p->p_ucred, p)) {
+	if ((error = vnode_size(names_vp, &file_size, &context)) != 0) {
 		printf("bsd_open_page_cache_files: Can't stat name file %s\n", profile_names_string);
 		kmem_free(kernel_map, 
 			(vm_offset_t)profile_data_string, PATH_MAX);
 		kmem_free(kernel_map, 
 			(vm_offset_t)names_buf, 4 * PAGE_SIZE);
-		vput(names_vp);
-		vrele(data_vp);
+
+		vnode_rele(names_vp);
+		vnode_put(names_vp);
+		vnode_rele(data_vp);
+		vnode_put(data_vp);
+
 		(*profile)->data_vp = NULL;
 		(*profile)->busy = 0;
 		wakeup(*profile);
 		return error;
 	}
 
-	size = vattr.va_size;
+	size = file_size;
 	if(size > 4 * PAGE_SIZE) 
 		size = 4 * PAGE_SIZE;
 	buf_ptr = names_buf;
@@ -1161,7 +1755,7 @@ restart:
 	while(size) {
 		error = vn_rdwr(UIO_READ, names_vp, (caddr_t)buf_ptr, 
 			size, resid_off,
-			UIO_SYSSPACE, IO_NODELOCKED, p->p_ucred, &resid, p);
+			UIO_SYSSPACE32, IO_NODELOCKED, kauth_cred_get(), &resid, p);
 		if((error) || (size == resid)) {
 			if(!error) {
 				error = EINVAL;
@@ -1170,8 +1764,12 @@ restart:
 				(vm_offset_t)profile_data_string, PATH_MAX);
 			kmem_free(kernel_map, 
 				(vm_offset_t)names_buf, 4 * PAGE_SIZE);
-			vput(names_vp);
-			vrele(data_vp);
+
+			vnode_rele(names_vp);
+			vnode_put(names_vp);
+			vnode_rele(data_vp);
+			vnode_put(data_vp);
+
 			(*profile)->data_vp = NULL;
 			(*profile)->busy = 0;
 			wakeup(*profile);
@@ -1181,12 +1779,16 @@ restart:
 		resid_off += size-resid;
 		size = resid;
 	}
-	
-	VOP_UNLOCK(names_vp, 0, p);
 	kmem_free(kernel_map, (vm_offset_t)profile_data_string, PATH_MAX);
+
 	(*profile)->names_vp = names_vp;
 	(*profile)->data_vp = data_vp;
 	(*profile)->buf_ptr = names_buf;
+
+	/*
+	 * at this point, the both the names_vp and the data_vp have
+	 * both a valid usecount and an iocount held
+	 */
 	return 0;
 
 }
@@ -1195,6 +1797,9 @@ void
 bsd_close_page_cache_files(
 	struct global_profile *profile)
 {
+        vnode_put(profile->data_vp);
+	vnode_put(profile->names_vp);
+
 	profile->busy = 0;
 	wakeup(profile);
 }
@@ -1207,28 +1812,26 @@ bsd_read_page_cache_file(
 	char		*app_name,
 	struct vnode	*app_vp,
 	vm_offset_t	*buffer,
-	vm_offset_t	*buf_size)
+	vm_offset_t	*bufsize)
 {
 
-	boolean_t		funnel_state;
+	boolean_t	funnel_state;
 
 	struct proc	*p;
 	int		error;
-	int		resid;
-	vm_size_t	size;
+	unsigned int	resid;
 
 	off_t		profile;
 	unsigned int	profile_size;
 
 	vm_offset_t	names_buf;
-	struct vattr	vattr;
+	struct vnode_attr	va;
+	struct vfs_context  context;
 
 	kern_return_t	ret;
 
 	struct	vnode	*names_vp;
 	struct	vnode	*data_vp;
-	struct	vnode	*vp1;
-	struct	vnode	*vp2;
 
 	struct global_profile *uid_files;
 
@@ -1253,79 +1856,52 @@ bsd_read_page_cache_file(
 	data_vp = uid_files->data_vp;
 	names_buf = uid_files->buf_ptr;
 
+	context.vc_proc = p;
+	context.vc_ucred = kauth_cred_get();
 
-	/* 
-	 * Get locks on both files, get the vnode with the lowest address first
-	 */
-
-	if((unsigned int)names_vp < (unsigned int)data_vp) {
-		vp1 = names_vp;
-		vp2 = data_vp;
-	} else {
-		vp1 = data_vp;
-		vp2 = names_vp;
-	}
-	error = vn_lock(vp1, LK_EXCLUSIVE | LK_RETRY, p);
-	if(error) {
-		printf("bsd_read_page_cache_file: Can't lock profile names %x\n", user);
-		bsd_close_page_cache_files(uid_files);
-		thread_funnel_set(kernel_flock, funnel_state);
-		return error;
-	}
-	error = vn_lock(vp2, LK_EXCLUSIVE | LK_RETRY, p);
-	if(error) {
-		printf("bsd_read_page_cache_file: Can't lock profile data %x\n", user);
-		VOP_UNLOCK(vp1, 0, p);
-		bsd_close_page_cache_files(uid_files);
-		thread_funnel_set(kernel_flock, funnel_state);
-		return error;
-	}
-
-	if(error = VOP_GETATTR(app_vp, &vattr, p->p_ucred, p)) {
-		VOP_UNLOCK(names_vp, 0, p);
-		VOP_UNLOCK(data_vp, 0, p);
+	VATTR_INIT(&va);
+	VATTR_WANTED(&va, va_fileid);
+	VATTR_WANTED(&va, va_modify_time);
+	
+	if ((error = vnode_getattr(app_vp, &va, &context))) {
 		printf("bsd_read_cache_file: Can't stat app file %s\n", app_name);
 		bsd_close_page_cache_files(uid_files);
 		thread_funnel_set(kernel_flock, funnel_state);
 		return error;
 	}
 
-	*fid = vattr.va_fileid;
-	*mod = vattr.va_mtime.tv_sec;
+	*fid = (u_long)va.va_fileid;
+	*mod = va.va_modify_time.tv_sec;
 		
-
-	if (bsd_search_page_cache_data_base(names_vp, names_buf, app_name, 
-			(unsigned int) vattr.va_mtime.tv_sec,  
-			vattr.va_fileid, &profile, &profile_size) == 0) {
+	if (bsd_search_page_cache_data_base(
+		    names_vp,
+		    (struct profile_names_header *)names_buf,
+		    app_name, 
+		    (unsigned int) va.va_modify_time.tv_sec,  
+		    (u_long)va.va_fileid, &profile, &profile_size) == 0) {
 		/* profile is an offset in the profile data base */
 		/* It is zero if no profile data was found */
 		
 		if(profile_size == 0) {
-			*buffer = NULL;
-			*buf_size = 0;
-			VOP_UNLOCK(names_vp, 0, p);
-			VOP_UNLOCK(data_vp, 0, p);
+			*buffer = 0;
+			*bufsize = 0;
 			bsd_close_page_cache_files(uid_files);
 			thread_funnel_set(kernel_flock, funnel_state);
 			return 0;
 		}
 		ret = (vm_offset_t)(kmem_alloc(kernel_map, buffer, profile_size));
 		if(ret) {
-			VOP_UNLOCK(names_vp, 0, p);
-			VOP_UNLOCK(data_vp, 0, p);
 			bsd_close_page_cache_files(uid_files);
 			thread_funnel_set(kernel_flock, funnel_state);
 			return ENOMEM;
 		}
-		*buf_size = profile_size;
+		*bufsize = profile_size;
 		while(profile_size) {
 			error = vn_rdwr(UIO_READ, data_vp, 
 				(caddr_t) *buffer, profile_size, 
-				profile, UIO_SYSSPACE, IO_NODELOCKED, 
-				p->p_ucred, &resid, p);
+				profile, UIO_SYSSPACE32, IO_NODELOCKED, 
+				kauth_cred_get(), &resid, p);
 			if((error) || (profile_size == resid)) {
-				VOP_UNLOCK(names_vp, 0, p);
-				VOP_UNLOCK(data_vp, 0, p);
 				bsd_close_page_cache_files(uid_files);
 				kmem_free(kernel_map, (vm_offset_t)*buffer, profile_size);
 				thread_funnel_set(kernel_flock, funnel_state);
@@ -1334,14 +1910,10 @@ bsd_read_page_cache_file(
 		        profile += profile_size - resid;
 			profile_size = resid;
 		}
-		VOP_UNLOCK(names_vp, 0, p);
-		VOP_UNLOCK(data_vp, 0, p);
 		bsd_close_page_cache_files(uid_files);
 		thread_funnel_set(kernel_flock, funnel_state);
 		return 0;
 	} else {
-		VOP_UNLOCK(names_vp, 0, p);
-		VOP_UNLOCK(data_vp, 0, p);
 		bsd_close_page_cache_files(uid_files);
 		thread_funnel_set(kernel_flock, funnel_state);
 		return EINVAL;
@@ -1369,8 +1941,8 @@ bsd_search_page_cache_data_base(
 	off_t			file_off = 0;
 	unsigned int		size;
 	off_t			resid_off;
-	int			resid;
-	vm_offset_t		local_buf = NULL;
+	unsigned int		resid;
+	vm_offset_t		local_buf = 0;
 
 	int			error;
 	kern_return_t		ret;
@@ -1413,9 +1985,8 @@ bsd_search_page_cache_data_base(
 				if(strncmp(element[i].name, app_name, 12) == 0) {
 					*profile = element[i].addr;
 					*profile_size = element[i].size;
-					if(local_buf != NULL) {
-						kmem_free(kernel_map, 
-							(vm_offset_t)local_buf, 4 * PAGE_SIZE);
+					if(local_buf != 0) {
+						kmem_free(kernel_map, local_buf, 4 * PAGE_SIZE);
 					}
 					return 0;
 				}
@@ -1423,9 +1994,8 @@ bsd_search_page_cache_data_base(
 		}
 		if(extended_list == 0)
 			break;
-		if(local_buf == NULL) {
-			ret = kmem_alloc(kernel_map,
-               	 		(vm_offset_t *)&local_buf, 4 * PAGE_SIZE);
+		if(local_buf == 0) {
+			ret = kmem_alloc(kernel_map, &local_buf, 4 * PAGE_SIZE);
 			if(ret != KERN_SUCCESS) {
 				return ENOMEM;
 			}
@@ -1444,13 +2014,11 @@ bsd_search_page_cache_data_base(
 		while(size) {
 			error = vn_rdwr(UIO_READ, vp, 
 				CAST_DOWN(caddr_t, (local_buf + resid_off)),
-				size, file_off + resid_off, UIO_SYSSPACE, 
-				IO_NODELOCKED, p->p_ucred, &resid, p);
+				size, file_off + resid_off, UIO_SYSSPACE32, 
+				IO_NODELOCKED, kauth_cred_get(), &resid, p);
 			if((error) || (size == resid)) {
-				if(local_buf != NULL) {
-					kmem_free(kernel_map, 
-						(vm_offset_t)local_buf, 
-						4 * PAGE_SIZE);
+				if(local_buf != 0) {
+					kmem_free(kernel_map, local_buf, 4 * PAGE_SIZE);
 				}
 				return EINVAL;
 			}
@@ -1458,9 +2026,8 @@ bsd_search_page_cache_data_base(
 			size = resid;
 		}
 	}
-	if(local_buf != NULL) {
-		kmem_free(kernel_map, 
-			(vm_offset_t)local_buf, 4 * PAGE_SIZE);
+	if(local_buf != 0) {
+		kmem_free(kernel_map, local_buf, 4 * PAGE_SIZE);
 	}
 	return 0;
 }
@@ -1475,32 +2042,24 @@ bsd_write_page_cache_file(
 	int		fid)
 {
 	struct proc		*p;
-	struct nameidata	nd;
-	struct vnode		*vp = 0; 
-	int			resid;
+	int				resid;
 	off_t			resid_off;
-	int			error;
+	int				error;
 	boolean_t		funnel_state;
-	struct vattr		vattr;
-	struct vattr		data_vattr;
-
-	off_t				profile;
-	unsigned int			profile_size;
+	off_t			file_size;
+	struct vfs_context	context;
+	off_t			profile;
+	unsigned int	profile_size;
 
 	vm_offset_t	names_buf;
 	struct	vnode	*names_vp;
 	struct	vnode	*data_vp;
-	struct	vnode	*vp1;
-	struct	vnode	*vp2;
-
 	struct	profile_names_header *profile_header;
 	off_t			name_offset;
-
 	struct global_profile *uid_files;
 
 
 	funnel_state = thread_funnel_set(kernel_flock, TRUE);
-
 
 
 	error = bsd_open_page_cache_files(user, &uid_files);
@@ -1515,39 +2074,12 @@ bsd_write_page_cache_file(
 	data_vp = uid_files->data_vp;
 	names_buf = uid_files->buf_ptr;
 
-	/* 
-	 * Get locks on both files, get the vnode with the lowest address first
-	 */
-
-	if((unsigned int)names_vp < (unsigned int)data_vp) {
-		vp1 = names_vp;
-		vp2 = data_vp;
-	} else {
-		vp1 = data_vp;
-		vp2 = names_vp;
-	}
-
-	error = vn_lock(vp1, LK_EXCLUSIVE | LK_RETRY, p);
-	if(error) {
-		printf("bsd_write_page_cache_file: Can't lock profile names %x\n", user);
-		bsd_close_page_cache_files(uid_files);
-		thread_funnel_set(kernel_flock, funnel_state);
-		return error;
-	}
-	error = vn_lock(vp2, LK_EXCLUSIVE | LK_RETRY, p);
-	if(error) {
-		printf("bsd_write_page_cache_file: Can't lock profile data %x\n", user);
-		VOP_UNLOCK(vp1, 0, p);
-		bsd_close_page_cache_files(uid_files);
-		thread_funnel_set(kernel_flock, funnel_state);
-		return error;
-	}
-
 	/* Stat data file for size */
 
-	if(error = VOP_GETATTR(data_vp, &data_vattr, p->p_ucred, p)) {
-		VOP_UNLOCK(names_vp, 0, p);
-		VOP_UNLOCK(data_vp, 0, p);
+	context.vc_proc = p;
+	context.vc_ucred = kauth_cred_get();
+
+	if ((error = vnode_size(data_vp, &file_size, &context)) != 0) {
 		printf("bsd_write_page_cache_file: Can't stat profile data %s\n", file_name);
 		bsd_close_page_cache_files(uid_files);
 		thread_funnel_set(kernel_flock, funnel_state);
@@ -1580,7 +2112,7 @@ bsd_write_page_cache_file(
 				/* write new entry */
 				name = (struct profile_element *)
 					(names_buf + (vm_offset_t)name_offset);
-				name->addr =  data_vattr.va_size;
+				name->addr =  file_size;
 				name->size = size;
 				name->mod_date = mod;
 				name->inode = fid;
@@ -1589,7 +2121,7 @@ bsd_write_page_cache_file(
 				unsigned int	ele_size;
 				struct profile_element	name;
 				/* write new entry */
-				name.addr = data_vattr.va_size;
+				name.addr = file_size;
 				name.size = size;
 				name.mod_date = mod;
 				name.inode = fid;
@@ -1603,12 +2135,10 @@ bsd_write_page_cache_file(
 					error = vn_rdwr(UIO_WRITE, names_vp, 
 						(caddr_t)buf_ptr, 
 						ele_size, resid_off, 
-						UIO_SYSSPACE, IO_NODELOCKED, 
-						p->p_ucred, &resid, p);
+						UIO_SYSSPACE32, IO_NODELOCKED, 
+						kauth_cred_get(), &resid, p);
 					if(error) {
 						printf("bsd_write_page_cache_file: Can't write name_element %x\n", user);
-						VOP_UNLOCK(names_vp, 0, p);
-						VOP_UNLOCK(data_vp, 0, p);
 						bsd_close_page_cache_files(
 							uid_files);
 						thread_funnel_set(
@@ -1639,11 +2169,9 @@ bsd_write_page_cache_file(
 				error = vn_rdwr(UIO_WRITE, names_vp, 
 					(caddr_t)buf_ptr, 
 					header_size, resid_off, 
-					UIO_SYSSPACE, IO_NODELOCKED, 
-					p->p_ucred, &resid, p);
+					UIO_SYSSPACE32, IO_NODELOCKED, 
+					kauth_cred_get(), &resid, p);
 				if(error) {
-					VOP_UNLOCK(names_vp, 0, p);
-					VOP_UNLOCK(data_vp, 0, p);
 					printf("bsd_write_page_cache_file: Can't write header %x\n", user);
 					bsd_close_page_cache_files(
 						uid_files);
@@ -1656,15 +2184,13 @@ bsd_write_page_cache_file(
 				header_size = resid;
 			}
 			/* write profile to data file */
-			resid_off = data_vattr.va_size;
+			resid_off = file_size;
 			while(size) {
 				error = vn_rdwr(UIO_WRITE, data_vp, 
 					(caddr_t)buffer, size, resid_off, 
-					UIO_SYSSPACE, IO_NODELOCKED, 
-					p->p_ucred, &resid, p);
+					UIO_SYSSPACE32, IO_NODELOCKED, 
+					kauth_cred_get(), &resid, p);
 				if(error) {
-					VOP_UNLOCK(names_vp, 0, p);
-					VOP_UNLOCK(data_vp, 0, p);
 					printf("bsd_write_page_cache_file: Can't write header %x\n", user);
 					bsd_close_page_cache_files(
 						uid_files);
@@ -1676,21 +2202,15 @@ bsd_write_page_cache_file(
 				resid_off += size-resid;
 				size = resid;
 			}
-			VOP_UNLOCK(names_vp, 0, p);
-			VOP_UNLOCK(data_vp, 0, p);
 			bsd_close_page_cache_files(uid_files);
 			thread_funnel_set(kernel_flock, funnel_state);
 			return 0;
 		}
 		/* Someone else wrote a twin profile before us */
-		VOP_UNLOCK(names_vp, 0, p);
-		VOP_UNLOCK(data_vp, 0, p);
 		bsd_close_page_cache_files(uid_files);
 		thread_funnel_set(kernel_flock, funnel_state);
 		return 0;
 	} else {		
-		VOP_UNLOCK(names_vp, 0, p);
-		VOP_UNLOCK(data_vp, 0, p);
 		bsd_close_page_cache_files(uid_files);
 		thread_funnel_set(kernel_flock, funnel_state);
 		return EINVAL;
@@ -1701,12 +2221,11 @@ bsd_write_page_cache_file(
 int
 prepare_profile_database(int	user)
 {
-	char		*cache_path = "/var/vm/app_profile/";
+	const char *cache_path = "/var/vm/app_profile/";
 	struct proc	*p;
 	int		error;
 	int		resid;
 	off_t		resid_off;
-	unsigned int	lru;
 	vm_size_t	size;
 
 	struct	vnode	*names_vp;
@@ -1720,7 +2239,8 @@ prepare_profile_database(int	user)
 	char		*profile_names_string;
 	char		*substring;
 
-	struct vattr	vattr;
+	struct vnode_attr va;
+	struct vfs_context context;
 
 	struct	profile_names_header *profile_header;
 	kern_return_t	ret;
@@ -1728,9 +2248,10 @@ prepare_profile_database(int	user)
 	struct nameidata nd_names;
 	struct nameidata nd_data;
 
-	int		i;
-
 	p = current_proc();
+
+	context.vc_proc = p;
+	context.vc_ucred = kauth_cred_get();
 
 	ret = kmem_alloc(kernel_map,
 		(vm_offset_t *)&profile_data_string, PATH_MAX);
@@ -1765,36 +2286,36 @@ prepare_profile_database(int	user)
 	}
 
 	NDINIT(&nd_names, LOOKUP, FOLLOW, 
-			UIO_SYSSPACE, profile_names_string, p);
+			UIO_SYSSPACE32, CAST_USER_ADDR_T(profile_names_string), &context);
 	NDINIT(&nd_data, LOOKUP, FOLLOW,
-			UIO_SYSSPACE, profile_data_string, p);
+			UIO_SYSSPACE32, CAST_USER_ADDR_T(profile_data_string), &context);
 
-	if (error = vn_open(&nd_data, 
-			O_CREAT | O_EXCL | FWRITE, S_IRUSR|S_IWUSR)) {
+	if ( (error = vn_open(&nd_data, 
+							O_CREAT | O_EXCL | FWRITE, S_IRUSR|S_IWUSR)) ) {
 			kmem_free(kernel_map, 
 					(vm_offset_t)names_buf, 4 * PAGE_SIZE);
 			kmem_free(kernel_map, 
 				(vm_offset_t)profile_data_string, PATH_MAX);
+			
 			return 0;
 	}
-
 	data_vp = nd_data.ni_vp;
-	VOP_UNLOCK(data_vp, 0, p);
 
-	if (error = vn_open(&nd_names, 
-			O_CREAT | O_EXCL | FWRITE, S_IRUSR|S_IWUSR)) {
+	if ( (error = vn_open(&nd_names, 
+							O_CREAT | O_EXCL | FWRITE, S_IRUSR|S_IWUSR)) ) {
 			printf("prepare_profile_database: Can't create CacheNames %s\n",
 				profile_data_string);
 			kmem_free(kernel_map, 
 					(vm_offset_t)names_buf, 4 * PAGE_SIZE);
 			kmem_free(kernel_map, 
 				(vm_offset_t)profile_data_string, PATH_MAX);
-			vrele(data_vp);
+
+			vnode_rele(data_vp);
+			vnode_put(data_vp);
+
 			return error;
 	}
-
 	names_vp = nd_names.ni_vp;
-
 
 	/* Write Header for new names file */
 
@@ -1816,8 +2337,8 @@ prepare_profile_database(int	user)
 	while(size) {
 		error = vn_rdwr(UIO_WRITE, names_vp, 
 				(caddr_t)buf_ptr, size, resid_off,
-				UIO_SYSSPACE, IO_NODELOCKED, 
-				p->p_ucred, &resid, p);
+				UIO_SYSSPACE32, IO_NODELOCKED, 
+				kauth_cred_get(), &resid, p);
 		if(error) {
 			printf("prepare_profile_database: Can't write header %s\n", profile_names_string);
 			kmem_free(kernel_map, 
@@ -1825,43 +2346,39 @@ prepare_profile_database(int	user)
 			kmem_free(kernel_map, 
 				(vm_offset_t)profile_data_string, 
 				PATH_MAX);
-			vput(names_vp);
-			vrele(data_vp);
+
+			vnode_rele(names_vp);
+			vnode_put(names_vp);
+			vnode_rele(data_vp);
+			vnode_put(data_vp);
+
 			return error;
 		}
 		buf_ptr += size-resid;
 		resid_off += size-resid;
 		size = resid;
 	}
+	VATTR_INIT(&va);
+	VATTR_SET(&va, va_uid, user);
 
-	VATTR_NULL(&vattr);
-	vattr.va_uid = user;
-       	error = VOP_SETATTR(names_vp, &vattr, p->p_cred->pc_ucred, p);
+       	error = vnode_setattr(names_vp, &va, &context);
 	if(error) {
 		printf("prepare_profile_database: "
 			"Can't set user %s\n", profile_names_string);
 	}
-	vput(names_vp);
+	vnode_rele(names_vp);
+	vnode_put(names_vp);
 	
-	error = vn_lock(data_vp, LK_EXCLUSIVE | LK_RETRY, p);
-	if(error) {
-		vrele(data_vp);
-		printf("prepare_profile_database: cannot lock data file %s\n",
-			profile_data_string);
-		kmem_free(kernel_map, 
-			(vm_offset_t)profile_data_string, PATH_MAX);
-		kmem_free(kernel_map, 
-			(vm_offset_t)names_buf, 4 * PAGE_SIZE);
-	}
-	VATTR_NULL(&vattr);
-	vattr.va_uid = user;
-       	error = VOP_SETATTR(data_vp, &vattr, p->p_cred->pc_ucred, p);
+	VATTR_INIT(&va);
+	VATTR_SET(&va, va_uid, user);
+       	error = vnode_setattr(data_vp, &va, &context);
 	if(error) {
 		printf("prepare_profile_database: "
 			"Can't set user %s\n", profile_data_string);
 	}
-	
-	vput(data_vp);
+	vnode_rele(data_vp);
+	vnode_put(data_vp);
+
 	kmem_free(kernel_map, 
 			(vm_offset_t)profile_data_string, PATH_MAX);
 	kmem_free(kernel_map, 

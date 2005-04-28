@@ -25,11 +25,9 @@
 #include <sys/file.h>
 #include <sys/dirent.h>
 #include <sys/stat.h>
-#include <sys/buf.h>
 #include <sys/mount.h>
 #include <sys/vnode.h>
 #include <sys/malloc.h>
-#include <sys/namei.h>
 #include <sys/ubc.h>
 #include <sys/quota.h>
 
@@ -38,7 +36,6 @@
 #include "hfs.h"
 #include "hfs_catalog.h"
 #include "hfs_cnode.h"
-#include "hfs_lockf.h"
 #include "hfs_dbg.h"
 #include "hfs_mount.h"
 #include "hfs_quota.h"
@@ -51,18 +48,22 @@
 
 void hfs_generate_volume_notifications(struct hfsmount *hfsmp) {
 	ExtendedVCB *vcb = HFSTOVCB(hfsmp);
+	fsid_t fsid;
+		
+	fsid.val[0] = (long)hfsmp->hfs_raw_dev;
+	fsid.val[1] = (long)vfs_typenum(HFSTOVFS(hfsmp));
 	
 	if (hfsmp->hfs_notification_conditions & VQ_LOWDISK) {
 		/* Check to see whether the free space is back above the minimal level: */
 		if (hfs_freeblks(hfsmp, 1) > hfsmp->hfs_freespace_notify_desiredlevel) {
             hfsmp->hfs_notification_conditions &= ~VQ_LOWDISK;
-            vfs_event_signal(&HFSTOVFS(hfsmp)->mnt_stat.f_fsid, hfsmp->hfs_notification_conditions, NULL);
+            vfs_event_signal(&fsid, hfsmp->hfs_notification_conditions, NULL);
 		}
 	} else {
 		/* Check to see whether the free space fell below the requested limit: */
 		if (hfs_freeblks(hfsmp, 1) < hfsmp->hfs_freespace_notify_warninglimit) {
             hfsmp->hfs_notification_conditions |= VQ_LOWDISK;
-            vfs_event_signal(&HFSTOVFS(hfsmp)->mnt_stat.f_fsid, hfsmp->hfs_notification_conditions, NULL);
+            vfs_event_signal(&fsid, hfsmp->hfs_notification_conditions, NULL);
 		}
 	};
 }

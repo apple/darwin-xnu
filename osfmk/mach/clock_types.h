@@ -30,15 +30,14 @@
  */
 
 /*
- * N.B. This interface has been deprecated and the contents
- * of this file should be considered obsolete.
+ *	All interfaces defined here are obsolete.
  */
 
 #ifndef	_MACH_CLOCK_TYPES_H_
 #define	_MACH_CLOCK_TYPES_H_
 
+#include <stdint.h>
 #include <mach/time_value.h>
-#include <sys/appleapiopts.h>
 
 /*
  * Type definitions.
@@ -59,19 +58,13 @@ struct mach_timespec {
 };
 typedef struct mach_timespec	mach_timespec_t;
 
-#ifdef	__APPLE_API_UNSTABLE
-
 /*
  * Reserved clock id values for default clocks.
  */
-#define SYSTEM_CLOCK		0	/* advances monotonically and
-								 * uniformly; set to zero at boot */
-#define CALENDAR_CLOCK		1	/* 'wall' clock; effectively
-								 * synchronized to UTC */
+#define SYSTEM_CLOCK		0
+#define CALENDAR_CLOCK		1
 
-#define REALTIME_CLOCK		0	/* obsolete; use SYSTEM or CALENDAR
-								 * clock depending on particular
-								 * requirements */
+#define REALTIME_CLOCK		0
 
 /*
  * Attribute names.
@@ -123,7 +116,5 @@ typedef struct mach_timespec	mach_timespec_t;
 #define	TIME_RELATIVE		0x01		/* relative time */
 
 #define BAD_ALRMTYPE(t)		(((t) &~ TIME_RELATIVE) != 0)
-
-#endif	/* __APPLE_API_UNSTABLE */
 
 #endif /* _MACH_CLOCK_TYPES_H_ */

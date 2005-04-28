@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -263,7 +263,7 @@ void db_display_mappings(db_expr_t addr, int have_addr, db_expr_t count, char * 
 	pmap_t			pmap;
 	addr64_t		lnextva;
 
-	mapping		*mp;
+	mapping_t	*mp;
 	
 	if (db_expression(&xspace)) {							/* Get the address space requested */
 		if(xspace >= maxAdrSp) {
@@ -318,7 +318,7 @@ void db_display_hash(db_expr_t addr, int have_addr, db_expr_t count, char * modi
 
 	llva = (addr64_t)((unsigned int)addr);					/* Make sure we are 64-bit now */
 	
-	s4bit = !((per_proc_info[0].pf.Available & pf64Bit) == 0);	/* Are we a big guy? */
+	s4bit = !((PerProcTable[0].ppe_vaddr->pf.Available & pf64Bit) == 0);	/* Are we a big guy? */
 	if (db_expression(&xspace)) {							/* Get the address space requested */
 		if(xspace >= maxAdrSp) {
 			db_printf("requested address space (%llX) larger than max (%X)\n", xspace, maxAdrSp - 1);
@@ -466,7 +466,7 @@ void db_dumpmapping(struct mapping *mp) { 					/* Dump out a mapping */
 		pmapTrans[mp->mpSpace].pmapPAddr);			/* Header */
 	db_printf("              mpFlags: %08X\n", mp->mpFlags);                 
 	db_printf("              mpSpace: %04X\n", mp->mpSpace);                 
-	db_printf("              mpBSize: %04X\n", mp->mpBSize);                 
+	db_printf("              mpBSize: %04X\n", mp->u.mpBSize);                 
 	db_printf("                mpPte: %08X\n", mp->mpPte);                 
 	db_printf("              mpPAddr: %08X\n", mp->mpPAddr);                 
 	db_printf("              mpVAddr: %016llX\n", mp->mpVAddr);                 
@@ -492,7 +492,7 @@ void db_dumppca(unsigned int ptegindex) {
 	int i, s4bit;
 	unsigned long long llslot, llseg, llhash;
 
-	s4bit = !((per_proc_info[0].pf.Available & pf64Bit) == 0);	/* Are we a big guy? */
+	s4bit = !((PerProcTable[0].ppe_vaddr->pf.Available & pf64Bit) == 0);	/* Are we a big guy? */
 
 	pteg = hash_table_base + (ptegindex << 6);				/* Point to the PTEG */
 	if(s4bit) pteg = hash_table_base + (ptegindex << 7);	/* Point to the PTEG */
@@ -563,7 +563,7 @@ void db_display_virtual(db_expr_t addr, int have_addr, db_expr_t count, char * m
 	db_expr_t	xspace;
 	pmap_t		pmap;
 
-	mapping		*mp, *mpv;
+	mapping_t	*mp, *mpv;
 	addr64_t	pa;
 	ppnum_t		pnum;
 
@@ -605,7 +605,7 @@ void db_display_virtual(db_expr_t addr, int have_addr, db_expr_t count, char * m
 		db_printf("%016llX   %08X %08X %08X %08X  %08X %08X %08X %08X\n", addr,	/* Print a line */
 			xbuf[0], xbuf[1], xbuf[2], xbuf[3], 
 			xbuf[4], xbuf[5], xbuf[6], xbuf[7]);
-		addr = (db_expr_t)((unsigned int)addr + 0x00000020);	/* Point to next address */
+		addr = (db_expr_t)(addr + 0x00000020);				/* Point to next address */
 		pa = pa + 0x00000020;								/* Point to next address */
 	}
 	db_next = addr;
@@ -663,14 +663,14 @@ void db_display_save(db_expr_t addr, int have_addr, db_expr_t count, char * modi
 		db_printf("\nTask %4d @%08X:\n", tottasks, task);	/* Show where we're at */
 		for(act = (thread_act_t)task->threads.next; act != (thread_act_t)&task->threads; act = (thread_act_t)act->task_threads.next) {	/* Go through activations */
 			db_printf("   Act %4d @%08X - p: %08X  current context: %08X\n",
-					  taskact, act, act->mact.pcb, act->mact.curctx);					
+					  taskact, act, act->machine.pcb, act->machine.curctx);					
 					
-			save = (savearea *)act->mact.pcb; 		/* Set the start of the normal chain */
+			save = (savearea *)act->machine.pcb; 		/* Set the start of the normal chain */
 			chainsize = 0;
 			
 			db_printf("      General context - fp: %08X  fl: %08X  fc: %d  vp: %08X  vl: %08X  vp: %d\n",
-				act->mact.facctx.FPUsave, act->mact.facctx.FPUlevel, act->mact.facctx.FPUcpu, 		
-				act->mact.facctx.VMXsave, act->mact.facctx.VMXlevel, act->mact.facctx.VMXcpu);
+				act->machine.facctx.FPUsave, act->machine.facctx.FPUlevel, act->machine.facctx.FPUcpu, 		
+				act->machine.facctx.VMXsave, act->machine.facctx.VMXlevel, act->machine.facctx.VMXcpu);
 			
 			while(save) {							/* Do them all */
 				totsaves++;							/* Count savearea */
@@ -682,7 +682,7 @@ void db_display_save(db_expr_t addr, int have_addr, db_expr_t count, char * modi
 				}
 			}
 			
-			save = (savearea *)act->mact.facctx.FPUsave; 	/* Set the start of the floating point chain */
+			save = (savearea *)act->machine.facctx.FPUsave; 	/* Set the start of the floating point chain */
 			chainsize = 0;
 			while(save) {							/* Do them all */
 				totsaves++;							/* Count savearea */
@@ -694,7 +694,7 @@ void db_display_save(db_expr_t addr, int have_addr, db_expr_t count, char * modi
 				}
 			}
 			
-			save = (savearea *)act->mact.facctx.VMXsave; 	/* Set the start of the floating point chain */
+			save = (savearea *)act->machine.facctx.VMXsave; 	/* Set the start of the floating point chain */
 			chainsize = 0;
 			while(save) {							/* Do them all */
 				totsaves++;							/* Count savearea */
@@ -706,7 +706,7 @@ void db_display_save(db_expr_t addr, int have_addr, db_expr_t count, char * modi
 				}
 			}
 			
-			if(CTable = act->mact.vmmControl) {		/* Are there virtual machines? */
+			if(CTable = act->machine.vmmControl) {		/* Are there virtual machines? */
 				
 				for(vmid = 0; vmid < kVmmMaxContexts; vmid++) {
 					
@@ -762,14 +762,14 @@ void db_display_save(db_expr_t addr, int have_addr, db_expr_t count, char * modi
 
 extern unsigned int dbfloats[33][2];
 extern unsigned int dbvecs[33][4];
-extern unsigned int dbspecrs[80];
+extern unsigned int dbspecrs[336];
 
 void db_display_xregs(db_expr_t addr, int have_addr, db_expr_t count, char * modif) {
 
 	int				i, j, pents;
 
 	stSpecrs(dbspecrs);										/* Save special registers */
-	if(per_proc_info[0].pf.Available & pf64Bit) {
+	if(PerProcTable[0].ppe_vaddr->pf.Available & pf64Bit) {
 		db_printf("PIR:    %08X\n", dbspecrs[0]);
 		db_printf("PVR:    %08X\n", dbspecrs[1]);
 		db_printf("SDR1:   %08X.%08X\n", dbspecrs[26], dbspecrs[27]);
@@ -850,12 +850,12 @@ void db_check_mappings(db_expr_t addr, int have_addr, db_expr_t count, char * mo
 	unsigned int xpteg[32], xpca[8], space, hash, pva, seg, api, va, free, free2, xauto, PTEGcnt, wimgkk, wimgxx, slotoff;
 	int i, j, fnderr, slot, slot2, k, s4bit;
 	pmap_t pmap;
-	mapping	 *mp;
+	mapping_t *mp;
 	ppnum_t ppn, pa, aoff;
 	unsigned long long llslot, llseg, llhash;
 	
 	s4bit = 0;												/* Assume dinky? */
-	if(per_proc_info[0].pf.Available & pf64Bit) s4bit = 1;	/* Are we a big guy? */
+	if(PerProcTable[0].ppe_vaddr->pf.Available & pf64Bit) s4bit = 1;	/* Are we a big guy? */
 	
 	PTEGcnt = hash_table_size / 64;							/* Get the number of PTEGS */
 	if(s4bit) PTEGcnt = PTEGcnt / 2;						/* PTEGs are twice as big */	
@@ -953,57 +953,63 @@ void db_check_mappings(db_expr_t addr, int have_addr, db_expr_t count, char * mo
 						fnderr = 1;
 						goto dcmout;
 					}
-				
-					mp = hw_find_map(pmap, llva, &lnextva);		/* Try to find the mapping for this address */
-//					db_printf("%08X - %017llX\n", mp, llva);
-					if((unsigned int)mp == mapRtBadLk) {	/* Did we lock up ok? */
-						db_printf("Timeout locking mapping for for virtual address %016ll8X, slot = %d\n", llva, j);	
-						return;
-					}
-					
-					if(!mp) {								/* Did we find one? */
-						db_printf("Not mapped, slot = %d, va = %08X\n", j, (unsigned int)llva);	
-						fnderr = 1;
-						goto dcmout;
-					}
-					
-					if((mp->mpFlags & 0xFF000000) > 0x01000000) {	/* Is busy count too high? */
-						db_printf("Busy count too high, slot = %d\n", j);
-						fnderr = 1;
-					}
-					
-					if(mp->mpFlags & mpBlock) {				/* Is this a block map? */
-						if(!(xpca[0] & xauto)) {				/* Is it marked as such? */
-							db_printf("mapping marked as block, PCA is not, slot = %d\n", j);
+
+					if (pmap->pmapFlags & pmapVMgsaa) {
+						unsigned int ret;
+						mapping_t mpcopy;
+						ret = hw_find_map_gv(pmap, llva, &mpcopy);
+					} else {
+						mp = hw_find_map(pmap, llva, &lnextva);		/* Try to find the mapping for this address */
+	//					db_printf("%08X - %017llX\n", mp, llva);
+						if((unsigned int)mp == mapRtBadLk) {	/* Did we lock up ok? */
+							db_printf("Timeout locking mapping for for virtual address %016ll8X, slot = %d\n", llva, j);	
+							return;
+						}
+						
+						if(!mp) {								/* Did we find one? */
+							db_printf("Not mapped, slot = %d, va = %08X\n", j, (unsigned int)llva);	
+							fnderr = 1;
+							goto dcmout;
+						}
+						
+						if((mp->mpFlags & 0xFF000000) > 0x01000000) {	/* Is busy count too high? */
+							db_printf("Busy count too high, slot = %d\n", j);
 							fnderr = 1;
 						}
-					}
-					else {									/* Is a block */
-						if(xpca[0] & xauto) {				/* Is it marked as such? */
-							db_printf("mapping not marked as block, PCA is, slot = %d\n", j);
-							fnderr = 1;
+						
+						if((mp->mpFlags & mpType) == mpBlock) {		/* Is this a block map? */
+							if(!(xpca[0] & xauto)) {				/* Is it marked as such? */
+								db_printf("mapping marked as block, PCA is not, slot = %d\n", j);
+								fnderr = 1;
+							}
 						}
-						if(mp->mpPte != slotoff) {			/* See if mapping PTEG offset is us */
-							db_printf("mapping does not point to PTE, slot = %d\n", j);
-							fnderr = 1;
+						else {									/* Is a block */
+							if(xpca[0] & xauto) {				/* Is it marked as such? */
+								db_printf("mapping not marked as block, PCA is, slot = %d\n", j);
+								fnderr = 1;
+							}
+							if(mp->mpPte != slotoff) {			/* See if mapping PTEG offset is us */
+								db_printf("mapping does not point to PTE, slot = %d\n", j);
+								fnderr = 1;
+							}
 						}
-					}
-				
-					wimgkk = (unsigned int)mp->mpVAddr;		/* Get last half of vaddr where keys, etc are */
-					wimgkk = (wimgkk ^ wimgxx) & 0x7F;		/* XOR to find differences from PTE */
-					if(wimgkk) {							/* See if key in PTE is what we want */
-						db_printf("key or WIMG does not match, slot = %d\n", j);
-						fnderr = 1;
-					}
 					
-					aoff = (ppnum_t)((llva >> 12) - (mp->mpVAddr >> 12));	/* Get the offset from vaddr */
-					pa = aoff + mp->mpPAddr;				/* Get the physical page number we expect */
-					if(pa != ppn) {							/* Is physical address expected? */
-						db_printf("Physical address does not match, slot = %d\n", j);
-						fnderr = 1;
+						wimgkk = (unsigned int)mp->mpVAddr;		/* Get last half of vaddr where keys, etc are */
+						wimgkk = (wimgkk ^ wimgxx) & 0x7F;		/* XOR to find differences from PTE */
+						if(wimgkk) {							/* See if key in PTE is what we want */
+							db_printf("key or WIMG does not match, slot = %d\n", j);
+							fnderr = 1;
+						}
+						
+						aoff = (ppnum_t)((llva >> 12) - (mp->mpVAddr >> 12));	/* Get the offset from vaddr */
+						pa = aoff + mp->mpPAddr;				/* Get the physical page number we expect */
+						if(pa != ppn) {							/* Is physical address expected? */
+							db_printf("Physical address does not match, slot = %d\n", j);
+							fnderr = 1;
+						}
+		
+						mapping_drop_busy(mp);					/* We're done with the mapping */
 					}
-	
-					mapping_drop_busy(mp);					/* We're done with the mapping */
 				}
 				
 			}

@@ -27,6 +27,9 @@ By Steve Reid <steve@edmweb.com>
 */
 /* Header portion split from main code for convenience (AYB 3/02/98) */
 #include "sha1mod.h"
+#ifdef SHA1HANDSOFF
+#include <string.h>
+#endif
 
 #define rol(value, bits) (((value) << (bits)) | ((value) >> (32 - (bits))))
 
@@ -58,7 +61,7 @@ By Steve Reid <steve@edmweb.com>
 
 /* Hash a single 512-bit block. This is the core of the algorithm. */
 
-void SHA1Transform(unsigned long state[5], unsigned char buffer[64])
+void SHA1Transform(unsigned long state[5], const unsigned char buffer[64])
 {
 unsigned long a, b, c, d, e;
 typedef union {
@@ -127,7 +130,7 @@ void SHA1Init(SHA1_CTX* context)
 
 /* Run your data through this. */
 
-void SHA1Update(SHA1_CTX* context, unsigned char* data, unsigned int len)
+void SHA1Update(SHA1_CTX* context, const unsigned char* data, unsigned int len)
 {
 unsigned int i, j;
 
@@ -158,9 +161,9 @@ unsigned char finalcount[8];
         finalcount[i] = (unsigned char)((context->count[(i >= 4 ? 0 : 1)]
          >> ((3-(i & 3)) * 8) ) & 255);  /* Endian independent */
     }
-    SHA1Update(context, (unsigned char *)"\200", 1);
+    SHA1Update(context, "\200", 1);
     while ((context->count[0] & 504) != 448) {
-        SHA1Update(context, (unsigned char *)"\0", 1);
+        SHA1Update(context, "\0", 1);
     }
     SHA1Update(context, finalcount, 8);  /* Should cause a SHA1Transform() */
     for (i = 0; i < 20; i++) {

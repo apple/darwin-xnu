@@ -66,7 +66,7 @@ indicates an error, and an error code is stored in
 .Fn Mkfifo
 will fail and no fifo will be created if:
 .Bl -tag -width Er
-.It Bq Er EOPNOTSUPP
+.It Bq Er ENOTSUP
 The kernel has not been configured to support fifo's.
 .It Bq Er ENOTDIR
 A component of the path prefix is not a directory.

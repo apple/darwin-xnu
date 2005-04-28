@@ -48,6 +48,8 @@
 #define _NETAT_ATP_H_
 #include <sys/appleapiopts.h>
 
+#ifdef __APPLE_API_OBSOLETE
+
 /* ATP function codes */
 
 #define ATP_CMD_TREQ		0x01	/* TRequest packet  */
@@ -184,8 +186,7 @@ typedef struct {
 #define ATP_SENDRESPONSE 2
 #define ATP_GETREQUEST   3
 
-#ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
+#ifdef KERNEL_PRIVATE
 
 
 /*
@@ -456,6 +457,6 @@ void atp_timout(void (*func)(), struct atp_trans *, int);
 void atp_untimout(void (*func)(), struct atp_trans *);
 int atp_tid(struct atp_state *);
 
-#endif /* __APPLE_API_PRIVATE */
-#endif /* KERNEL */
+#endif /* KERNEL_PRIVATE */
+#endif /* __APPLE_API_OBSOLETE */
 #endif /* _NETAT_ATP_H_ */

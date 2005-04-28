@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -97,7 +97,7 @@ db_term(db_expr_t *valuep)
 	    if (db_allow_unprefixed_hexa && db_radix == 16 &&
 		db_tok_string) {
 		char *cp;
-		int value;
+		db_expr_t value;
 		    
 		value = 0;
 		valid_hexa = TRUE;
@@ -118,7 +118,7 @@ db_term(db_expr_t *valuep)
 			db_printf("Ambiguous constant %x used as a symbol\n",
 				  value);
 		    } else {
-			*valuep = (db_expr_t)value;
+			*valuep = value;
 		    }	
 		}
 	    }

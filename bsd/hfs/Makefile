@@ -24,7 +24,7 @@ DATAFILES = \
 
 PRIVATE_DATAFILES = \
 	hfs.h hfs_attrlist.h hfs_catalog.h hfs_cnode.h hfs_endian.h \
-	hfs_lockf.h hfs_macos_defs.h hfs_quota.h rangelist.h
+	hfs_fsctl.h hfs_macos_defs.h hfs_quota.h rangelist.h
 
 INSTALL_MI_LIST	= ${DATAFILES}
 

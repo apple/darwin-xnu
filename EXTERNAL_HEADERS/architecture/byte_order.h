@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -23,17 +23,6 @@
  * Copyright (c) 1992 NeXT Computer, Inc.
  *
  * Byte ordering conversion.
- *
- * HISTORY
- *
- * 20 October 1992 ? at NeXT
- *	Added #ifdef wrapper to prevent multiple inclusions of this file.
- *
- * 8 October 1992 ? at NeXT
- *	Converted to NXxxx versions.  Condensed history.
- *
- * 18 May 1992 ? at NeXT
- *	Created.
  */
 
 #ifndef	_ARCHITECTURE_BYTE_ORDER_H_
@@ -42,7 +31,7 @@
 typedef unsigned long NXSwappedFloat;
 typedef unsigned long long NXSwappedDouble;
 
-#if defined (__ppc__)
+#if defined (__ppc__) || defined(__ppc64__)
 #include "architecture/ppc/byte_order.h"
 #elif defined (__i386__)
 #include "architecture/i386/byte_order.h"

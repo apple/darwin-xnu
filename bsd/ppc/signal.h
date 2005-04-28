@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -63,13 +63,35 @@ typedef enum {
  * to the handler to allow it to properly restore state if
  * a non-standard exit is performed.
  */
+struct sigcontext32 {
+    int		sc_onstack;     /* sigstack state to restore */
+    int		sc_mask;        /* signal mask to restore */
+    int		sc_ir;			/* pc */
+    int		sc_psw;         /* processor status word */
+    int		sc_sp;      	/* stack pointer if sc_regs == NULL */
+    void	*sc_regs;		/* (kernel private) saved state */
+};
+
+struct sigcontext64 {
+    int		sc_onstack;     /* sigstack state to restore */
+    int		sc_mask;        /* signal mask to restore */
+    long long	sc_ir;		/* pc */
+    long long	sc_psw;         /* processor status word */
+    long long	sc_sp;      	/* stack pointer if sc_regs == NULL */
+    void	*sc_regs;	/* (kernel private) saved state */
+};
+
+/*
+ * LP64todo - Have to decide how to handle this.
+ * For now, just duplicate the 32-bit context as the generic one.
+ */
 struct sigcontext {
     int		sc_onstack;     /* sigstack state to restore */
     int		sc_mask;        /* signal mask to restore */
-	int		sc_ir;			/* pc */
+    int		sc_ir;			/* pc */
     int		sc_psw;         /* processor status word */
     int		sc_sp;      	/* stack pointer if sc_regs == NULL */
-	void	*sc_regs;		/* (kernel private) saved state */
+    void	*sc_regs;		/* (kernel private) saved state */
 };
 
 #endif /* __APPLE_API_OBSOLETE */

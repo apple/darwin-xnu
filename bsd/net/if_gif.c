@@ -66,7 +66,6 @@
 
 #include <net/if.h>
 #include <net/if_types.h>
-#include <net/netisr.h>
 #include <net/route.h>
 #include <net/bpf.h>
 
@@ -104,9 +103,9 @@ static MALLOC_DEFINE(M_GIF, "gif", "Generic Tunnel Interface");
 TAILQ_HEAD(gifhead, gif_softc) gifs = TAILQ_HEAD_INITIALIZER(gifs);
 
 #ifdef __APPLE__
-void gifattach __P((void));
-int gif_pre_output __P((struct ifnet *, register struct mbuf **, struct sockaddr *,
-	caddr_t, char *, char *, u_long));
+void gifattach(void);
+int gif_pre_output(struct ifnet *ifp, u_long protocol_family, struct mbuf **m0,
+				   const struct sockaddr *dst, caddr_t rt, char *frame, char *address);
 static void gif_create_dev(void);
 static int gif_encapcheck(const struct mbuf*, int, int, void*);
 
@@ -119,20 +118,22 @@ struct protosw in_gif_protosw =
 { SOCK_RAW,	0,	0/*IPPROTO_IPV[46]*/,	PR_ATOMIC|PR_ADDR,
   in_gif_input,	0,	0,		0,
   0,
-  0,		0,		0,		0,
+  0,		0,	0,	0,	
   0,
-  &rip_usrreqs
+  &rip_usrreqs,
+  0,		rip_unlock,	0
 };
 #endif
 #if INET6
 struct ip6protosw in6_gif_protosw =
 { SOCK_RAW,	0,	0/*IPPROTO_IPV[46]*/,	PR_ATOMIC|PR_ADDR,
-  in6_gif_input,
-  0,	0,		0,
+  in6_gif_input, 0,		0,		0,
   0,
   0,		0,		0,		0,
-  0,
-  &rip6_usrreqs
+  0,  
+  &rip6_usrreqs,
+  0,		rip_unlock,		0,
+
 };
 #endif
 
@@ -163,184 +164,87 @@ static int max_gif_nesting = MAX_GIF_NEST;
  */
 
 /* GIF interface module support */
-int gif_demux(ifp, m, frame_header, proto)
-    struct ifnet *ifp;
-    struct mbuf  *m;
-    char         *frame_header;
-    struct if_proto **proto;
+int gif_demux(
+    struct ifnet *ifp,
+    struct mbuf  *m,
+    char         *frame_header,
+    u_long *protocol_family)
 {
 	struct gif_softc* gif = (struct gif_softc*)ifp->if_softc;
 	
 	/* Only one protocol may be attached to a gif interface. */
-	*proto = gif->gif_proto;
+	*protocol_family = gif->gif_proto;
 	
 	return 0;
 }
 
 static
-int  gif_add_if(struct ifnet *ifp) 
-{
-    ifp->if_demux  = gif_demux;
-    ifp->if_framer = 0;
-    return 0;
-}       
-
-static
-int  gif_del_if(struct ifnet *ifp)
-{       
-    return 0;
-}   
-
-static
-int  gif_add_proto(struct ddesc_head_str *desc_head, struct if_proto *proto, u_long dl_tag)
+int  gif_add_proto(struct ifnet *ifp, u_long protocol_family, struct ddesc_head_str *desc_head)
 {
 	/* Only one protocol may be attached at a time */
-	struct gif_softc* gif = (struct gif_softc*)proto->ifp;
+	struct gif_softc* gif = (struct gif_softc*)ifp->if_softc;
 
-	if (gif->gif_proto != NULL)
+	if (gif->gif_proto != 0)
 		printf("gif_add_proto: request add_proto for gif%d\n", gif->gif_if.if_unit);
 
-	gif->gif_proto = proto;
+	gif->gif_proto = protocol_family;
 
 	return 0;
 }
 
 static
-int  gif_del_proto(struct if_proto *proto, u_long dl_tag)
+int  gif_del_proto(struct ifnet *ifp, u_long protocol_family)
 {
-	if (((struct gif_softc*)proto->ifp)->gif_proto == proto)
-		((struct gif_softc*)proto->ifp)->gif_proto = NULL;
+	if (((struct gif_softc*)ifp)->gif_proto == protocol_family)
+		((struct gif_softc*)ifp)->gif_proto = 0;
 	else
 		return ENOENT;
 
 	return 0;
 }
 
-int gif_shutdown()
-{
-	return 0;
-}
-
-void gif_reg_if_mods()
-{
-     struct dlil_ifmod_reg_str  gif_ifmod;
-
-     bzero(&gif_ifmod, sizeof(gif_ifmod));
-     gif_ifmod.add_if = gif_add_if;
-     gif_ifmod.del_if = gif_del_if;
-     gif_ifmod.add_proto = gif_add_proto;
-     gif_ifmod.del_proto = gif_del_proto;
-     gif_ifmod.ifmod_ioctl = 0;
-     gif_ifmod.shutdown    = gif_shutdown;
-
-    if (dlil_reg_if_modules(APPLE_IF_FAM_GIF, &gif_ifmod))
-        panic("Couldn't register gif modules\n");
-
-}
-
 /* Glue code to attach inet to a gif interface through DLIL */
-
-u_long  gif_attach_proto_family(struct ifnet *ifp, int af)
+int
+gif_attach_proto_family(
+	struct ifnet *ifp,
+	u_long protocol_family)
 {
     struct dlil_proto_reg_str   reg;
-    struct dlil_demux_desc      desc;
-    u_long                      dl_tag=0;
-    short native=0;     
     int   stat;
 
-	/* Check if we're already attached */
-	stat = dlil_find_dltag(ifp->if_family, ifp->if_unit, af, &dl_tag);
-	if (stat == 0)
-		return dl_tag;
-
+	bzero(&reg, sizeof(reg));
     TAILQ_INIT(&reg.demux_desc_head);
-    desc.type = DLIL_DESC_RAW;
-    desc.variants.bitmask.proto_id_length = 0;
-    desc.variants.bitmask.proto_id = 0;
-    desc.variants.bitmask.proto_id_mask = 0;
-    desc.native_type = (char *) &native;
-    TAILQ_INSERT_TAIL(&reg.demux_desc_head, &desc, next);
     reg.interface_family = ifp->if_family;
     reg.unit_number      = ifp->if_unit;
     reg.input            = gif_input;
     reg.pre_output       = gif_pre_output;
-    reg.event            = 0;
-    reg.offer            = 0;
-    reg.ioctl            = 0;
-    reg.default_proto    = 0;
-    reg.protocol_family  = af;
+    reg.protocol_family  = protocol_family;
 
-    stat = dlil_attach_protocol(&reg, &dl_tag);
-    if (stat) {
-        panic("gif_attach_proto_family can't attach interface fam=%d\n", af);
+    stat = dlil_attach_protocol(&reg);
+    if (stat && stat != EEXIST) {
+        panic("gif_attach_proto_family can't attach interface fam=%d\n", protocol_family);
     }
 
-    return dl_tag;
+    return stat;
 }
 
-u_long  gif_detach_proto_family(struct ifnet *ifp, int af)
-{
-    u_long      ip_dl_tag = 0;
-    int         stat;
-
-    stat = dlil_find_dltag(ifp->if_family, ifp->if_unit, af, &ip_dl_tag);
-    if (stat == 0) {
-        stat = dlil_detach_protocol(ip_dl_tag);
-        if (stat) {
-            printf("WARNING: gif_detach can't detach IP fam=%d from interface\n", af);
-	}
-    }
-    return (stat);
-}
-
-int gif_attach_inet(struct ifnet *ifp, u_long *dl_tag) {
-	*dl_tag = gif_attach_proto_family(ifp, AF_INET);
-	return 0;
-}
-
-int gif_detach_inet(struct ifnet *ifp, u_long dl_tag) {
-	gif_detach_proto_family(ifp, AF_INET);
-	return 0;
-}
-
-int gif_attach_inet6(struct ifnet *ifp, u_long *dl_tag) {
-	*dl_tag = gif_attach_proto_family(ifp, AF_INET6);
-	return 0;
-}
-
-int gif_detach_inet6(struct ifnet *ifp, u_long dl_tag) {
-	gif_detach_proto_family(ifp, AF_INET6);
-	return 0;
-}
 #endif
 
 /* Function to setup the first gif interface */
 void
 gifattach(void)
 {
-     	struct dlil_protomod_reg_str gif_protoreg;
 	int error;
 
 	/* Init the list of interfaces */
 	TAILQ_INIT(&gifs);
 
-	gif_reg_if_mods(); /* DLIL modules */
-
 	/* Register protocol registration functions */
-
-	bzero(&gif_protoreg, sizeof(gif_protoreg));
-	gif_protoreg.attach_proto = gif_attach_inet;
-	gif_protoreg.detach_proto = gif_detach_inet;
-	
-	if ( error = dlil_reg_proto_module(AF_INET, APPLE_IF_FAM_GIF, &gif_protoreg) != 0)
+	if ( error = dlil_reg_proto_module(AF_INET, APPLE_IF_FAM_GIF, gif_attach_proto_family, NULL) != 0)
 		printf("dlil_reg_proto_module failed for AF_INET error=%d\n", error);
-
-	gif_protoreg.attach_proto = gif_attach_inet6;
-	gif_protoreg.detach_proto = gif_detach_inet6;
 	
-	if ( error = dlil_reg_proto_module(AF_INET6, APPLE_IF_FAM_GIF, &gif_protoreg) != 0)
+	if ( error = dlil_reg_proto_module(AF_INET6, APPLE_IF_FAM_GIF, gif_attach_proto_family, NULL) != 0)
 		printf("dlil_reg_proto_module failed for AF_INET6 error=%d\n", error);
-
 
 	/* Create first device */
 	gif_create_dev();
@@ -399,6 +303,7 @@ gif_create_dev(void)
 	}
 #endif
 	
+	sc->gif_called = 0;
 	sc->gif_if.if_family= APPLE_IF_FAM_GIF;
 	sc->gif_if.if_mtu	= GIF_MTU;
 	sc->gif_if.if_flags  = IFF_POINTOPOINT | IFF_MULTICAST;
@@ -406,9 +311,12 @@ gif_create_dev(void)
 	/* turn off ingress filter */
 	sc->gif_if.if_flags  |= IFF_LINK2;
 #endif
+	sc->gif_if.if_demux = gif_demux;
 	sc->gif_if.if_ioctl	= gif_ioctl;
 	sc->gif_if.if_output = NULL;	/* pre_output returns error or EJUSTRETURN */
 	sc->gif_if.if_type   = IFT_GIF;
+	sc->gif_if.if_add_proto = gif_add_proto;
+	sc->gif_if.if_del_proto = gif_del_proto;
 	dlil_if_attach(&sc->gif_if);
 	bpfattach(&sc->gif_if, DLT_NULL, sizeof(u_int));
 	TAILQ_INSERT_TAIL(&gifs, sc, gif_link);
@@ -473,20 +381,19 @@ gif_encapcheck(m, off, proto, arg)
 }
 
 int
-gif_pre_output(ifp, m0, dst, rt, frame, address, dl_tag)
-	struct ifnet *ifp;
-	struct mbuf **m0;
-	struct sockaddr *dst;
-	caddr_t rt;
-	char *frame;
-	char *address;
-	u_long dl_tag;
+gif_pre_output(
+	struct ifnet *ifp,
+	u_long protocol_family,
+	struct mbuf **m0,
+	const struct sockaddr *dst,
+	caddr_t rt,
+	char *frame,
+	char *address)
 {
 	struct gif_softc *sc = (struct gif_softc*)ifp;
 	register struct mbuf * m = *m0;
 	int error = 0;
-	static int called = 0;	/* XXX: MUTEX */
-
+	
 	/*
 	 * gif may cause infinite recursion calls when misconfigured.
 	 * We'll prevent this by introducing upper limit.
@@ -494,16 +401,16 @@ gif_pre_output(ifp, m0, dst, rt, frame, address, dl_tag)
 	 *      mutual exclusion of the variable CALLED, especially if we
 	 *      use kernel thread.
 	 */
-	if (++called > max_gif_nesting) {
+	if (++sc->gif_called > max_gif_nesting) {
 		log(LOG_NOTICE,
 		    "gif_output: recursively called too many times(%d)\n",
-		    called);
+		    sc->gif_called);
 		m_freem(m);	/* free it here not in dlil_output*/
 		error = EIO;	/* is there better errno? */
 		goto end;
 	}
 
-	getmicrotime(&ifp->if_lastchange);
+	ifnet_touch_lastchange(ifp);
 	m->m_flags &= ~(M_BCAST|M_MCAST);
 	if (!(ifp->if_flags & IFF_UP) ||
 	    sc->gif_psrc == NULL || sc->gif_pdst == NULL) {
@@ -521,11 +428,11 @@ gif_pre_output(ifp, m0, dst, rt, frame, address, dl_tag)
 		 * try to free it or keep a pointer a to it).
 		 */
 		struct mbuf m0;
-		u_int32_t af = dst->sa_family;
+		u_int32_t protocol_family = dst->sa_family;
 
 		m0.m_next = m;
 		m0.m_len = 4;
-		m0.m_data = (char *)&af;
+		m0.m_data = (char *)&protocol_family;
 		
 		bpf_mtap(ifp, &m0);
 	}
@@ -554,7 +461,7 @@ gif_pre_output(ifp, m0, dst, rt, frame, address, dl_tag)
 	}
 
   end:
-	called = 0;		/* reset recursion counter */
+	sc->gif_called = 0;		/* reset recursion counter */
 	if (error) {
 		/* the mbuf was freed either by in_gif_output or in here */
 		*m0 = NULL; /* avoid getting dlil_output freeing it */
@@ -566,25 +473,19 @@ gif_pre_output(ifp, m0, dst, rt, frame, address, dl_tag)
 }
 
 int
-gif_input(m, frame_header, gifp, dl_tag, sync_ok)
-	struct mbuf *m;
-	char* frame_header;
-	struct ifnet* gifp;
-	u_long dl_tag;
-	int sync_ok;
+gif_input(
+	struct mbuf *m,
+	char* frame_header,
+	struct ifnet* gifp,
+	u_long protocol_family,
+	int sync_ok)
 {
-	int s, isr;
-	struct ifqueue *ifq = 0;
-	int af;
 
 	if (gifp == NULL) {
 		/* just in case */
 		m_freem(m);
 		return;
 	}
-
-	/* Assume packet is of type of protocol attached to this interface */
-	af = ((struct gif_softc*)(gifp->if_softc))->gif_proto->protocol_family;
 
 	if (m->m_pkthdr.rcvif)
 		m->m_pkthdr.rcvif = gifp;
@@ -598,11 +499,11 @@ gif_input(m, frame_header, gifp, dl_tag, sync_ok)
 		 * try to free it or keep a pointer a to it).
 		 */
 		struct mbuf m0;
-		u_int32_t af1 = af;
+		u_int32_t protocol_family1 = protocol_family;
 		
 		m0.m_next = m;
 		m0.m_len = 4;
-		m0.m_data = (char *)&af1;
+		m0.m_data = (char *)&protocol_family1;
 		
 		bpf_mtap(gifp, &m0);
 	}
@@ -619,37 +520,9 @@ gif_input(m, frame_header, gifp, dl_tag, sync_ok)
 	 * it occurs more times than we thought, we may change the policy
 	 * again.
 	 */
-	switch (af) {
-#if INET
-	case AF_INET:
-		ifq = &ipintrq;
-		isr = NETISR_IP;
-		break;
-#endif
-#if INET6
-	case AF_INET6:
-		ifq = &ip6intrq;
-		isr = NETISR_IPV6;
-		break;
-#endif
-	default:
-		m_freem(m);
-		return (EJUSTRETURN);
-	}
-
-	s = splimp();
-	if (IF_QFULL(ifq)) {
-		IF_DROP(ifq);	/* update statistics */
-		m_freem(m);
-		splx(s);
-		return (EJUSTRETURN);
-	}
-	IF_ENQUEUE(ifq, m);
-	/* we need schednetisr since the address family may change */
-	schednetisr(isr);
+	proto_input(protocol_family, m);
 	gifp->if_ipackets++;
 	gifp->if_ibytes += m->m_pkthdr.len;
-	splx(s);
 
 	return (0);
 }
@@ -781,7 +654,8 @@ gif_ioctl(ifp, cmd, data)
 			break;
 		}
 
-		TAILQ_FOREACH(ifp2, &ifnet, if_link) {
+		ifnet_head_lock_shared();
+		TAILQ_FOREACH(ifp2, &ifnet_head, if_link) {
 			if (strcmp(ifp2->if_name, GIFNAME) != 0)
 				continue;
 			sc2 = ifp2->if_softc;
@@ -799,6 +673,7 @@ gif_ioctl(ifp, cmd, data)
 			if (bcmp(sc2->gif_pdst, dst, dst->sa_len) == 0 &&
 			    bcmp(sc2->gif_psrc, src, src->sa_len) == 0) {
 				error = EADDRNOTAVAIL;
+				ifnet_head_done();
 				goto bad;
 			}
 #endif
@@ -813,16 +688,19 @@ gif_ioctl(ifp, cmd, data)
 			if (dst->sa_family == AF_INET &&
 			    multidest(dst) && multidest(sc2->gif_pdst)) {
 				error = EADDRNOTAVAIL;
+				ifnet_head_done();
 				goto bad;
 			}
 #if INET6
 			if (dst->sa_family == AF_INET6 &&
 			    multidest6(dst) && multidest6(sc2->gif_pdst)) {
 				error = EADDRNOTAVAIL;
+				ifnet_head_done();
 				goto bad;
 			}
 #endif
 		}
+		ifnet_head_done();
 
 		if (sc->gif_psrc)
 			FREE((caddr_t)sc->gif_psrc, M_IFADDR);
@@ -837,8 +715,6 @@ gif_ioctl(ifp, cmd, data)
 		sc->gif_pdst = sa;
 
 		ifp->if_flags |= IFF_RUNNING;
-
-		gif_attach_proto_family(ifp, src->sa_family);
 
 		s = splimp();
 		if_up(ifp);	/* mark interface UP and send up RTM_IFINFO */
@@ -966,6 +842,8 @@ gif_ioctl(ifp, cmd, data)
 	return error;
 }
 
+#ifndef __APPLE__
+/* This function is not used in our stack */
 void
 gif_delete_tunnel(sc)
 	struct gif_softc *sc;
@@ -982,3 +860,4 @@ gif_delete_tunnel(sc)
 	}
 	/* change the IFF_UP flag as well? */
 }
+#endif

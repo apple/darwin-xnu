@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -21,7 +21,6 @@
  */
 #include <assym.s>
 #include <debug.h>
-#include <cpus.h>
 #include <db_machine_commands.h>
 #include <mach_rt.h>
 	
@@ -155,6 +154,12 @@ LEXT(hw_add_map)
 			stw		r31,FM_ARG0+0x38(r1)		; Save a register
 			stw		r0,(FM_ALIGN((31-17+1)*4)+FM_SIZE+FM_LR_SAVE)(r1)	; Save the return
 
+#if DEBUG
+			lwz		r11,pmapFlags(r3)			; Get pmaps flags
+			rlwinm.	r11,r11,0,pmapVMgsaa		; Is guest shadow assist active?
+			bne		hamPanic					; Call not valid for guest shadow assist pmap
+#endif
+			
 			rlwinm	r11,r4,0,0,19				; Round down to get mapping block address
   			mr		r28,r3						; Save the pmap
   			mr		r31,r4						; Save the mapping
@@ -217,12 +222,15 @@ hamRescan:	lwz		r4,mpVAddr(r31)				; Get the new vaddr top half
 			mfspr	r0,pmc4						; INSTRUMENT - Get stamp
 			stw		r0,0x6100+(17*16)+0xC(0)	; INSTRUMENT - Save it
 #endif			
-			
-			andi.	r0,r24,mpNest				; See if we are a nest
+
+			rlwinm	r0,r24,0,mpType				; Isolate the mapping type
 			rlwinm	r23,r23,12,0,19				; Convert standard block size to bytes
+			cmplwi	r0,mpNest					; Is this a nested type?
+			cmplwi	cr1,r0,mpLinkage			; Linkage type?
+			cror	cr0_eq,cr1_eq,cr0_eq		; Nested or linkage type?
 			lis		r0,0x8000					; Get 0xFFFFFFFF80000000
 			li		r22,0						; Assume high part of size is 0
-			beq++	hamNoNest					; This is not a nest...
+			bne++	hamNoNest					; This is not a nested or linkage type
 			
 			rlwinm	r22,r23,16,16,31			; Convert partially converted size to segments
 			rlwinm	r23,r23,16,0,3				; Finish shift
@@ -301,23 +309,27 @@ hamGotX:
 			stw		r4,0x6100+(19*16)+0xC(0)	; INSTRUMENT - Save it
 #endif			
 	
+			rlwinm	r11,r24,mpPcfgb+2,mpPcfg>>6	; Get the index into the page config table
 			lhz		r8,mpSpace(r31)				; Get the address space
+			lwz		r11,lgpPcfg(r11)			; Get the page config
 			mfsdr1	r7							; Get the hash table base/bounds
 			lwz		r4,pmapResidentCnt(r28)		; Get the mapped page count 
-			andi.	r0,r24,mpNest|mpBlock		; Is this a nest or block?
+			
+			andi.	r0,r24,mpType				; Is this a normal mapping?
 
 			rlwimi	r8,r8,14,4,17				; Double address space
-			rlwinm	r9,r30,20,16,31				; Isolate the page number
+			rlwinm	r9,r30,0,4,31				; Clear segment
 			rlwinm	r10,r30,18,14,17			; Shift EA[32:35] down to correct spot in VSID (actually shift up 14)
 			rlwimi	r8,r8,28,0,3				; Get the last nybble of the hash
 			rlwimi	r10,r29,18,0,13				; Shift EA[18:31] down to VSID (31-bit math works because of max hash table size)			
 			rlwinm	r7,r7,0,16,31				; Isolate length mask (or count)
 			addi	r4,r4,1						; Bump up the mapped page count
+			srw		r9,r9,r11					; Isolate just the page index
 			xor		r10,r10,r8					; Calculate the low 32 bits of the VSID
 			stw		r4,pmapResidentCnt(r28)		; Set the mapped page count 
 			xor		r9,r9,r10					; Get the hash to the PTEG
 			
-			bne--	hamDoneNP					; This is a block or nest, therefore, no physent...
+			bne--	hamDoneNP					; Not a normal mapping, therefore, no physent...
 			
 			bl		mapPhysFindLock				; Go find and lock the physent
 			
@@ -327,7 +339,7 @@ hamGotX:
 			rlwinm	r7,r7,16,0,15				; Get the PTEG wrap size
 			slwi	r9,r9,6						; Make PTEG offset
 			ori		r7,r7,0xFFC0				; Stick in the bottom part
-			rlwinm	r12,r11,0,0,25				; Clean it up
+			rlwinm	r12,r11,0,~ppFlags			; Clean it up
 			and		r9,r9,r7					; Wrap offset into table
 			mr		r4,r31						; Set the link to install
 			stw		r9,mpPte(r31)				; Point the mapping at the PTEG (exact offset is invalid)
@@ -337,11 +349,11 @@ hamGotX:
 			
 			.align	5
 			
-ham64:		li		r0,0xFF						; Get mask to clean up alias pointer
+ham64:		li		r0,ppLFAmask				; Get mask to clean up alias pointer
 			subfic	r7,r7,46					; Get number of leading zeros
 			eqv		r4,r4,r4					; Get all ones
 			ld		r11,ppLink(r3)				; Get the alias chain pointer
-			rldicl	r0,r0,62,0					; Rotate clean up mask to get 0xC0000000000000003F
+			rotrdi	r0,r0,ppLFArrot				; Rotate clean up mask to get 0xF0000000000000000F
 			srd		r4,r4,r7					; Get the wrap mask
 			sldi	r9,r9,7						; Change hash to PTEG offset
 			andc	r11,r11,r0					; Clean out the lock and flags
@@ -439,18 +451,19 @@ hamOverlay:	lwz		r22,mpFlags(r3)				; Get the overlay flags
 			crand	cr5_eq,cr5_eq,cr0_eq		; Remember
 			crand	cr5_eq,cr5_eq,cr1_eq		; Remember if same
 			
-			xor		r23,r23,r22					; Check for differences in flags
-			ori		r23,r23,mpFIP				; "Fault in Progress" is ok to be different
-			xori	r23,r23,mpFIP				; Force mpFIP off
-			rlwinm.	r0,r23,0,mpSpecialb,mpListsb-1	; See if any important flags are different
+			xor		r23,r23,r22					; Compare mapping flag words
+			andi.	r23,r23,mpType|mpPerm		; Are mapping types and attributes the same?
 			crand	cr5_eq,cr5_eq,cr0_eq		; Merge in final check
-			bf--	cr5_eq,hamReturn			; This is not the same, so we just return a collision...
+			bf--	cr5_eq,hamSmash				; This is not the same, so we return a smash...
 			
 			ori		r4,r4,mapRtMapDup			; Set duplicate
 			b		hamReturn					; And leave...
 			
 hamRemv:	ori		r4,r4,mapRtRemove			; We are in the process of removing the collision
 			b		hamReturn					; Come back yall...
+			
+hamSmash:	ori		r4,r4,mapRtSmash			; Tell caller that it has some clean up to do
+			b		hamReturn					; Join common epilog code
 
 			.align	5
 			
@@ -458,6 +471,10 @@ hamBadLock:	li		r3,0						; Set lock time out error code
 			li		r4,mapRtBadLk				; Set lock time out error code
 			b		hamReturn					; Leave....
 
+hamPanic:	lis		r0,hi16(Choke)				; System abend
+			ori		r0,r0,lo16(Choke)			; System abend
+			li		r3,failMapping				; Show that we failed some kind of mapping thing
+			sc
 
 
 
@@ -577,6 +594,12 @@ LEXT(hw_rem_map)
 			stw		r6,FM_ARG0+0x44(r1)			; Save address to save next mapped vaddr
 			stw		r0,(FM_ALIGN(hrmStackSize)+FM_SIZE+FM_LR_SAVE)(r1)	; Save the return
 
+#if DEBUG
+			lwz		r11,pmapFlags(r3)			; Get pmaps flags
+			rlwinm.	r11,r11,0,pmapVMgsaa		; Is guest shadow assist active? 
+			bne		hrmPanic					; Call not valid for guest shadow assist pmap
+#endif
+			
  			bt++	pf64Bitb,hrmSF1				; skip if 64-bit (only they take the hint)
 			lwz		r9,pmapvr+4(r3)				; Get conversion mask
 			b		hrmSF1x						; Done...
@@ -592,11 +615,15 @@ hrmSF1x:
 ;			Here is where we join in from the hw_purge_* routines
 ;
 
-hrmJoin:	mfsprg	r19,2						; Get feature flags again (for alternate entries)
+hrmJoin:	lwz		r3,pmapFlags(r28)			; Get pmap's flags
+			mfsprg	r19,2						; Get feature flags again (for alternate entries)
 
 			mr		r17,r11						; Save the MSR
 			mr		r29,r4						; Top half of vaddr
 			mr		r30,r5						; Bottom half of vaddr
+			
+			rlwinm.	r3,r3,0,pmapVMgsaa			; Is guest shadow assist active? 
+			bne--	hrmGuest					; Yes, handle specially
 			
 			la		r3,pmapSXlk(r28)			; Point to the pmap search lock
 			bl		sxlkShared					; Go get a shared lock on the mapping lists
@@ -613,17 +640,14 @@ hrmJoin:	mfsprg	r19,2						; Get feature flags again (for alternate entries)
 			mr		r4,r29						; High order of address
 			mr		r5,r30						; Low order of address
 			bl		EXT(mapSearchFull)			; Go see if we can find it
-			
-			andi.	r0,r7,lo16(mpPerm|mpSpecial|mpNest)	; Is this nested, special, or a perm mapping?
+
+			andi.	r0,r7,mpPerm				; Mapping marked permanent?
+			crmove	cr5_eq,cr0_eq				; Remember permanent marking
 			mr		r20,r7						; Remember mpFlags
-			rlwinm	r0,r7,0,mpRemovableb,mpRemovableb	; Are we allowed to remove it?
-			crmove	cr5_eq,cr0_eq				; Remember if we should remove this
 			mr.		r31,r3						; Did we? (And remember mapping address for later)
-			cmplwi	cr1,r0,0					; Are we allowed to remove?
 			mr		r15,r4						; Save top of next vaddr
-			crorc	cr5_eq,cr5_eq,cr1_eq		; cr5_eq is true if this is not removable
 			mr		r16,r5						; Save bottom of next vaddr
-			beq		hrmNotFound					; Nope, not found...
+			beq--	hrmNotFound					; Nope, not found...
  			
 			bf--	cr5_eq,hrmPerm				; This one can't be removed...
 ;
@@ -653,13 +677,10 @@ hrmJoin:	mfsprg	r19,2						; Get feature flags again (for alternate entries)
 			mr		r5,r30						; Low order of address
 			bl		EXT(mapSearchFull)			; Rescan the list
 			
-			andi.	r0,r7,lo16(mpPerm|mpSpecial|mpNest)	; Is this nested, special, or a perm mapping?
-			rlwinm	r0,r7,0,mpRemovableb,mpRemovableb	; Are we allowed to remove it?
-			crmove	cr5_eq,cr0_eq				; Remember if we should remove this
+			andi.	r0,r7,mpPerm				; Mapping marked permanent?
+			crmove	cr5_eq,cr0_eq				; Remember permanent marking
 			mr.		r31,r3						; Did we lose it when we converted?
-			cmplwi	cr1,r0,0					; Are we allowed to remove?
 			mr		r20,r7						; Remember mpFlags
-			crorc	cr5_eq,cr5_eq,cr1_eq		; cr5_eq is true if this is not removable
 			mr		r15,r4						; Save top of next vaddr
 			mr		r16,r5						; Save bottom of next vaddr
 			beq--	hrmNotFound					; Yeah, we did, someone tossed it for us...
@@ -686,14 +707,16 @@ hrmGotX:	mr		r3,r31						; Get the mapping
 			lwz		r21,mpPte(r31)				; Grab the offset to the PTE
 			rlwinm	r23,r29,0,1,0				; Copy high order vaddr to high if 64-bit machine
 			mfsdr1	r29							; Get the hash table base and size
-			rlwinm	r0,r20,0,mpBlockb,mpBlockb	; Is this a block mapping?
-			andi.	r2,r20,lo16(mpSpecial|mpNest)	; Is this nest or special mapping?
-			cmplwi	cr5,r0,0					; Remember if this is a block mapping
+
+			rlwinm	r0,r20,0,mpType				; Isolate mapping type
+			cmplwi	cr5,r0,mpBlock				; Remember whether this is a block mapping
+			cmplwi	r0,mpMinSpecial				; cr0_lt <- not a special mapping type
+			
 			rlwinm	r0,r21,0,mpHValidb,mpHValidb	; See if we actually have a PTE
 			ori		r2,r2,0xFFFF				; Get mask to clean out hash table base (works for both 32- and 64-bit)
 			cmpwi	cr1,r0,0					; Have we made a PTE for this yet? 
-			rlwinm	r21,r21,0,0,30				; Clear out valid bit
-			crorc	cr0_eq,cr1_eq,cr0_eq		; No need to look at PTE if none or a special mapping
+			rlwinm	r21,r21,0,~mpHValid			; Clear out valid bit
+			crorc	cr0_eq,cr1_eq,cr0_lt		; No need to look at PTE if none or a special mapping
 			rlwimi	r23,r30,0,0,31				; Insert low under high part of address
 			andc	r29,r29,r2					; Clean up hash table base
 			li		r22,0						; Clear this on out (also sets RC to 0 if we bail)
@@ -703,11 +726,10 @@ hrmGotX:	mr		r3,r31						; Get the mapping
 			bt++	pf64Bitb,hrmSplit64			; Go do 64-bit version...
 			
 			rlwinm	r9,r21,28,4,29				; Convert PTEG to PCA entry
-			bne-	cr5,hrmBlock32				; Go treat block specially...
+			beq-	cr5,hrmBlock32				; Go treat block specially...
 			subfic	r9,r9,-4					; Get the PCA entry offset
 			bt-		cr0_eq,hrmPysDQ32			; Skip next if no possible PTE...
 			add		r7,r9,r29					; Point to the PCA slot
-
 	
 			bl		mapLockPteg					; Go lock up the PTEG (Note: we need to save R6 to set PCA)
 	
@@ -715,7 +737,7 @@ hrmGotX:	mr		r3,r31						; Get the mapping
 			lwz		r5,0(r26)					; Get the top of PTE
 			
 			rlwinm.	r0,r21,0,mpHValidb,mpHValidb	; See if we actually have a PTE
-			rlwinm	r21,r21,0,0,30				; Clear out valid bit
+			rlwinm	r21,r21,0,~mpHValid			; Clear out valid bit
 			rlwinm	r5,r5,0,1,31				; Turn off valid bit in PTE
 			stw		r21,mpPte(r31)				; Make sure we invalidate mpPte, still pointing to PTEG (keep walk_page from making a mistake)
 			beq-	hrmUlckPCA32				; Pte is gone, no need to invalidate...
@@ -770,16 +792,15 @@ hrmPysDQ32:	mr		r3,r31						; Point to the mapping
 			mr		r4,r31						; Point to the mapping
 			bl		EXT(mapRemove)				; Remove the mapping from the list			
 
-			
 			lwz		r4,pmapResidentCnt(r28)		; Get the mapped page count 
-			andi.	r0,r20,lo16(mpSpecial|mpNest)	; Is this nest or special mapping?
-			cmplwi	cr1,r0,0					; Special thingie?
+			rlwinm	r0,r20,0,mpType				; Isolate mapping type
+			cmplwi	cr1,r0,mpMinSpecial			; cr1_lt <- not a special mapping type
 			la		r3,pmapSXlk(r28)			; Point to the pmap search lock
 			subi	r4,r4,1						; Drop down the mapped page count
 			stw		r4,pmapResidentCnt(r28)		; Set the mapped page count 
 			bl		sxlkUnlock					; Unlock the search list
 
-			bne--	cr1,hrmRetn32				; This one has no real memory associated with it so we are done...
+			bf--	cr1_lt,hrmRetn32			; This one has no real memory associated with it so we are done...
 
 			bl		mapPhysFindLock				; Go find and lock the physent
 
@@ -788,7 +809,7 @@ hrmPysDQ32:	mr		r3,r31						; Point to the mapping
 			mr		r4,r22						; Get the RC bits we just got
 			bl		mapPhysMerge				; Go merge the RC bits
 			
-			rlwinm	r9,r9,0,0,25				; Clear the flags from the mapping pointer
+			rlwinm	r9,r9,0,~ppFlags			; Clear the flags from the mapping pointer
 			
 			cmplw	r9,r31						; Are we the first on the list?
 			bne-	hrmNot1st					; Nope...
@@ -831,7 +852,7 @@ hrmDoneChunk:
 hrmNotFound:
 			la		r3,pmapSXlk(r28)			; Point to the pmap search lock
 			bl		sxlkUnlock					; Unlock the search list
-			li		r3,0						; Make sure we know we did not find it
+			li		r3,mapRtNotFnd				; No mapping found
 
 hrmErRtn:	bt++	pf64Bitb,hrmSF1z			; skip if 64-bit (only they take the hint)
 
@@ -1120,7 +1141,7 @@ hrmBDone1:	bl		mapDrainBusy				; Go wait until mapping is unused
 			.align	5
 		
 hrmSplit64:	rlwinm	r9,r21,27,5,29				; Convert PTEG to PCA entry
-			bne--	cr5,hrmBlock64				; Go treat block specially...
+			beq--	cr5,hrmBlock64				; Go treat block specially...
 			subfic	r9,r9,-4					; Get the PCA entry offset
 			bt--	cr0_eq,hrmPysDQ64			; Skip next if no possible PTE...
 			add		r7,r9,r29					; Point to the PCA slot
@@ -1131,8 +1152,9 @@ hrmSplit64:	rlwinm	r9,r21,27,5,29				; Convert PTEG to PCA entry
 			ld		r5,0(r26)					; Get the top of PTE
 			
 			rlwinm.	r0,r21,0,mpHValidb,mpHValidb	; See if we actually have a PTE
-			rlwinm	r21,r21,0,0,30				; Clear out valid bit
+			rlwinm	r21,r21,0,~mpHValid			; Clear out valid bit
 			sldi	r23,r5,16					; Shift AVPN up to EA format
+//			****	Need to adjust above shift based on the page size - large pages need to shift a bit more
 			rldicr	r5,r5,0,62					; Clear the valid bit
 			rldimi	r23,r30,0,36				; Insert the page portion of the VPN
 			stw		r21,mpPte(r31)				; Make sure we invalidate mpPte but keep pointing to PTEG (keep walk_page from making a mistake)
@@ -1152,18 +1174,17 @@ hrmPtlb64:	lwarx	r5,0,r9						; Get the TLBIE lock
 			stwcx.	r5,0,r9						; Try to get it
 			bne--	hrmPtlb64					; We was beat... 
 					
-			tlbie	r23							; Invalidate it all corresponding TLB entries
+			tlbie	r23							; Invalidate all corresponding TLB entries
 			
 			eieio								; Make sure that the tlbie happens first
 			tlbsync								; Wait for everyone to catch up
-			isync								
 			
 			ptesync								; Make sure of it all
 			li		r0,0						; Clear this 
 			rlwinm	r2,r21,28,29,31				; Get slot number (16 byte entries)
 			stw		r0,tlbieLock(0)				; Clear the tlbie lock
 			oris	r0,r0,0x8000				; Assume slot 0
-			eieio								; Make sure those RC bit have been stashed in PTE
+
 			srw		r0,r0,r2					; Get slot mask to deallocate
 
 			lwz		r22,12(r26)					; Get the latest reference and change bits
@@ -1177,25 +1198,25 @@ hrmUlckPCA64:
 hrmPysDQ64:	mr		r3,r31						; Point to the mapping
 			bl		mapDrainBusy				; Go wait until mapping is unused
 
-			mr		r3,r28						; Get the pmap to insert into
+			mr		r3,r28						; Get the pmap to remove from
 			mr		r4,r31						; Point to the mapping
 			bl		EXT(mapRemove)				; Remove the mapping from the list			
 
-			andi.	r0,r20,lo16(mpSpecial|mpNest)	; Is this nest or special mapping?
+			rlwinm	r0,r20,0,mpType				; Isolate mapping type
+			cmplwi	cr1,r0,mpMinSpecial			; cr1_lt <- not a special mapping type
 			lwz		r4,pmapResidentCnt(r28)		; Get the mapped page count 
-			cmplwi	cr1,r0,0					; Special thingie?
 			la		r3,pmapSXlk(r28)			; Point to the pmap search lock
 			subi	r4,r4,1						; Drop down the mapped page count
 			stw		r4,pmapResidentCnt(r28)		; Set the mapped page count 
 			bl		sxlkUnlock					; Unlock the search list
 		
-			bne--	cr1,hrmRetn64				; This one has no real memory associated with it so we are done...
+			bf--	cr1_lt,hrmRetn64			; This one has no real memory associated with it so we are done...
 
 			bl		mapPhysFindLock				; Go find and lock the physent
 
-			li		r0,0xFF						; Get mask to clean up mapping pointer
+			li		r0,ppLFAmask				; Get mask to clean up mapping pointer
 			ld		r9,ppLink(r3)				; Get first mapping
-			rldicl	r0,r0,62,0					; Rotate clean up mask to get 0xC0000000000000003F
+			rotrdi	r0,r0,ppLFArrot				; Rotate clean up mask to get 0xF0000000000000000F
 			mr		r4,r22						; Get the RC bits we just got
 			
 			bl		mapPhysMerge				; Go merge the RC bits
@@ -1203,7 +1224,7 @@ hrmPysDQ64:	mr		r3,r31						; Point to the mapping
 			andc	r9,r9,r0					; Clean up the mapping pointer
 			
 			cmpld	r9,r31						; Are we the first on the list?
-			bne-	hrmNot1st64					; Nope...
+			bne--	hrmNot1st64					; Nope...
 			
 			li		r9,0						; Get a 0
 			ld		r4,mpAlias(r31)				; Get our forward pointer
@@ -1226,10 +1247,10 @@ hrmPtlb64x:	lwz		r5,0(r9)					; Do a regular load to avoid taking reservation
 			
 hrmNot1st64:
 			mr.		r8,r9						; Remember and test current node
-			beq-	hrmNotFound					; Could not find our node...
+			beq--	hrmPhyDQd64					; Could not find our node...
 			ld		r9,mpAlias(r9)				; Chain to the next
 			cmpld	r9,r31						; Is this us?
-			bne-	hrmNot1st64					; Not us...
+			bne--	hrmNot1st64					; Not us...
 		
 			ld		r9,mpAlias(r9)				; Get our forward pointer
 			std		r9,mpAlias(r8)				; Unchain us
@@ -1386,17 +1407,13 @@ hrmBTLBj:	sldi	r2,r27,maxAdrSpb			; Move to make room for address space ID
 			tlbie	r2							; Invalidate it everywhere
 			addi	r27,r27,0x1000				; Up to the next page
 			bge++	hrmBTLBj					; Make sure we have done it all...
-
-			sync								; Make sure all is quiet
 			
 			eieio								; Make sure that the tlbie happens first
 			tlbsync								; wait for everyone to catch up
-			isync								
 
 			li		r2,0						; Lock clear value
 
 			ptesync								; Wait for quiet again
-			sync								; Make sure that is done
 
 			stw		r2,tlbieLock(0)				; Clear the tlbie lock
 			
@@ -1463,6 +1480,266 @@ hrmBTLBlcn:	lwz		r2,0(r7)					; Get the TLBIE lock
 			beq++	hrmBTLBlcl					; Nope...
 			b		hrmBTLBlcn					; Yeah...
 
+;
+;			Guest shadow assist -- mapping remove
+;
+;			Method of operation:
+;				o Locate the VMM extension block and the host pmap
+;				o Obtain the host pmap's search lock exclusively
+;				o Locate the requested mapping in the shadow hash table,
+;				  exit if not found
+;				o If connected, disconnect the PTE and gather R&C to physent
+;				o Locate and lock the physent
+;				o Remove mapping from physent's chain
+;				o Unlock physent
+;				o Unlock pmap's search lock
+;
+;			Non-volatile registers on entry:
+;				r17: caller's msr image
+;				r19: sprg2 (feature flags)
+;				r28: guest pmap's physical address
+;				r29: high-order 32 bits of guest virtual address
+;				r30: low-order 32 bits of guest virtual address
+;
+;			Non-volatile register usage:
+;				r26: VMM extension block's physical address
+;				r27: host pmap's physical address
+;				r28: guest pmap's physical address
+;				r29: physent's physical address
+;				r30: guest virtual address
+;				r31: guest mapping's physical address
+;
+			.align	5			
+hrmGuest:
+			rlwinm	r30,r30,0,0xFFFFF000		; Clean up low-order bits of 32-bit guest vaddr
+			bt++	pf64Bitb,hrmG64				; Test for 64-bit machine
+			lwz		r26,pmapVmmExtPhys+4(r28)	; r26 <- VMM pmap extension block paddr
+			lwz		r27,vmxHostPmapPhys+4(r26)	; r27 <- host pmap's paddr
+			b		hrmGStart					; Join common code
+
+hrmG64:		ld		r26,pmapVmmExtPhys(r28)		; r26 <- VMM pmap extension block paddr
+			ld		r27,vmxHostPmapPhys(r26)	; r27 <- host pmap's paddr
+			rldimi	r30,r29,32,0				; Insert high-order 32 bits of 64-bit guest vaddr			
+
+hrmGStart:	la		r3,pmapSXlk(r27)			; r3 <- host pmap's search lock address
+			bl		sxlkExclusive				; Get lock exclusive
+			
+			lwz		r3,vxsGrm(r26)				; Get mapping remove request count
+
+			lwz		r9,pmapSpace(r28)			; r9 <- guest space ID number
+			la		r31,VMX_HPIDX_OFFSET(r26)	; r31 <- base of hash page physical index
+			srwi	r11,r30,12					; Form shadow hash:
+			xor		r11,r9,r11					; 	spaceID ^ (vaddr >> 12) 
+			rlwinm	r12,r11,GV_HPAGE_SHIFT,GV_HPAGE_MASK
+												; Form index offset from hash page number
+			add		r31,r31,r12					; r31 <- hash page index entry
+			li		r0,(GV_SLOTS - 1)			; Prepare to iterate over mapping slots
+			mtctr	r0							;  in this group
+			bt++	pf64Bitb,hrmG64Search		; Separate handling for 64-bit search
+			lwz		r31,4(r31)					; r31 <- hash page paddr
+			rlwimi	r31,r11,GV_HGRP_SHIFT,GV_HGRP_MASK
+												; r31 <- hash group paddr
+												
+			addi	r3,r3,1						; Increment remove request count
+			stw		r3,vxsGrm(r26)				; Update remove request count
+
+			lwz		r3,mpFlags(r31)				; r3 <- 1st mapping slot's flags
+			lhz		r4,mpSpace(r31)				; r4 <- 1st mapping slot's space ID 
+			lwz		r5,mpVAddr+4(r31)			; r5 <- 1st mapping slot's virtual address
+			b		hrmG32SrchLp				; Let the search begin!
+			
+			.align	5
+hrmG32SrchLp:
+			mr		r6,r3						; r6 <- current mapping slot's flags
+			lwz		r3,mpFlags+GV_SLOT_SZ(r31)	; r3 <- next mapping slot's flags
+			mr		r7,r4						; r7 <- current mapping slot's space ID
+			lhz		r4,mpSpace+GV_SLOT_SZ(r31)	; r4 <- next mapping slot's space ID
+			clrrwi	r8,r5,12					; r8 <- current mapping slot's virtual addr w/o flags
+			lwz		r5,mpVAddr+4+GV_SLOT_SZ(r31); r5 <- next mapping slot's virtual addr
+			rlwinm	r11,r6,0,mpgFree			; Isolate guest free mapping flag
+			xor		r7,r7,r9					; Compare space ID
+			or		r0,r11,r7					; r0 <- !(free && space match)
+			xor		r8,r8,r30					; Compare virtual address
+			or.		r0,r0,r8					; cr0_eq <- !free && space match && virtual addr match
+			beq		hrmGSrchHit					; Join common path on hit (r31 points to guest mapping)
+			
+			addi	r31,r31,GV_SLOT_SZ			; r31 <- next mapping slot		
+			bdnz	hrmG32SrchLp				; Iterate
+
+			mr		r6,r3						; r6 <- current mapping slot's flags
+			clrrwi	r5,r5,12					; Remove flags from virtual address			
+			rlwinm	r11,r6,0,mpgFree			; Isolate guest free mapping flag
+			xor		r4,r4,r9					; Compare space ID
+			or		r0,r11,r4					; r0 <- !(free && space match)
+			xor		r5,r5,r30					; Compare virtual address
+			or.		r0,r0,r5					; cr0_eq <- !free && space match && virtual addr match
+			beq		hrmGSrchHit					; Join common path on hit (r31 points to guest mapping)
+			b		hrmGSrchMiss				; No joy in our hash group
+			
+hrmG64Search:			
+			ld		r31,0(r31)					; r31 <- hash page paddr
+			insrdi	r31,r11,GV_GRPS_PPG_LG2,64-(GV_HGRP_SHIFT+GV_GRPS_PPG_LG2)
+												; r31 <- hash group paddr
+			lwz		r3,mpFlags(r31)				; r3 <- 1st mapping slot's flags
+			lhz		r4,mpSpace(r31)				; r4 <- 1st mapping slot's space ID 
+			ld		r5,mpVAddr(r31)				; r5 <- 1st mapping slot's virtual address
+			b		hrmG64SrchLp				; Let the search begin!
+			
+			.align	5
+hrmG64SrchLp:
+			mr		r6,r3						; r6 <- current mapping slot's flags
+			lwz		r3,mpFlags+GV_SLOT_SZ(r31)	; r3 <- next mapping slot's flags
+			mr		r7,r4						; r7 <- current mapping slot's space ID
+			lhz		r4,mpSpace+GV_SLOT_SZ(r31)	; r4 <- next mapping slot's space ID
+			clrrdi	r8,r5,12					; r8 <- current mapping slot's virtual addr w/o flags
+			ld		r5,mpVAddr+GV_SLOT_SZ(r31)	; r5 <- next mapping slot's virtual addr
+			rlwinm	r11,r6,0,mpgFree			; Isolate guest free mapping flag
+			xor		r7,r7,r9					; Compare space ID
+			or		r0,r11,r7					; r0 <- !(free && space match)
+			xor		r8,r8,r30					; Compare virtual address
+			or.		r0,r0,r8					; cr0_eq <- !free && space match && virtual addr match
+			beq		hrmGSrchHit					; Join common path on hit (r31 points to guest mapping)
+			
+			addi	r31,r31,GV_SLOT_SZ			; r31 <- next mapping slot		
+			bdnz	hrmG64SrchLp				; Iterate
+
+			mr		r6,r3						; r6 <- current mapping slot's flags
+			clrrdi	r5,r5,12					; Remove flags from virtual address			
+			rlwinm	r11,r6,0,mpgFree			; Isolate guest free mapping flag
+			xor		r4,r4,r9					; Compare space ID
+			or		r0,r11,r4					; r0 <- !(free && space match)
+			xor		r5,r5,r30					; Compare virtual address
+			or.		r0,r0,r5					; cr0_eq <- !free && space match && virtual addr match
+			beq		hrmGSrchHit					; Join common path on hit (r31 points to guest mapping)
+hrmGSrchMiss:
+			lwz		r3,vxsGrmMiss(r26)			; Get remove miss count
+			li		r25,mapRtNotFnd				; Return not found
+			addi	r3,r3,1						; Increment miss count
+			stw		r3,vxsGrmMiss(r26)			; Update miss count
+			b		hrmGReturn					; Join guest return
+
+			.align	5			
+hrmGSrchHit:
+			rlwinm.	r0,r6,0,mpgDormant			; Is this entry dormant?
+			bne		hrmGDormant					; Yes, nothing to disconnect
+			
+			lwz		r3,vxsGrmActive(r26)		; Get active hit count
+			addi	r3,r3,1						; Increment active hit count
+			stw		r3,vxsGrmActive(r26)		; Update hit count
+			
+			bt++	pf64Bitb,hrmGDscon64		; Handle 64-bit disconnect separately
+			bl		mapInvPte32					; Disconnect PTE, invalidate, gather ref and change
+												; r31 <- mapping's physical address
+												; r3  -> PTE slot physical address
+												; r4  -> High-order 32 bits of PTE
+												; r5  -> Low-order  32 bits of PTE
+												; r6  -> PCA
+												; r7  -> PCA physical address
+			rlwinm	r2,r3,29,29,31				; Get PTE's slot number in the PTEG (8-byte PTEs)
+			b		hrmGFreePTE					; Join 64-bit path to release the PTE			
+hrmGDscon64:
+			bl		mapInvPte64					; Disconnect PTE, invalidate, gather ref and change
+			rlwinm	r2,r3,28,29,31				; Get PTE's slot number in the PTEG (16-byte PTEs)
+hrmGFreePTE:
+			mr.		r3,r3						; Was there a valid PTE?
+			beq		hrmGDormant					; No valid PTE, we're almost done
+			lis		r0,0x8000					; Prepare free bit for this slot
+			srw		r0,r0,r2					; Position free bit
+			or		r6,r6,r0					; Set it in our PCA image
+			lwz		r8,mpPte(r31)				; Get PTE offset
+			rlwinm	r8,r8,0,~mpHValid			; Make the offset invalid
+			stw		r8,mpPte(r31)				; Save invalidated PTE offset
+			eieio								; Synchronize all previous updates (mapInvPtexx didn't)
+			stw		r6,0(r7)					; Update PCA and unlock the PTEG
+
+hrmGDormant:
+			lwz		r3,mpPAddr(r31)				; r3 <- physical 4K-page number
+			bl		mapFindLockPN				; Find 'n' lock this page's physent
+			mr.		r29,r3						; Got lock on our physent?
+			beq--	hrmGBadPLock				; No, time to bail out
+
+			crset	cr1_eq						; cr1_eq <- previous link is the anchor
+			bt++	pf64Bitb,hrmGRemove64		; Use 64-bit version on 64-bit machine
+			la		r11,ppLink+4(r29)			; Point to chain anchor
+			lwz		r9,ppLink+4(r29)			; Get chain anchor
+			rlwinm.	r9,r9,0,~ppFlags			; Remove flags, yielding 32-bit physical chain pointer
+hrmGRemLoop:
+			beq-	hrmGPEMissMiss				; End of chain, this is not good
+			cmplw	r9,r31						; Is this the mapping to remove?
+			lwz		r8,mpAlias+4(r9)			; Get forward chain pointer
+			bne		hrmGRemNext					; No, chain onward
+			bt		cr1_eq,hrmGRemRetry			; Mapping to remove is chained from anchor
+			stw		r8,0(r11)					; Unchain gpv->phys mapping
+			b		hrmGDelete					; Finish deleting mapping
+hrmGRemRetry:
+			lwarx	r0,0,r11					; Get previous link
+			rlwimi	r0,r8,0,~ppFlags			; Insert new forward pointer whilst preserving flags
+			stwcx.	r0,0,r11					; Update previous link
+			bne-	hrmGRemRetry				; Lost reservation, retry
+			b		hrmGDelete					; Finish deleting mapping
+			
+hrmGRemNext:
+			la		r11,mpAlias+4(r9)			; Point to (soon to be) previous link
+			crclr	cr1_eq						; ~cr1_eq <- Previous link is not the anchor
+			mr.		r9,r8						; Does next entry exist?
+			b		hrmGRemLoop					; Carry on
+
+hrmGRemove64:
+			li		r7,ppLFAmask				; Get mask to clean up mapping pointer
+			rotrdi	r7,r7,ppLFArrot				; Rotate clean up mask to get 0xF0000000000000000F
+			la		r11,ppLink(r29)				; Point to chain anchor
+			ld		r9,ppLink(r29)				; Get chain anchor
+			andc.	r9,r9,r7					; Remove flags, yielding 64-bit physical chain pointer
+hrmGRem64Lp:
+			beq--	hrmGPEMissMiss				; End of chain, this is not good
+			cmpld	r9,r31						; Is this the mapping to remove?
+			ld		r8,mpAlias(r9)				; Get forward chain pinter
+			bne		hrmGRem64Nxt				; No mapping to remove, chain on, dude
+			bt		cr1_eq,hrmGRem64Rt			; Mapping to remove is chained from anchor
+			std		r8,0(r11)					; Unchain gpv->phys mapping
+			b		hrmGDelete					; Finish deleting mapping
+hrmGRem64Rt:
+			ldarx	r0,0,r11					; Get previous link
+			and		r0,r0,r7					; Get flags
+			or		r0,r0,r8					; Insert new forward pointer
+			stdcx.	r0,0,r11					; Slam it back in
+			bne--	hrmGRem64Rt					; Lost reservation, retry
+			b		hrmGDelete					; Finish deleting mapping
+
+			.align	5		
+hrmGRem64Nxt:
+			la		r11,mpAlias(r9)				; Point to (soon to be) previous link
+			crclr	cr1_eq						; ~cr1_eq <- Previous link is not the anchor
+			mr.		r9,r8						; Does next entry exist?
+			b		hrmGRem64Lp					; Carry on
+			
+hrmGDelete:
+			mr		r3,r29						; r3 <- physent addr
+			bl		mapPhysUnlock				; Unlock physent chain
+			lwz		r3,mpFlags(r31)				; Get mapping's flags
+			rlwinm	r3,r3,0,~mpgFlags			; Clear all guest flags
+			ori		r3,r3,mpgFree				; Mark mapping free
+			stw		r3,mpFlags(r31)				; Update flags
+			li		r25,mapRtGuest				; Set return code to 'found guest mapping'
+
+hrmGReturn:
+			la		r3,pmapSXlk(r27)			; r3 <- host pmap search lock phys addr
+			bl		sxlkUnlock					; Release host pmap search lock
+			
+			mr		r3,r25						; r3 <- return code
+			bt++	pf64Bitb,hrmGRtn64			; Handle 64-bit separately
+			mtmsr	r17							; Restore 'rupts, translation
+			isync								; Throw a small wrench into the pipeline
+			b		hrmRetnCmn					; Nothing to do now but pop a frame and return
+hrmGRtn64:	mtmsrd	r17							; Restore 'rupts, translation, 32-bit mode
+			b		hrmRetnCmn					; Join common return
+
+hrmGBadPLock:
+hrmGPEMissMiss:
+			lis		r0,hi16(Choke)				; Seen the arrow on the doorpost
+			ori		r0,r0,lo16(Choke)			; Sayin' "THIS LAND IS CONDEMNED"
+			li		r3,failMapping				; All the way from New Orleans
+			sc									; To Jeruselem
 
 
 /*
@@ -1533,12 +1810,12 @@ LEXT(hw_purge_phys)
  			bt++	pf64Bitb,hppSF				; skip if 64-bit (only they take the hint)
 		
 			lwz		r12,ppLink+4(r3)			; Grab the pointer to the first mapping
- 			li		r0,0x3F						; Set the bottom stuff to clear
+ 			li		r0,ppFlags					; Set the bottom stuff to clear
 			b		hppJoin						; Join the common...
 			
-hppSF:		li		r0,0xFF
+hppSF:		li		r0,ppLFAmask
 			ld		r12,ppLink(r3)				; Get the pointer to the first mapping
-			rldicl	r0,r0,62,0					; Rotate clean up mask to get 0xC0000000000000003F
+			rotrdi	r0,r0,ppLFArrot				; Rotate clean up mask to get 0xF0000000000000000F
 
 hppJoin:	andc.	r12,r12,r0					; Clean and test link
 			beq--	hppNone						; There are no more mappings on physical page
@@ -1584,7 +1861,7 @@ hppSF3:		mtmsrd	r11							; Restore enables/translation/etc.
 
 hppRetnCmn:	lwz		r12,(FM_ALIGN(hrmStackSize)+FM_SIZE+FM_LR_SAVE)(r1)	; Restore the return
 
-			li		r3,0						; Clear high order mapping address because we are 32-bit
+			li		r3,mapRtEmpty				; Physent chain is empty
 			mtlr	r12							; Restore the return
 			lwz		r1,0(r1)					; Pop the stack
 			blr									; Leave...
@@ -1638,6 +1915,12 @@ LEXT(hw_purge_map)
 			stw		r6,FM_ARG0+0x44(r1)			; Save address to save next mapped vaddr
 			stw		r0,(FM_ALIGN(hrmStackSize)+FM_SIZE+FM_LR_SAVE)(r1)	; Save the return
 
+#if DEBUG
+			lwz		r11,pmapFlags(r3)			; Get pmaps flags
+			rlwinm.	r11,r11,0,pmapVMgsaa		; Is guest shadow assist active? 
+			bne		hpmPanic					; Call not valid for guest shadow assist pmap
+#endif
+			
  			bt++	pf64Bitb,hpmSF1				; skip if 64-bit (only they take the hint)
 			lwz		r9,pmapvr+4(r3)				; Get conversion mask
 			b		hpmSF1x						; Done...
@@ -1676,12 +1959,17 @@ hpmCNext:	bne++	cr1,hpmSearch				; There is another to check...
 			b		hrmNotFound					; No more in pmap to check...
 
 hpmGotOne:	lwz		r20,mpFlags(r3)				; Get the flags
-			andi.	r9,r20,lo16(mpSpecial|mpNest|mpPerm|mpBlock)	; Are we allowed to remove it?
+			andi.	r0,r20,lo16(mpType|mpPerm)	; cr0_eq <- normal mapping && !permanent
 			rlwinm	r21,r20,8,24,31				; Extract the busy count
 			cmplwi	cr2,r21,0					; Is it busy?
 			crand	cr0_eq,cr2_eq,cr0_eq		; not busy and can be removed?
 			beq++	hrmGotX						; Found, branch to remove the mapping...
 			b		hpmCNext					; Nope...
+
+hpmPanic:	lis		r0,hi16(Choke)				; System abend
+			ori		r0,r0,lo16(Choke)			; System abend
+			li		r3,failMapping				; Show that we failed some kind of mapping thing
+			sc
 
 /*
  *			mapping *hw_purge_space(physent, pmap) - remove a mapping from the system based upon address space
@@ -1747,6 +2035,12 @@ LEXT(hw_purge_space)
 			stw		r6,FM_ARG0+0x44(r1)			; Save address to save next mapped vaddr
 			stw		r0,(FM_ALIGN(hrmStackSize)+FM_SIZE+FM_LR_SAVE)(r1)	; Save the return
 
+#if DEBUG
+			lwz		r11,pmapFlags(r4)			; Get pmaps flags
+			rlwinm.	r11,r11,0,pmapVMgsaa		; Is guest shadow assist active? 
+			bne		hpsPanic					; Call not valid for guest shadow assist pmap
+#endif
+			
 			bt++	pf64Bitb,hpsSF1				; skip if 64-bit (only they take the hint)
 
 			lwz		r9,pmapvr+4(r4)				; Get conversion mask for pmap
@@ -1767,7 +2061,7 @@ hpsSF1x:	bl		EXT(mapSetUp)				; Turn off interrupts, translation, and possibly e
 		
 			lwz		r12,ppLink+4(r3)			; Grab the pointer to the first mapping
 			
-hpsSrc32:	rlwinm.	r12,r12,0,0,25				; Clean and test mapping address
+hpsSrc32:	rlwinm.	r12,r12,0,~ppFlags			; Clean and test mapping address
 			beq		hpsNone						; Did not find one...
 			
 			lhz		r10,mpSpace(r12)			; Get the space
@@ -1780,9 +2074,9 @@ hpsSrc32:	rlwinm.	r12,r12,0,0,25				; Clean and test mapping address
 
 			.align	5
 		
-hpsSF:		li		r0,0xFF
+hpsSF:		li		r0,ppLFAmask
 			ld		r12,ppLink(r3)				; Get the pointer to the first mapping
-			rldicl	r0,r0,62,0					; Rotate clean up mask to get 0xC0000000000000003F
+			rotrdi	r0,r0,ppLFArrot				; Rotate clean up mask to get 0xF0000000000000000F
 			
 hpsSrc64:	andc.	r12,r12,r0					; Clean and test mapping address
 			beq		hpsNone						; Did not find one...
@@ -1823,10 +2117,155 @@ hpsSF3:		mtmsrd	r11							; Restore enables/translation/etc.
 
 hpsRetnCmn:	lwz		r12,(FM_ALIGN(hrmStackSize)+FM_SIZE+FM_LR_SAVE)(r1)	; Restore the return
 
-			li		r3,0						; Set return code
+			li		r3,mapRtEmpty				; No mappings for specified pmap on physent chain
 			mtlr	r12							; Restore the return
 			lwz		r1,0(r1)					; Pop the stack
 			blr									; Leave...
+
+hpsPanic:	lis		r0,hi16(Choke)				; System abend
+			ori		r0,r0,lo16(Choke)			; System abend
+			li		r3,failMapping				; Show that we failed some kind of mapping thing
+			sc
+			
+/*
+ *			mapping *hw_scrub_guest(physent, pmap) - remove first guest mapping associated with host
+ *                                                    on this physent chain
+ *
+ *			Locates the first guest mapping on the physent chain that is associated with the
+ *			specified host pmap. If this succeeds, the mapping is removed by joining the general
+ *			remove path; otherwise, we return NULL. The caller is expected to invoke this entry
+ *			repeatedly until no additional guest mappings that match our criteria are removed.
+ *
+ *			Because this entry point exits through hw_rem_map, our prolog pushes its frame.
+ *
+ *			Parameters:
+ *				r3 : physent, 32-bit kernel virtual address
+ *				r4 : host pmap, 32-bit kernel virtual address
+ *
+ *			Volatile register usage (for linkage through hrmJoin):
+ *				r4 : high-order 32 bits of guest virtual address
+ *				r5 : low-order 32 bits of guest virtual address
+ *				r11: saved MSR image
+ *
+ *			Non-volatile register usage:
+ *				r26: VMM extension block's physical address
+ *				r27: host pmap's physical address
+ *				r28: guest pmap's physical address
+ *	
+ */
+
+			.align	5
+			.globl	EXT(hw_scrub_guest)
+
+LEXT(hw_scrub_guest)
+			stwu	r1,-(FM_ALIGN(hrmStackSize)+FM_SIZE)(r1)	; Make some space on the stack
+			mflr	r0							; Save the link register
+			stw		r15,FM_ARG0+0x00(r1)		; Save a register
+			stw		r16,FM_ARG0+0x04(r1)		; Save a register
+			stw		r17,FM_ARG0+0x08(r1)		; Save a register
+ 			mfsprg	r2,2						; Get feature flags 
+			stw		r18,FM_ARG0+0x0C(r1)		; Save a register
+			stw		r19,FM_ARG0+0x10(r1)		; Save a register
+			stw		r20,FM_ARG0+0x14(r1)		; Save a register
+			stw		r21,FM_ARG0+0x18(r1)		; Save a register
+			stw		r22,FM_ARG0+0x1C(r1)		; Save a register
+			mtcrf	0x02,r2						; move pf64Bit cr6
+			stw		r23,FM_ARG0+0x20(r1)		; Save a register
+			stw		r24,FM_ARG0+0x24(r1)		; Save a register
+			stw		r25,FM_ARG0+0x28(r1)		; Save a register
+			stw		r26,FM_ARG0+0x2C(r1)		; Save a register
+			stw		r27,FM_ARG0+0x30(r1)		; Save a register
+			li		r6,0						; Set no next address return
+			stw		r28,FM_ARG0+0x34(r1)		; Save a register
+			stw		r29,FM_ARG0+0x38(r1)		; Save a register
+			stw		r30,FM_ARG0+0x3C(r1)		; Save a register
+			stw		r31,FM_ARG0+0x40(r1)		; Save a register
+			stw		r6,FM_ARG0+0x44(r1)			; Save address to save next mapped vaddr
+			stw		r0,(FM_ALIGN(hrmStackSize)+FM_SIZE+FM_LR_SAVE)(r1)	; Save the return
+
+			lwz		r11,pmapVmmExt(r4)			; get VMM pmap extension block vaddr
+
+			bt++	pf64Bitb,hsg64Salt			; Test for 64-bit machine
+			lwz		r26,pmapVmmExtPhys+4(r4)	; Get VMM pmap extension block paddr
+			lwz		r9,pmapvr+4(r4)				; Get 32-bit virt<->real conversion salt
+			b		hsgStart					; Get to work
+
+hsg64Salt:	ld		r26,pmapVmmExtPhys(r4)		; Get VMM pmap extension block paddr
+			ld		r9,pmapvr+4(r4)				; Get 64-bit virt<->real conversion salt
+			
+hsgStart:	bl		EXT(mapSetUp)				; Disable 'rupts, translation, enter 64-bit mode
+			xor		r27,r4,r9					; Convert host pmap_t virt->real
+			bl		mapPhysLock					; Lock the physent
+
+			bt++	pf64Bitb,hsg64Scan			; Test for 64-bit machine
+
+			lwz		r12,ppLink+4(r3)			; Grab the pointer to the first mapping
+hsg32Loop:	rlwinm.	r12,r12,0,~ppFlags			; Clean and test mapping address
+			beq		hsg32Miss					; Did not find one...
+			lwz		r8,mpFlags(r12)				; Get mapping's flags
+			lhz		r7,mpSpace(r12)				; Get mapping's space id
+			rlwinm	r8,r8,0,mpType				; Extract mapping's type code
+			lis		r28,hi16(EXT(pmapTrans))	; Get the top of the start of the pmap hash to pmap translate table
+			xori	r8,r8,mpGuest				; Is it a guest mapping?
+			ori		r28,r28,lo16(EXT(pmapTrans))	; Get the top of the start of the pmap hash to pmap translate table
+			slwi	r9,r7,2						; Multiply space by 4
+			lwz		r28,0(r28)					; Get the actual translation map
+			lwz		r4,mpVAddr(r12)				; Get the top of the vaddr
+			slwi	r7,r7,3						; Multiply space by 8
+			lwz		r5,mpVAddr+4(r12)			; Get the bottom of the vaddr
+			add		r7,r7,r9					; Get correct displacement into translate table
+			add		r28,r28,r7					; Point to the pmap translation
+			lwz		r28,pmapPAddr+4(r28)		; Get guest pmap paddr
+			lwz		r7,pmapVmmExtPhys+4(r28)	; Get VMM extension block paddr
+			xor		r7,r7,r26					; Is guest associated with specified host?
+			or.		r7,r7,r8					; Guest mapping && associated with host?
+			lwz		r12,mpAlias+4(r12)			; Chain on to the next
+			bne		hsg32Loop					; Try next mapping on alias chain			
+
+hsg32Hit:	bl		mapPhysUnlock				; Unlock physent chain
+			b		hrmJoin						; Join common path for mapping removal
+			
+			.align	5
+hsg32Miss:	bl		mapPhysUnlock				; Unlock physent chain
+			mtmsr	r11							; Restore 'rupts, translation
+			isync								; Throw a small wrench into the pipeline
+			li		r3,mapRtEmpty				; No mappings found matching specified criteria
+			b		hrmRetnCmn					; Exit through common epilog
+			
+			.align	5			
+hsg64Scan:	li		r6,ppLFAmask				; Get lock, flag, attribute mask seed
+			ld		r12,ppLink(r3)				; Grab the pointer to the first mapping
+			rotrdi	r6,r6,ppLFArrot				; Rotate clean up mask to get 0xF0000000000000000F
+hsg64Loop:	andc.	r12,r12,r6					; Clean and test mapping address
+			beq		hsg64Miss					; Did not find one...
+			lwz		r8,mpFlags(r12)				; Get mapping's flags
+			lhz		r7,mpSpace(r12)				; Get mapping's space id
+			rlwinm	r8,r8,0,mpType				; Extract mapping's type code
+			lis		r28,hi16(EXT(pmapTrans))	; Get the top of the start of the pmap hash to pmap translate table
+			xori	r8,r8,mpGuest				; Is it a guest mapping?
+			ori		r28,r28,lo16(EXT(pmapTrans))	; Get the top of the start of the pmap hash to pmap translate table
+			slwi	r9,r7,2						; Multiply space by 4
+			lwz		r28,0(r28)					; Get the actual translation map
+			lwz		r4,mpVAddr(r12)				; Get the top of the vaddr
+			slwi	r7,r7,3						; Multiply space by 8
+			lwz		r5,mpVAddr+4(r12)			; Get the bottom of the vaddr
+			add		r7,r7,r9					; Get correct displacement into translate table
+			add		r28,r28,r7					; Point to the pmap translation
+			ld		r28,pmapPAddr(r28)			; Get guest pmap paddr
+			ld		r7,pmapVmmExtPhys(r28)		; Get VMM extension block paddr
+			xor		r7,r7,r26					; Is guest associated with specified host?
+			or.		r7,r7,r8					; Guest mapping && associated with host?
+			ld		r12,mpAlias(r12)			; Chain on to the next
+			bne		hsg64Loop					; Try next mapping on alias chain			
+
+hsg64Hit:	bl		mapPhysUnlock				; Unlock physent chain
+			b		hrmJoin						; Join common path for mapping removal
+			
+			.align	5
+hsg64Miss:	bl		mapPhysUnlock				; Unlock physent chain
+			mtmsr	r11							; Restore 'rupts, translation
+			li		r3,mapRtEmpty				; No mappings found matching specified criteria
+			b		hrmRetnCmn					; Exit through common epilog
 
 
 /*
@@ -1863,7 +2302,7 @@ LEXT(hw_find_space)
 		
 			lwz		r12,ppLink+4(r3)			; Grab the pointer to the first mapping
 			
-hfsSrc32:	rlwinm.	r12,r12,0,0,25				; Clean and test mapping address
+hfsSrc32:	rlwinm.	r12,r12,0,~ppFlags			; Clean and test mapping address
 			beq		hfsNone						; Did not find one...
 			
 			lhz		r10,mpSpace(r12)			; Get the space
@@ -1876,9 +2315,9 @@ hfsSrc32:	rlwinm.	r12,r12,0,0,25				; Clean and test mapping address
 
 			.align	5
 		
-hfsSF:		li		r0,0xFF
+hfsSF:		li		r0,ppLFAmask
 			ld		r12,ppLink(r3)				; Get the pointer to the first mapping
-			rldicl	r0,r0,62,0					; Rotate clean up mask to get 0xC0000000000000003F
+			rotrdi	r0,r0,ppLFArrot				; Rotate clean up mask to get 0xF0000000000000000F
 			
 hfsSrc64:	andc.	r12,r12,r0					; Clean and test mapping address
 			beq		hfsNone						; Did not find one...
@@ -1924,12 +2363,27 @@ hfsSF3:		mtmsrd	r11							; Restore enables/translation/etc.
 ;
 
 hfsRetnCmn:	mr		r3,r12						; Get the mapping or a 0 if we failed
+
+#if DEBUG
+			mr.		r3,r3						; Anything to return?
+			beq		hfsRetnNull					; Nope
+			lwz		r11,mpFlags(r3)				; Get mapping flags
+			rlwinm	r0,r11,0,mpType				; Isolate the mapping type
+			cmplwi	r0,mpGuest					; Shadow guest mapping?
+			beq		hfsPanic					; Yup, kick the bucket
+hfsRetnNull:
+#endif
+
 			lwz		r12,(FM_SIZE+FM_LR_SAVE)(r1)	; Restore the return
 
 			mtlr	r12							; Restore the return
 			lwz		r1,0(r1)					; Pop the stack
 			blr									; Leave...
 
+hfsPanic:	lis		r0,hi16(Choke)				; System abend
+			ori		r0,r0,lo16(Choke)			; System abend
+			li		r3,failMapping				; Show that we failed some kind of mapping thing
+			sc
 
 ;
 ;			mapping *hw_find_map(pmap, va, *nextva) - Looks up a vaddr in a pmap
@@ -1952,6 +2406,12 @@ LEXT(hw_find_map)
 			stw		r31,FM_ARG0+0x18(r1)		; Save a register
 			stw		r0,(FM_ALIGN((31-26+1)*4)+FM_SIZE+FM_LR_SAVE)(r1)	; Save the return
 
+#if DEBUG
+			lwz		r11,pmapFlags(r3)			; Get pmaps flags
+			rlwinm.	r11,r11,0,pmapVMgsaa		; Is guest shadow assist active? 
+			bne		hfmPanic					; Call not valid for guest shadow assist pmap
+#endif
+			
 			lwz		r6,pmapvr(r3)				; Get the first part of the VR translation for pmap
 			lwz		r7,pmapvr+4(r3)				; Get the second part
 
@@ -2039,9 +2499,109 @@ hfmReturnC:	stw		r29,0(r25)					; Save the top of the next va
 hfmBadLock:	li		r3,1						; Set lock time out error code
 			b		hfmReturn					; Leave....
 
+hfmPanic:	lis		r0,hi16(Choke)				; System abend
+			ori		r0,r0,lo16(Choke)			; System abend
+			li		r3,failMapping				; Show that we failed some kind of mapping thing
+			sc
+
 
 /*
- *			unsigned int hw_walk_phys(pp, preop, op, postop, parm) 
+ *			void hw_clear_maps(void) 
+ *
+ *			Remove all mappings for all phys entries.
+ *	
+ * 
+ */
+
+			.align	5
+			.globl	EXT(hw_clear_maps)
+
+LEXT(hw_clear_maps)
+			mflr	r10							; Save the link register
+            mfcr	r9							; Save the condition register
+			bl		EXT(mapSetUp)				; Turn off interrupts, translation, and possibly enter 64-bit
+
+			lis		r5,hi16(EXT(pmap_mem_regions))		; Point to the start of the region table
+			ori		r5,r5,lo16(EXT(pmap_mem_regions))	; Point to the start of the region table			
+
+hcmNextRegion:
+			lwz		r3,mrPhysTab(r5)			; Get the actual table address
+			lwz		r0,mrStart(r5)				; Get start of table entry
+			lwz		r4,mrEnd(r5)				; Get end of table entry
+			addi	r5,r5,mrSize				; Point to the next regions
+
+			cmplwi	r3,0						; No more regions?
+			beq--	hcmDone						; Leave...
+
+			sub		r4,r4,r0					; Calculate physical entry count
+            addi	r4,r4,1
+            mtctr	r4
+
+			bt++	pf64Bitb,hcmNextPhys64		; 64-bit version
+
+
+hcmNextPhys32:
+			lwz		r4,ppLink+4(r3)				; Grab the pointer to the first mapping
+            addi	r3,r3,physEntrySize			; Next phys_entry
+			
+hcmNextMap32:
+			rlwinm.	r4,r4,0,0,25				; Clean and test mapping address
+			beq		hcmNoMap32					; Did not find one...
+
+			lwz		r0,mpPte(r4)				; Grab the offset to the PTE
+			rlwinm	r0,r0,0,~mpHValid			; Clear out valid bit
+			stw		r0,mpPte(r4)				; Get the quick pointer again
+
+			lwz		r4,mpAlias+4(r4)			; Chain on to the next
+			b		hcmNextMap32				; Check it out...
+hcmNoMap32:
+            bdnz	hcmNextPhys32
+            b		hcmNextRegion
+
+
+			.align	5
+hcmNextPhys64:
+			li		r0,ppLFAmask				; Get mask to clean up mapping pointer
+			ld		r4,ppLink(r3)				; Get the pointer to the first mapping
+			rotrdi	r0,r0,ppLFArrot				; Rotate clean up mask to get 0xF0000000000000000F
+            addi	r3,r3,physEntrySize			; Next phys_entry
+			
+hcmNextMap64:
+			andc.	r4,r4,r0					; Clean and test mapping address
+			beq		hcmNoMap64					; Did not find one...
+
+			lwz		r0,mpPte(r4)				; Grab the offset to the PTE
+			rlwinm	r0,r0,0,~mpHValid			; Clear out valid bit
+			stw		r0,mpPte(r4)				; Get the quick pointer again
+
+			ld		r4,mpAlias(r4)				; Chain on to the next
+			li		r0,ppLFAmask				; Get mask to clean up mapping pointer
+			rotrdi	r0,r0,ppLFArrot				; Rotate clean up mask to get 0xF0000000000000000F
+			b		hcmNextMap64				; Check it out...
+hcmNoMap64:
+            bdnz	hcmNextPhys64
+            b		hcmNextRegion
+
+
+			.align	5
+hcmDone:
+			mtlr	r10							; Restore the return
+			mtcr	r9							; Restore the condition register
+			bt++	pf64Bitb,hcmDone64			; 64-bit version
+hcmDone32:
+			mtmsr	r11							; Restore translation/mode/etc.
+			isync
+			blr									; Leave...
+
+hcmDone64:
+			mtmsrd	r11							; Restore translation/mode/etc.
+			isync
+			blr									; Leave...
+
+
+
+/*
+ *			unsigned int hw_walk_phys(pp, preop, op, postop, parm, opmod) 
  *				walks all mapping for a physical page and performs
  *				specified operations on each.
  *
@@ -2051,6 +2611,8 @@ hfmBadLock:	li		r3,1						; Set lock time out error code
  *			op is the operation to perform on each mapping during walk
  *			postop is operation to perform in the phsyent after walk.  this would be
  *				used to set or reset the RC bits.
+ *			opmod modifies the action taken on any connected PTEs visited during
+ *				the mapping walk.
  *
  *			We return the RC bits from before postop is run.
  *
@@ -2074,19 +2636,31 @@ hfmBadLock:	li		r3,1						; Set lock time out error code
 			.globl	EXT(hw_walk_phys)
 
 LEXT(hw_walk_phys)
-			stwu	r1,-(FM_ALIGN((31-25+1)*4)+FM_SIZE)(r1)	; Make some space on the stack
+			stwu	r1,-(FM_ALIGN((31-24+1)*4)+FM_SIZE)(r1)	; Make some space on the stack
 			mflr	r0							; Save the link register
-			stw		r25,FM_ARG0+0x00(r1)		; Save a register
-			stw		r26,FM_ARG0+0x04(r1)		; Save a register
-			stw		r27,FM_ARG0+0x08(r1)		; Save a register
-			stw		r28,FM_ARG0+0x0C(r1)		; Save a register
+			stw		r24,FM_ARG0+0x00(r1)		; Save a register
+			stw		r25,FM_ARG0+0x04(r1)		; Save a register
+			stw		r26,FM_ARG0+0x08(r1)		; Save a register
+			stw		r27,FM_ARG0+0x0C(r1)		; Save a register
+			mr		r24,r8						; Save the parm
 			mr		r25,r7						; Save the parm
-			stw		r29,FM_ARG0+0x10(r1)		; Save a register
-			stw		r30,FM_ARG0+0x14(r1)		; Save a register
-			stw		r31,FM_ARG0+0x18(r1)		; Save a register
-			stw		r0,(FM_ALIGN((31-25+1)*4)+FM_SIZE+FM_LR_SAVE)(r1)	; Save the return
+			stw		r28,FM_ARG0+0x10(r1)		; Save a register
+			stw		r29,FM_ARG0+0x14(r1)		; Save a register
+			stw		r30,FM_ARG0+0x18(r1)		; Save a register
+			stw		r31,FM_ARG0+0x1C(r1)		; Save a register
+			stw		r0,(FM_ALIGN((31-24+1)*4)+FM_SIZE+FM_LR_SAVE)(r1)	; Save the return
 
 			bl		EXT(mapSetUp)				; Turn off interrupts, translation, and possibly enter 64-bit
+			
+			mfsprg	r26,0						; (INSTRUMENTATION)
+			lwz		r27,hwWalkPhys(r26)			; (INSTRUMENTATION)
+			addi	r27,r27,1					; (INSTRUMENTATION)
+			stw		r27,hwWalkPhys(r26)			; (INSTRUMENTATION)
+			la		r26,hwWalkFull(r26)			; (INSTRUMENTATION)
+			slwi	r12,r24,2					; (INSTRUMENTATION)
+			lwzx	r27,r26,r12					; (INSTRUMENTATION)
+			addi	r27,r27,1					; (INSTRUMENTATION)
+			stwx	r27,r26,r12					; (INSTRUMENTATION)
 		
 			mr		r26,r11						; Save the old MSR
 			lis		r27,hi16(hwpOpBase)			; Get high order of op base
@@ -2107,13 +2681,37 @@ LEXT(hw_walk_phys)
 			
 			bctrl								; Call preop routine
 			bne-	hwpEarly32					; preop says to bail now...
-			
+
+			cmplwi	r24,hwpMergePTE				; Classify operation modifier			
  			mtctr	r27							; Set up the op function address
 			lwz		r31,ppLink+4(r3)			; Grab the pointer to the first mapping
+			blt		hwpSrc32					; Do TLB invalidate/purge/merge/reload for each mapping
+			beq		hwpMSrc32					; Do TLB merge for each mapping
 			
-hwpSrc32:	rlwinm.	r31,r31,0,0,25				; Clean and test mapping address
+hwpQSrc32:	rlwinm.	r31,r31,0,0,25				; Clean and test mapping address
 			beq		hwpNone32					; Did not find one...
+			
+			bctrl								; Call the op function
+			
+			bne-	hwpEarly32					; op says to bail now...
+			lwz		r31,mpAlias+4(r31)			; Chain on to the next
+			b		hwpQSrc32					; Check it out...
 
+			.align	5			
+hwpMSrc32:	rlwinm.	r31,r31,0,0,25				; Clean and test mapping address
+			beq		hwpNone32					; Did not find one...
+			
+			bl		mapMergeRC32				; Merge reference and change into mapping and physent
+			bctrl								; Call the op function
+			
+			bne-	hwpEarly32					; op says to bail now...
+			lwz		r31,mpAlias+4(r31)			; Chain on to the next
+			b		hwpMSrc32					; Check it out...
+
+			.align	5			
+hwpSrc32:	rlwinm.	r31,r31,0,~ppFlags			; Clean and test mapping address
+			beq		hwpNone32					; Did not find one...
+						
 ;
 ;			Note: mapInvPte32 returns the PTE in R3 (or 0 if none), PTE high in R4, 
 ;			PTE low in R5.  The PCA address is in R7.  The PTEG come back locked.
@@ -2170,13 +2768,37 @@ hwpEarly32:	lwz		r30,ppLink+4(r29)			; Save the old RC
 hwp64:		bctrl								; Call preop routine
 			bne--	hwpEarly64					; preop says to bail now...
 			
+			cmplwi	r24,hwpMergePTE				; Classify operation modifier			
  			mtctr	r27							; Set up the op function address
 			
-			li		r0,0xFF
+			li		r24,ppLFAmask
 			ld		r31,ppLink(r3)				; Get the pointer to the first mapping
-			rldicl	r0,r0,62,0					; Rotate clean up mask to get 0xC0000000000000003F
+			rotrdi	r24,r24,ppLFArrot			; Rotate clean up mask to get 0xF0000000000000000F
+			blt		hwpSrc64					; Do TLB invalidate/purge/merge/reload for each mapping
+			beq		hwpMSrc64					; Do TLB merge for each mapping
 			
-hwpSrc64:	andc.	r31,r31,r0					; Clean and test mapping address
+hwpQSrc64:	andc.	r31,r31,r24					; Clean and test mapping address
+			beq		hwpNone64					; Did not find one...
+
+			bctrl								; Call the op function
+
+			bne--	hwpEarly64					; op says to bail now...
+			ld		r31,mpAlias(r31)			; Chain on to the next
+			b		hwpQSrc64					; Check it out...
+
+			.align	5			
+hwpMSrc64:	andc.	r31,r31,r24					; Clean and test mapping address
+			beq		hwpNone64					; Did not find one...
+
+			bl		mapMergeRC64				; Merge reference and change into mapping and physent
+			bctrl								; Call the op function
+
+			bne--	hwpEarly64					; op says to bail now...
+			ld		r31,mpAlias(r31)			; Chain on to the next
+			b		hwpMSrc64					; Check it out...
+
+			.align	5			
+hwpSrc64:	andc.	r31,r31,r24					; Clean and test mapping address
 			beq		hwpNone64					; Did not find one...
 ;
 ;			Note: mapInvPte64 returns the PTE in R3 (or 0 if none), PTE high in R4, 
@@ -2200,8 +2822,6 @@ hwpSrc64:	andc.	r31,r31,r0					; Clean and test mapping address
 
 hwpNxt64:	bne--	cr1,hwpEarly64				; op says to bail now...
 			ld		r31,mpAlias(r31)			; Chain on to the next
-			li		r0,0xFF
-			rldicl	r0,r0,62,0					; Rotate clean up mask to get 0xC0000000000000003F
 			b		hwpSrc64					; Check it out...
 	
 			.align	5
@@ -2227,16 +2847,17 @@ hwpEarly64:	lwz		r30,ppLink+4(r29)			; Save the old RC
 			mtmsrd	r26							; Restore translation/mode/etc.
 			isync			
 
-hwpReturn:	lwz		r0,(FM_ALIGN((31-25+1)*4)+FM_SIZE+FM_LR_SAVE)(r1)	; Restore the return
-			lwz		r25,FM_ARG0+0x00(r1)		; Restore a register
-			lwz		r26,FM_ARG0+0x04(r1)		; Restore a register
+hwpReturn:	lwz		r0,(FM_ALIGN((31-24+1)*4)+FM_SIZE+FM_LR_SAVE)(r1)	; Restore the return
+			lwz		r24,FM_ARG0+0x00(r1)		; Restore a register
+			lwz		r25,FM_ARG0+0x04(r1)		; Restore a register
+			lwz		r26,FM_ARG0+0x08(r1)		; Restore a register
 			mr		r3,r30						; Pass back the RC
-			lwz		r27,FM_ARG0+0x08(r1)		; Restore a register
-			lwz		r28,FM_ARG0+0x0C(r1)		; Restore a register
+			lwz		r27,FM_ARG0+0x0C(r1)		; Restore a register
+			lwz		r28,FM_ARG0+0x10(r1)		; Restore a register
 			mtlr	r0							; Restore the return
-			lwz		r29,FM_ARG0+0x10(r1)		; Restore a register
-			lwz		r30,FM_ARG0+0x14(r1)		; Restore a register
-			lwz		r31,FM_ARG0+0x18(r1)		; Restore a register
+			lwz		r29,FM_ARG0+0x14(r1)		; Restore a register
+			lwz		r30,FM_ARG0+0x18(r1)		; Restore a register
+			lwz		r31,FM_ARG0+0x1C(r1)		; Restore a register
 			lwz		r1,0(r1)					; Pop the stack
 			blr									; Leave...
 
@@ -2267,7 +2888,7 @@ hwpNoop:	cmplw	r0,r0						; Make sure CR0_EQ is set
 ;			We changed the attributes of a mapped page.  Make sure there are no cache paradoxes.
 ;			NOTE: Do we have to deal with i-cache here?
 
-hwpSAM:		li		r11,4096						; Get page size
+hwpSAM:		li		r11,4096					; Get page size
 			
 hwpSAMinvd:	sub.	r11,r11,r9					; Back off a line
 			dcbf	r11,r5						; Flush the line in the data cache
@@ -2275,7 +2896,7 @@ hwpSAMinvd:	sub.	r11,r11,r9					; Back off a line
 			
 			sync								; Make sure it is done
 
-			li		r11,4096						; Get page size
+			li		r11,4096					; Get page size
 			
 hwpSAMinvi:	sub.	r11,r11,r9					; Back off a line
 			icbi	r11,r5						; Flush the line in the icache
@@ -2287,17 +2908,11 @@ hwpSAMinvi:	sub.	r11,r11,r9					; Back off a line
 			blr									; Return...
 
 
-;			Function 1 - Set protection in physent
+;			Function 1 - Set protection in physent (obsolete)
 
 			.set	.,hwpOpBase+(1*128)			; Generate error if previous function too long
 
-hwpSPrtPhy:	li		r5,ppLink+4					; Get offset for flag part of physent
-
-hwpSPrtPhX:	lwarx	r4,r5,r29					; Get the old flags
-			rlwimi	r4,r25,0,ppPPb-32,ppPPe-32	; Stick in the new protection
-			stwcx.	r4,r5,r29					; Try to stuff it
-			bne--	hwpSPrtPhX					; Try again...
-;			Note: CR0_EQ is set because of stwcx.
+hwpSPrtPhy: cmplw	r0,r0						; Make sure we return CR0_EQ
 			blr									; Return...
 			
 
@@ -2308,12 +2923,12 @@ hwpSPrtPhX:	lwarx	r4,r5,r29					; Get the old flags
 hwpSPrtMap:	lwz		r9,mpFlags(r31)				; Get the mapping flags
 			lwz		r8,mpVAddr+4(r31)			; Get the protection part of mapping
 			rlwinm.	r9,r9,0,mpPermb,mpPermb		; Is the mapping permanent?
-			li		r0,lo16(mpPP)				; Get protection bits
+			li		r0,lo16(mpN|mpPP)			; Get no-execute and protection bits
 			crnot	cr0_eq,cr0_eq				; Change CR0_EQ to true if mapping is permanent
-			rlwinm	r2,r25,0,mpPPb-32,mpPPb-32+2	; Position new protection 
+			rlwinm	r2,r25,0,mpNb-32,mpPPe-32	; Isolate new no-execute and protection bits 
 			beqlr--								; Leave if permanent mapping (before we trash R5)...
-			andc	r5,r5,r0					; Clear the old prot bits
-			or		r5,r5,r2					; Move in the prot bits
+			andc	r5,r5,r0					; Clear the old no-execute and prot bits
+			or		r5,r5,r2					; Move in the new no-execute and prot bits
 			rlwimi	r8,r5,0,20,31				; Copy into the mapping copy
 			cmpw	r0,r0						; Make sure we return CR0_EQ
 			stw		r8,mpVAddr+4(r31)			; Set the flag part of mapping
@@ -2323,10 +2938,10 @@ hwpSPrtMap:	lwz		r9,mpFlags(r31)				; Get the mapping flags
 
 			.set	.,hwpOpBase+(3*128)			; Generate error if previous function too long
 
-hwpSAtrPhy:	li		r5,ppLink+4					; Get offset for flag part of physent
+hwpSAtrPhy:	li		r5,ppLink					; Get offset for flag part of physent
 
 hwpSAtrPhX:	lwarx	r4,r5,r29					; Get the old flags
-			rlwimi	r4,r25,0,ppIb-32,ppGb-32	; Stick in the new attributes
+			rlwimi	r4,r25,0,ppIb,ppGb			; Stick in the new attributes
 			stwcx.	r4,r5,r29					; Try to stuff it
 			bne--	hwpSAtrPhX					; Try again...
 ;			Note: CR0_EQ is set because of stwcx.
@@ -2338,14 +2953,16 @@ hwpSAtrPhX:	lwarx	r4,r5,r29					; Get the old flags
 
 hwpSAtrMap:	lwz		r9,mpFlags(r31)				; Get the mapping flags
 			lwz		r8,mpVAddr+4(r31)			; Get the attribute part of mapping
-			li		r2,0x10						; Force on coherent
+			li		r2,mpM						; Force on coherent
 			rlwinm.	r9,r9,0,mpPermb,mpPermb		; Is the mapping permanent?
 			li		r0,lo16(mpWIMG)				; Get wimg mask		
 			crnot	cr0_eq,cr0_eq				; Change CR0_EQ to true if mapping is permanent
-			rlwimi	r2,r2,mpIb-ppIb,mpIb-32,mpIb-32	; Copy in the cache inhibited bit
+			rlwimi	r2,r25,32-(mpIb-32-ppIb),mpIb-32,mpIb-32
+												; Copy in the cache inhibited bit
 			beqlr--								; Leave if permanent mapping (before we trash R5)...
 			andc	r5,r5,r0					; Clear the old wimg
-			rlwimi	r2,r2,32-(mpGb-ppGb),mpGb-32,mpGb-32	; Copy in the guarded bit
+			rlwimi	r2,r25,32-(mpGb-32-ppGb),mpGb-32,mpGb-32
+												; Copy in the guarded bit
 			mfsprg	r9,2						; Feature flags
 			or		r5,r5,r2					; Move in the new wimg
 			rlwimi	r8,r5,0,20,31				; Copy into the mapping copy
@@ -2374,7 +2991,7 @@ hwpSAtrMap:	lwz		r9,mpFlags(r31)				; Get the mapping flags
 hwpCRefPhy:	li		r5,ppLink+4					; Get offset for flag part of physent
 
 hwpCRefPhX:	lwarx	r4,r5,r29					; Get the old flags
-			rlwinm	r4,r4,0,ppRb+1-32,ppRb-1-32		; Clear R
+			rlwinm	r4,r4,0,ppRb+1-32,ppRb-1-32	; Clear R
 			stwcx.	r4,r5,r29					; Try to stuff it
 			bne--	hwpCRefPhX					; Try again...
 ;			Note: CR0_EQ is set because of stwcx.
@@ -2440,7 +3057,6 @@ hwpSRefPhX:	lwarx	r4,r5,r29					; Get the old flags
 			.set	.,hwpOpBase+(10*128)		; Generate error if previous function too long
 
 hwpSRefMap:	lwz		r8,mpVAddr+4(r31)			; Get the flag part of mapping
-			ori		r5,r5,lo16(mpR)				; Set reference in PTE low
 			ori		r8,r8,lo16(mpR)				; Set reference in mapping
 			cmpw	r0,r0						; Make sure we return CR0_EQ
 			stw		r8,mpVAddr+4(r31)			; Set the flag part of mapping
@@ -2464,7 +3080,6 @@ hwpSCngPhX:	lwarx	r4,r5,r29					; Get the old flags
 			.set	.,hwpOpBase+(12*128)		; Generate error if previous function too long
 
 hwpSCngMap:	lwz		r8,mpVAddr+4(r31)			; Get the flag part of mapping
-			ori		r5,r5,lo16(mpC)				; Set change in PTE low
 			ori		r8,r8,lo16(mpC)				; Set chage in mapping
 			cmpw	r0,r0						; Make sure we return CR0_EQ
 			stw		r8,mpVAddr+4(r31)			; Set the flag part of mapping
@@ -2486,13 +3101,14 @@ hwpTRefPhy:	lwz		r0,ppLink+4(r29)			; Get the flags from physent
 hwpTRefMap:	rlwinm.	r0,r5,0,mpRb-32,mpRb-32		; Isolate reference bit and see if 0
 			blr									; Return (CR0_EQ set to continue if reference is off)...
 
+
 ;			Function 15 - Test change in physent
 
 			.set	.,hwpOpBase+(15*128)		; Generate error if previous function too long
 			
 hwpTCngPhy:	lwz		r0,ppLink+4(r29)			; Get the flags from physent	
 			rlwinm.	r0,r0,0,ppCb-32,ppCb-32		; Isolate change bit and see if 0
-			blr									; Return (CR0_EQ set to continue if reference is off)...
+			blr									; Return (CR0_EQ set to continue if change is off)...
 
 
 ;			Function 16 - Test change in mapping
@@ -2500,14 +3116,63 @@ hwpTCngPhy:	lwz		r0,ppLink+4(r29)			; Get the flags from physent
 			.set	.,hwpOpBase+(16*128)		; Generate error if previous function too long
 			
 hwpTCngMap:	rlwinm.	r0,r5,0,mpCb-32,mpCb-32		; Isolate change bit and see if 0
-			blr									; Return (CR0_EQ set to continue if reference is off)...
+			blr									; Return (CR0_EQ set to continue if change is off)...
+
+
+;			Function 17 - Test reference and change in physent
 
 			.set	.,hwpOpBase+(17*128)		; Generate error if previous function too long
 
+hwpTRefCngPhy:			
+			lwz		r0,ppLink+4(r29)			; Get the flags from physent	
+			rlwinm	r0,r0,0,ppRb-32,ppCb-32		; Isolate reference and change bits
+			cmplwi	r0,lo16(ppR|ppC)			; cr0_eq <- ((R == 1) && (C == 1))
+			crnot	cr0_eq,cr0_eq				; cr0_eq <- ((R == 0) || (C == 0))
+			blr									; Return (CR0_EQ set to continue if either R or C is off)...
 
+
+;			Function 18 - Test reference and change in mapping
+
+			.set	.,hwpOpBase+(18*128)		; Generate error if previous function too long
+hwpTRefCngMap:
+			rlwinm	r0,r5,0,mpRb-32,mpCb-32		; Isolate reference and change bits from mapping
+			cmplwi	r0,lo16(mpR|mpC)			; cr0_eq <- ((R == 1) && (C == 1))
+			crnot	cr0_eq,cr0_eq				; cr0_eq <- ((R == 0) || (C == 0))
+			blr									; Return (CR0_EQ set to continue if either R or C is off)...
+
+
+;			Function 19 - Clear reference and change in physent
+
+			.set	.,hwpOpBase+(19*128)		; Generate error if previous function too long
+hwpCRefCngPhy:
+			li		r5,ppLink+4					; Get offset for flag part of physent
+
+hwpCRefCngPhX:
+			lwarx	r4,r5,r29					; Get the old flags
+			andc	r4,r4,r25					; Clear R and C as specified by mask
+			stwcx.	r4,r5,r29					; Try to stuff it
+			bne--	hwpCRefCngPhX				; Try again...
+;			Note: CR0_EQ is set because of stwcx.
+			blr									; Return...
+
+
+;			Function 20 - Clear reference and change in mapping
+
+			.set	.,hwpOpBase+(20*128)		; Generate error if previous function too long
+hwpCRefCngMap:
+			srwi	r0,r25,(ppRb - mpRb)		; Align reference/change clear mask (phys->map)
+			lwz		r8,mpVAddr+4(r31)			; Get the flag part of mapping
+			andc	r5,r5,r0					; Clear in PTE copy
+			andc	r8,r8,r0					; and in the mapping
+			cmpw	r0,r0						; Make sure we return CR0_EQ
+			stw		r8,mpVAddr+4(r31)			; Set the flag part of mapping
+			blr									; Return...
+
+
+			.set	.,hwpOpBase+(21*128)		; Generate error if previous function too long
 
 ;
-;			int hw_protect(pmap, va, prot, *nextva) - Changes protection on a specific mapping.
+;			unsigned int hw_protect(pmap, va, prot, *nextva) - Changes protection on a specific mapping.
 ;			
 ;			Returns:
 ;				mapRtOK     - if all is ok
@@ -2534,6 +3199,12 @@ LEXT(hw_protect)
 			stw		r31,FM_ARG0+0x1C(r1)		; Save a register
 			stw		r0,(FM_ALIGN((31-24+1)*4)+FM_SIZE+FM_LR_SAVE)(r1)	; Save the return
 
+#if DEBUG
+			lwz		r11,pmapFlags(r3)			; Get pmaps flags
+			rlwinm.	r11,r11,0,pmapVMgsaa		; Is guest shadow assist active? 
+			bne		hpPanic						; Call not valid for guest shadow assist pmap
+#endif
+			
 			lwz		r6,pmapvr(r3)				; Get the first part of the VR translation for pmap
 			lwz		r7,pmapvr+4(r3)				; Get the second part
 
@@ -2563,21 +3234,23 @@ hpSF1:		mr		r29,r4						; Save top half of vaddr
 			
 			bl		EXT(mapSearch)				; Go see if we can find it (note: R7 comes back with mpFlags)
 
-			andi.	r7,r7,lo16(mpSpecial|mpNest|mpPerm|mpBlock|mpRIP)	; Are we allowed to change it or is it being removed?
+			rlwinm.	r0,r7,0,mpType				; Is this a normal mapping?
+			crmove	cr1_eq,cr0_eq				; cr1_eq <- this is a normal mapping
+			andi.	r0,r7,mpPerm|mpRIP			; Is it permanent or being removed?
+			cror	cr1_eq,cr0_eq,cr1_eq        ; cr1_eq <- normal mapping and not permanent and not being removed
 			mr.		r31,r3						; Save the mapping if we found it
-			cmplwi	cr1,r7,0					; Anything special going on?
 			mr		r29,r4						; Save next va high half
 			mr		r30,r5						; Save next va low half
 			
 			beq--	hpNotFound					; Not found...
 
-			bne--	cr1,hpNotAllowed			; Something special is happening...
+			bf--	cr1_eq,hpNotAllowed			; Something special is happening...
 			
 			bt++	pf64Bitb,hpDo64				; Split for 64 bit
 			
 			bl		mapInvPte32					; Invalidate and lock PTEG, also merge into physent
 						
-			rlwimi	r5,r24,0,mpPPb-32,mpPPb-32+2	; Stick in the new pp
+			rlwimi	r5,r24,0,mpPPb-32,mpPPe-32	; Stick in the new pp (note that we ignore no-execute for 32-bit)
 			mr.		r3,r3						; Was there a previously valid PTE?
 
 			stb		r5,mpVAddr+7(r31)			; Set the new pp field (do not muck with the rest)			
@@ -2602,7 +3275,7 @@ hpNoOld32:	la		r3,pmapSXlk(r28)			; Point to the pmap search lock
 			
 hpDo64:		bl		mapInvPte64					; Invalidate and lock PTEG, also merge into physent
 						
-			rldimi	r5,r24,0,mpPPb				; Stick in the new pp
+			rldimi	r5,r24,0,mpNb				; Stick in the new no-exectue and pp bits
 			mr.		r3,r3						; Was there a previously valid PTE?
 
 			stb		r5,mpVAddr+7(r31)			; Set the new pp field (do not muck with the rest)			
@@ -2666,12 +3339,18 @@ hpNotAllowed:
 			bl		sxlkUnlock					; Unlock the search list
 			
 			li		r3,mapRtBlock				; Assume it was a block
-			andi.	r7,r7,lo16(mpBlock)			; Is this a block?
-			bne++	hpReturn					; Yes, leave...
+			rlwinm	r0,r7,0,mpType				; Isolate mapping type
+			cmplwi	r0,mpBlock					; Is this a block mapping?
+			beq++	hpReturn					; Yes, leave...
 			
 			li		r3,mapRtPerm				; Set that we hit a permanent page
 			b		hpReturn					; Leave....
 
+hpPanic:	lis		r0,hi16(Choke)				; System abend
+			ori		r0,r0,lo16(Choke)			; System abend
+			li		r3,failMapping				; Show that we failed some kind of mapping thing
+			sc
+			
 
 ;
 ;			int hw_test_rc(pmap, va, reset) - tests RC on a specific va
@@ -2698,6 +3377,12 @@ LEXT(hw_test_rc)
 			stw		r31,FM_ARG0+0x1C(r1)		; Save a register
 			stw		r0,(FM_ALIGN((31-24+1)*4)+FM_SIZE+FM_LR_SAVE)(r1)	; Save the return
 
+#if DEBUG
+			lwz		r11,pmapFlags(r3)			; Get pmaps flags
+			rlwinm.	r11,r11,0,pmapVMgsaa		; Is guest shadow assist active? 
+			bne		htrPanic					; Call not valid for guest shadow assist pmap
+#endif
+			
 			lwz		r6,pmapvr(r3)				; Get the first part of the VR translation for pmap
 			lwz		r7,pmapvr+4(r3)				; Get the second part
 
@@ -2728,12 +3413,14 @@ htrSF1:		mr		r29,r4						; Save top half of vaddr
 			
 			bl		EXT(mapSearch)				; Go see if we can find it (R7 comes back with mpFlags)
 
-			andi.	r0,r7,lo16(mpSpecial|mpNest|mpPerm|mpBlock|mpRIP)	; Are we allowed to change it or is it being removed?
+			rlwinm.	r0,r7,0,mpType				; Is this a normal mapping?
+			crmove	cr1_eq,cr0_eq				; cr1_eq <- this is a normal mapping
+			andi.	r0,r7,mpPerm|mpRIP			; Is it permanent or being removed?
+			crand	cr1_eq,cr0_eq,cr1_eq        ; cr1_eq <- normal mapping and not permanent and not being removed
 			mr.		r31,r3						; Save the mapping if we found it
-			cmplwi	cr1,r0,0					; Are we removing it?
-			crorc	cr0_eq,cr0_eq,cr1_eq		; Did we not find it or is it being removed?
+			crandc	cr1_eq,cr1_eq,cr0_eq		; cr1_eq <- found & normal & not permanent & not being removed
 			
-			bt--	cr0_eq,htrNotFound			; Not found, something special, or being removed...
+			bf--	cr1_eq,htrNotFound			; Not found, something special, or being removed...
 			
 			bt++	pf64Bitb,htrDo64			; Split for 64 bit
 			
@@ -2833,7 +3520,44 @@ htrNotFound:
 			li		r3,mapRtNotFnd				; Set that we did not find the requested page
 			b		htrReturn					; Leave....
 
+htrPanic:	lis		r0,hi16(Choke)				; System abend
+			ori		r0,r0,lo16(Choke)			; System abend
+			li		r3,failMapping				; Show that we failed some kind of mapping thing
+			sc
+			
 
+;
+;
+;			mapFindLockPN - find and lock physent for a given page number
+;
+;
+			.align	5
+mapFindLockPN:
+			lis		r9,hi16(EXT(pmap_mem_regions))		; Point to the start of the region table
+			mr		r2,r3						; Save our target
+			ori		r9,r9,lo16(EXT(pmap_mem_regions))	; Point to the start of the region table			
+
+mapFLPNitr:	lwz		r3,mrPhysTab(r9)			; Get the actual table address
+			lwz		r5,mrStart(r9)				; Get start of table entry
+			lwz		r0,mrEnd(r9)				; Get end of table entry
+			addi	r9,r9,mrSize				; Point to the next slot
+			cmplwi	cr2,r3,0					; Are we at the end of the table?
+			cmplw	r2,r5						; See if we are in this table
+			cmplw	cr1,r2,r0					; Check end also
+			sub		r4,r2,r5					; Calculate index to physical entry
+			beq--	cr2,mapFLPNmiss				; Leave if we did not find an entry...
+			cror	cr0_lt,cr0_lt,cr1_gt		; Set CR0_LT if it is NOT this entry
+			slwi	r4,r4,3						; Get offset to physical entry
+
+			blt--	mapFLPNitr					; Did not find it...
+			
+			add		r3,r3,r4					; Point right to the slot
+			b		mapPhysLock					; Join common lock code
+
+mapFLPNmiss:
+			li		r3,0						; Show that we did not find it
+			blr									; Leave...			
+			
 
 ;
 ;			mapPhysFindLock - find physent list and lock it
@@ -2844,7 +3568,7 @@ htrNotFound:
 mapPhysFindLock:	
 			lbz		r4,mpFlags+1(r31)			; Get the index into the physent bank table
 			lis		r3,ha16(EXT(pmap_mem_regions))	; Get high order of physent table (note use of ha16 to get value appropriate for an addi of low part)
-			rlwinm	r4,r4,2,0,29				; Change index into byte offset
+			rlwinm	r4,r4,2,24,29				; Mask index bits and convert to byte offset
 			addi	r4,r4,lo16(EXT(pmap_mem_regions))	; Get low part of address of entry
 			add		r3,r3,r4					; Point to table entry
 			lwz		r5,mpPAddr(r31)				; Get physical page number
@@ -2929,7 +3653,7 @@ mapPhyCSet32:
 
 mapPhyCSetR:
 			lwarx	r2,0,r5						; Get the link and flags
-			rlwimi	r4,r2,0,26,31				; Insert the flags
+			rlwimi	r4,r2,0,ppFlags				; Insert the flags
 			stwcx.	r4,0,r5						; Stick them back
 			bne--	mapPhyCSetR					; Someone else did something, try again...
 			blr									; Return...
@@ -2937,8 +3661,8 @@ mapPhyCSetR:
 			.align	5
 
 mapPhyCSet64:
-			li		r0,0xFF						; Get mask to clean up mapping pointer
-			rldicl	r0,r0,62,0					; Rotate clean up mask to get 0xC0000000000000003F
+			li		r0,ppLFAmask				; Get mask to clean up mapping pointer
+			rotrdi	r0,r0,ppLFArrot				; Rotate clean up mask to get 0xF0000000000000000F
 		
 mapPhyCSet64x:
 			ldarx	r2,0,r3						; Get the link and flags
@@ -3073,7 +3797,7 @@ gotIfetch:	andis.	r27,r8,hi16(dsiValid)		; Clean this up to construct a DSISR va
 ckIfProt:	and.	r4,r27,r0					; Is this a non-handlable exception?
 			li		r20,64						; Set a limit of 64 nests for sanity check
 			bne--	hpfExit						; Yes... (probably not though)
-
+			
 ;
 ;			Note: if the RI is on, we are accessing user space from the kernel, therefore we
 ;			should be loading the user pmap here.
@@ -3101,25 +3825,27 @@ hpfInKern:	mr		r22,r29						; Save the high part of faulting address
 			lwz		r28,4(r8)					; Pick up the pmap
 			rlwinm.	r18,r18,0,SAVredriveb,SAVredriveb	; Was this a redrive?
 			mr		r25,r28						; Save the original pmap (in case we nest)
-			bne		hpfNest						; Segs are not ours if so...
+			lwz		r0,pmapFlags(r28)			; Get pmap's flags
+			bne		hpfGVtest					; Segs are not ours if so...
 			mfsrin	r4,r30						; Get the SR that was used for translation
 			cmplwi	r4,invalSpace				; Is this a simulated segment fault?
-			bne++	hpfNest						; No...
+			bne++	hpfGVtest					; No...
 			
 			rlwinm	r27,r27,0,dsiMissb+1,dsiMissb-1	; Clear the PTE miss bit in DSISR
-			b		hpfNest						; Join on up...
+			b		hpfGVtest					; Join on up...
 			
 			.align	5
 
 			nop									; Push hpfNest to a 32-byte boundary
 			nop									; Push hpfNest to a 32-byte boundary
 			nop									; Push hpfNest to a 32-byte boundary
-			nop									; Push hpfNest to a 32-byte boundary
-			nop									; Push hpfNest to a 32-byte boundary
-			nop									; Push hpfNest to a 32-byte boundary
 
 hpf64a:		ld		r28,0(r8)					; Get the pmap pointer (64-bit)
 			mr		r25,r28						; Save the original pmap (in case we nest)
+			lwz		r0,pmapFlags(r28)			; Get pmap's flags
+			
+hpfGVtest:	rlwinm.	r0,r0,0,pmapVMgsaa			; Using guest shadow mapping assist?
+			bne		hpfGVxlate					; Yup, do accelerated shadow stuff
 
 ;
 ;			This is where we loop descending nested pmaps
@@ -3142,21 +3868,24 @@ hpfNest:	la		r3,pmapSXlk(r28)			; Point to the pmap search lock
 			crorc	cr0_eq,cr0_eq,cr1_eq		; Merge not found and removing
 			
 			bt--	cr0_eq,hpfNotFound			; Not found or removing...
-			
-			rlwinm.	r0,r7,0,mpNestb,mpNestb		; Are we nested?
+
+			rlwinm	r0,r7,0,mpType				; Isolate mapping type
+			cmplwi	r0,mpNest					; Are we again nested?
+			cmplwi	cr1,r0,mpLinkage			; Are we a linkage type?
+			cror	cr0_eq,cr1_eq,cr0_eq		; cr0_eq <- nested or linkage type?
 			mr		r26,r7						; Get the flags for this mapping (passed back from search call)
 			
 			lhz		r21,mpSpace(r31)			; Get the space
 
-			beq++	hpfFoundIt					; No, we found our guy...
+			bne++	hpfFoundIt					; No, we found our guy...
 			
 
 #if pmapTransSize != 12
 #error pmapTrans entry size is not 12 bytes!!!!!!!!!!!! It is pmapTransSize
 #endif
-			rlwinm.	r0,r26,0,mpSpecialb,mpSpecialb	; Special handling?
+			cmplwi	r0,mpLinkage				; Linkage mapping?
 			cmplwi	cr1,r20,0					; Too many nestings?
-			bne--	hpfSpclNest					; Do we need to do special handling?
+			beq--	hpfSpclNest					; Do we need to do special handling?
 
 hpfCSrch:	lhz		r21,mpSpace(r31)			; Get the space
 			lwz		r8,mpNestReloc(r31)			; Get the vaddr relocation
@@ -3178,11 +3907,18 @@ hpfCSrch:	lhz		r21,mpSpace(r31)			; Get the space
 			add		r12,r12,r10					; Now we are pointing at the space to pmap translation entry
 			bl		sxlkUnlock					; Unlock the search list
 			
+			bt++	pf64Bitb,hpfGetPmap64		; Separate handling for 64-bit machines
 			lwz		r28,pmapPAddr+4(r12)		; Get the physical address of the new pmap
-			bf--	pf64Bitb,hpfNest			; Done if 32-bit...
+			cmplwi	r28,0						; Is the pmap paddr valid?
+			bne+	hpfNest						; Nest into new pmap...
+			b		hpfBadPmap					; Handle bad pmap
 			
+hpfGetPmap64:
 			ld		r28,pmapPAddr(r12)			; Get the physical address of the new pmap
-			b		hpfNest						; Go try the new pmap...
+			cmpldi	r28,0						; Is the pmap paddr valid?
+			bne++	hpfNest						; Nest into new pmap...
+			b		hpfBadPmap					; Handle bad pmap			
+
 
 ;
 ;			Error condition.  We only allow 64 nestings.  This keeps us from having to 
@@ -3211,6 +3947,19 @@ hpfBadLock:
 			ori		r0,r0,lo16(Choke)			; System abend
 			li		r3,failMapping				; Show mapping failure
 			sc
+			
+;
+;			Error condition - space id selected an invalid pmap - fatal
+;
+
+			.align	5
+			
+hpfBadPmap:
+			lis		r0,hi16(Choke)				; System abend
+			ori		r0,r0,lo16(Choke)			; System abend
+			li		r3,failPmap					; Show invalid pmap
+			sc
+			
 ;
 ;			Did not find any kind of mapping
 ;
@@ -3240,8 +3989,8 @@ hpfExit:										; We need this because we can not do a relative branch
 			.align	5
 
 hpfSpclNest:	
-			la		r31,ppCIOmp(r19)			; Just point to the mapping
-			oris	r27,r27,hi16(dsiSpcNest)	; Show that we had a special nesting here
+			la		r31,ppUMWmp(r19)			; Just point to the mapping
+			oris	r27,r27,hi16(dsiLinkage)	; Show that we had a linkage mapping here
 			b		hpfCSrch					; Go continue search...
 
 
@@ -3264,14 +4013,26 @@ hpfSpclNest:
 #error maxAdrSpb (address space id size) is not 14 bits!!!!!!!!!!!!
 #endif
 
+;			Important non-volatile registers at this point ('home' means the final pmap/mapping found
+;   		when a multi-level mapping has been successfully searched):
+;				r21: home space id number
+;				r22: relocated high-order 32 bits of vaddr
+;				r23: relocated low-order 32 bits of vaddr 	
+;				r25: pmap physical address
+;				r27: dsisr
+;				r28: home pmap physical address
+;				r29: high-order 32 bits of faulting vaddr
+;				r30: low-order 32 bits of faulting vaddr
+;				r31: mapping's physical address
+
 			.align	5
 			
 hpfFoundIt:	lwz		r12,pmapFlags(r28)			; Get the pmap flags so we can find the keys for this segment
-			rlwinm.	r0,r27,0,dsiMissb,dsiMissb	; Did we actually miss the segment?
+hpfGVfound:	rlwinm.	r0,r27,0,dsiMissb,dsiMissb	; Did we actually miss the segment?
 			rlwinm	r15,r23,18,14,17			; Shift 32:35 (0:3) of vaddr just above space ID
 			rlwinm	r20,r21,28,22,31			; Shift upper 10 bits of space into high order
 			rlwinm	r14,r22,18,14,31			; Shift 0:17 of vaddr over
-			rlwinm	r0,r27,0,dsiSpcNestb,dsiSpcNestb	; Isolate special nest flag
+			rlwinm	r0,r27,0,dsiLinkageb,dsiLinkageb	; Isolate linkage mapping flag
 			rlwimi	r21,r21,14,4,17				; Make a second copy of space above first
 			cmplwi	cr5,r0,0					; Did we just do a special nesting?
 			rlwimi	r15,r22,18,0,13				; Shift 18:31 of vaddr just above shifted 32:35	
@@ -3509,8 +4270,9 @@ hpfPteMiss:	lwarx	r0,0,r31					; Load the mapping flag field
 			and.	r12,r12,r3					; Isolate the valid bit
 			crorc	cr0_eq,cr1_eq,cr0_eq		; Bail if FIP is on.  Then, if already have PTE, bail...
 			beq--	hpfAbandon					; Yes, other processor is or already has handled this...
-			andi.	r0,r2,mpBlock				; Is this a block mapping?
-			crmove	cr7_eq,cr0_eq				; Remember if we have a block mapping
+			rlwinm	r0,r2,0,mpType				; Isolate mapping type
+			cmplwi	r0,mpBlock					; Is this a block mapping?
+			crnot	cr7_eq,cr0_eq				; Remember if we have a block mapping
 			stwcx.	r2,0,r31					; Store the flags
 			bne--	hpfPteMiss					; Collision, try again...
 
@@ -3590,7 +4352,7 @@ hpfBldPTE32:
 			bne-	hpfBailOut					; Someone already did this for us...
 
 ;
-;			The mapSelSlot function selects a PTEG slot to use. As input, it uses R3 as a 
+;			The mapSelSlot function selects a PTEG slot to use. As input, it uses R6 as a 
 ;			pointer to the PCA.  When it returns, R3 contains 0 if an unoccupied slot was
 ;			selected, 1 if it stole a non-block PTE, or 2 if it stole a block mapped PTE.
 ;			R4 returns the slot index.
@@ -3654,14 +4416,14 @@ hpfTLBIE32:	lwarx	r0,0,r9						; Get the TLBIE lock
 
 			tlbie	r12							; Invalidate it everywhere 
 
+			
 			beq-	hpfNoTS32					; Can not have MP on this machine...
 			
 			eieio								; Make sure that the tlbie happens first 
 			tlbsync								; Wait for everyone to catch up 
 			sync								; Make sure of it all
-			
-hpfNoTS32:	
-			stw		r0,tlbieLock(0)				; Clear the tlbie lock
+
+hpfNoTS32:	stw		r0,tlbieLock(0)				; Clear the tlbie lock
 			
 			stw		r7,hwSteals(r4)				; Save the steal count
 			bgt		cr5,hpfInser32				; We just stole a block mapping...
@@ -3678,7 +4440,7 @@ hpfMrgRC32:	lwarx	r0,0,r11					; Get the master RC
 			bne-	hpfMrgRC32					; Try again if we collided...
 			
 			
-hpfFPnch:	rlwinm.	r7,r7,0,0,25				; Clean and test mapping address
+hpfFPnch:	rlwinm.	r7,r7,0,~ppFlags			; Clean and test mapping address
 			beq-	hpfLostPhys					; We could not find our mapping.  Kick the bucket...
 			
 			lhz		r10,mpSpace(r7)				; Get the space
@@ -3843,14 +4605,11 @@ hpfTLBIE64:	lwarx	r0,0,r9						; Get the TLBIE lock
 			rldimi	r7,r7,14,36					; Copy address space to make hash value
 			tlbsync								; Wait for everyone to catch up
 			rldimi	r7,r7,28,22					; Add in a 3rd copy of the hash up top
-			isync								
 			srdi	r2,r6,26					; Shift original segment down to bottom
 			
 			ptesync								; Make sure of it all
-
-			stw		r0,tlbieLock(0)				; Clear the tlbie lock
-
 			xor		r7,r7,r2					; Compute original segment
+			stw		r0,tlbieLock(0)				; Clear the tlbie lock
 
 			stw		r10,hwSteals(r4)			; Save the steal count
 			bgt		cr5,hpfInser64				; We just stole a block mapping...
@@ -3865,9 +4624,9 @@ hpfTLBIE64:	lwarx	r0,0,r9						; Get the TLBIE lock
 			rlwinm	r2,r12,27,ppRb-32,ppCb-32	; Position the new RC
 
 hpfMrgRC64:	lwarx	r0,0,r11					; Get the master RC
-			li		r12,0xFF					; Get mask to clean up alias pointer
+			li		r12,ppLFAmask				; Get mask to clean up alias pointer
 			or		r0,r0,r2					; Merge in the new RC
-			rldicl	r12,r12,62,0				; Rotate clean up mask to get 0xC0000000000000003F
+			rotrdi	r12,r12,ppLFArrot			; Rotate clean up mask to get 0xF0000000000000000F
 			stwcx.	r0,0,r11					; Try to stick it back
 			bne--	hpfMrgRC64					; Try again if we collided...
 	
@@ -3956,7 +4715,162 @@ hpfAbandon:	li		r3,lgKillResv				; Kill off any reservation
 			li		r11,T_IN_VAIN				; Say that it was handled
 			b		EXT(PFSExit)				; Leave...
 			
+;
+;			Guest shadow assist -- page fault handler
+;
+;			Here we handle a fault in a guest pmap that has the guest shadow mapping
+;			assist active. We locate the VMM pmap extension block, which contains an
+;			index over the discontiguous multi-page shadow hash table. The index
+;			corresponding to our vaddr is selected, and the selected group within
+;			that page is searched for a valid and active entry that contains
+;			our vaddr and space id. The search is pipelined, so that we may fetch
+;			the next slot while examining the current slot for a hit. The final
+;			search iteration is unrolled so that we don't fetch beyond the end of
+;			our group, which could have dire consequences depending upon where the
+;			physical hash page is located.
+;
+;			The VMM pmap extension block occupies a page. Begining at offset 0, we
+;			have the pmap_vmm_ext proper. Aligned at the first 128-byte boundary
+;			after the pmap_vmm_ext is the hash table physical address index, a 
+;			linear list of 64-bit physical addresses of the pages that comprise
+;			the hash table.
+;
+;			In the event that we succesfully locate a guest mapping, we re-join
+;			the page fault path at hpfGVfound with the mapping's address in r31;
+;			otherwise, we re-join at hpfNotFound. In either case, we re-join holding
+;			a share of the pmap search lock for the host pmap with the host pmap's
+;			address in r28, the guest pmap's space id in r21, and the guest pmap's
+;			flags in r12.
+;
 
+			.align	5
+hpfGVxlate:
+			bt		pf64Bitb,hpfGV64			; Take 64-bit path for 64-bit machine
+			
+			lwz		r11,pmapVmmExtPhys+4(r28)	; r11 <- VMM pmap extension block paddr
+			lwz		r12,pmapFlags(r28)			; r12 <- guest pmap's flags
+			lwz		r21,pmapSpace(r28)			; r21 <- guest space ID number
+			lwz		r28,vmxHostPmapPhys+4(r11)	; r28 <- host pmap's paddr
+			la		r31,VMX_HPIDX_OFFSET(r11)	; r31 <- base of hash page physical index
+			rlwinm	r10,r30,0,0xFFFFF000		; r10 <- page-aligned guest vaddr
+			lwz		r6,vxsGpf(r11)				; Get guest fault count
+			
+			srwi	r3,r10,12					; Form shadow hash:
+			xor		r3,r3,r21					; 	spaceID ^ (vaddr >> 12) 
+			rlwinm	r4,r3,GV_HPAGE_SHIFT,GV_HPAGE_MASK
+												; Form index offset from hash page number
+			add		r31,r31,r4					; r31 <- hash page index entry
+			lwz		r31,4(r31)					; r31 <- hash page paddr
+			rlwimi	r31,r3,GV_HGRP_SHIFT,GV_HGRP_MASK
+												; r31 <- hash group paddr
+
+			la		r3,pmapSXlk(r28)			; Point to the host pmap's search lock
+			bl		sxlkShared					; Go get a shared lock on the mapping lists
+			mr.		r3,r3						; Did we get the lock?
+			bne-	hpfBadLock					; Nope...
+
+			lwz		r3,mpFlags(r31)				; r3 <- 1st mapping slot's flags
+			lhz		r4,mpSpace(r31)				; r4 <- 1st mapping slot's space ID 
+			lwz		r5,mpVAddr+4(r31)			; r5 <- 1st mapping slot's virtual address
+			addi	r6,r6,1						; Increment guest fault count
+			li		r0,(GV_SLOTS - 1)			; Prepare to iterate over mapping slots
+			mtctr	r0							;  in this group
+			stw		r6,vxsGpf(r11)				; Update guest fault count
+			b		hpfGVlp32
+
+			.align	5
+hpfGVlp32:
+			mr		r6,r3						; r6 <- current mapping slot's flags
+			lwz		r3,mpFlags+GV_SLOT_SZ(r31)	; r3 <- next mapping slot's flags
+			mr		r7,r4						; r7 <- current mapping slot's space ID
+			lhz		r4,mpSpace+GV_SLOT_SZ(r31)	; r4 <- next mapping slot's space ID
+			clrrwi	r8,r5,12					; r8 <- current mapping slot's virtual addr w/o flags
+			lwz		r5,mpVAddr+4+GV_SLOT_SZ(r31); r5 <- next mapping slot's virtual addr
+			andi.	r6,r6,mpgFree+mpgDormant	; Isolate guest free and dormant flags
+			xor		r7,r7,r21					; Compare space ID
+			or		r0,r6,r7					; r0 <- !(!free && !dormant && space match)
+			xor		r8,r8,r10					; Compare virtual address
+			or.		r0,r0,r8					; cr0_eq <- !free && !dormant && space match && virtual addr match
+			beq		hpfGVfound					; Join common patch on hit (r31 points to mapping)
+			
+			addi	r31,r31,GV_SLOT_SZ			; r31 <- next mapping slot		
+			bdnz	hpfGVlp32					; Iterate
+
+			clrrwi	r5,r5,12					; Remove flags from virtual address			
+			andi.	r3,r3,mpgFree+mpgDormant	; Isolate guest free and dormant flag
+			xor		r4,r4,r21					; Compare space ID
+			or		r0,r3,r4					; r0 <- !(!free && !dormant && space match)
+			xor		r5,r5,r10					; Compare virtual address
+			or.		r0,r0,r5					; cr0_eq <- !free && !dormant && space match && virtual addr match
+			beq		hpfGVfound					; Join common patch on hit (r31 points to mapping)
+			
+			b		hpfGVmiss
+
+			.align	5
+hpfGV64:
+			ld		r11,pmapVmmExtPhys(r28)		; r11 <- VMM pmap extension block paddr
+			lwz		r12,pmapFlags(r28)			; r12 <- guest pmap's flags
+			lwz		r21,pmapSpace(r28)			; r21 <- guest space ID number
+			ld		r28,vmxHostPmapPhys(r11)	; r28 <- host pmap's paddr
+			la		r31,VMX_HPIDX_OFFSET(r11)	; r31 <- base of hash page physical index
+			rlwinm	r10,r30,0,0xFFFFF000		; Form 64-bit guest vaddr
+			rldimi	r10,r29,32,0				;  cleaning up low-order 12 bits			
+			lwz		r6,vxsGpf(r11)				; Get guest fault count
+
+			srwi	r3,r10,12					; Form shadow hash:
+			xor		r3,r3,r21					; 	spaceID ^ (vaddr >> 12) 
+			rlwinm	r4,r3,GV_HPAGE_SHIFT,GV_HPAGE_MASK
+												; Form index offset from hash page number
+			add		r31,r31,r4					; r31 <- hash page index entry
+			ld		r31,0(r31)					; r31 <- hash page paddr
+			insrdi	r31,r3,GV_GRPS_PPG_LG2,64-(GV_HGRP_SHIFT+GV_GRPS_PPG_LG2)
+												; r31 <- hash group paddr
+												
+			la		r3,pmapSXlk(r28)			; Point to the host pmap's search lock
+			bl		sxlkShared					; Go get a shared lock on the mapping lists
+			mr.		r3,r3						; Did we get the lock?
+			bne--	hpfBadLock					; Nope...
+
+			lwz		r3,mpFlags(r31)				; r3 <- 1st mapping slot's flags
+			lhz		r4,mpSpace(r31)				; r4 <- 1st mapping slot's space ID 
+			ld		r5,mpVAddr(r31)				; r5 <- 1st mapping slot's virtual address
+			addi	r6,r6,1						; Increment guest fault count
+			li		r0,(GV_SLOTS - 1)			; Prepare to iterate over mapping slots
+			mtctr	r0							;  in this group
+			stw		r6,vxsGpf(r11)				; Update guest fault count
+			b		hpfGVlp64
+			
+			.align	5
+hpfGVlp64:
+			mr		r6,r3						; r6 <- current mapping slot's flags
+			lwz		r3,mpFlags+GV_SLOT_SZ(r31)	; r3 <- next mapping slot's flags
+			mr		r7,r4						; r7 <- current mapping slot's space ID
+			lhz		r4,mpSpace+GV_SLOT_SZ(r31)	; r4 <- next mapping slot's space ID
+			clrrdi	r8,r5,12					; r8 <- current mapping slot's virtual addr w/o flags
+			ld		r5,mpVAddr+GV_SLOT_SZ(r31)	; r5 <- next mapping slot's virtual addr
+			andi.	r6,r6,mpgFree+mpgDormant	; Isolate guest free and dormant flag
+			xor		r7,r7,r21					; Compare space ID
+			or		r0,r6,r7					; r0 <- !(!free && !dormant && space match)
+			xor		r8,r8,r10					; Compare virtual address
+			or.		r0,r0,r8					; cr0_eq <- !free && !dormant && space match && virtual addr match
+			beq		hpfGVfound					; Join common path on hit (r31 points to mapping)
+			
+			addi	r31,r31,GV_SLOT_SZ			; r31 <- next mapping slot		
+			bdnz	hpfGVlp64					; Iterate
+
+			clrrdi	r5,r5,12					; Remove flags from virtual address			
+			andi.	r3,r3,mpgFree+mpgDormant	; Isolate guest free and dormant flag
+			xor		r4,r4,r21					; Compare space ID
+			or		r0,r3,r4					; r0 <- !(!free && !dormant && space match)
+			xor		r5,r5,r10					; Compare virtual address
+			or.		r0,r0,r5					; cr0_eq <- !free && !dormant && space match && virtual addr match
+			beq		hpfGVfound					; Join common path on hit (r31 points to mapping)
+
+hpfGVmiss:
+			lwz		r6,vxsGpfMiss(r11)			; Guest guest fault miss count
+			addi	r6,r6,1						; Increment miss count
+			stw		r6,vxsGpfMiss(r11)			; Update guest fault miss count
+			b		hpfNotFound
 			
 /*
  *			hw_set_user_space(pmap) 
@@ -3985,7 +4899,8 @@ LEXT(hw_set_user_space)
 			andc	r9,r10,r9					; Turn off EE also
 			mtmsr	r9							; Disable them 
  			isync								; Make sure FP and vec are off
- 			mfsprg	r6,0						; Get the per_proc_info address
+			mfsprg	r6,1						; Get the current activation
+			lwz		r6,ACT_PER_PROC(r6)			; Get the per_proc block
 			lwz		r2,ppUserPmapVirt(r6)		; Get our virtual pmap address
 			mfsprg	r4,2						; The the feature flags
 			lwz		r7,pmapvr(r3)				; Get the v to r translation
@@ -4012,7 +4927,8 @@ LEXT(hw_set_user_space_dis)
  			lwz		r7,pmapvr(r3)				; Get the v to r translation
  			mfsprg	r4,2						; The the feature flags
 			lwz		r8,pmapvr+4(r3)				; Get the v to r translation
-			mfsprg	r6,0						; Get the per_proc_info address
+			mfsprg	r6,1						; Get the current activation
+			lwz		r6,ACT_PER_PROC(r6)			; Get the per_proc block
 			lwz		r2,ppUserPmapVirt(r6)		; Get our virtual pmap address
  			mtcrf	0x80,r4						; Get the Altivec flag
 			xor		r4,r3,r8					; Get bottom of the real address of bmap anchor
@@ -4343,7 +5259,6 @@ LEXT(hw_map_seg)
 			lwz		r0,pmapSpace(r3)			; Get the space, we will need it soon
 			lwz		r9,pmapFlags(r3)			; Get the flags for the keys now
  			mfsprg	r10,2						; Get feature flags 
-			mfsprg	r12,0						; Get the per_proc
 
 ;
 ;			Note: the following code would problably be easier to follow if I split it,
@@ -4409,7 +5324,7 @@ LEXT(hw_map_seg)
 			xor		r8,r8,r2					; Calculate VSID
 			
 			bf--	pf64Bitb,hms32bit			; Skip out if 32-bit...
-			
+			mfsprg	r12,0						; Get the per_proc
 			li		r0,1						; Prepare to set bit 0 (also to clear EE)
 			mfmsr	r6							; Get current MSR
 			li		r2,MASK(MSR_IR)|MASK(MSR_DR)	; Get the translation bits
@@ -4472,7 +5387,10 @@ hmsFreeSeg:	subi	r2,r7,1						; Adjust for skipped slb 0
 
 			.align	5
 
-hms32bit:	rlwinm	r8,r8,0,8,31				; Clean up the VSID
+hms32bit:
+			mfsprg	r12,1						; Get the current activation
+			lwz		r12,ACT_PER_PROC(r12)		; Get the per_proc block
+			rlwinm	r8,r8,0,8,31				; Clean up the VSID
 			rlwinm	r2,r4,4,28,31				; Isolate the segment we are setting
 			lis		r0,0x8000					; Set bit 0
 			rlwimi	r8,r9,28,1,3				; Insert the keys and N bit			
@@ -4500,10 +5418,8 @@ hmsrupt:	lwarx	r6,0,r7						; Get and reserve the valid segment flags
 LEXT(hw_blow_seg)
 
  			mfsprg	r10,2						; Get feature flags 
-			mfsprg	r12,0						; Get the per_proc
 			mtcrf	0x02,r10					; move pf64Bit and pfNoMSRirb to cr5 and 6
 		
-			addi	r7,r12,validSegs			; Point to the valid segment flags directly
 			rlwinm	r9,r4,0,0,3					; Save low segment address and make sure it is clean
 			
 			bf--	pf64Bitb,hbs32bit			; Skip out if 32-bit...
@@ -4530,7 +5446,11 @@ LEXT(hw_blow_seg)
 
 			.align	5
 
-hbs32bit:	lwarx	r4,0,r7						; Get and reserve the valid segment flags
+hbs32bit:
+			mfsprg	r12,1						; Get the current activation
+			lwz		r12,ACT_PER_PROC(r12)		; Get the per_proc block
+			addi	r7,r12,validSegs			; Point to the valid segment flags directly
+			lwarx	r4,0,r7						; Get and reserve the valid segment flags
 			rlwinm	r6,r9,4,28,31				; Convert segment to number
 			lis		r2,0x8000					; Set up a mask
 			srw		r2,r2,r6					; Make a mask
@@ -4780,6 +5700,7 @@ ssg64Done:	stw		r15,pmapCCtl(r28)			; Unlock the segment cache controls
 ;
 ;			We also return the original MSR in r11, the feature flags in R12,
 ;			and CR6 set up so we can do easy branches for 64-bit
+;			hw_clear_maps assumes r10, r9 will not be trashed.
 ;
 
 			.align	5
@@ -4820,6 +5741,2279 @@ msuNoMSR:	mr		r2,r3						; Save R3 across call
 			mr		r3,r2						; Restore R3
 			blr									; Go back all set up...
 			
+
+;
+;			Guest shadow assist -- remove all guest mappings
+;
+;			Remove all mappings for a guest pmap from the shadow hash table.
+;
+;			Parameters:
+;				r3 : address of pmap, 32-bit kernel virtual address
+;
+;			Non-volatile register usage:
+;				r24 : host pmap's physical address
+;				r25 : VMM extension block's physical address
+;				r26 : physent address
+;				r27 : guest pmap's space ID number
+;				r28 : current hash table page index
+;				r29 : guest pmap's physical address
+;				r30 : saved msr image
+;				r31 : current mapping
+;
+			.align	5
+			.globl	EXT(hw_rem_all_gv)
+			
+LEXT(hw_rem_all_gv)
+
+#define graStackSize ((31-24+1)*4)+4
+			stwu	r1,-(FM_ALIGN(graStackSize)+FM_SIZE)(r1)
+												; Mint a new stack frame
+			mflr	r0							; Get caller's return address
+			mfsprg	r11,2						; Get feature flags
+			mtcrf	0x02,r11					; Insert feature flags into cr6
+			stw		r0,(FM_ALIGN(graStackSize)+FM_SIZE+FM_LR_SAVE)(r1)
+												; Save caller's return address
+			stw		r31,FM_ARG0+0x00(r1)		; Save non-volatile r31
+			stw		r30,FM_ARG0+0x04(r1)		; Save non-volatile r30
+			stw		r29,FM_ARG0+0x08(r1)		; Save non-volatile r29
+			stw		r28,FM_ARG0+0x0C(r1)		; Save non-volatile r28
+			stw		r27,FM_ARG0+0x10(r1)		; Save non-volatile r27
+			stw		r26,FM_ARG0+0x14(r1)		; Save non-volatile r26
+			stw		r25,FM_ARG0+0x18(r1)		; Save non-volatile r25
+			stw		r24,FM_ARG0+0x1C(r1)		; Save non-volatile r24
+												
+			lwz		r11,pmapVmmExt(r3)			; r11 <- VMM pmap extension block vaddr
+
+			bt++	pf64Bitb,gra64Salt			; Test for 64-bit machine
+			lwz		r25,pmapVmmExtPhys+4(r3)	; r25 <- VMM pmap extension block paddr
+			lwz		r9,pmapvr+4(r3)				; Get 32-bit virt<->real conversion salt
+			lwz		r24,vmxHostPmapPhys+4(r11)	; r24 <- host pmap's paddr
+			b		graStart					; Get to it			
+gra64Salt:	ld		r25,pmapVmmExtPhys(r3)		; r25 <- VMM pmap extension block paddr
+			ld		r9,pmapvr(r3)				; Get 64-bit virt<->real conversion salt
+			ld		r24,vmxHostPmapPhys(r11)	; r24 <- host pmap's paddr
+graStart:	bl		EXT(mapSetUp)				; Disable 'rupts, translation, enter 64-bit mode
+			xor		r29,r3,r9					; Convert pmap_t virt->real
+			mr		r30,r11						; Save caller's msr image
+
+			la		r3,pmapSXlk(r24)			; r3 <- host pmap's search lock
+			bl		sxlkExclusive				; Get lock exclusive
+			
+			lwz		r3,vxsGra(r25)				; Get remove all count
+			addi	r3,r3,1						; Increment remove all count
+			stw		r3,vxsGra(r25)				; Update remove all count
+
+			li		r28,0						; r28 <- first hash page table index to search
+			lwz		r27,pmapSpace(r29)			; r27 <- guest pmap's space ID number
+graPgLoop:	
+			la		r31,VMX_HPIDX_OFFSET(r25)	; Get base of hash page physical index
+			rlwinm	r11,r28,GV_PGIDX_SZ_LG2,GV_HPAGE_MASK
+												; Convert page index into page physical index offset
+			add		r31,r31,r11					; Calculate page physical index entry address
+			bt++	pf64Bitb,gra64Page			; Separate handling for 64-bit
+			lwz		r31,4(r31)					; r31 <- first slot in hash table page to examine
+			b		graLoop						; Examine all slots in this page
+gra64Page:	ld		r31,0(r31)					; r31 <- first slot in hash table page to examine
+			b		graLoop						; Examine all slots in this page
+
+			.align	5
+graLoop:	lwz		r3,mpFlags(r31)				; Get mapping's flags
+			lhz		r4,mpSpace(r31)				; Get mapping's space ID number
+			rlwinm	r6,r3,0,mpgFree				; Isolate guest free mapping flag
+			xor		r4,r4,r27					; Compare space ID number
+			or.		r0,r6,r4					; cr0_eq <- !free && space id match
+			bne		graMiss						; Not one of ours, skip it
+			
+			lwz		r11,vxsGraHits(r25)			; Get remove hit count
+			addi	r11,r11,1					; Increment remove hit count
+			stw		r11,vxsGraHits(r25)			; Update remove hit count
+
+			rlwinm.	r0,r3,0,mpgDormant			; Is this entry dormant?
+			bne		graRemPhys					; Yes, nothing to disconnect
+			
+			lwz		r11,vxsGraActive(r25)		; Get remove active count
+			addi	r11,r11,1					; Increment remove hit count
+			stw		r11,vxsGraActive(r25)		; Update remove hit count
+
+			bt++	pf64Bitb,graDscon64			; Handle 64-bit disconnect separately
+			bl		mapInvPte32					; Disconnect PTE, invalidate, gather ref and change
+												; r31 <- mapping's physical address
+												; r3  -> PTE slot physical address
+												; r4  -> High-order 32 bits of PTE
+												; r5  -> Low-order  32 bits of PTE
+												; r6  -> PCA
+												; r7  -> PCA physical address
+			rlwinm	r2,r3,29,29,31				; Get PTE's slot number in the PTEG (8-byte PTEs)
+			b		graFreePTE					; Join 64-bit path to release the PTE			
+graDscon64:	bl		mapInvPte64					; Disconnect PTE, invalidate, gather ref and change
+			rlwinm	r2,r3,28,29,31				; Get PTE's slot number in the PTEG (16-byte PTEs)
+graFreePTE: mr.		r3,r3						; Was there a valid PTE?
+			beq-	graRemPhys					; No valid PTE, we're almost done
+			lis		r0,0x8000					; Prepare free bit for this slot
+			srw		r0,r0,r2					; Position free bit
+			or		r6,r6,r0					; Set it in our PCA image
+			lwz		r8,mpPte(r31)				; Get PTE pointer
+			rlwinm	r8,r8,0,~mpHValid			; Make the pointer invalid
+			stw		r8,mpPte(r31)				; Save invalidated PTE pointer
+			eieio								; Synchronize all previous updates (mapInvPtexx doesn't)
+			stw		r6,0(r7)					; Update PCA and unlock the PTEG
+			
+graRemPhys:
+			lwz		r3,mpPAddr(r31)				; r3 <- physical 4K-page number
+			bl		mapFindLockPN				; Find 'n' lock this page's physent
+			mr.		r26,r3						; Got lock on our physent?
+			beq--	graBadPLock					; No, time to bail out
+
+			crset	cr1_eq						; cr1_eq <- previous link is the anchor
+			bt++	pf64Bitb,graRemove64		; Use 64-bit version on 64-bit machine
+			la		r11,ppLink+4(r26)			; Point to chain anchor
+			lwz		r9,ppLink+4(r26)			; Get chain anchor
+			rlwinm.	r9,r9,0,~ppFlags			; Remove flags, yielding 32-bit physical chain pointer
+
+graRemLoop:	beq-	graRemoveMiss				; End of chain, this is not good
+			cmplw	r9,r31						; Is this the mapping to remove?
+			lwz		r8,mpAlias+4(r9)			; Get forward chain pointer
+			bne		graRemNext					; No, chain onward
+			bt		cr1_eq,graRemRetry			; Mapping to remove is chained from anchor
+			stw		r8,0(r11)					; Unchain gpv->phys mapping
+			b		graRemoved					; Exit loop
+graRemRetry:
+			lwarx	r0,0,r11					; Get previous link
+			rlwimi	r0,r8,0,~ppFlags			; Insert new forward pointer whilst preserving flags
+			stwcx.	r0,0,r11					; Update previous link
+			bne-	graRemRetry					; Lost reservation, retry
+			b		graRemoved					; Good work, let's get outta here
+			
+graRemNext:	la		r11,mpAlias+4(r9)			; Point to (soon to be) previous link
+			crclr	cr1_eq						; ~cr1_eq <- Previous link is not the anchor
+			mr.		r9,r8						; Does next entry exist?
+			b		graRemLoop					; Carry on
+
+graRemove64:
+			li		r7,ppLFAmask				; Get mask to clean up mapping pointer
+			rotrdi	r7,r7,ppLFArrot				; Rotate clean up mask to get 0xF0000000000000000F
+			la		r11,ppLink(r26)				; Point to chain anchor
+			ld		r9,ppLink(r26)				; Get chain anchor
+			andc.	r9,r9,r7					; Remove flags, yielding 64-bit physical chain pointer
+graRem64Lp:	beq--	graRemoveMiss				; End of chain, this is not good
+			cmpld	r9,r31						; Is this the mapping to remove?
+			ld		r8,mpAlias(r9)				; Get forward chain pinter
+			bne		graRem64Nxt					; Not mapping to remove, chain on, dude
+			bt		cr1_eq,graRem64Rt			; Mapping to remove is chained from anchor
+			std		r8,0(r11)					; Unchain gpv->phys mapping
+			b		graRemoved					; Exit loop
+graRem64Rt:	ldarx	r0,0,r11					; Get previous link
+			and		r0,r0,r7					; Get flags
+			or		r0,r0,r8					; Insert new forward pointer
+			stdcx.	r0,0,r11					; Slam it back in
+			bne--	graRem64Rt					; Lost reservation, retry
+			b		graRemoved					; Good work, let's go home
+		
+graRem64Nxt:
+			la		r11,mpAlias(r9)				; Point to (soon to be) previous link
+			crclr	cr1_eq						; ~cr1_eq <- Previous link is not the anchor
+			mr.		r9,r8						; Does next entry exist?
+			b		graRem64Lp					; Carry on
+
+graRemoved:
+			mr		r3,r26						; r3 <- physent's address
+			bl		mapPhysUnlock				; Unlock the physent (and its chain of mappings)
+			
+			lwz		r3,mpFlags(r31)				; Get mapping's flags
+			rlwinm	r3,r3,0,~mpgFlags			; Clear all guest flags
+			ori		r3,r3,mpgFree				; Mark mapping free
+			stw		r3,mpFlags(r31)				; Update flags
+			
+graMiss:	addi	r31,r31,GV_SLOT_SZ			; r31 <- next mapping
+			rlwinm.	r0,r31,0,GV_PAGE_MASK		; End of hash table page?
+			bne		graLoop						; No, examine next slot
+			addi	r28,r28,1					; Increment hash table page index
+			cmplwi	r28,GV_HPAGES				; End of hash table?
+			bne		graPgLoop					; Examine next hash table page
+			
+			la		r3,pmapSXlk(r24)			; r3 <- host pmap's search lock
+			bl		sxlkUnlock					; Release host pmap's search lock
+			
+			bt++	pf64Bitb,graRtn64			; Handle 64-bit separately
+			mtmsr	r30							; Restore 'rupts, translation
+			isync								; Throw a small wrench into the pipeline
+			b		graPopFrame					; Nothing to do now but pop a frame and return
+graRtn64:	mtmsrd	r30							; Restore 'rupts, translation, 32-bit mode
+graPopFrame:		
+			lwz		r0,(FM_ALIGN(graStackSize)+FM_SIZE+FM_LR_SAVE)(r1)
+												; Get caller's return address
+			lwz		r31,FM_ARG0+0x00(r1)		; Restore non-volatile r31
+			lwz		r30,FM_ARG0+0x04(r1)		; Restore non-volatile r30
+			lwz		r29,FM_ARG0+0x08(r1)		; Restore non-volatile r29
+			lwz		r28,FM_ARG0+0x0C(r1)		; Restore non-volatile r28
+			mtlr	r0							; Prepare return address
+			lwz		r27,FM_ARG0+0x10(r1)		; Restore non-volatile r27
+			lwz		r26,FM_ARG0+0x14(r1)		; Restore non-volatile r26
+			lwz		r25,FM_ARG0+0x18(r1)		; Restore non-volatile r25
+			lwz		r24,FM_ARG0+0x1C(r1)		; Restore non-volatile r24
+			lwz		r1,0(r1)					; Pop stack frame
+			blr									; Return to caller
+
+graBadPLock:
+graRemoveMiss:
+			lis		r0,hi16(Choke)				; Dmitri, you know how we've always talked about the
+			ori		r0,r0,lo16(Choke)			;  possibility of something going wrong with the bomb?
+			li		r3,failMapping				; The BOMB, Dmitri.
+			sc									; The hydrogen bomb.
+
+
+;
+;			Guest shadow assist -- remove local guest mappings
+;
+;			Remove local mappings for a guest pmap from the shadow hash table.
+;
+;			Parameters:
+;				r3 : address of guest pmap, 32-bit kernel virtual address
+;
+;			Non-volatile register usage:
+;				r20 : current active map word's physical address
+;				r21 : current hash table page address
+;				r22 : updated active map word in process
+;				r23 : active map word in process
+;				r24 : host pmap's physical address
+;				r25 : VMM extension block's physical address
+;				r26 : physent address
+;				r27 : guest pmap's space ID number
+;				r28 : current active map index
+;				r29 : guest pmap's physical address
+;				r30 : saved msr image
+;				r31 : current mapping
+;
+			.align	5
+			.globl	EXT(hw_rem_local_gv)
+			
+LEXT(hw_rem_local_gv)
+
+#define grlStackSize ((31-20+1)*4)+4
+			stwu	r1,-(FM_ALIGN(grlStackSize)+FM_SIZE)(r1)
+												; Mint a new stack frame
+			mflr	r0							; Get caller's return address
+			mfsprg	r11,2						; Get feature flags
+			mtcrf	0x02,r11					; Insert feature flags into cr6
+			stw		r0,(FM_ALIGN(grlStackSize)+FM_SIZE+FM_LR_SAVE)(r1)
+												; Save caller's return address
+			stw		r31,FM_ARG0+0x00(r1)		; Save non-volatile r31
+			stw		r30,FM_ARG0+0x04(r1)		; Save non-volatile r30
+			stw		r29,FM_ARG0+0x08(r1)		; Save non-volatile r29
+			stw		r28,FM_ARG0+0x0C(r1)		; Save non-volatile r28
+			stw		r27,FM_ARG0+0x10(r1)		; Save non-volatile r27
+			stw		r26,FM_ARG0+0x14(r1)		; Save non-volatile r26
+			stw		r25,FM_ARG0+0x18(r1)		; Save non-volatile r25
+			stw		r24,FM_ARG0+0x1C(r1)		; Save non-volatile r24
+			stw		r23,FM_ARG0+0x20(r1)		; Save non-volatile r23
+			stw		r22,FM_ARG0+0x24(r1)		; Save non-volatile r22
+			stw		r21,FM_ARG0+0x28(r1)		; Save non-volatile r21
+			stw		r20,FM_ARG0+0x2C(r1)		; Save non-volatile r20
+												
+			lwz		r11,pmapVmmExt(r3)			; r11 <- VMM pmap extension block vaddr
+
+			bt++	pf64Bitb,grl64Salt			; Test for 64-bit machine
+			lwz		r25,pmapVmmExtPhys+4(r3)	; r25 <- VMM pmap extension block paddr
+			lwz		r9,pmapvr+4(r3)				; Get 32-bit virt<->real conversion salt
+			lwz		r24,vmxHostPmapPhys+4(r11)	; r24 <- host pmap's paddr
+			b		grlStart					; Get to it			
+grl64Salt:	ld		r25,pmapVmmExtPhys(r3)		; r25 <- VMM pmap extension block paddr
+			ld		r9,pmapvr(r3)				; Get 64-bit virt<->real conversion salt
+			ld		r24,vmxHostPmapPhys(r11)	; r24 <- host pmap's paddr
+
+grlStart:	bl		EXT(mapSetUp)				; Disable 'rupts, translation, enter 64-bit mode
+			xor		r29,r3,r9					; Convert pmap_t virt->real
+			mr		r30,r11						; Save caller's msr image
+
+			la		r3,pmapSXlk(r24)			; r3 <- host pmap's search lock
+			bl		sxlkExclusive				; Get lock exclusive
+
+			li		r28,0						; r28 <- index of first active map word to search
+			lwz		r27,pmapSpace(r29)			; r27 <- guest pmap's space ID number
+			b		grlMap1st					; Examine first map word
+
+			.align	5
+grlNextMap:	stw		r22,0(r21)					; Save updated map word
+			addi	r28,r28,1					; Increment map word index
+			cmplwi	r28,GV_MAP_WORDS			; See if we're done
+			beq		grlDone						; Yup, let's get outta here
+
+grlMap1st:	la		r20,VMX_ACTMAP_OFFSET(r25)	; Get base of active map word array
+			rlwinm	r11,r28,GV_MAPWD_SZ_LG2,GV_MAP_MASK
+												; Convert map index into map index offset
+			add		r20,r20,r11					; Calculate map array element address
+			lwz		r22,0(r20)					; Get active map word at index
+			mr.		r23,r22						; Any active mappings indicated?
+			beq		grlNextMap					; Nope, check next word
+			
+			la		r21,VMX_HPIDX_OFFSET(r25)	; Get base of hash page physical index
+			rlwinm	r11,r28,GV_MAP_SHIFT,GV_HPAGE_MASK
+												; Extract page index from map word index and convert
+												;  into page physical index offset
+			add		r21,r21,r11					; Calculate page physical index entry address
+			bt++	pf64Bitb,grl64Page			; Separate handling for 64-bit
+			lwz		r21,4(r21)					; Get selected hash table page's address
+			b		grlLoop						; Examine all slots in this page
+grl64Page:	ld		r21,0(r21)					; Get selected hash table page's address
+			b		grlLoop						; Examine all slots in this page
+			
+			.align	5
+grlLoop:	cntlzw	r11,r23						; Get next active bit lit in map word
+			cmplwi	r11,32						; Any active mappings left in this word?
+			lis		r12,0x8000					; Prepare mask to reset bit
+			srw		r12,r12,r11					; Position mask bit
+			andc	r23,r23,r12					; Reset lit bit
+			beq		grlNextMap					; No bits lit, examine next map word						
+
+			slwi	r31,r11,GV_SLOT_SZ_LG2		; Get slot offset in slot band from lit bit number
+			rlwinm	r31,r28,GV_BAND_SHIFT,GV_BAND_MASK
+												; Extract slot band number from index and insert
+			add		r31,r31,r21					; Add hash page address yielding mapping slot address
+
+			lwz		r3,mpFlags(r31)				; Get mapping's flags
+			lhz		r4,mpSpace(r31)				; Get mapping's space ID number
+			rlwinm	r5,r3,0,mpgGlobal			; Extract global bit
+			xor		r4,r4,r27					; Compare space ID number
+			or.		r4,r4,r5					; (space id miss || global)
+			bne		grlLoop						; Not one of ours, skip it
+			andc	r22,r22,r12					; Reset active bit corresponding to this mapping
+			ori		r3,r3,mpgDormant			; Mark entry dormant
+			stw		r3,mpFlags(r31)				; Update mapping's flags
+
+			bt++	pf64Bitb,grlDscon64			; Handle 64-bit disconnect separately
+			bl		mapInvPte32					; Disconnect PTE, invalidate, gather ref and change
+												; r31 <- mapping's physical address
+												; r3  -> PTE slot physical address
+												; r4  -> High-order 32 bits of PTE
+												; r5  -> Low-order  32 bits of PTE
+												; r6  -> PCA
+												; r7  -> PCA physical address
+			rlwinm	r2,r3,29,29,31				; Get PTE's slot number in the PTEG (8-byte PTEs)
+			b		grlFreePTE					; Join 64-bit path to release the PTE			
+grlDscon64:	bl		mapInvPte64					; Disconnect PTE, invalidate, gather ref and change
+			rlwinm	r2,r3,28,29,31				; Get PTE's slot number in the PTEG (16-byte PTEs)
+grlFreePTE: mr.		r3,r3						; Was there a valid PTE?
+			beq-	grlLoop						; No valid PTE, we're done with this mapping
+			lis		r0,0x8000					; Prepare free bit for this slot
+			srw		r0,r0,r2					; Position free bit
+			or		r6,r6,r0					; Set it in our PCA image
+			lwz		r8,mpPte(r31)				; Get PTE pointer
+			rlwinm	r8,r8,0,~mpHValid			; Make the pointer invalid
+			stw		r8,mpPte(r31)				; Save invalidated PTE pointer
+			eieio								; Synchronize all previous updates (mapInvPtexx doesn't)
+			stw		r6,0(r7)					; Update PCA and unlock the PTEG
+			b		grlLoop						; On to next active mapping in this map word
+						
+grlDone:	la		r3,pmapSXlk(r24)			; r3 <- host pmap's search lock
+			bl		sxlkUnlock					; Release host pmap's search lock
+			
+			bt++	pf64Bitb,grlRtn64			; Handle 64-bit separately
+			mtmsr	r30							; Restore 'rupts, translation
+			isync								; Throw a small wrench into the pipeline
+			b		grlPopFrame					; Nothing to do now but pop a frame and return
+grlRtn64:	mtmsrd	r30							; Restore 'rupts, translation, 32-bit mode
+grlPopFrame:		
+			lwz		r0,(FM_ALIGN(grlStackSize)+FM_SIZE+FM_LR_SAVE)(r1)
+												; Get caller's return address
+			lwz		r31,FM_ARG0+0x00(r1)		; Restore non-volatile r31
+			lwz		r30,FM_ARG0+0x04(r1)		; Restore non-volatile r30
+			lwz		r29,FM_ARG0+0x08(r1)		; Restore non-volatile r29
+			lwz		r28,FM_ARG0+0x0C(r1)		; Restore non-volatile r28
+			mtlr	r0							; Prepare return address
+			lwz		r27,FM_ARG0+0x10(r1)		; Restore non-volatile r27
+			lwz		r26,FM_ARG0+0x14(r1)		; Restore non-volatile r26
+			lwz		r25,FM_ARG0+0x18(r1)		; Restore non-volatile r25
+			lwz		r24,FM_ARG0+0x1C(r1)		; Restore non-volatile r24
+			lwz		r23,FM_ARG0+0x20(r1)		; Restore non-volatile r23
+			lwz		r22,FM_ARG0+0x24(r1)		; Restore non-volatile r22
+			lwz		r21,FM_ARG0+0x28(r1)		; Restore non-volatile r21
+			lwz		r20,FM_ARG0+0x2C(r1)		; Restore non-volatile r20
+			lwz		r1,0(r1)					; Pop stack frame
+			blr									; Return to caller
+
+
+;
+;			Guest shadow assist -- resume a guest mapping
+;
+;			Locates the specified dormant mapping, and if it exists validates it and makes it
+;			active.
+;
+;			Parameters:
+;				r3 : address of host pmap, 32-bit kernel virtual address
+;				r4 : address of guest pmap, 32-bit kernel virtual address
+;				r5 : host virtual address, high-order 32 bits
+;				r6 : host virtual address,  low-order 32 bits
+;				r7 : guest virtual address, high-order 32 bits
+;				r8 : guest virtual address,  low-order 32 bits
+;				r9 : guest mapping protection code
+;
+;			Non-volatile register usage:
+;				r23 : VMM extension block's physical address
+;				r24 : physent physical address
+;				r25 : caller's msr image from mapSetUp
+;				r26 : guest mapping protection code
+;				r27 : host pmap physical address
+;				r28 : guest pmap physical address
+;				r29 : host virtual address
+;				r30 : guest virtual address
+;				r31 : gva->phys mapping's physical address
+;
+			.align	5
+			.globl	EXT(hw_res_map_gv)
+			
+LEXT(hw_res_map_gv)
+
+#define grsStackSize ((31-23+1)*4)+4
+
+			stwu	r1,-(FM_ALIGN(grsStackSize)+FM_SIZE)(r1)
+												; Mint a new stack frame
+			mflr	r0							; Get caller's return address
+			mfsprg	r11,2						; Get feature flags
+			mtcrf	0x02,r11					; Insert feature flags into cr6
+			stw		r0,(FM_ALIGN(grsStackSize)+FM_SIZE+FM_LR_SAVE)(r1)
+												; Save caller's return address
+			stw		r31,FM_ARG0+0x00(r1)		; Save non-volatile r31
+			stw		r30,FM_ARG0+0x04(r1)		; Save non-volatile r30
+			stw		r29,FM_ARG0+0x08(r1)		; Save non-volatile r29
+			stw		r28,FM_ARG0+0x0C(r1)		; Save non-volatile r28
+			stw		r27,FM_ARG0+0x10(r1)		; Save non-volatile r27
+			stw		r26,FM_ARG0+0x14(r1)		; Save non-volatile r26
+			stw		r25,FM_ARG0+0x18(r1)		; Save non-volatile r25
+			stw		r24,FM_ARG0+0x1C(r1)		; Save non-volatile r24
+			stw		r23,FM_ARG0+0x20(r1)		; Save non-volatile r23
+
+			rlwinm	r29,r6,0,0xFFFFF000			; Clean up low-order 32 bits of host vaddr
+			rlwinm	r30,r8,0,0xFFFFF000			; Clean up low-order 32 bits of guest vaddr
+			mr		r26,r9						; Copy guest mapping protection code
+
+			lwz		r11,pmapVmmExt(r3)			; r11 <- VMM pmap extension block vaddr
+			lwz		r9,pmapSpace(r4)			; r9 <- guest space ID number
+			bt++	pf64Bitb,grs64Salt			; Handle 64-bit machine separately
+			lwz		r23,pmapVmmExtPhys+4(r3)	; r23 <- VMM pmap extension block paddr
+			lwz		r27,pmapvr+4(r3)			; Get 32-bit virt<->real host pmap conversion salt
+			lwz		r28,pmapvr+4(r4)			; Get 32-bit virt<->real guest pmap conversion salt
+			la		r31,VMX_HPIDX_OFFSET(r11)	; r31 <- base of hash page physical index
+			srwi	r11,r30,12					; Form shadow hash:
+			xor		r11,r11,r9					; 	spaceID ^ (vaddr >> 12) 
+			rlwinm	r10,r11,GV_HPAGE_SHIFT,GV_HPAGE_MASK
+												; Form index offset from hash page number
+			add		r31,r31,r10					; r31 <- hash page index entry
+			lwz		r31,4(r31)					; r31 <- hash page paddr
+			rlwimi	r31,r11,GV_HGRP_SHIFT,GV_HGRP_MASK
+												; r31 <- hash group paddr
+			b		grsStart					; Get to it			
+
+grs64Salt:	rldimi	r29,r5,32,0					; Insert high-order 32 bits of 64-bit host vaddr			
+			rldimi	r30,r7,32,0					; Insert high-order 32 bits of 64-bit guest vaddr			
+			ld		r23,pmapVmmExtPhys(r3)		; r23 <- VMM pmap extension block paddr
+			ld		r27,pmapvr(r3)				; Get 64-bit virt<->real host pmap conversion salt
+			ld		r28,pmapvr(r4)				; Get 64-bit virt<->real guest pmap conversion salt
+			la		r31,VMX_HPIDX_OFFSET(r11)	; r31 <- base of hash page physical index
+			srwi	r11,r30,12					; Form shadow hash:
+			xor		r11,r11,r9					; 	spaceID ^ (vaddr >> 12) 
+			rlwinm	r10,r11,GV_HPAGE_SHIFT,GV_HPAGE_MASK
+												; Form index offset from hash page number
+			add		r31,r31,r10					; r31 <- hash page index entry
+			ld		r31,0(r31)					; r31 <- hash page paddr
+			insrdi	r31,r11,GV_GRPS_PPG_LG2,64-(GV_HGRP_SHIFT+GV_GRPS_PPG_LG2)
+												; r31 <- hash group paddr
+
+grsStart:	xor		r27,r3,r27					; Convert host pmap_t virt->real
+			xor		r28,r4,r28					; Convert guest pmap_t virt->real
+			bl		EXT(mapSetUp)				; Disable 'rupts, translation, maybe enter 64-bit mode
+			mr		r25,r11						; Save caller's msr image
+
+			la		r3,pmapSXlk(r27)			; r3 <- host pmap's search lock address
+			bl		sxlkExclusive				; Get lock exclusive
+
+			li		r0,(GV_SLOTS - 1)			; Prepare to iterate over mapping slots
+			mtctr	r0							;  in this group
+			bt++	pf64Bitb,grs64Search		; Test for 64-bit machine
+
+			lwz		r3,mpFlags(r31)				; r3 <- 1st mapping slot's flags
+			lhz		r4,mpSpace(r31)				; r4 <- 1st mapping slot's space ID 
+			lwz		r5,mpVAddr+4(r31)			; r5 <- 1st mapping slot's virtual address
+			b		grs32SrchLp					; Let the search begin!
+			
+			.align	5
+grs32SrchLp:
+			mr		r6,r3						; r6 <- current mapping slot's flags
+			lwz		r3,mpFlags+GV_SLOT_SZ(r31)	; r3 <- next mapping slot's flags
+			mr		r7,r4						; r7 <- current mapping slot's space ID
+			lhz		r4,mpSpace+GV_SLOT_SZ(r31)	; r4 <- next mapping slot's space ID
+			clrrwi	r8,r5,12					; r8 <- current mapping slot's virtual addr w/o flags
+			lwz		r5,mpVAddr+4+GV_SLOT_SZ(r31); r5 <- next mapping slot's virtual addr
+			rlwinm	r11,r6,0,mpgFree			; Isolate guest free flag
+			xor		r7,r7,r9					; Compare space ID
+			or		r0,r11,r7					; r0 <- !(!free && space match)
+			xor		r8,r8,r30					; Compare virtual address
+			or.		r0,r0,r8					; cr0_eq <- !free && space match && virtual addr match
+			beq		grsSrchHit					; Join common path on hit (r31 points to guest mapping)
+			
+			addi	r31,r31,GV_SLOT_SZ			; r31 <- next mapping slot		
+			bdnz	grs32SrchLp					; Iterate
+
+			mr		r6,r3						; r6 <- current mapping slot's flags
+			clrrwi	r5,r5,12					; Remove flags from virtual address			
+			rlwinm	r11,r6,0,mpgFree			; Isolate guest free flag
+			xor		r4,r4,r9					; Compare space ID
+			or		r0,r11,r4					; r0 <- !(!free && space match)
+			xor		r5,r5,r30					; Compare virtual address
+			or.		r0,r0,r5					; cr0_eq <- !free && space match && virtual addr match
+			beq		grsSrchHit					; Join common path on hit (r31 points to guest mapping)
+			b		grsSrchMiss					; No joy in our hash group
+			
+grs64Search:			
+			lwz		r3,mpFlags(r31)				; r3 <- 1st mapping slot's flags
+			lhz		r4,mpSpace(r31)				; r4 <- 1st mapping slot's space ID 
+			ld		r5,mpVAddr(r31)				; r5 <- 1st mapping slot's virtual address
+			b		grs64SrchLp					; Let the search begin!
+			
+			.align	5
+grs64SrchLp:
+			mr		r6,r3						; r6 <- current mapping slot's flags
+			lwz		r3,mpFlags+GV_SLOT_SZ(r31)	; r3 <- next mapping slot's flags
+			mr		r7,r4						; r7 <- current mapping slot's space ID
+			lhz		r4,mpSpace+GV_SLOT_SZ(r31)	; r4 <- next mapping slot's space ID
+			clrrdi	r8,r5,12					; r8 <- current mapping slot's virtual addr w/o flags
+			ld		r5,mpVAddr+GV_SLOT_SZ(r31)	; r5 <- next mapping slot's virtual addr
+			rlwinm	r11,r6,0,mpgFree			; Isolate guest free flag
+			xor		r7,r7,r9					; Compare space ID
+			or		r0,r11,r7					; r0 <- !(!free && space match)
+			xor		r8,r8,r30					; Compare virtual address
+			or.		r0,r0,r8					; cr0_eq <- !free && space match && virtual addr match
+			beq		grsSrchHit					; Join common path on hit (r31 points to guest mapping)
+			
+			addi	r31,r31,GV_SLOT_SZ			; r31 <- next mapping slot		
+			bdnz	grs64SrchLp					; Iterate
+
+			mr		r6,r3						; r6 <- current mapping slot's flags
+			clrrdi	r5,r5,12					; Remove flags from virtual address			
+			rlwinm	r11,r6,0,mpgFree			; Isolate guest free flag
+			xor		r4,r4,r9					; Compare space ID
+			or		r0,r11,r4					; r0 <- !(!free && space match)
+			xor		r5,r5,r30					; Compare virtual address
+			or.		r0,r0,r5					; cr0_eq <- !free && space match && virtual addr match
+			bne		grsSrchMiss					; No joy in our hash group
+			
+grsSrchHit:
+			rlwinm.	r0,r6,0,mpgDormant			; Is the mapping dormant?
+			bne		grsFindHost					; Yes, nothing to disconnect
+
+			bt++	pf64Bitb,grsDscon64			; Handle 64-bit disconnect separately
+			bl		mapInvPte32					; Disconnect PTE, invalidate, gather ref and change
+												; r31 <- mapping's physical address
+												; r3  -> PTE slot physical address
+												; r4  -> High-order 32 bits of PTE
+												; r5  -> Low-order  32 bits of PTE
+												; r6  -> PCA
+												; r7  -> PCA physical address
+			rlwinm	r2,r3,29,29,31				; Get PTE's slot number in the PTEG (8-byte PTEs)
+			b		grsFreePTE					; Join 64-bit path to release the PTE			
+grsDscon64:	bl		mapInvPte64					; Disconnect PTE, invalidate, gather ref and change
+			rlwinm	r2,r3,28,29,31				; Get PTE's slot number in the PTEG (16-byte PTEs)
+grsFreePTE: mr.		r3,r3						; Was there a valid PTE?
+			beq-	grsFindHost					; No valid PTE, we're almost done
+			lis		r0,0x8000					; Prepare free bit for this slot
+			srw		r0,r0,r2					; Position free bit
+			or		r6,r6,r0					; Set it in our PCA image
+			lwz		r8,mpPte(r31)				; Get PTE pointer
+			rlwinm	r8,r8,0,~mpHValid			; Make the pointer invalid
+			stw		r8,mpPte(r31)				; Save invalidated PTE pointer
+			eieio								; Synchronize all previous updates (mapInvPtexx didn't)
+			stw		r6,0(r7)					; Update PCA and unlock the PTEG
+
+grsFindHost:
+
+// We now have a dormant guest mapping that matches our space id and virtual address. Our next
+// step is to locate the host mapping that completes the guest mapping's connection to a physical
+// frame. The guest and host mappings must connect to the same physical frame, so they must both
+// be chained on the same physent. We search the physent chain for a host mapping matching our
+// host's space id and the host virtual address. If we succeed, we know that the entire chain
+// of mappings (guest virtual->host virtual->physical) is valid, so the dormant mapping can be
+// resumed. If we fail to find the specified host virtual->physical mapping, it is because the
+// host virtual or physical address has changed since the guest mapping was suspended, so it
+// is no longer valid and cannot be resumed -- we therefore delete the guest mappping and tell
+// our caller that it will have to take its long path, translating the host virtual address
+// through the host's skiplist and installing a new guest mapping.
+
+			lwz		r3,mpPAddr(r31)				; r3 <- physical 4K-page number
+			bl		mapFindLockPN				; Find 'n' lock this page's physent
+			mr.		r24,r3						; Got lock on our physent?
+			beq--	grsBadPLock					; No, time to bail out
+			
+			bt++	pf64Bitb,grsPFnd64			; 64-bit version of physent chain search
+			
+			lwz		r9,ppLink+4(r24)			; Get first mapping on physent
+			lwz		r6,pmapSpace(r27)			; Get host pmap's space id number
+			rlwinm	r9,r9,0,~ppFlags			; Be-gone, unsightly flags
+grsPELoop:	mr.		r12,r9						; Got a mapping to look at?
+			beq-	grsPEMiss					; Nope, we've missed hva->phys mapping
+			lwz		r7,mpFlags(r12)				; Get mapping's flags
+			lhz		r4,mpSpace(r12)				; Get mapping's space id number
+			lwz		r5,mpVAddr+4(r12)			; Get mapping's virtual address
+			lwz		r9,mpAlias+4(r12)			; Next mapping in physent alias chain
+			
+			rlwinm	r0,r7,0,mpType				; Isolate mapping's type
+			rlwinm	r5,r5,0,~mpHWFlags			; Bye-bye unsightly flags
+			xori	r0,r0,mpNormal				; Normal mapping?
+			xor		r4,r4,r6					; Compare w/ host space id number
+			xor		r5,r5,r29					; Compare w/ host virtual address
+			or		r0,r0,r4					; r0 <- (wrong type || !space id)
+			or.		r0,r0,r5					; cr0_eq <- (right type && space id hit && hva hit)
+			beq		grsPEHit					; Hit
+			b		grsPELoop					; Iterate
+			
+grsPFnd64:	li		r0,ppLFAmask				; Get mask to clean up mapping pointer
+			rotrdi	r0,r0,ppLFArrot				; Rotate clean up mask to get 0xF0000000000000000F
+			ld		r9,ppLink(r24)				; Get first mapping on physent
+			lwz		r6,pmapSpace(r27)			; Get pmap's space id number
+			andc	r9,r9,r0					; Cleanup mapping pointer
+grsPELp64:	mr.		r12,r9						; Got a mapping to look at?
+			beq--	grsPEMiss					; Nope, we've missed hva->phys mapping
+			lwz		r7,mpFlags(r12)				; Get mapping's flags
+			lhz		r4,mpSpace(r12)				; Get mapping's space id number
+			ld		r5,mpVAddr(r12)				; Get mapping's virtual address
+			ld		r9,mpAlias(r12)				; Next mapping physent alias chain
+			rlwinm	r0,r7,0,mpType				; Isolate mapping's type
+			rldicr	r5,r5,0,mpHWFlagsb-1		; Bye-bye unsightly flags
+			xori	r0,r0,mpNormal				; Normal mapping?
+			xor		r4,r4,r6					; Compare w/ host space id number
+			xor		r5,r5,r29					; Compare w/ host virtual address
+			or		r0,r0,r4					; r0 <- (wrong type || !space id)
+			or.		r0,r0,r5					; cr0_eq <- (right type && space id hit && hva hit)
+			beq		grsPEHit					; Hit
+			b		grsPELp64					; Iterate
+			
+grsPEHit:	lwz		r0,mpVAddr+4(r31)			; Get va byte containing protection bits
+			rlwimi	r0,r26,0,mpPP				; Insert new protection bits
+			stw		r0,mpVAddr+4(r31)			; Write 'em back
+
+			eieio								; Ensure previous mapping updates are visible
+			lwz		r0,mpFlags(r31)				; Get flags
+			rlwinm	r0,r0,0,~mpgDormant			; Turn off dormant flag
+			stw		r0,mpFlags(r31)				; Set updated flags, entry is now valid
+			
+			li		r31,mapRtOK					; Indicate success
+			b		grsRelPhy					; Exit through physent lock release
+
+grsPEMiss:	crset	cr1_eq						; cr1_eq <- previous link is the anchor
+			bt++	pf64Bitb,grsRemove64		; Use 64-bit version on 64-bit machine
+			la		r11,ppLink+4(r24)			; Point to chain anchor
+			lwz		r9,ppLink+4(r24)			; Get chain anchor
+			rlwinm.	r9,r9,0,~ppFlags			; Remove flags, yielding 32-bit physical chain pointer
+grsRemLoop:	beq-	grsPEMissMiss				; End of chain, this is not good
+			cmplw	r9,r31						; Is this the mapping to remove?
+			lwz		r8,mpAlias+4(r9)			; Get forward chain pointer
+			bne		grsRemNext					; No, chain onward
+			bt		cr1_eq,grsRemRetry			; Mapping to remove is chained from anchor
+			stw		r8,0(r11)					; Unchain gpv->phys mapping
+			b		grsDelete					; Finish deleting mapping
+grsRemRetry:
+			lwarx	r0,0,r11					; Get previous link
+			rlwimi	r0,r8,0,~ppFlags			; Insert new forward pointer whilst preserving flags
+			stwcx.	r0,0,r11					; Update previous link
+			bne-	grsRemRetry					; Lost reservation, retry
+			b		grsDelete					; Finish deleting mapping
+			
+			.align	5
+grsRemNext:	la		r11,mpAlias+4(r9)			; Point to (soon to be) previous link
+			crclr	cr1_eq						; ~cr1_eq <- Previous link is not the anchor
+			mr.		r9,r8						; Does next entry exist?
+			b		grsRemLoop					; Carry on
+
+grsRemove64:
+			li		r7,ppLFAmask				; Get mask to clean up mapping pointer
+			rotrdi	r7,r7,ppLFArrot				; Rotate clean up mask to get 0xF0000000000000000F
+			la		r11,ppLink(r24)				; Point to chain anchor
+			ld		r9,ppLink(r24)				; Get chain anchor
+			andc.	r9,r9,r7					; Remove flags, yielding 64-bit physical chain pointer
+grsRem64Lp:	beq--	grsPEMissMiss				; End of chain, this is not good
+			cmpld	r9,r31						; Is this the mapping to remove?
+			ld		r8,mpAlias(r9)				; Get forward chain pinter
+			bne		grsRem64Nxt					; Not mapping to remove, chain on, dude
+			bt		cr1_eq,grsRem64Rt			; Mapping to remove is chained from anchor
+			std		r8,0(r11)					; Unchain gpv->phys mapping
+			b		grsDelete					; Finish deleting mapping
+grsRem64Rt:	ldarx	r0,0,r11					; Get previous link
+			and		r0,r0,r7					; Get flags
+			or		r0,r0,r8					; Insert new forward pointer
+			stdcx.	r0,0,r11					; Slam it back in
+			bne--	grsRem64Rt					; Lost reservation, retry
+			b		grsDelete					; Finish deleting mapping
+
+			.align	5		
+grsRem64Nxt:
+			la		r11,mpAlias(r9)				; Point to (soon to be) previous link
+			crclr	cr1_eq						; ~cr1_eq <- Previous link is not the anchor
+			mr.		r9,r8						; Does next entry exist?
+			b		grsRem64Lp					; Carry on
+			
+grsDelete:
+			lwz		r3,mpFlags(r31)				; Get mapping's flags
+			rlwinm	r3,r3,0,~mpgFlags			; Clear all guest flags
+			ori		r3,r3,mpgFree				; Mark mapping free
+			stw		r3,mpFlags(r31)				; Update flags
+
+			li		r31,mapRtNotFnd				; Didn't succeed
+
+grsRelPhy:	mr		r3,r24						; r3 <- physent addr
+			bl		mapPhysUnlock				; Unlock physent chain
+			
+grsRelPmap:	la		r3,pmapSXlk(r27)			; r3 <- host pmap search lock phys addr
+			bl		sxlkUnlock					; Release host pmap search lock
+			
+grsRtn:		mr		r3,r31						; r3 <- result code
+			bt++	pf64Bitb,grsRtn64			; Handle 64-bit separately
+			mtmsr	r25							; Restore 'rupts, translation
+			isync								; Throw a small wrench into the pipeline
+			b		grsPopFrame					; Nothing to do now but pop a frame and return
+grsRtn64:	mtmsrd	r25							; Restore 'rupts, translation, 32-bit mode
+grsPopFrame:		
+			lwz		r0,(FM_ALIGN(grsStackSize)+FM_SIZE+FM_LR_SAVE)(r1)
+												; Get caller's return address
+			lwz		r31,FM_ARG0+0x00(r1)		; Restore non-volatile r31
+			lwz		r30,FM_ARG0+0x04(r1)		; Restore non-volatile r30
+			lwz		r29,FM_ARG0+0x08(r1)		; Restore non-volatile r29
+			lwz		r28,FM_ARG0+0x0C(r1)		; Restore non-volatile r28
+			mtlr	r0							; Prepare return address
+			lwz		r27,FM_ARG0+0x10(r1)		; Restore non-volatile r27
+			lwz		r26,FM_ARG0+0x14(r1)		; Restore non-volatile r26
+			lwz		r25,FM_ARG0+0x18(r1)		; Restore non-volatile r25
+			lwz		r24,FM_ARG0+0x1C(r1)		; Restore non-volatile r24
+			lwz		r23,FM_ARG0+0x20(r1)		; Restore non-volatile r23
+			lwz		r1,0(r1)					; Pop stack frame
+			blr									; Return to caller
+
+			.align	5
+grsSrchMiss:
+			li		r31,mapRtNotFnd				; Could not locate requested mapping
+			b		grsRelPmap					; Exit through host pmap search lock release
+
+grsBadPLock:
+grsPEMissMiss:
+			lis		r0,hi16(Choke)				; Dmitri, you know how we've always talked about the
+			ori		r0,r0,lo16(Choke)			;  possibility of something going wrong with the bomb?
+			li		r3,failMapping				; The BOMB, Dmitri.
+			sc									; The hydrogen bomb.
+
+
+;
+;			Guest shadow assist -- add a guest mapping
+;
+;			Adds a guest mapping.
+;
+;			Parameters:
+;				r3 : address of host pmap, 32-bit kernel virtual address
+;				r4 : address of guest pmap, 32-bit kernel virtual address
+;				r5 : guest virtual address, high-order 32 bits
+;				r6 : guest virtual address,  low-order 32 bits (with mpHWFlags)
+;				r7 : new mapping's flags
+;				r8 : physical address, 32-bit page number
+;
+;			Non-volatile register usage:
+;				r22 : hash group's physical address
+;				r23 : VMM extension block's physical address
+;				r24 : mapping's flags
+;				r25 : caller's msr image from mapSetUp
+;				r26 : physent physical address
+;				r27 : host pmap physical address
+;				r28 : guest pmap physical address
+;				r29 : physical address, 32-bit 4k-page number
+;				r30 : guest virtual address
+;				r31 : gva->phys mapping's physical address
+;
+			
+			.align	5
+			.globl	EXT(hw_add_map_gv)
+			
+			
+LEXT(hw_add_map_gv)
+
+#define gadStackSize ((31-22+1)*4)+4
+
+			stwu	r1,-(FM_ALIGN(gadStackSize)+FM_SIZE)(r1)
+												; Mint a new stack frame
+			mflr	r0							; Get caller's return address
+			mfsprg	r11,2						; Get feature flags
+			mtcrf	0x02,r11					; Insert feature flags into cr6
+			stw		r0,(FM_ALIGN(gadStackSize)+FM_SIZE+FM_LR_SAVE)(r1)
+												; Save caller's return address
+			stw		r31,FM_ARG0+0x00(r1)		; Save non-volatile r31
+			stw		r30,FM_ARG0+0x04(r1)		; Save non-volatile r30
+			stw		r29,FM_ARG0+0x08(r1)		; Save non-volatile r29
+			stw		r28,FM_ARG0+0x0C(r1)		; Save non-volatile r28
+			stw		r27,FM_ARG0+0x10(r1)		; Save non-volatile r27
+			stw		r26,FM_ARG0+0x14(r1)		; Save non-volatile r26
+			stw		r25,FM_ARG0+0x18(r1)		; Save non-volatile r25
+			stw		r24,FM_ARG0+0x1C(r1)		; Save non-volatile r24
+			stw		r23,FM_ARG0+0x20(r1)		; Save non-volatile r23
+			stw		r22,FM_ARG0+0x24(r1)		; Save non-volatile r22
+
+			rlwinm	r30,r5,0,1,0				; Get high-order 32 bits of guest vaddr
+			rlwimi	r30,r6,0,0,31				; Get  low-order 32 bits of guest vaddr
+			mr		r24,r7						; Copy guest mapping's flags
+			mr		r29,r8						; Copy target frame's physical address
+
+			lwz		r11,pmapVmmExt(r3)			; r11 <- VMM pmap extension block vaddr
+			lwz		r9,pmapSpace(r4)			; r9 <- guest space ID number
+			bt++	pf64Bitb,gad64Salt			; Test for 64-bit machine
+			lwz		r23,pmapVmmExtPhys+4(r3)	; r23 <- VMM pmap extension block paddr
+			lwz		r27,pmapvr+4(r3)			; Get 32-bit virt<->real host pmap conversion salt
+			lwz		r28,pmapvr+4(r4)			; Get 32-bit virt<->real guest pmap conversion salt
+			la		r22,VMX_HPIDX_OFFSET(r11)	; r22 <- base of hash page physical index
+			srwi	r11,r30,12					; Form shadow hash:
+			xor		r11,r11,r9					; 	spaceID ^ (vaddr >> 12) 
+			rlwinm	r10,r11,GV_HPAGE_SHIFT,GV_HPAGE_MASK
+												; Form index offset from hash page number
+			add		r22,r22,r10					; r22 <- hash page index entry
+			lwz		r22,4(r22)					; r22 <- hash page paddr
+			rlwimi	r22,r11,GV_HGRP_SHIFT,GV_HGRP_MASK
+												; r22 <- hash group paddr
+			b		gadStart					; Get to it			
+
+gad64Salt:	ld		r23,pmapVmmExtPhys(r3)		; r23 <- VMM pmap extension block paddr
+			ld		r27,pmapvr(r3)				; Get 64-bit virt<->real host pmap conversion salt
+			ld		r28,pmapvr(r4)				; Get 64-bit virt<->real guest pmap conversion salt
+			la		r22,VMX_HPIDX_OFFSET(r11)	; r22 <- base of hash page physical index
+			srwi	r11,r30,12					; Form shadow hash:
+			xor		r11,r11,r9					; 	spaceID ^ (vaddr >> 12) 
+			rlwinm	r10,r11,GV_HPAGE_SHIFT,GV_HPAGE_MASK
+												; Form index offset from hash page number
+			add		r22,r22,r10					; r22 <- hash page index entry
+			ld		r22,0(r22)					; r22 <- hash page paddr
+			insrdi	r22,r11,GV_GRPS_PPG_LG2,64-(GV_HGRP_SHIFT+GV_GRPS_PPG_LG2)
+												; r22 <- hash group paddr
+
+gadStart:	xor		r27,r3,r27					; Convert host pmap_t virt->real
+			xor		r28,r4,r28					; Convert guest pmap_t virt->real
+			bl		EXT(mapSetUp)				; Disable 'rupts, translation, maybe enter 64-bit mode
+			mr		r25,r11						; Save caller's msr image
+
+			la		r3,pmapSXlk(r27)			; r3 <- host pmap's search lock address
+			bl		sxlkExclusive				; Get lock exlusive
+
+			mr		r31,r22						; Prepare to search this group
+			li		r0,(GV_SLOTS - 1)			; Prepare to iterate over mapping slots
+			mtctr	r0							;  in this group
+			bt++	pf64Bitb,gad64Search		; Test for 64-bit machine
+
+			lwz		r3,mpFlags(r31)				; r3 <- 1st mapping slot's flags
+			lhz		r4,mpSpace(r31)				; r4 <- 1st mapping slot's space ID 
+			lwz		r5,mpVAddr+4(r31)			; r5 <- 1st mapping slot's virtual address
+			clrrwi	r12,r30,12					; r12 <- virtual address we're searching for
+			b		gad32SrchLp					; Let the search begin!
+			
+			.align	5
+gad32SrchLp:
+			mr		r6,r3						; r6 <- current mapping slot's flags
+			lwz		r3,mpFlags+GV_SLOT_SZ(r31)	; r3 <- next mapping slot's flags
+			mr		r7,r4						; r7 <- current mapping slot's space ID
+			lhz		r4,mpSpace+GV_SLOT_SZ(r31)	; r4 <- next mapping slot's space ID
+			clrrwi	r8,r5,12					; r8 <- current mapping slot's virtual addr w/o flags
+			lwz		r5,mpVAddr+4+GV_SLOT_SZ(r31); r5 <- next mapping slot's virtual addr
+			rlwinm	r11,r6,0,mpgFree			; Isolate guest free flag
+			xor		r7,r7,r9					; Compare space ID
+			or		r0,r11,r7					; r0 <- !(!free && space match)
+			xor		r8,r8,r12					; Compare virtual address
+			or.		r0,r0,r8					; cr0_eq <- !free && space match && virtual addr match
+			beq		gadRelPmap					; Join common path on hit (r31 points to guest mapping)
+			
+			addi	r31,r31,GV_SLOT_SZ			; r31 <- next mapping slot		
+			bdnz	gad32SrchLp					; Iterate
+
+			mr		r6,r3						; r6 <- current mapping slot's flags
+			clrrwi	r5,r5,12					; Remove flags from virtual address			
+			rlwinm	r11,r6,0,mpgFree			; Isolate guest free flag
+			xor		r4,r4,r9					; Compare space ID
+			or		r0,r11,r4					; r0 <- !(!free && && space match)
+			xor		r5,r5,r12					; Compare virtual address
+			or.		r0,r0,r5					; cr0_eq <- free && space match && virtual addr match
+			beq		gadRelPmap					; Join common path on hit (r31 points to guest mapping)
+			b		gadScan						; No joy in our hash group
+			
+gad64Search:			
+			lwz		r3,mpFlags(r31)				; r3 <- 1st mapping slot's flags
+			lhz		r4,mpSpace(r31)				; r4 <- 1st mapping slot's space ID 
+			ld		r5,mpVAddr(r31)				; r5 <- 1st mapping slot's virtual address
+			clrrdi	r12,r30,12					; r12 <- virtual address we're searching for
+			b		gad64SrchLp					; Let the search begin!
+			
+			.align	5
+gad64SrchLp:
+			mr		r6,r3						; r6 <- current mapping slot's flags
+			lwz		r3,mpFlags+GV_SLOT_SZ(r31)	; r3 <- next mapping slot's flags
+			mr		r7,r4						; r7 <- current mapping slot's space ID
+			lhz		r4,mpSpace+GV_SLOT_SZ(r31)	; r4 <- next mapping slot's space ID
+			clrrdi	r8,r5,12					; r8 <- current mapping slot's virtual addr w/o flags
+			ld		r5,mpVAddr+GV_SLOT_SZ(r31)	; r5 <- next mapping slot's virtual addr
+			rlwinm	r11,r6,0,mpgFree			; Isolate guest free flag
+			xor		r7,r7,r9					; Compare space ID
+			or		r0,r11,r7					; r0 <- !(!free && space match)
+			xor		r8,r8,r12					; Compare virtual address
+			or.		r0,r0,r8					; cr0_eq <- !free && space match && virtual addr match
+			beq		gadRelPmap					; Hit, let upper-level redrive sort it out
+			
+			addi	r31,r31,GV_SLOT_SZ			; r31 <- next mapping slot		
+			bdnz	gad64SrchLp					; Iterate
+
+			mr		r6,r3						; r6 <- current mapping slot's flags
+			clrrdi	r5,r5,12					; Remove flags from virtual address			
+			rlwinm	r11,r6,0,mpgFree			; Isolate guest free flag
+			xor		r4,r4,r9					; Compare space ID
+			or		r0,r11,r4					; r0 <- !(!free && && space match)
+			xor		r5,r5,r12					; Compare virtual address
+			or.		r0,r0,r5					; cr0_eq <- !free && space match && virtual addr match
+			bne		gadScan						; No joy in our hash group
+			b		gadRelPmap					; Hit, let upper-level redrive sort it out
+			
+gadScan:	lbz		r12,mpgCursor(r22)			; Get group's cursor
+			rlwinm	r12,r12,GV_SLOT_SZ_LG2,(GV_SLOT_MASK << GV_SLOT_SZ_LG2)
+												; Prepare to address slot at cursor
+			li		r0,(GV_SLOTS - 1)			; Prepare to iterate over mapping slots
+			mtctr	r0							;  in this group
+			or		r2,r22,r12					; r2 <- 1st mapping to search
+			lwz		r3,mpFlags(r2)				; r3 <- 1st mapping slot's flags
+			li		r11,0						; No dormant entries found yet
+			b		gadScanLoop					; Let the search begin!
+			
+			.align	5
+gadScanLoop:
+			addi	r12,r12,GV_SLOT_SZ			; Calculate next slot number to search
+			rlwinm	r12,r12,0,(GV_SLOT_MASK << GV_SLOT_SZ_LG2)
+												; Trim off any carry, wrapping into slot number range
+			mr		r31,r2						; r31 <- current mapping's address
+			or		r2,r22,r12					; r2 <- next mapping to search
+			mr		r6,r3						; r6 <- current mapping slot's flags
+			lwz		r3,mpFlags(r2)				; r3 <- next mapping slot's flags
+			rlwinm.	r0,r6,0,mpgFree				; Test free flag
+			bne		gadFillMap					; Join common path on hit (r31 points to free mapping)
+			rlwinm	r0,r6,0,mpgDormant			; Dormant entry?
+			xori	r0,r0,mpgDormant			; Invert dormant flag
+			or.		r0,r0,r11					; Skip all but the first dormant entry we see
+			bne		gadNotDorm					; Not dormant or we've already seen one
+			mr		r11,r31						; We'll use this dormant entry if we don't find a free one first
+gadNotDorm:	bdnz	gadScanLoop					; Iterate
+
+			mr		r31,r2						; r31 <- final mapping's address
+			rlwinm.	r0,r6,0,mpgFree				; Test free flag in final mapping
+			bne		gadFillMap					; Join common path on hit (r31 points to dormant mapping)
+			rlwinm	r0,r6,0,mpgDormant			; Dormant entry?
+			xori	r0,r0,mpgDormant			; Invert dormant flag
+			or.		r0,r0,r11					; Skip all but the first dormant entry we see
+			bne		gadCkDormant				; Not dormant or we've already seen one
+			mr		r11,r31						; We'll use this dormant entry if we don't find a free one first
+
+gadCkDormant:
+			mr.		r31,r11						; Get dormant mapping, if any, and test
+			bne		gadUpCursor					; Go update the cursor, we'll take the dormant entry
+			
+gadSteal:
+			lbz		r12,mpgCursor(r22)			; Get group's cursor
+			rlwinm	r12,r12,GV_SLOT_SZ_LG2,(GV_SLOT_MASK << GV_SLOT_SZ_LG2)
+												; Prepare to address slot at cursor
+			or		r31,r22,r12					; r31 <- address of mapping to steal
+
+			bt++	pf64Bitb,gadDscon64			; Handle 64-bit disconnect separately
+			bl		mapInvPte32					; Disconnect PTE, invalidate, gather ref and change
+												; r31 <- mapping's physical address
+												; r3  -> PTE slot physical address
+												; r4  -> High-order 32 bits of PTE
+												; r5  -> Low-order  32 bits of PTE
+												; r6  -> PCA
+												; r7  -> PCA physical address
+			rlwinm	r2,r3,29,29,31				; Get PTE's slot number in the PTEG (8-byte PTEs)
+			b		gadFreePTE					; Join 64-bit path to release the PTE			
+gadDscon64:	bl		mapInvPte64					; Disconnect PTE, invalidate, gather ref and change
+			rlwinm	r2,r3,28,29,31				; Get PTE's slot number in the PTEG (16-byte PTEs)
+gadFreePTE: mr.		r3,r3						; Was there a valid PTE?
+			beq-	gadUpCursor					; No valid PTE, we're almost done
+			lis		r0,0x8000					; Prepare free bit for this slot
+			srw		r0,r0,r2					; Position free bit
+			or		r6,r6,r0					; Set it in our PCA image
+			lwz		r8,mpPte(r31)				; Get PTE pointer
+			rlwinm	r8,r8,0,~mpHValid			; Make the pointer invalid
+			stw		r8,mpPte(r31)				; Save invalidated PTE pointer
+			eieio								; Synchronize all previous updates (mapInvPtexx didn't)
+			stw		r6,0(r7)					; Update PCA and unlock the PTEG
+
+gadUpCursor:
+			rlwinm	r12,r31,(32-GV_SLOT_SZ_LG2),GV_SLOT_MASK
+												; Recover slot number from stolen mapping's address
+			addi	r12,r12,1					; Increment slot number
+			rlwinm	r12,r12,0,GV_SLOT_MASK		; Clip to slot number range
+			stb		r12,mpgCursor(r22)			; Update group's cursor
+
+			lwz		r3,mpPAddr(r31)				; r3 <- physical 4K-page number
+			bl		mapFindLockPN				; Find 'n' lock this page's physent
+			mr.		r26,r3						; Got lock on our physent?
+			beq--	gadBadPLock					; No, time to bail out
+
+			crset	cr1_eq						; cr1_eq <- previous link is the anchor
+			bt++	pf64Bitb,gadRemove64		; Use 64-bit version on 64-bit machine
+			la		r11,ppLink+4(r26)			; Point to chain anchor
+			lwz		r9,ppLink+4(r26)			; Get chain anchor
+			rlwinm.	r9,r9,0,~ppFlags			; Remove flags, yielding 32-bit physical chain pointer
+gadRemLoop:	beq-	gadPEMissMiss				; End of chain, this is not good
+			cmplw	r9,r31						; Is this the mapping to remove?
+			lwz		r8,mpAlias+4(r9)			; Get forward chain pointer
+			bne		gadRemNext					; No, chain onward
+			bt		cr1_eq,gadRemRetry			; Mapping to remove is chained from anchor
+			stw		r8,0(r11)					; Unchain gpv->phys mapping
+			b		gadDelDone					; Finish deleting mapping
+gadRemRetry:
+			lwarx	r0,0,r11					; Get previous link
+			rlwimi	r0,r8,0,~ppFlags			; Insert new forward pointer whilst preserving flags
+			stwcx.	r0,0,r11					; Update previous link
+			bne-	gadRemRetry					; Lost reservation, retry
+			b		gadDelDone					; Finish deleting mapping
+			
+gadRemNext:	la		r11,mpAlias+4(r9)			; Point to (soon to be) previous link
+			crclr	cr1_eq						; ~cr1_eq <- Previous link is not the anchor
+			mr.		r9,r8						; Does next entry exist?
+			b		gadRemLoop					; Carry on
+
+gadRemove64:
+			li		r7,ppLFAmask				; Get mask to clean up mapping pointer
+			rotrdi	r7,r7,ppLFArrot				; Rotate clean up mask to get 0xF0000000000000000F
+			la		r11,ppLink(r26)				; Point to chain anchor
+			ld		r9,ppLink(r26)				; Get chain anchor
+			andc.	r9,r9,r7					; Remove flags, yielding 64-bit physical chain pointer
+gadRem64Lp:	beq--	gadPEMissMiss				; End of chain, this is not good
+			cmpld	r9,r31						; Is this the mapping to remove?
+			ld		r8,mpAlias(r9)				; Get forward chain pinter
+			bne		gadRem64Nxt					; Not mapping to remove, chain on, dude
+			bt		cr1_eq,gadRem64Rt			; Mapping to remove is chained from anchor
+			std		r8,0(r11)					; Unchain gpv->phys mapping
+			b		gadDelDone					; Finish deleting mapping
+gadRem64Rt:	ldarx	r0,0,r11					; Get previous link
+			and		r0,r0,r7					; Get flags
+			or		r0,r0,r8					; Insert new forward pointer
+			stdcx.	r0,0,r11					; Slam it back in
+			bne--	gadRem64Rt					; Lost reservation, retry
+			b		gadDelDone					; Finish deleting mapping
+
+			.align	5		
+gadRem64Nxt:
+			la		r11,mpAlias(r9)				; Point to (soon to be) previous link
+			crclr	cr1_eq						; ~cr1_eq <- Previous link is not the anchor
+			mr.		r9,r8						; Does next entry exist?
+			b		gadRem64Lp					; Carry on
+			
+gadDelDone:
+			mr		r3,r26						; Get physent address
+			bl		mapPhysUnlock				; Unlock physent chain
+
+gadFillMap:
+			lwz		r12,pmapSpace(r28)			; Get guest space id number
+			li		r2,0						; Get a zero
+			stw		r24,mpFlags(r31)			; Set mapping's flags
+			sth		r12,mpSpace(r31)			; Set mapping's space id number
+			stw		r2,mpPte(r31)				; Set mapping's pte pointer invalid
+			stw		r29,mpPAddr(r31)			; Set mapping's physical address
+			bt++	pf64Bitb,gadVA64			; Use 64-bit version on 64-bit machine
+			stw		r30,mpVAddr+4(r31)			; Set mapping's virtual address (w/flags)
+			b		gadChain					; Continue with chaining mapping to physent
+gadVA64:	std		r30,mpVAddr(r31)			; Set mapping's virtual address (w/flags)
+			
+gadChain:	mr		r3,r29						; r3 <- physical frame address
+			bl		mapFindLockPN				; Find 'n' lock this page's physent
+			mr.		r26,r3						; Got lock on our physent?
+			beq--	gadBadPLock					; No, time to bail out
+
+			bt++	pf64Bitb,gadChain64			; Use 64-bit version on 64-bit machine
+			lwz		r12,ppLink+4(r26)			; Get forward chain
+			rlwinm	r11,r12,0,~ppFlags			; Get physent's forward pointer sans flags
+			rlwimi	r12,r31,0,~ppFlags			; Insert new mapping, preserve physent flags
+			stw		r11,mpAlias+4(r31)			; New mapping will head chain
+			stw		r12,ppLink+4(r26)			; Point physent to new mapping
+			b		gadFinish					; All over now...
+
+gadChain64:	li		r7,ppLFAmask				; Get mask to clean up mapping pointer
+			rotrdi	r7,r7,ppLFArrot				; Rotate clean up mask to get 0xF0000000000000000F
+			ld		r12,ppLink(r26)				; Get forward chain
+			andc	r11,r12,r7					; Get physent's forward chain pointer sans flags
+			and		r12,r12,r7					; Isolate pointer's flags
+			or		r12,r12,r31					; Insert new mapping's address forming pointer
+			std		r11,mpAlias(r31)			; New mapping will head chain
+			std		r12,ppLink(r26)				; Point physent to new mapping
+
+gadFinish:	eieio								; Ensure new mapping is completely visible
+			
+gadRelPhy:	mr		r3,r26						; r3 <- physent addr
+			bl		mapPhysUnlock				; Unlock physent chain
+			
+gadRelPmap:	la		r3,pmapSXlk(r27)			; r3 <- host pmap search lock phys addr
+			bl		sxlkUnlock					; Release host pmap search lock
+			
+			bt++	pf64Bitb,gadRtn64			; Handle 64-bit separately
+			mtmsr	r25							; Restore 'rupts, translation
+			isync								; Throw a small wrench into the pipeline
+			b		gadPopFrame					; Nothing to do now but pop a frame and return
+gadRtn64:	mtmsrd	r25							; Restore 'rupts, translation, 32-bit mode
+gadPopFrame:		
+			lwz		r0,(FM_ALIGN(gadStackSize)+FM_SIZE+FM_LR_SAVE)(r1)
+												; Get caller's return address
+			lwz		r31,FM_ARG0+0x00(r1)		; Restore non-volatile r31
+			lwz		r30,FM_ARG0+0x04(r1)		; Restore non-volatile r30
+			lwz		r29,FM_ARG0+0x08(r1)		; Restore non-volatile r29
+			lwz		r28,FM_ARG0+0x0C(r1)		; Restore non-volatile r28
+			mtlr	r0							; Prepare return address
+			lwz		r27,FM_ARG0+0x10(r1)		; Restore non-volatile r27
+			lwz		r26,FM_ARG0+0x14(r1)		; Restore non-volatile r26
+			lwz		r25,FM_ARG0+0x18(r1)		; Restore non-volatile r25
+			lwz		r24,FM_ARG0+0x1C(r1)		; Restore non-volatile r24
+			lwz		r23,FM_ARG0+0x20(r1)		; Restore non-volatile r23
+			lwz		r22,FM_ARG0+0x24(r1)		; Restore non-volatile r22
+			lwz		r1,0(r1)					; Pop stack frame
+			blr									; Return to caller
+
+gadPEMissMiss:
+gadBadPLock:
+			lis		r0,hi16(Choke)				; Dmitri, you know how we've always talked about the
+			ori		r0,r0,lo16(Choke)			;  possibility of something going wrong with the bomb?
+			li		r3,failMapping				; The BOMB, Dmitri.
+			sc									; The hydrogen bomb.
+
+
+;
+;			Guest shadow assist -- supend a guest mapping
+;
+;			Suspends a guest mapping.
+;
+;			Parameters:
+;				r3 : address of host pmap, 32-bit kernel virtual address
+;				r4 : address of guest pmap, 32-bit kernel virtual address
+;				r5 : guest virtual address, high-order 32 bits
+;				r6 : guest virtual address,  low-order 32 bits
+;
+;			Non-volatile register usage:
+;				r26 : VMM extension block's physical address
+;				r27 : host pmap physical address
+;				r28 : guest pmap physical address
+;				r29 : caller's msr image from mapSetUp
+;				r30 : guest virtual address
+;				r31 : gva->phys mapping's physical address
+;
+
+			.align	5
+			.globl	EXT(hw_susp_map_gv)
+
+LEXT(hw_susp_map_gv)
+
+#define gsuStackSize ((31-26+1)*4)+4
+
+			stwu	r1,-(FM_ALIGN(gsuStackSize)+FM_SIZE)(r1)
+												; Mint a new stack frame
+			mflr	r0							; Get caller's return address
+			mfsprg	r11,2						; Get feature flags
+			mtcrf	0x02,r11					; Insert feature flags into cr6
+			stw		r0,(FM_ALIGN(gsuStackSize)+FM_SIZE+FM_LR_SAVE)(r1)
+												; Save caller's return address
+			stw		r31,FM_ARG0+0x00(r1)		; Save non-volatile r31
+			stw		r30,FM_ARG0+0x04(r1)		; Save non-volatile r30
+			stw		r29,FM_ARG0+0x08(r1)		; Save non-volatile r29
+			stw		r28,FM_ARG0+0x0C(r1)		; Save non-volatile r28
+			stw		r27,FM_ARG0+0x10(r1)		; Save non-volatile r27
+			stw		r26,FM_ARG0+0x14(r1)		; Save non-volatile r26
+
+			rlwinm	r30,r6,0,0xFFFFF000			; Clean up low-order 32 bits of guest vaddr
+
+			lwz		r11,pmapVmmExt(r3)			; r11 <- VMM pmap extension block vaddr
+			lwz		r9,pmapSpace(r4)			; r9 <- guest space ID number
+			bt++	pf64Bitb,gsu64Salt			; Test for 64-bit machine
+
+			lwz		r26,pmapVmmExtPhys+4(r3)	; r26 <- VMM pmap extension block paddr
+			lwz		r27,pmapvr+4(r3)			; Get 32-bit virt<->real host pmap conversion salt
+			lwz		r28,pmapvr+4(r4)			; Get 32-bit virt<->real guest pmap conversion salt
+			la		r31,VMX_HPIDX_OFFSET(r11)	; r31 <- base of hash page physical index
+			srwi	r11,r30,12					; Form shadow hash:
+			xor		r11,r11,r9					; 	spaceID ^ (vaddr >> 12) 
+			rlwinm	r10,r11,GV_HPAGE_SHIFT,GV_HPAGE_MASK
+												; Form index offset from hash page number
+			add		r31,r31,r10					; r31 <- hash page index entry
+			lwz		r31,4(r31)					; r31 <- hash page paddr
+			rlwimi	r31,r11,GV_HGRP_SHIFT,GV_HGRP_MASK
+												; r31 <- hash group paddr
+			b		gsuStart					; Get to it			
+gsu64Salt:	rldimi	r30,r5,32,0					; Insert high-order 32 bits of 64-bit guest vaddr
+			ld		r26,pmapVmmExtPhys(r3)		; r26 <- VMM pmap extension block paddr
+			ld		r27,pmapvr(r3)				; Get 64-bit virt<->real host pmap conversion salt
+			ld		r28,pmapvr(r4)				; Get 64-bit virt<->real guest pmap conversion salt
+			la		r31,VMX_HPIDX_OFFSET(r11)	; r31 <- base of hash page physical index
+			srwi	r11,r30,12					; Form shadow hash:
+			xor		r11,r11,r9					; 	spaceID ^ (vaddr >> 12) 
+			rlwinm	r10,r11,GV_HPAGE_SHIFT,GV_HPAGE_MASK
+												; Form index offset from hash page number
+			add		r31,r31,r10					; r31 <- hash page index entry
+			ld		r31,0(r31)					; r31 <- hash page paddr
+			insrdi	r31,r11,GV_GRPS_PPG_LG2,64-(GV_HGRP_SHIFT+GV_GRPS_PPG_LG2)
+												; r31 <- hash group paddr
+
+gsuStart:	xor		r27,r3,r27					; Convert host pmap_t virt->real
+			xor		r28,r4,r28					; Convert guest pmap_t virt->real
+			bl		EXT(mapSetUp)				; Disable 'rupts, translation, maybe enter 64-bit mode
+			mr		r29,r11						; Save caller's msr image
+
+			la		r3,pmapSXlk(r27)			; r3 <- host pmap's search lock address
+			bl		sxlkExclusive				; Get lock exclusive
+
+			li		r0,(GV_SLOTS - 1)			; Prepare to iterate over mapping slots
+			mtctr	r0							;  in this group
+			bt++	pf64Bitb,gsu64Search		; Test for 64-bit machine
+
+			lwz		r3,mpFlags(r31)				; r3 <- 1st mapping slot's flags
+			lhz		r4,mpSpace(r31)				; r4 <- 1st mapping slot's space ID 
+			lwz		r5,mpVAddr+4(r31)			; r5 <- 1st mapping slot's virtual address
+			b		gsu32SrchLp					; Let the search begin!
+			
+			.align	5
+gsu32SrchLp:
+			mr		r6,r3						; r6 <- current mapping slot's flags
+			lwz		r3,mpFlags+GV_SLOT_SZ(r31)	; r3 <- next mapping slot's flags
+			mr		r7,r4						; r7 <- current mapping slot's space ID
+			lhz		r4,mpSpace+GV_SLOT_SZ(r31)	; r4 <- next mapping slot's space ID
+			clrrwi	r8,r5,12					; r8 <- current mapping slot's virtual addr w/o flags
+			lwz		r5,mpVAddr+4+GV_SLOT_SZ(r31); r5 <- next mapping slot's virtual addr
+			andi.	r11,r6,mpgFree+mpgDormant	; Isolate guest free and dormant flags
+			xor		r7,r7,r9					; Compare space ID
+			or		r0,r11,r7					; r0 <- !(!free && !dormant && space match)
+			xor		r8,r8,r30					; Compare virtual address
+			or.		r0,r0,r8					; cr0_eq <- !free && !dormant && space match && virtual addr match
+			beq		gsuSrchHit					; Join common path on hit (r31 points to guest mapping)
+			
+			addi	r31,r31,GV_SLOT_SZ			; r31 <- next mapping slot		
+			bdnz	gsu32SrchLp					; Iterate
+
+			mr		r6,r3						; r6 <- current mapping slot's flags
+			clrrwi	r5,r5,12					; Remove flags from virtual address			
+			andi.	r11,r6,mpgFree+mpgDormant	; Isolate guest free and dormant flags
+			xor		r4,r4,r9					; Compare space ID
+			or		r0,r11,r4					; r0 <- !(!free && !dormant && space match)
+			xor		r5,r5,r30					; Compare virtual address
+			or.		r0,r0,r5					; cr0_eq <- !free && !dormant && space match && virtual addr match
+			beq		gsuSrchHit					; Join common path on hit (r31 points to guest mapping)
+			b		gsuSrchMiss					; No joy in our hash group
+			
+gsu64Search:			
+			lwz		r3,mpFlags(r31)				; r3 <- 1st mapping slot's flags
+			lhz		r4,mpSpace(r31)				; r4 <- 1st mapping slot's space ID 
+			ld		r5,mpVAddr(r31)				; r5 <- 1st mapping slot's virtual address
+			b		gsu64SrchLp					; Let the search begin!
+			
+			.align	5
+gsu64SrchLp:
+			mr		r6,r3						; r6 <- current mapping slot's flags
+			lwz		r3,mpFlags+GV_SLOT_SZ(r31)	; r3 <- next mapping slot's flags
+			mr		r7,r4						; r7 <- current mapping slot's space ID
+			lhz		r4,mpSpace+GV_SLOT_SZ(r31)	; r4 <- next mapping slot's space ID
+			clrrdi	r8,r5,12					; r8 <- current mapping slot's virtual addr w/o flags
+			ld		r5,mpVAddr+GV_SLOT_SZ(r31)	; r5 <- next mapping slot's virtual addr
+			andi.	r11,r6,mpgFree+mpgDormant	; Isolate guest free and dormant flags
+			xor		r7,r7,r9					; Compare space ID
+			or		r0,r11,r7					; r0 <- !(!free && !dormant && space match)
+			xor		r8,r8,r30					; Compare virtual address
+			or.		r0,r0,r8					; cr0_eq <- !free && !dormant && space match && virtual addr match
+			beq		gsuSrchHit					; Join common path on hit (r31 points to guest mapping)
+			
+			addi	r31,r31,GV_SLOT_SZ			; r31 <- next mapping slot		
+			bdnz	gsu64SrchLp					; Iterate
+
+			mr		r6,r3						; r6 <- current mapping slot's flags
+			clrrdi	r5,r5,12					; Remove flags from virtual address			
+			andi.	r11,r6,mpgFree+mpgDormant	; Isolate guest free and dormant flags
+			xor		r4,r4,r9					; Compare space ID
+			or		r0,r11,r4					; r0 <- !(!free && !dormant && space match)
+			xor		r5,r5,r30					; Compare virtual address
+			or.		r0,r0,r5					; cr0_eq <- !free && !dormant && space match && virtual addr match
+			bne		gsuSrchMiss					; No joy in our hash group
+			
+gsuSrchHit:
+			bt++	pf64Bitb,gsuDscon64			; Handle 64-bit disconnect separately
+			bl		mapInvPte32					; Disconnect PTE, invalidate, gather ref and change
+												; r31 <- mapping's physical address
+												; r3  -> PTE slot physical address
+												; r4  -> High-order 32 bits of PTE
+												; r5  -> Low-order  32 bits of PTE
+												; r6  -> PCA
+												; r7  -> PCA physical address
+			rlwinm	r2,r3,29,29,31				; Get PTE's slot number in the PTEG (8-byte PTEs)
+			b		gsuFreePTE					; Join 64-bit path to release the PTE			
+gsuDscon64:	bl		mapInvPte64					; Disconnect PTE, invalidate, gather ref and change
+			rlwinm	r2,r3,28,29,31				; Get PTE's slot number in the PTEG (16-byte PTEs)
+gsuFreePTE: mr.		r3,r3						; Was there a valid PTE?
+			beq-	gsuNoPTE					; No valid PTE, we're almost done
+			lis		r0,0x8000					; Prepare free bit for this slot
+			srw		r0,r0,r2					; Position free bit
+			or		r6,r6,r0					; Set it in our PCA image
+			lwz		r8,mpPte(r31)				; Get PTE pointer
+			rlwinm	r8,r8,0,~mpHValid			; Make the pointer invalid
+			stw		r8,mpPte(r31)				; Save invalidated PTE pointer
+			eieio								; Synchronize all previous updates (mapInvPtexx didn't)
+			stw		r6,0(r7)					; Update PCA and unlock the PTEG
+			
+gsuNoPTE:	lwz		r3,mpFlags(r31)				; Get mapping's flags
+			ori		r3,r3,mpgDormant			; Mark entry dormant
+			stw		r3,mpFlags(r31)				; Save updated flags
+			eieio								; Ensure update is visible when we unlock
+
+gsuSrchMiss:
+			la		r3,pmapSXlk(r27)			; r3 <- host pmap search lock phys addr
+			bl		sxlkUnlock					; Release host pmap search lock
+			
+			bt++	pf64Bitb,gsuRtn64			; Handle 64-bit separately
+			mtmsr	r29							; Restore 'rupts, translation
+			isync								; Throw a small wrench into the pipeline
+			b		gsuPopFrame					; Nothing to do now but pop a frame and return
+gsuRtn64:	mtmsrd	r29							; Restore 'rupts, translation, 32-bit mode
+gsuPopFrame:		
+			lwz		r0,(FM_ALIGN(gsuStackSize)+FM_SIZE+FM_LR_SAVE)(r1)
+												; Get caller's return address
+			lwz		r31,FM_ARG0+0x00(r1)		; Restore non-volatile r31
+			lwz		r30,FM_ARG0+0x04(r1)		; Restore non-volatile r30
+			lwz		r29,FM_ARG0+0x08(r1)		; Restore non-volatile r29
+			lwz		r28,FM_ARG0+0x0C(r1)		; Restore non-volatile r28
+			mtlr	r0							; Prepare return address
+			lwz		r27,FM_ARG0+0x10(r1)		; Restore non-volatile r27
+			lwz		r26,FM_ARG0+0x14(r1)		; Restore non-volatile r26
+			lwz		r1,0(r1)					; Pop stack frame
+			blr									; Return to caller
+
+;
+;			Guest shadow assist -- test guest mapping reference and change bits
+;
+;			Locates the specified guest mapping, and if it exists gathers its reference
+;			and change bit, optionallyÊresetting them.
+;
+;			Parameters:
+;				r3 : address of host pmap, 32-bit kernel virtual address
+;				r4 : address of guest pmap, 32-bit kernel virtual address
+;				r5 : guest virtual address, high-order 32 bits
+;				r6 : guest virtual address,  low-order 32 bits
+;				r7 : reset boolean
+;
+;			Non-volatile register usage:
+;				r24 : VMM extension block's physical address
+;				r25 : return code (w/reference and change bits)
+;				r26 : reset boolean
+;				r27 : host pmap physical address
+;				r28 : guest pmap physical address
+;				r29 : caller's msr image from mapSetUp
+;				r30 : guest virtual address
+;				r31 : gva->phys mapping's physical address
+;
+
+			.align	5
+			.globl	EXT(hw_test_rc_gv)
+
+LEXT(hw_test_rc_gv)
+
+#define gtdStackSize ((31-24+1)*4)+4
+
+			stwu	r1,-(FM_ALIGN(gtdStackSize)+FM_SIZE)(r1)
+												; Mint a new stack frame
+			mflr	r0							; Get caller's return address
+			mfsprg	r11,2						; Get feature flags
+			mtcrf	0x02,r11					; Insert feature flags into cr6
+			stw		r0,(FM_ALIGN(gtdStackSize)+FM_SIZE+FM_LR_SAVE)(r1)
+												; Save caller's return address
+			stw		r31,FM_ARG0+0x00(r1)		; Save non-volatile r31
+			stw		r30,FM_ARG0+0x04(r1)		; Save non-volatile r30
+			stw		r29,FM_ARG0+0x08(r1)		; Save non-volatile r29
+			stw		r28,FM_ARG0+0x0C(r1)		; Save non-volatile r28
+			stw		r27,FM_ARG0+0x10(r1)		; Save non-volatile r27
+			stw		r26,FM_ARG0+0x14(r1)		; Save non-volatile r26
+			stw		r25,FM_ARG0+0x18(r1)		; Save non-volatile r25
+			stw		r24,FM_ARG0+0x1C(r1)		; Save non-volatile r24
+
+			rlwinm	r30,r6,0,0xFFFFF000			; Clean up low-order 20 bits of guest vaddr
+
+			lwz		r11,pmapVmmExt(r3)			; r11 <- VMM pmap extension block vaddr
+			lwz		r9,pmapSpace(r4)			; r9 <- guest space ID number
+
+			bt++	pf64Bitb,gtd64Salt			; Test for 64-bit machine
+
+			lwz		r24,pmapVmmExtPhys+4(r3)	; r24 <- VMM pmap extension block paddr
+			lwz		r27,pmapvr+4(r3)			; Get 32-bit virt<->real host pmap conversion salt
+			lwz		r28,pmapvr+4(r4)			; Get 32-bit virt<->real guest pmap conversion salt
+			la		r31,VMX_HPIDX_OFFSET(r11)	; r31 <- base of hash page physical index
+			srwi	r11,r30,12					; Form shadow hash:
+			xor		r11,r11,r9					; 	spaceID ^ (vaddr >> 12) 
+			rlwinm	r10,r11,GV_HPAGE_SHIFT,GV_HPAGE_MASK
+												; Form index offset from hash page number
+			add		r31,r31,r10					; r31 <- hash page index entry
+			lwz		r31,4(r31)					; r31 <- hash page paddr
+			rlwimi	r31,r11,GV_HGRP_SHIFT,GV_HGRP_MASK
+												; r31 <- hash group paddr
+			b		gtdStart					; Get to it			
+
+gtd64Salt:	rldimi	r30,r5,32,0					; Insert high-order 32 bits of 64-bit guest vaddr
+			ld		r24,pmapVmmExtPhys(r3)		; r24 <- VMM pmap extension block paddr
+			ld		r27,pmapvr(r3)				; Get 64-bit virt<->real host pmap conversion salt
+			ld		r28,pmapvr(r4)				; Get 64-bit virt<->real guest pmap conversion salt
+			la		r31,VMX_HPIDX_OFFSET(r11)	; r31 <- base of hash page physical index
+			srwi	r11,r30,12					; Form shadow hash:
+			xor		r11,r11,r9					; 	spaceID ^ (vaddr >> 12) 
+			rlwinm	r10,r11,GV_HPAGE_SHIFT,GV_HPAGE_MASK
+												; Form index offset from hash page number
+			add		r31,r31,r10					; r31 <- hash page index entry
+			ld		r31,0(r31)					; r31 <- hash page paddr
+			insrdi	r31,r11,GV_GRPS_PPG_LG2,64-(GV_HGRP_SHIFT+GV_GRPS_PPG_LG2)
+												; r31 <- hash group paddr
+
+gtdStart:	xor		r27,r3,r27					; Convert host pmap_t virt->real
+			xor		r28,r4,r28					; Convert guest pmap_t virt->real
+			mr		r26,r7						; Save reset boolean
+			bl		EXT(mapSetUp)				; Disable 'rupts, translation, maybe enter 64-bit mode
+			mr		r29,r11						; Save caller's msr image
+
+			la		r3,pmapSXlk(r27)			; r3 <- host pmap's search lock address
+			bl		sxlkExclusive				; Get lock exclusive
+
+			li		r0,(GV_SLOTS - 1)			; Prepare to iterate over mapping slots
+			mtctr	r0							;  in this group
+			bt++	pf64Bitb,gtd64Search		; Test for 64-bit machine
+
+			lwz		r3,mpFlags(r31)				; r3 <- 1st mapping slot's flags
+			lhz		r4,mpSpace(r31)				; r4 <- 1st mapping slot's space ID 
+			lwz		r5,mpVAddr+4(r31)			; r5 <- 1st mapping slot's virtual address
+			b		gtd32SrchLp					; Let the search begin!
+			
+			.align	5
+gtd32SrchLp:
+			mr		r6,r3						; r6 <- current mapping slot's flags
+			lwz		r3,mpFlags+GV_SLOT_SZ(r31)	; r3 <- next mapping slot's flags
+			mr		r7,r4						; r7 <- current mapping slot's space ID
+			lhz		r4,mpSpace+GV_SLOT_SZ(r31)	; r4 <- next mapping slot's space ID
+			clrrwi	r8,r5,12					; r8 <- current mapping slot's virtual addr w/o flags
+			lwz		r5,mpVAddr+4+GV_SLOT_SZ(r31); r5 <- next mapping slot's virtual addr
+			andi.	r11,r6,mpgFree+mpgDormant	; Isolate guest free and dormant flags
+			xor		r7,r7,r9					; Compare space ID
+			or		r0,r11,r7					; r0 <- !(!free && !dormant && space match)
+			xor		r8,r8,r30					; Compare virtual address
+			or.		r0,r0,r8					; cr0_eq <- !free && !dormant && space match && virtual addr match
+			beq		gtdSrchHit					; Join common path on hit (r31 points to guest mapping)
+			
+			addi	r31,r31,GV_SLOT_SZ			; r31 <- next mapping slot		
+			bdnz	gtd32SrchLp					; Iterate
+
+			mr		r6,r3						; r6 <- current mapping slot's flags
+			clrrwi	r5,r5,12					; Remove flags from virtual address			
+			andi.	r11,r6,mpgFree+mpgDormant	; Isolate guest free and dormant flags
+			xor		r4,r4,r9					; Compare space ID
+			or		r0,r11,r4					; r0 <- !(!free && !dormant && space match)
+			xor		r5,r5,r30					; Compare virtual address
+			or.		r0,r0,r5					; cr0_eq <- !free && !dormant && space match && virtual addr match
+			beq		gtdSrchHit					; Join common path on hit (r31 points to guest mapping)
+			b		gtdSrchMiss					; No joy in our hash group
+			
+gtd64Search:			
+			lwz		r3,mpFlags(r31)				; r3 <- 1st mapping slot's flags
+			lhz		r4,mpSpace(r31)				; r4 <- 1st mapping slot's space ID 
+			ld		r5,mpVAddr(r31)				; r5 <- 1st mapping slot's virtual address
+			b		gtd64SrchLp					; Let the search begin!
+			
+			.align	5
+gtd64SrchLp:
+			mr		r6,r3						; r6 <- current mapping slot's flags
+			lwz		r3,mpFlags+GV_SLOT_SZ(r31)	; r3 <- next mapping slot's flags
+			mr		r7,r4						; r7 <- current mapping slot's space ID
+			lhz		r4,mpSpace+GV_SLOT_SZ(r31)	; r4 <- next mapping slot's space ID
+			clrrdi	r8,r5,12					; r8 <- current mapping slot's virtual addr w/o flags
+			ld		r5,mpVAddr+GV_SLOT_SZ(r31)	; r5 <- next mapping slot's virtual addr
+			andi.	r11,r6,mpgFree+mpgDormant	; Isolate guest free and dormant flags
+			xor		r7,r7,r9					; Compare space ID
+			or		r0,r11,r7					; r0 <- !(!free && !dormant && space match)
+			xor		r8,r8,r30					; Compare virtual address
+			or.		r0,r0,r8					; cr0_eq <- !free && !dormant && space match && virtual addr match
+			beq		gtdSrchHit					; Join common path on hit (r31 points to guest mapping)
+			
+			addi	r31,r31,GV_SLOT_SZ			; r31 <- next mapping slot		
+			bdnz	gtd64SrchLp					; Iterate
+
+			mr		r6,r3						; r6 <- current mapping slot's flags
+			clrrdi	r5,r5,12					; Remove flags from virtual address			
+			andi.	r11,r6,mpgFree+mpgDormant	; Isolate guest free and dormant flags
+			xor		r4,r4,r9					; Compare space ID
+			or		r0,r11,r4					; r0 <- !(!free && !dormant && space match)
+			xor		r5,r5,r30					; Compare virtual address
+			or.		r0,r0,r5					; cr0_eq <- !free && !dormant && space match && virtual addr match
+			bne		gtdSrchMiss					; No joy in our hash group
+			
+gtdSrchHit:
+			bt++	pf64Bitb,gtdDo64			; Split for 64 bit
+			
+			bl		mapInvPte32					; Invalidate and lock PTEG, also merge into physent
+						
+			cmplwi	cr1,r26,0					; Do we want to clear RC?
+			lwz		r12,mpVAddr+4(r31)			; Get the bottom of the mapping vaddr field
+			mr.		r3,r3						; Was there a previously valid PTE?
+			li		r0,lo16(mpR|mpC)			; Get bits to clear
+
+			and		r25,r5,r0					; Copy RC bits into result
+			beq++	cr1,gtdNoClr32				; Nope...
+			
+			andc	r12,r12,r0					; Clear mapping copy of RC
+			andc	r5,r5,r0					; Clear PTE copy of RC
+			sth		r12,mpVAddr+6(r31)			; Set the new RC in mapping			
+
+gtdNoClr32:	beq--	gtdNoOld32					; No previously valid PTE...
+			
+			sth		r5,6(r3)					; Store updated RC in PTE
+			eieio								; Make sure we do not reorder
+			stw		r4,0(r3)					; Revalidate the PTE
+
+			eieio								; Make sure all updates come first
+			stw		r6,0(r7)					; Unlock PCA
+
+gtdNoOld32:	la		r3,pmapSXlk(r27)			; Point to the pmap search lock
+			bl		sxlkUnlock					; Unlock the search list
+			b		gtdR32						; Join common...
+
+			.align	5			
+			
+			
+gtdDo64:	bl		mapInvPte64					; Invalidate and lock PTEG, also merge into physent
+						
+			cmplwi	cr1,r26,0					; Do we want to clear RC?
+			lwz		r12,mpVAddr+4(r31)			; Get the bottom of the mapping vaddr field
+			mr.		r3,r3						; Was there a previously valid PTE?
+			li		r0,lo16(mpR|mpC)			; Get bits to clear
+
+			and		r25,r5,r0					; Copy RC bits into result
+			beq++	cr1,gtdNoClr64				; Nope...
+			
+			andc	r12,r12,r0					; Clear mapping copy of RC
+			andc	r5,r5,r0					; Clear PTE copy of RC
+			sth		r12,mpVAddr+6(r31)			; Set the new RC			
+
+gtdNoClr64:	beq--	gtdNoOld64					; Nope, no pevious pte...
+			
+			sth		r5,14(r3)					; Store updated RC
+			eieio								; Make sure we do not reorder
+			std		r4,0(r3)					; Revalidate the PTE
+
+			eieio								; Make sure all updates come first
+			stw		r6,0(r7)					; Unlock PCA
+
+gtdNoOld64:	la		r3,pmapSXlk(r27)			; Point to the pmap search lock
+			bl		sxlkUnlock					; Unlock the search list
+			b		gtdR64						; Join common...
+
+gtdSrchMiss:
+			la		r3,pmapSXlk(r27)			; Point to the pmap search lock
+			bl		sxlkUnlock					; Unlock the search list
+			li		r25,mapRtNotFnd				; Get ready to return not found
+			bt++	pf64Bitb,gtdR64				; Test for 64-bit machine
+			
+gtdR32:		mtmsr	r29							; Restore caller's msr image
+			isync
+			b		gtdEpilog
+			
+gtdR64:		mtmsrd	r29							; Restore caller's msr image
+
+gtdEpilog:	lwz		r0,(FM_ALIGN(gtdStackSize)+FM_SIZE+FM_LR_SAVE)(r1)
+												; Get caller's return address
+			mr		r3,r25						; Get return code
+			lwz		r31,FM_ARG0+0x00(r1)		; Restore non-volatile r31
+			lwz		r30,FM_ARG0+0x04(r1)		; Restore non-volatile r30
+			lwz		r29,FM_ARG0+0x08(r1)		; Restore non-volatile r29
+			lwz		r28,FM_ARG0+0x0C(r1)		; Restore non-volatile r28
+			mtlr	r0							; Prepare return address
+			lwz		r27,FM_ARG0+0x10(r1)		; Restore non-volatile r27
+			lwz		r26,FM_ARG0+0x14(r1)		; Restore non-volatile r26
+			lwz		r25,FM_ARG0+0x18(r1)		; Restore non-volatile r25
+			lwz		r24,FM_ARG0+0x1C(r1)		; Restore non-volatile r24
+			lwz		r1,0(r1)					; Pop stack frame
+			blr									; Return to caller
+
+;
+;			Guest shadow assist -- convert guest to host virtual address
+;
+;			Locates the specified guest mapping, and if it exists locates the
+;			first mapping belonging to its host on the physical chain and returns
+;			its virtual address.
+;
+;			Note that if there are multiple mappings belonging to this host
+;			chained to the physent to which the guest mapping is chained, then
+;			host virtual aliases exist for this physical address. If host aliases
+;			exist, then we select the first on the physent chain, making it 
+;			unpredictable which of the two or more possible host virtual addresses
+;			will be returned.
+;
+;			Parameters:
+;				r3 : address of guest pmap, 32-bit kernel virtual address
+;				r4 : guest virtual address, high-order 32 bits
+;				r5 : guest virtual address,  low-order 32 bits
+;
+;			Non-volatile register usage:
+;				r24 : physent physical address
+;				r25 : VMM extension block's physical address
+;				r26 : host virtual address
+;				r27 : host pmap physical address
+;				r28 : guest pmap physical address
+;				r29 : caller's msr image from mapSetUp
+;				r30 : guest virtual address
+;				r31 : gva->phys mapping's physical address
+;
+
+			.align	5
+			.globl	EXT(hw_gva_to_hva)
+
+LEXT(hw_gva_to_hva)
+
+#define gthStackSize ((31-24+1)*4)+4
+
+			stwu	r1,-(FM_ALIGN(gtdStackSize)+FM_SIZE)(r1)
+												; Mint a new stack frame
+			mflr	r0							; Get caller's return address
+			mfsprg	r11,2						; Get feature flags
+			mtcrf	0x02,r11					; Insert feature flags into cr6
+			stw		r0,(FM_ALIGN(gtdStackSize)+FM_SIZE+FM_LR_SAVE)(r1)
+												; Save caller's return address
+			stw		r31,FM_ARG0+0x00(r1)		; Save non-volatile r31
+			stw		r30,FM_ARG0+0x04(r1)		; Save non-volatile r30
+			stw		r29,FM_ARG0+0x08(r1)		; Save non-volatile r29
+			stw		r28,FM_ARG0+0x0C(r1)		; Save non-volatile r28
+			stw		r27,FM_ARG0+0x10(r1)		; Save non-volatile r27
+			stw		r26,FM_ARG0+0x14(r1)		; Save non-volatile r26
+			stw		r25,FM_ARG0+0x18(r1)		; Save non-volatile r25
+			stw		r24,FM_ARG0+0x1C(r1)		; Save non-volatile r24
+
+			rlwinm	r30,r5,0,0xFFFFF000			; Clean up low-order 32 bits of guest vaddr
+
+			lwz		r11,pmapVmmExt(r3)			; r11 <- VMM pmap extension block vaddr
+			lwz		r9,pmapSpace(r3)			; r9 <- guest space ID number
+
+			bt++	pf64Bitb,gth64Salt			; Test for 64-bit machine
+
+			lwz		r25,pmapVmmExtPhys+4(r3)	; r25 <- VMM pmap extension block paddr
+			lwz		r28,pmapvr+4(r3)			; Get 32-bit virt<->real guest pmap conversion salt
+			lwz		r27,vmxHostPmapPhys+4(r11)	; Get host pmap physical address
+			la		r31,VMX_HPIDX_OFFSET(r11)	; r31 <- base of hash page physical index
+			srwi	r11,r30,12					; Form shadow hash:
+			xor		r11,r11,r9					; 	spaceID ^ (vaddr >> 12) 
+			rlwinm	r10,r11,GV_HPAGE_SHIFT,GV_HPAGE_MASK
+												; Form index offset from hash page number
+			add		r31,r31,r10					; r31 <- hash page index entry
+			lwz		r31,4(r31)					; r31 <- hash page paddr
+			rlwimi	r31,r11,GV_HGRP_SHIFT,GV_HGRP_MASK
+												; r31 <- hash group paddr
+			b		gthStart					; Get to it			
+
+gth64Salt:	rldimi	r30,r4,32,0					; Insert high-order 32 bits of 64-bit guest vaddr
+			ld		r25,pmapVmmExtPhys(r3)		; r24 <- VMM pmap extension block paddr
+			ld		r28,pmapvr(r3)				; Get 64-bit virt<->real guest pmap conversion salt
+			ld		r27,vmxHostPmapPhys(r11)	; Get host pmap physical address
+			la		r31,VMX_HPIDX_OFFSET(r11)	; r31 <- base of hash page physical index
+			srwi	r11,r30,12					; Form shadow hash:
+			xor		r11,r11,r9					; 	spaceID ^ (vaddr >> 12) 
+			rlwinm	r10,r11,GV_HPAGE_SHIFT,GV_HPAGE_MASK
+												; Form index offset from hash page number
+			add		r31,r31,r10					; r31 <- hash page index entry
+			ld		r31,0(r31)					; r31 <- hash page paddr
+			insrdi	r31,r11,GV_GRPS_PPG_LG2,64-(GV_HGRP_SHIFT+GV_GRPS_PPG_LG2)
+												; r31 <- hash group paddr
+
+gthStart:	xor		r28,r3,r28					; Convert guest pmap_t virt->real
+			bl		EXT(mapSetUp)				; Disable 'rupts, translation, maybe enter 64-bit mode
+			mr		r29,r11						; Save caller's msr image
+
+			la		r3,pmapSXlk(r27)			; r3 <- host pmap's search lock address
+			bl		sxlkExclusive				; Get lock exclusive
+
+			li		r0,(GV_SLOTS - 1)			; Prepare to iterate over mapping slots
+			mtctr	r0							;  in this group
+			bt++	pf64Bitb,gth64Search		; Test for 64-bit machine
+
+			lwz		r3,mpFlags(r31)				; r3 <- 1st mapping slot's flags
+			lhz		r4,mpSpace(r31)				; r4 <- 1st mapping slot's space ID 
+			lwz		r5,mpVAddr+4(r31)			; r5 <- 1st mapping slot's virtual address
+			b		gth32SrchLp					; Let the search begin!
+			
+			.align	5
+gth32SrchLp:
+			mr		r6,r3						; r6 <- current mapping slot's flags
+			lwz		r3,mpFlags+GV_SLOT_SZ(r31)	; r3 <- next mapping slot's flags
+			mr		r7,r4						; r7 <- current mapping slot's space ID
+			lhz		r4,mpSpace+GV_SLOT_SZ(r31)	; r4 <- next mapping slot's space ID
+			clrrwi	r8,r5,12					; r8 <- current mapping slot's virtual addr w/o flags
+			lwz		r5,mpVAddr+4+GV_SLOT_SZ(r31); r5 <- next mapping slot's virtual addr
+			andi.	r11,r6,mpgFree+mpgDormant	; Isolate guest free and dormant flags
+			xor		r7,r7,r9					; Compare space ID
+			or		r0,r11,r7					; r0 <- !(!free && !dormant && space match)
+			xor		r8,r8,r30					; Compare virtual address
+			or.		r0,r0,r8					; cr0_eq <- !free && !dormant && space match && virtual addr match
+			beq		gthSrchHit					; Join common path on hit (r31 points to guest mapping)
+			
+			addi	r31,r31,GV_SLOT_SZ			; r31 <- next mapping slot		
+			bdnz	gth32SrchLp					; Iterate
+
+			mr		r6,r3						; r6 <- current mapping slot's flags
+			clrrwi	r5,r5,12					; Remove flags from virtual address			
+			andi.	r11,r6,mpgFree+mpgDormant	; Isolate guest free and dormant flags
+			xor		r4,r4,r9					; Compare space ID
+			or		r0,r11,r4					; r0 <- !(!free && !dormant && space match)
+			xor		r5,r5,r30					; Compare virtual address
+			or.		r0,r0,r5					; cr0_eq <- !free && !dormant && space match && virtual addr match
+			beq		gthSrchHit					; Join common path on hit (r31 points to guest mapping)
+			b		gthSrchMiss					; No joy in our hash group
+			
+gth64Search:			
+			lwz		r3,mpFlags(r31)				; r3 <- 1st mapping slot's flags
+			lhz		r4,mpSpace(r31)				; r4 <- 1st mapping slot's space ID 
+			ld		r5,mpVAddr(r31)				; r5 <- 1st mapping slot's virtual address
+			b		gth64SrchLp					; Let the search begin!
+			
+			.align	5
+gth64SrchLp:
+			mr		r6,r3						; r6 <- current mapping slot's flags
+			lwz		r3,mpFlags+GV_SLOT_SZ(r31)	; r3 <- next mapping slot's flags
+			mr		r7,r4						; r7 <- current mapping slot's space ID
+			lhz		r4,mpSpace+GV_SLOT_SZ(r31)	; r4 <- next mapping slot's space ID
+			clrrdi	r8,r5,12					; r8 <- current mapping slot's virtual addr w/o flags
+			ld		r5,mpVAddr+GV_SLOT_SZ(r31)	; r5 <- next mapping slot's virtual addr
+			andi.	r11,r6,mpgFree+mpgDormant	; Isolate guest free and dormant flags
+			xor		r7,r7,r9					; Compare space ID
+			or		r0,r11,r7					; r0 <- !(!free && !dormant && space match)
+			xor		r8,r8,r30					; Compare virtual address
+			or.		r0,r0,r8					; cr0_eq <- !free && !dormant && space match && virtual addr match
+			beq		gthSrchHit					; Join common path on hit (r31 points to guest mapping)
+			
+			addi	r31,r31,GV_SLOT_SZ			; r31 <- next mapping slot		
+			bdnz	gth64SrchLp					; Iterate
+
+			mr		r6,r3						; r6 <- current mapping slot's flags
+			clrrdi	r5,r5,12					; Remove flags from virtual address			
+			andi.	r11,r6,mpgFree+mpgDormant	; Isolate guest free and dormant flags
+			xor		r4,r4,r9					; Compare space ID
+			or		r0,r11,r4					; r0 <- !(!free && !dormant && space match)
+			xor		r5,r5,r30					; Compare virtual address
+			or.		r0,r0,r5					; cr0_eq <- !free && !dormant && space match && virtual addr match
+			bne		gthSrchMiss					; No joy in our hash group
+			
+gthSrchHit:	lwz		r3,mpPAddr(r31)				; r3 <- physical 4K-page number
+			bl		mapFindLockPN				; Find 'n' lock this page's physent
+			mr.		r24,r3						; Got lock on our physent?
+			beq--	gthBadPLock					; No, time to bail out
+			
+			bt++	pf64Bitb,gthPFnd64			; 64-bit version of physent chain search
+			
+			lwz		r9,ppLink+4(r24)			; Get first mapping on physent
+			lwz		r6,pmapSpace(r27)			; Get host pmap's space id number
+			rlwinm	r9,r9,0,~ppFlags			; Be-gone, unsightly flags
+gthPELoop:	mr.		r12,r9						; Got a mapping to look at?
+			beq-	gthPEMiss					; Nope, we've missed hva->phys mapping
+			lwz		r7,mpFlags(r12)				; Get mapping's flags
+			lhz		r4,mpSpace(r12)				; Get mapping's space id number
+			lwz		r26,mpVAddr+4(r12)			; Get mapping's virtual address
+			lwz		r9,mpAlias+4(r12)			; Next mapping in physent alias chain
+			
+			rlwinm	r0,r7,0,mpType				; Isolate mapping's type
+			rlwinm	r26,r26,0,~mpHWFlags		; Bye-bye unsightly flags
+			xori	r0,r0,mpNormal				; Normal mapping?
+			xor		r4,r4,r6					; Compare w/ host space id number
+			or.		r0,r0,r4					; cr0_eq <- (normal && space id hit)
+			beq		gthPEHit					; Hit
+			b		gthPELoop					; Iterate
+			
+gthPFnd64:	li		r0,ppLFAmask				; Get mask to clean up mapping pointer
+			rotrdi	r0,r0,ppLFArrot				; Rotate clean up mask to get 0xF0000000000000000F
+			ld		r9,ppLink(r24)				; Get first mapping on physent
+			lwz		r6,pmapSpace(r27)			; Get host pmap's space id number
+			andc	r9,r9,r0					; Cleanup mapping pointer
+gthPELp64:	mr.		r12,r9						; Got a mapping to look at?
+			beq--	gthPEMiss					; Nope, we've missed hva->phys mapping
+			lwz		r7,mpFlags(r12)				; Get mapping's flags
+			lhz		r4,mpSpace(r12)				; Get mapping's space id number
+			ld		r26,mpVAddr(r12)			; Get mapping's virtual address
+			ld		r9,mpAlias(r12)				; Next mapping physent alias chain
+			rlwinm	r0,r7,0,mpType				; Isolate mapping's type
+			rldicr	r26,r26,0,mpHWFlagsb-1		; Bye-bye unsightly flags
+			xori	r0,r0,mpNormal				; Normal mapping?
+			xor		r4,r4,r6					; Compare w/ host space id number
+			or.		r0,r0,r4					; cr0_eq <- (normal && space id hit)
+			beq		gthPEHit					; Hit
+			b		gthPELp64					; Iterate
+
+			.align	5			
+gthPEMiss:	mr		r3,r24						; Get physent's address
+			bl		mapPhysUnlock				; Unlock physent chain
+gthSrchMiss:
+			la		r3,pmapSXlk(r27)			; Get host pmap search lock address
+			bl		sxlkUnlock					; Release host pmap search lock
+			li		r3,-1						; Return 64-bit -1
+			li		r4,-1
+			bt++	pf64Bitb,gthEpi64			; Take 64-bit exit
+			b		gthEpi32					; Take 32-bit exit
+
+			.align	5
+gthPEHit:	mr		r3,r24						; Get physent's address
+			bl		mapPhysUnlock				; Unlock physent chain
+			la		r3,pmapSXlk(r27)			; Get host pmap search lock address
+			bl		sxlkUnlock					; Release host pmap search lock
+
+			bt++	pf64Bitb,gthR64				; Test for 64-bit machine
+			
+gthR32:		li		r3,0						; High-order 32 bits host virtual address
+			mr		r4,r26						; Low-order  32 bits host virtual address
+gthEpi32:	mtmsr	r29							; Restore caller's msr image
+			isync
+			b		gthEpilog
+
+			.align	5			
+gthR64:		srdi	r3,r26,32					; High-order 32 bits host virtual address
+			clrldi	r4,r26,32					; Low-order  32 bits host virtual address
+gthEpi64:	mtmsrd	r29							; Restore caller's msr image
+
+gthEpilog:	lwz		r0,(FM_ALIGN(gthStackSize)+FM_SIZE+FM_LR_SAVE)(r1)
+												; Get caller's return address
+			lwz		r31,FM_ARG0+0x00(r1)		; Restore non-volatile r31
+			lwz		r30,FM_ARG0+0x04(r1)		; Restore non-volatile r30
+			lwz		r29,FM_ARG0+0x08(r1)		; Restore non-volatile r29
+			lwz		r28,FM_ARG0+0x0C(r1)		; Restore non-volatile r28
+			mtlr	r0							; Prepare return address
+			lwz		r27,FM_ARG0+0x10(r1)		; Restore non-volatile r27
+			lwz		r26,FM_ARG0+0x14(r1)		; Restore non-volatile r26
+			lwz		r25,FM_ARG0+0x18(r1)		; Restore non-volatile r25
+			lwz		r24,FM_ARG0+0x1C(r1)		; Restore non-volatile r24
+			lwz		r1,0(r1)					; Pop stack frame
+			blr									; Return to caller
+
+gthBadPLock:
+			lis		r0,hi16(Choke)				; Dmitri, you know how we've always talked about the
+			ori		r0,r0,lo16(Choke)			;  possibility of something going wrong with the bomb?
+			li		r3,failMapping				; The BOMB, Dmitri.
+			sc									; The hydrogen bomb.
+
+
+;
+;			Guest shadow assist -- find a guest mapping
+;
+;			Locates the specified guest mapping, and if it exists returns a copy
+;			of it.
+;
+;			Parameters:
+;				r3 : address of guest pmap, 32-bit kernel virtual address
+;				r4 : guest virtual address, high-order 32 bits
+;				r5 : guest virtual address,  low-order 32 bits
+;				r6 : 32 byte copy area, 32-bit kernel virtual address
+;
+;			Non-volatile register usage:
+;				r25 : VMM extension block's physical address
+;				r26 : copy area virtual address
+;				r27 : host pmap physical address
+;				r28 : guest pmap physical address
+;				r29 : caller's msr image from mapSetUp
+;				r30 : guest virtual address
+;				r31 : gva->phys mapping's physical address
+;
+
+			.align	5
+			.globl	EXT(hw_find_map_gv)
+
+LEXT(hw_find_map_gv)
+
+#define gfmStackSize ((31-25+1)*4)+4
+
+			stwu	r1,-(FM_ALIGN(gfmStackSize)+FM_SIZE)(r1)
+												; Mint a new stack frame
+			mflr	r0							; Get caller's return address
+			mfsprg	r11,2						; Get feature flags
+			mtcrf	0x02,r11					; Insert feature flags into cr6
+			stw		r0,(FM_ALIGN(gfmStackSize)+FM_SIZE+FM_LR_SAVE)(r1)
+												; Save caller's return address
+			stw		r31,FM_ARG0+0x00(r1)		; Save non-volatile r31
+			stw		r30,FM_ARG0+0x04(r1)		; Save non-volatile r30
+			stw		r29,FM_ARG0+0x08(r1)		; Save non-volatile r29
+			stw		r28,FM_ARG0+0x0C(r1)		; Save non-volatile r28
+			stw		r27,FM_ARG0+0x10(r1)		; Save non-volatile r27
+			stw		r26,FM_ARG0+0x14(r1)		; Save non-volatile r26
+			stw		r25,FM_ARG0+0x18(r1)		; Save non-volatile r25
+
+			rlwinm	r30,r5,0,0xFFFFF000			; Clean up low-order 32 bits of guest vaddr
+			mr		r26,r6						; Copy copy buffer vaddr
+
+			lwz		r11,pmapVmmExt(r3)			; r11 <- VMM pmap extension block vaddr
+			lwz		r9,pmapSpace(r3)			; r9 <- guest space ID number
+
+			bt++	pf64Bitb,gfm64Salt			; Test for 64-bit machine
+
+			lwz		r25,pmapVmmExtPhys+4(r3)	; r25 <- VMM pmap extension block paddr
+			lwz		r28,pmapvr+4(r3)			; Get 32-bit virt<->real guest pmap conversion salt
+			lwz		r27,vmxHostPmapPhys+4(r11)	; Get host pmap physical address
+			la		r31,VMX_HPIDX_OFFSET(r11)	; r31 <- base of hash page physical index
+			srwi	r11,r30,12					; Form shadow hash:
+			xor		r11,r11,r9					; 	spaceID ^ (vaddr >> 12) 
+			rlwinm	r10,r11,GV_HPAGE_SHIFT,GV_HPAGE_MASK
+												; Form index offset from hash page number
+			add		r31,r31,r10					; r31 <- hash page index entry
+			lwz		r31,4(r31)					; r31 <- hash page paddr
+			rlwimi	r31,r11,GV_HGRP_SHIFT,GV_HGRP_MASK
+												; r31 <- hash group paddr
+			b		gfmStart					; Get to it			
+
+gfm64Salt:	rldimi	r30,r4,32,0					; Insert high-order 32 bits of 64-bit guest vaddr
+			ld		r25,pmapVmmExtPhys(r3)		; r24 <- VMM pmap extension block paddr
+			ld		r28,pmapvr(r3)				; Get 64-bit virt<->real guest pmap conversion salt
+			ld		r27,vmxHostPmapPhys(r11)	; Get host pmap physical address
+			la		r31,VMX_HPIDX_OFFSET(r11)	; r31 <- base of hash page physical index
+			srwi	r11,r30,12					; Form shadow hash:
+			xor		r11,r11,r9					; 	spaceID ^ (vaddr >> 12) 
+			rlwinm	r10,r11,GV_HPAGE_SHIFT,GV_HPAGE_MASK
+												; Form index offset from hash page number
+			add		r31,r31,r10					; r31 <- hash page index entry
+			ld		r31,0(r31)					; r31 <- hash page paddr
+			insrdi	r31,r11,GV_GRPS_PPG_LG2,64-(GV_HGRP_SHIFT+GV_GRPS_PPG_LG2)
+												; r31 <- hash group paddr
+
+gfmStart:	xor		r28,r3,r28					; Convert guest pmap_t virt->real
+			bl		EXT(mapSetUp)				; Disable 'rupts, translation, maybe enter 64-bit mode
+			mr		r29,r11						; Save caller's msr image
+
+			la		r3,pmapSXlk(r27)			; r3 <- host pmap's search lock address
+			bl		sxlkExclusive				; Get lock exclusive
+
+			li		r0,(GV_SLOTS - 1)			; Prepare to iterate over mapping slots
+			mtctr	r0							;  in this group
+			bt++	pf64Bitb,gfm64Search		; Test for 64-bit machine
+
+			lwz		r3,mpFlags(r31)				; r3 <- 1st mapping slot's flags
+			lhz		r4,mpSpace(r31)				; r4 <- 1st mapping slot's space ID 
+			lwz		r5,mpVAddr+4(r31)			; r5 <- 1st mapping slot's virtual address
+			b		gfm32SrchLp					; Let the search begin!
+			
+			.align	5
+gfm32SrchLp:
+			mr		r6,r3						; r6 <- current mapping slot's flags
+			lwz		r3,mpFlags+GV_SLOT_SZ(r31)	; r3 <- next mapping slot's flags
+			mr		r7,r4						; r7 <- current mapping slot's space ID
+			lhz		r4,mpSpace+GV_SLOT_SZ(r31)	; r4 <- next mapping slot's space ID
+			clrrwi	r8,r5,12					; r8 <- current mapping slot's virtual addr w/o flags
+			lwz		r5,mpVAddr+4+GV_SLOT_SZ(r31); r5 <- next mapping slot's virtual addr
+			andi.	r11,r6,mpgFree+mpgDormant	; Isolate guest free and dormant flags
+			xor		r7,r7,r9					; Compare space ID
+			or		r0,r11,r7					; r0 <- !(!free && !dormant && space match)
+			xor		r8,r8,r30					; Compare virtual address
+			or.		r0,r0,r8					; cr0_eq <- !free && !dormant && space match && virtual addr match
+			beq		gfmSrchHit					; Join common path on hit (r31 points to guest mapping)
+			
+			addi	r31,r31,GV_SLOT_SZ			; r31 <- next mapping slot		
+			bdnz	gfm32SrchLp					; Iterate
+
+			mr		r6,r3						; r6 <- current mapping slot's flags
+			clrrwi	r5,r5,12					; Remove flags from virtual address			
+			andi.	r11,r6,mpgFree+mpgDormant	; Isolate guest free and dormant flags
+			xor		r4,r4,r9					; Compare space ID
+			or		r0,r11,r4					; r0 <- !(!free && !dormant && space match)
+			xor		r5,r5,r30					; Compare virtual address
+			or.		r0,r0,r5					; cr0_eq <- !free && !dormant && space match && virtual addr match
+			beq		gfmSrchHit					; Join common path on hit (r31 points to guest mapping)
+			b		gfmSrchMiss					; No joy in our hash group
+			
+gfm64Search:			
+			lwz		r3,mpFlags(r31)				; r3 <- 1st mapping slot's flags
+			lhz		r4,mpSpace(r31)				; r4 <- 1st mapping slot's space ID 
+			ld		r5,mpVAddr(r31)				; r5 <- 1st mapping slot's virtual address
+			b		gfm64SrchLp					; Let the search begin!
+			
+			.align	5
+gfm64SrchLp:
+			mr		r6,r3						; r6 <- current mapping slot's flags
+			lwz		r3,mpFlags+GV_SLOT_SZ(r31)	; r3 <- next mapping slot's flags
+			mr		r7,r4						; r7 <- current mapping slot's space ID
+			lhz		r4,mpSpace+GV_SLOT_SZ(r31)	; r4 <- next mapping slot's space ID
+			clrrdi	r8,r5,12					; r8 <- current mapping slot's virtual addr w/o flags
+			ld		r5,mpVAddr+GV_SLOT_SZ(r31)	; r5 <- next mapping slot's virtual addr
+			andi.	r11,r6,mpgFree+mpgDormant	; Isolate guest free and dormant flags
+			xor		r7,r7,r9					; Compare space ID
+			or		r0,r11,r7					; r0 <- !(!free && !dormant && space match)
+			xor		r8,r8,r30					; Compare virtual address
+			or.		r0,r0,r8					; cr0_eq <- !free && !dormant && space match && virtual addr match
+			beq		gfmSrchHit					; Join common path on hit (r31 points to guest mapping)
+			
+			addi	r31,r31,GV_SLOT_SZ			; r31 <- next mapping slot		
+			bdnz	gfm64SrchLp					; Iterate
+
+			mr		r6,r3						; r6 <- current mapping slot's flags
+			clrrdi	r5,r5,12					; Remove flags from virtual address			
+			andi.	r11,r6,mpgFree+mpgDormant	; Isolate guest free and dormant flags
+			xor		r4,r4,r9					; Compare space ID
+			or		r0,r11,r4					; r0 <- !(!free && !dormant && space match)
+			xor		r5,r5,r30					; Compare virtual address
+			or.		r0,r0,r5					; cr0_eq <- !free && !dormant && space match && virtual addr match
+			bne		gfmSrchMiss					; No joy in our hash group
+			
+gfmSrchHit:	lwz		r5,0(r31)					; Fetch 32 bytes of mapping from physical
+			lwz		r6,4(r31)					;  +4
+			lwz		r7,8(r31)					;  +8
+			lwz		r8,12(r31)					;  +12
+			lwz		r9,16(r31)					;  +16
+			lwz		r10,20(r31)					;  +20
+			lwz		r11,24(r31)					;  +24
+			lwz		r12,28(r31)					;  +28
+			
+			li		r31,mapRtOK					; Return found mapping
+
+			la		r3,pmapSXlk(r27)			; Get host pmap search lock address
+			bl		sxlkUnlock					; Release host pmap search lock
+
+			bt++	pf64Bitb,gfmEpi64			; Test for 64-bit machine
+			
+gfmEpi32:	mtmsr	r29							; Restore caller's msr image
+			isync								; A small wrench
+			b		gfmEpilog					;  and a larger bubble
+
+			.align	5			
+gfmEpi64:	mtmsrd	r29							; Restore caller's msr image
+
+gfmEpilog:	mr.		r3,r31						; Copy/test mapping address
+			beq		gfmNotFound					; Skip copy if no mapping found
+			
+			stw		r5,0(r26)					; Store 32 bytes of mapping into virtual
+			stw		r6,4(r26)					;  +4
+			stw		r7,8(r26)					;  +8
+			stw		r8,12(r26)					;  +12
+			stw		r9,16(r26)					;  +16
+			stw		r10,20(r26)					;  +20
+			stw		r11,24(r26)					;  +24
+			stw		r12,28(r26)					;  +28
+			
+gfmNotFound:
+			lwz		r0,(FM_ALIGN(gfmStackSize)+FM_SIZE+FM_LR_SAVE)(r1)
+												; Get caller's return address
+			lwz		r31,FM_ARG0+0x00(r1)		; Restore non-volatile r31
+			lwz		r30,FM_ARG0+0x04(r1)		; Restore non-volatile r30
+			lwz		r29,FM_ARG0+0x08(r1)		; Restore non-volatile r29
+			lwz		r28,FM_ARG0+0x0C(r1)		; Restore non-volatile r28
+			mtlr	r0							; Prepare return address
+			lwz		r27,FM_ARG0+0x10(r1)		; Restore non-volatile r27
+			lwz		r26,FM_ARG0+0x14(r1)		; Restore non-volatile r26
+			lwz		r25,FM_ARG0+0x18(r1)		; Restore non-volatile r25
+			lwz		r1,0(r1)					; Pop stack frame
+			blr									; Return to caller
+
+			.align	5			
+gfmSrchMiss:
+			li		r31,mapRtNotFnd				; Indicate mapping not found
+			la		r3,pmapSXlk(r27)			; Get host pmap search lock address
+			bl		sxlkUnlock					; Release host pmap search lock
+			bt++	pf64Bitb,gfmEpi64			; Take 64-bit exit
+			b		gfmEpi32					; Take 32-bit exit
+
+
+;
+;			Guest shadow assist -- change guest page protection
+;
+;			Locates the specified dormant mapping, and if it is active, changes its
+;			protection.
+;
+;			Parameters:
+;				r3 : address of guest pmap, 32-bit kernel virtual address
+;				r4 : guest virtual address, high-order 32 bits
+;				r5 : guest virtual address,  low-order 32 bits
+;				r6 : guest mapping protection code
+;
+;			Non-volatile register usage:
+;				r25 : caller's msr image from mapSetUp
+;				r26 : guest mapping protection code
+;				r27 : host pmap physical address
+;				r28 : guest pmap physical address
+;				r29 : VMM extension block's physical address
+;				r30 : guest virtual address
+;				r31 : gva->phys mapping's physical address
+;
+			.align	5
+			.globl	EXT(hw_protect_gv)
+			
+LEXT(hw_protect_gv)
+
+#define gcpStackSize ((31-24+1)*4)+4
+
+			stwu	r1,-(FM_ALIGN(gcpStackSize)+FM_SIZE)(r1)
+												; Mint a new stack frame
+			mflr	r0							; Get caller's return address
+			mfsprg	r11,2						; Get feature flags
+			mtcrf	0x02,r11					; Insert feature flags into cr6
+			stw		r0,(FM_ALIGN(gcpStackSize)+FM_SIZE+FM_LR_SAVE)(r1)
+												; Save caller's return address
+			stw		r31,FM_ARG0+0x00(r1)		; Save non-volatile r31
+			stw		r30,FM_ARG0+0x04(r1)		; Save non-volatile r30
+			stw		r29,FM_ARG0+0x08(r1)		; Save non-volatile r29
+			stw		r28,FM_ARG0+0x0C(r1)		; Save non-volatile r28
+			stw		r27,FM_ARG0+0x10(r1)		; Save non-volatile r27
+			stw		r26,FM_ARG0+0x14(r1)		; Save non-volatile r26
+			stw		r25,FM_ARG0+0x18(r1)		; Save non-volatile r25
+
+			rlwinm	r30,r5,0,0xFFFFF000			; Clean up low-order 32 bits of guest vaddr
+			mr		r26,r6						; Copy guest mapping protection code
+
+			lwz		r11,pmapVmmExt(r3)			; r11 <- VMM pmap extension block vaddr
+			lwz		r9,pmapSpace(r3)			; r9 <- guest space ID number
+			bt++	pf64Bitb,gcp64Salt			; Handle 64-bit machine separately
+			lwz		r29,pmapVmmExtPhys+4(r3)	; r29 <- VMM pmap extension block paddr
+			lwz		r27,vmxHostPmapPhys+4(r11)	; r27 <- host pmap paddr
+			lwz		r28,pmapvr+4(r3)			; Get 32-bit virt<->real guest pmap conversion salt
+			la		r31,VMX_HPIDX_OFFSET(r11)	; r31 <- base of hash page physical index
+			srwi	r11,r30,12					; Form shadow hash:
+			xor		r11,r11,r9					; 	spaceID ^ (vaddr >> 12) 
+			rlwinm	r10,r11,GV_HPAGE_SHIFT,GV_HPAGE_MASK
+												; Form index offset from hash page number
+			add		r31,r31,r10					; r31 <- hash page index entry
+			lwz		r31,4(r31)					; r31 <- hash page paddr
+			rlwimi	r31,r11,GV_HGRP_SHIFT,GV_HGRP_MASK
+												; r31 <- hash group paddr
+			b		gcpStart					; Get to it			
+
+gcp64Salt:	rldimi	r30,r4,32,0					; Insert high-order 32 bits of 64-bit guest vaddr			
+			ld		r29,pmapVmmExtPhys(r3)		; r29 <- VMM pmap extension block paddr
+			ld		r27,vmxHostPmapPhys(r11)	; r27 <- host pmap paddr
+			ld		r28,pmapvr(r3)				; Get 64-bit virt<->real guest pmap conversion salt
+			la		r31,VMX_HPIDX_OFFSET(r11)	; r31 <- base of hash page physical index
+			srwi	r11,r30,12					; Form shadow hash:
+			xor		r11,r11,r9					; 	spaceID ^ (vaddr >> 12) 
+			rlwinm	r10,r11,GV_HPAGE_SHIFT,GV_HPAGE_MASK
+												; Form index offset from hash page number
+			add		r31,r31,r10					; r31 <- hash page index entry
+			ld		r31,0(r31)					; r31 <- hash page paddr
+			insrdi	r31,r11,GV_GRPS_PPG_LG2,64-(GV_HGRP_SHIFT+GV_GRPS_PPG_LG2)
+												; r31 <- hash group paddr
+
+gcpStart:	xor		r28,r4,r28					; Convert guest pmap_t virt->real
+			bl		EXT(mapSetUp)				; Disable 'rupts, translation, maybe enter 64-bit mode
+			mr		r25,r11						; Save caller's msr image
+
+			la		r3,pmapSXlk(r27)			; r3 <- host pmap's search lock address
+			bl		sxlkExclusive				; Get lock exclusive
+
+			li		r0,(GV_SLOTS - 1)			; Prepare to iterate over mapping slots
+			mtctr	r0							;  in this group
+			bt++	pf64Bitb,gcp64Search		; Test for 64-bit machine
+
+			lwz		r3,mpFlags(r31)				; r3 <- 1st mapping slot's flags
+			lhz		r4,mpSpace(r31)				; r4 <- 1st mapping slot's space ID 
+			lwz		r5,mpVAddr+4(r31)			; r5 <- 1st mapping slot's virtual address
+			b		gcp32SrchLp					; Let the search begin!
+			
+			.align	5
+gcp32SrchLp:
+			mr		r6,r3						; r6 <- current mapping slot's flags
+			lwz		r3,mpFlags+GV_SLOT_SZ(r31)	; r3 <- next mapping slot's flags
+			mr		r7,r4						; r7 <- current mapping slot's space ID
+			lhz		r4,mpSpace+GV_SLOT_SZ(r31)	; r4 <- next mapping slot's space ID
+			clrrwi	r8,r5,12					; r8 <- current mapping slot's virtual addr w/o flags
+			lwz		r5,mpVAddr+4+GV_SLOT_SZ(r31); r5 <- next mapping slot's virtual addr
+			andi.	r11,r6,mpgFree+mpgDormant	; Isolate guest free flag
+			xor		r7,r7,r9					; Compare space ID
+			or		r0,r11,r7					; r0 <- free || dormant || !space match
+			xor		r8,r8,r30					; Compare virtual address
+			or.		r0,r0,r8					; cr0_eq <- !free && !dormant && space match && virtual addr match
+			beq		gcpSrchHit					; Join common path on hit (r31 points to guest mapping)
+			
+			addi	r31,r31,GV_SLOT_SZ			; r31 <- next mapping slot		
+			bdnz	gcp32SrchLp					; Iterate
+
+			mr		r6,r3						; r6 <- current mapping slot's flags
+			clrrwi	r5,r5,12					; Remove flags from virtual address			
+			andi.	r11,r6,mpgFree+mpgDormant	; Isolate guest free flag
+			xor		r4,r4,r9					; Compare space ID
+			or		r0,r11,r4					; r0 <- free || dormant || !space match
+			xor		r5,r5,r30					; Compare virtual address
+			or.		r0,r0,r5					; cr0_eq <- !free && !dormant && space match && virtual addr match
+			beq		gcpSrchHit					; Join common path on hit (r31 points to guest mapping)
+			b		gcpSrchMiss					; No joy in our hash group
+			
+gcp64Search:			
+			lwz		r3,mpFlags(r31)				; r3 <- 1st mapping slot's flags
+			lhz		r4,mpSpace(r31)				; r4 <- 1st mapping slot's space ID 
+			ld		r5,mpVAddr(r31)				; r5 <- 1st mapping slot's virtual address
+			b		gcp64SrchLp					; Let the search begin!
+			
+			.align	5
+gcp64SrchLp:
+			mr		r6,r3						; r6 <- current mapping slot's flags
+			lwz		r3,mpFlags+GV_SLOT_SZ(r31)	; r3 <- next mapping slot's flags
+			mr		r7,r4						; r7 <- current mapping slot's space ID
+			lhz		r4,mpSpace+GV_SLOT_SZ(r31)	; r4 <- next mapping slot's space ID
+			clrrdi	r8,r5,12					; r8 <- current mapping slot's virtual addr w/o flags
+			ld		r5,mpVAddr+GV_SLOT_SZ(r31)	; r5 <- next mapping slot's virtual addr
+			andi.	r11,r6,mpgFree+mpgDormant	; Isolate guest free flag
+			xor		r7,r7,r9					; Compare space ID
+			or		r0,r11,r7					; r0 <- free || dormant || !space match
+			xor		r8,r8,r30					; Compare virtual address
+			or.		r0,r0,r8					; cr0_eq <- !free && !dormant && space match && virtual addr match
+			beq		gcpSrchHit					; Join common path on hit (r31 points to guest mapping)
+			
+			addi	r31,r31,GV_SLOT_SZ			; r31 <- next mapping slot		
+			bdnz	gcp64SrchLp					; Iterate
+
+			mr		r6,r3						; r6 <- current mapping slot's flags
+			clrrdi	r5,r5,12					; Remove flags from virtual address			
+			andi.	r11,r6,mpgFree+mpgDormant	; Isolate guest free flag
+			xor		r4,r4,r9					; Compare space ID
+			or		r0,r11,r4					; r0 <- free || dormant || !space match
+			xor		r5,r5,r30					; Compare virtual address
+			or.		r0,r0,r5					; cr0_eq <- !free && !dormant && space match && virtual addr match
+			bne		gcpSrchMiss					; No joy in our hash group
+			
+gcpSrchHit:
+			bt++	pf64Bitb,gcpDscon64			; Handle 64-bit disconnect separately
+			bl		mapInvPte32					; Disconnect PTE, invalidate, gather ref and change
+												; r31 <- mapping's physical address
+												; r3  -> PTE slot physical address
+												; r4  -> High-order 32 bits of PTE
+												; r5  -> Low-order  32 bits of PTE
+												; r6  -> PCA
+												; r7  -> PCA physical address
+			rlwinm	r2,r3,29,29,31				; Get PTE's slot number in the PTEG (8-byte PTEs)
+			b		gcpFreePTE					; Join 64-bit path to release the PTE			
+gcpDscon64:	bl		mapInvPte64					; Disconnect PTE, invalidate, gather ref and change
+			rlwinm	r2,r3,28,29,31				; Get PTE's slot number in the PTEG (16-byte PTEs)
+gcpFreePTE: mr.		r3,r3						; Was there a valid PTE?
+			beq-	gcpSetKey					; No valid PTE, we're almost done
+			lis		r0,0x8000					; Prepare free bit for this slot
+			srw		r0,r0,r2					; Position free bit
+			or		r6,r6,r0					; Set it in our PCA image
+			lwz		r8,mpPte(r31)				; Get PTE pointer
+			rlwinm	r8,r8,0,~mpHValid			; Make the pointer invalid
+			stw		r8,mpPte(r31)				; Save invalidated PTE pointer
+			eieio								; Synchronize all previous updates (mapInvPtexx didn't)
+			stw		r6,0(r7)					; Update PCA and unlock the PTEG
+			
+gcpSetKey:	lwz		r0,mpVAddr+4(r31)			; Get va word containing protection bits
+			rlwimi	r0,r26,0,mpPP				; Insert new protection bits
+			stw		r0,mpVAddr+4(r31)			; Write 'em back
+			eieio								; Ensure previous mapping updates are visible
+			li		r31,mapRtOK					; I'm a success
+
+gcpRelPmap:	la		r3,pmapSXlk(r27)			; r3 <- host pmap search lock phys addr
+			bl		sxlkUnlock					; Release host pmap search lock
+			
+			mr		r3,r31						; r3 <- result code
+			bt++	pf64Bitb,gcpRtn64			; Handle 64-bit separately
+			mtmsr	r25							; Restore 'rupts, translation
+			isync								; Throw a small wrench into the pipeline
+			b		gcpPopFrame					; Nothing to do now but pop a frame and return
+gcpRtn64:	mtmsrd	r25							; Restore 'rupts, translation, 32-bit mode
+gcpPopFrame:		
+			lwz		r0,(FM_ALIGN(gcpStackSize)+FM_SIZE+FM_LR_SAVE)(r1)
+												; Get caller's return address
+			lwz		r31,FM_ARG0+0x00(r1)		; Restore non-volatile r31
+			lwz		r30,FM_ARG0+0x04(r1)		; Restore non-volatile r30
+			lwz		r29,FM_ARG0+0x08(r1)		; Restore non-volatile r29
+			lwz		r28,FM_ARG0+0x0C(r1)		; Restore non-volatile r28
+			mtlr	r0							; Prepare return address
+			lwz		r27,FM_ARG0+0x10(r1)		; Restore non-volatile r27
+			lwz		r26,FM_ARG0+0x14(r1)		; Restore non-volatile r26
+			lwz		r25,FM_ARG0+0x18(r1)		; Restore non-volatile r25
+			lwz		r1,0(r1)					; Pop stack frame
+			blr									; Return to caller
+
+			.align	5
+gcpSrchMiss:
+			li		r31,mapRtNotFnd				; Could not locate requested mapping
+			b		gcpRelPmap					; Exit through host pmap search lock release
+
 
 ;
 ;			Find the physent based on a physical page and try to lock it (but not too hard) 
@@ -4992,7 +8186,95 @@ pmapCacheLookus:
 			beq++	pmapCacheLookup				; Nope...
 			b		pmapCacheLookus				; Yup, keep waiting...
 
+
+;
+;			mapMergeRC -- Given a physical mapping address in R31, locate its
+;           connected PTE (if any) and merge the PTE referenced and changed bits
+;			into the mapping and physent.
+;
+
+			.align	5
 			
+mapMergeRC32:
+			lwz		r0,mpPte(r31)				; Grab the PTE offset
+			mfsdr1	r7							; Get the pointer to the hash table
+			lwz		r5,mpVAddr+4(r31)			; Grab the virtual address
+			rlwinm	r10,r7,0,0,15				; Clean up the hash table base
+			andi.	r3,r0,mpHValid				; Is there a possible PTE?
+			srwi	r7,r0,4						; Convert to PCA units
+			rlwinm	r7,r7,0,0,29				; Clean up PCA offset
+			mflr	r2							; Save the return
+			subfic	r7,r7,-4					; Convert to -4 based negative index
+			add		r7,r10,r7					; Point to the PCA directly
+			beqlr--								; There was no PTE to start with...
+			
+			bl		mapLockPteg					; Lock the PTEG
+
+			lwz		r0,mpPte(r31)				; Grab the PTE offset
+			mtlr	r2							; Restore the LR
+			andi.	r3,r0,mpHValid				; Is there a possible PTE?
+			beq-	mMPUnlock					; There is no PTE, someone took it so just unlock and leave...
+
+			rlwinm	r3,r0,0,0,30				; Clear the valid bit
+			add		r3,r3,r10					; Point to actual PTE
+			lwz		r5,4(r3)					; Get the real part of the PTE
+			srwi	r10,r5,12					; Change physical address to a ppnum
+
+mMNmerge:	lbz		r11,mpFlags+1(r31)			; Get the offset to the physical entry table
+			lwz		r0,mpVAddr+4(r31)			; Get the flags part of the field
+			lis		r8,hi16(EXT(pmap_mem_regions))	; Get the top of the region table
+			ori		r8,r8,lo16(EXT(pmap_mem_regions))	; Get the bottom of the region table
+			rlwinm	r11,r11,2,24,29				; Mask index bits and convert to byte offset
+			add		r11,r11,r8					; Point to the bank table
+			lwz		r2,mrPhysTab(r11)			; Get the physical table bank pointer
+			lwz		r11,mrStart(r11)			; Get the start of bank
+			rlwimi	r0,r5,0,mpRb-32,mpCb-32		; Copy in the RC
+			addi	r2,r2,4						; Offset to last half of field
+			stw		r0,mpVAddr+4(r31)			; Set the new RC into the field
+			sub		r11,r10,r11					; Get the index into the table
+			rlwinm	r11,r11,3,0,28				; Get offset to the physent
+
+mMmrgRC:	lwarx	r10,r11,r2					; Get the master RC
+			rlwinm	r0,r5,27,ppRb-32,ppCb-32	; Position the new RC
+			or		r0,r0,r10					; Merge in the new RC
+			stwcx.	r0,r11,r2					; Try to stick it back
+			bne--	mMmrgRC						; Try again if we collided...
+			eieio								; Commit all updates
+
+mMPUnlock:				
+			stw		r6,0(r7)					; Unlock PTEG
+			blr									; Return
+
+;
+;			64-bit version of mapMergeRC
+;
+			.align	5
+
+mapMergeRC64:
+			lwz		r0,mpPte(r31)				; Grab the PTE offset
+			ld		r5,mpVAddr(r31)				; Grab the virtual address
+			mfsdr1	r7							; Get the pointer to the hash table
+			rldicr	r10,r7,0,45					; Clean up the hash table base
+			andi.	r3,r0,mpHValid				; Is there a possible PTE?
+			srdi	r7,r0,5						; Convert to PCA units
+			rldicr	r7,r7,0,61					; Clean up PCA
+			subfic	r7,r7,-4					; Convert to -4 based negative index
+			mflr	r2							; Save the return
+			add		r7,r10,r7					; Point to the PCA directly
+			beqlr--								; There was no PTE to start with...
+			
+			bl		mapLockPteg					; Lock the PTEG
+			
+			lwz		r0,mpPte(r31)				; Grab the PTE offset again
+			mtlr	r2							; Restore the LR
+			andi.	r3,r0,mpHValid				; Is there a possible PTE?
+			beq--	mMPUnlock					; There is no PTE, someone took it so just unlock and leave...
+
+			rlwinm	r3,r0,0,0,30				; Clear the valid bit
+			add		r3,r3,r10					; Point to the actual PTE
+			ld		r5,8(r3)					; Get the real part
+			srdi	r10,r5,12					; Change physical address to a ppnum
+			b		mMNmerge					; Join the common 32-64-bit code...
 
 
 ;
@@ -5057,16 +8339,14 @@ mITLBIE32:	lwarx	r0,0,r8						; Get the TLBIE lock
 			li		r0,0						; Lock clear value 
 
 			tlbie	r5							; Invalidate it everywhere 
-
+			
 			beq-	mINoTS32					; Can not have MP on this machine...
 			
 			eieio								; Make sure that the tlbie happens first 
 			tlbsync								; Wait for everyone to catch up 
 			sync								; Make sure of it all
 			
-mINoTS32:	
-			stw		r0,tlbieLock(0)				; Clear the tlbie lock
-			
+mINoTS32:	stw		r0,tlbieLock(0)				; Clear the tlbie lock
 			lwz		r5,4(r3)					; Get the real part
 			srwi	r10,r5,12					; Change physical address to a ppnum
 
@@ -5074,7 +8354,7 @@ mINmerge:	lbz		r11,mpFlags+1(r31)			; Get the offset to the physical entry table
 			lwz		r0,mpVAddr+4(r31)			; Get the flags part of the field
 			lis		r8,hi16(EXT(pmap_mem_regions))	; Get the top of the region table
 			ori		r8,r8,lo16(EXT(pmap_mem_regions))	; Get the bottom of the region table
-			rlwinm	r11,r11,2,0,29				; Change index into byte offset
+			rlwinm	r11,r11,2,24,29				; Mask index bits and convert to byte offset
 			add		r11,r11,r8					; Point to the bank table
 			lwz		r2,mrPhysTab(r11)			; Get the physical table bank pointer
 			lwz		r11,mrStart(r11)			; Get the start of bank
@@ -5151,13 +8431,9 @@ mITLBIE64:	lwarx	r0,0,r8						; Get the TLBIE lock
 
 			eieio								; Make sure that the tlbie happens first 
 			tlbsync								; Wait for everyone to catch up 
-			isync								
 			ptesync								; Wait for quiet again
-			
-mINoTS64:	
+
 			stw		r0,tlbieLock(0)				; Clear the tlbie lock
-			
-			sync								; Make sure of it all
 
 			ld		r5,8(r3)					; Get the real part
 			srdi	r10,r5,12					; Change physical address to a ppnum

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -57,8 +57,6 @@
  *	Clock primitives.
  */
 
-#include <cpus.h>
-
 #include <mach/boolean.h>
 #include <mach/kern_return.h>
 #include <mach/machine.h>
@@ -92,14 +90,12 @@ thread_quantum_expire(
 	 *	Check for fail-safe trip.
 	 */
 	if (!(thread->sched_mode & TH_MODE_TIMESHARE)) {
-		extern uint64_t		max_unsafe_computation;
 		uint64_t			new_computation;
 
 		new_computation = myprocessor->quantum_end;
 		new_computation -= thread->computation_epoch;
 		if (new_computation + thread->computation_metered >
 											max_unsafe_computation) {
-			extern uint32_t		sched_safe_duration;
 
 			if (thread->sched_mode & TH_MODE_REALTIME) {
 				thread->priority = DEPRESSPRI;
@@ -123,9 +119,19 @@ thread_quantum_expire(
 		update_priority(thread);
 	else
 	if (thread->sched_mode & TH_MODE_TIMESHARE) {
-		thread_timer_delta(thread);
-		thread->sched_usage += thread->sched_delta;
-		thread->sched_delta = 0;
+		register uint32_t	delta;
+
+		thread_timer_delta(thread, delta);
+
+		/*
+		 *	Accumulate timesharing usage only
+		 *	during contention for processor
+		 *	resources.
+		 */
+		if (thread->pri_shift < INT8_MAX)
+			thread->sched_usage += delta;
+
+		thread->cpu_delta += delta;
 
 		/*
 		 * Adjust the scheduled priority if
@@ -156,4 +162,212 @@ thread_quantum_expire(
 	ast_check(myprocessor);
 
 	splx(s);
+}
+
+/*
+ *	Define shifts for simulating (5/8) ** n
+ *
+ *	Shift structures for holding update shifts.  Actual computation
+ *	is  usage = (usage >> shift1) +/- (usage >> abs(shift2))  where the
+ *	+/- is determined by the sign of shift 2.
+ */
+struct shift_data {
+	int	shift1;
+	int	shift2;
+};
+
+#define SCHED_DECAY_TICKS	32
+static struct shift_data	sched_decay_shifts[SCHED_DECAY_TICKS] = {
+	{1,1},{1,3},{1,-3},{2,-7},{3,5},{3,-5},{4,-8},{5,7},
+	{5,-7},{6,-10},{7,10},{7,-9},{8,-11},{9,12},{9,-11},{10,-13},
+	{11,14},{11,-13},{12,-15},{13,17},{13,-15},{14,-17},{15,19},{16,18},
+	{16,-19},{17,22},{18,20},{18,-20},{19,26},{20,22},{20,-22},{21,-27}
+};
+
+/*
+ *	do_priority_computation:
+ *
+ *	Calculate the timesharing priority based upon usage and load.
+ */
+#define do_priority_computation(thread, pri)							\
+	MACRO_BEGIN															\
+	(pri) = (thread)->priority		/* start with base priority */		\
+	    - ((thread)->sched_usage >> (thread)->pri_shift);				\
+	if ((pri) < MINPRI_USER)											\
+		(pri) = MINPRI_USER;											\
+	else																\
+	if ((pri) > MAXPRI_KERNEL)											\
+		(pri) = MAXPRI_KERNEL;											\
+	MACRO_END
+
+/*
+ *	set_priority:
+ *
+ *	Set the base priority of the thread
+ *	and reset its scheduled priority.
+ *
+ *	Called with the thread locked.
+ */
+void
+set_priority(
+	register thread_t	thread,
+	register int		priority)
+{
+	thread->priority = priority;
+	compute_priority(thread, FALSE);
+}
+
+/*
+ *	compute_priority:
+ *
+ *	Reset the scheduled priority of the thread
+ *	according to its base priority if the
+ *	thread has not been promoted or depressed.
+ *
+ *	Called with the thread locked.
+ */
+void
+compute_priority(
+	register thread_t	thread,
+	boolean_t			override_depress)
+{
+	register int		priority;
+
+	if (	!(thread->sched_mode & TH_MODE_PROMOTED)			&&
+			(!(thread->sched_mode & TH_MODE_ISDEPRESSED)	||
+				 override_depress							)		) {
+		if (thread->sched_mode & TH_MODE_TIMESHARE)
+			do_priority_computation(thread, priority);
+		else
+			priority = thread->priority;
+
+		set_sched_pri(thread, priority);
+	}
+}
+
+/*
+ *	compute_my_priority:
+ *
+ *	Reset the scheduled priority for
+ *	a timesharing thread.
+ *
+ *	Only for use on the current thread
+ *	if timesharing and not depressed.
+ *
+ *	Called with the thread locked.
+ */
+void
+compute_my_priority(
+	register thread_t	thread)
+{
+	register int		priority;
+
+	do_priority_computation(thread, priority);
+	assert(thread->runq == RUN_QUEUE_NULL);
+	thread->sched_pri = priority;
+}
+
+/*
+ *	update_priority
+ *
+ *	Perform housekeeping operations driven by scheduler tick.
+ *
+ *	Called with the thread locked.
+ */
+void
+update_priority(
+	register thread_t	thread)
+{
+	register unsigned	ticks;
+	register uint32_t	delta;
+
+	ticks = sched_tick - thread->sched_stamp;
+	assert(ticks != 0);
+	thread->sched_stamp += ticks;
+	thread->pri_shift = thread->processor_set->pri_shift;
+
+	/*
+	 *	Gather cpu usage data.
+	 */
+	thread_timer_delta(thread, delta);
+	if (ticks < SCHED_DECAY_TICKS) {
+		register struct shift_data	*shiftp;
+
+		/*
+		 *	Accumulate timesharing usage only
+		 *	during contention for processor
+		 *	resources.
+		 */
+		if (thread->pri_shift < INT8_MAX)
+			thread->sched_usage += delta;
+
+		thread->cpu_usage += delta + thread->cpu_delta;
+		thread->cpu_delta = 0;
+
+		shiftp = &sched_decay_shifts[ticks];
+		if (shiftp->shift2 > 0) {
+		    thread->cpu_usage =
+						(thread->cpu_usage >> shiftp->shift1) +
+						(thread->cpu_usage >> shiftp->shift2);
+		    thread->sched_usage =
+						(thread->sched_usage >> shiftp->shift1) +
+						(thread->sched_usage >> shiftp->shift2);
+		}
+		else {
+		    thread->cpu_usage =
+						(thread->cpu_usage >> shiftp->shift1) -
+						(thread->cpu_usage >> -(shiftp->shift2));
+		    thread->sched_usage =
+						(thread->sched_usage >> shiftp->shift1) -
+						(thread->sched_usage >> -(shiftp->shift2));
+		}
+	}
+	else {
+		thread->cpu_usage = thread->cpu_delta = 0;
+		thread->sched_usage = 0;
+	}
+
+	/*
+	 *	Check for fail-safe release.
+	 */
+	if (	(thread->sched_mode & TH_MODE_FAILSAFE)		&&
+			thread->sched_stamp >= thread->safe_release		) {
+		if (!(thread->safe_mode & TH_MODE_TIMESHARE)) {
+			if (thread->safe_mode & TH_MODE_REALTIME) {
+				thread->priority = BASEPRI_RTQUEUES;
+
+				thread->sched_mode |= TH_MODE_REALTIME;
+			}
+
+			thread->sched_mode &= ~TH_MODE_TIMESHARE;
+
+			if (thread->state & TH_RUN)
+				pset_share_decr(thread->processor_set);
+
+			if (!(thread->sched_mode & TH_MODE_ISDEPRESSED))
+				set_sched_pri(thread, thread->priority);
+		}
+
+		thread->safe_mode = 0;
+		thread->sched_mode &= ~TH_MODE_FAILSAFE;
+	}
+
+	/*
+	 *	Recompute scheduled priority if appropriate.
+	 */
+	if (	(thread->sched_mode & TH_MODE_TIMESHARE)	&&
+			!(thread->sched_mode & TH_MODE_PROMOTED)	&&
+			!(thread->sched_mode & TH_MODE_ISDEPRESSED)		) {
+		register int		new_pri;
+
+		do_priority_computation(thread, new_pri);
+		if (new_pri != thread->sched_pri) {
+			run_queue_t		runq;
+
+			runq = run_queue_remove(thread);
+			thread->sched_pri = new_pri;
+			if (runq != RUN_QUEUE_NULL)
+				thread_setrun(thread, SCHED_TAILQ);
+		}
+	}
 }

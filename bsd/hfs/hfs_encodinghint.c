@@ -22,6 +22,7 @@
 
 #include <sys/param.h>
 #include <hfs/hfs_macos_defs.h>
+#include <hfs/hfs.h>
 
 
 /* CJK Mac Encoding Bits */
@@ -41,6 +42,9 @@ u_int8_t cjk_lastunique = 0;
 /* Encoding bias */
 u_int32_t hfs_encodingbias = 0;
 int hfs_islatinbias = 0;
+
+extern lck_mtx_t  encodinglst_mutex;
+
 
 /* Map CJK bits to Mac encoding */
 u_int8_t cjk_encoding[] = {
@@ -889,7 +893,7 @@ hfs_pickencoding(const u_int16_t *src, int len)
 
 __private_extern__
 u_int32_t
-hfs_getencodingbias()
+hfs_getencodingbias(void)
 {
 	return (hfs_encodingbias);
 }
@@ -899,6 +903,8 @@ __private_extern__
 void
 hfs_setencodingbias(u_int32_t bias)
 {
+	lck_mtx_lock(&encodinglst_mutex);
+
 	hfs_encodingbias = bias;
 
 	switch (bias) {
@@ -914,5 +920,7 @@ hfs_setencodingbias(u_int32_t bias)
 		hfs_islatinbias = 0;
 		break;					
 	}
+
+	lck_mtx_unlock(&encodinglst_mutex);
 }
 

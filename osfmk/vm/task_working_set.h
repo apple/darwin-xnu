@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -33,6 +33,12 @@
 
 #ifndef	_VM_TASK_WORKING_SET_H_
 #define _VM_TASK_WORKING_SET_H_
+
+#include <mach/mach_types.h>
+
+#ifdef	KERNEL_PRIVATE
+
+#ifdef	MACH_KERNEL_PRIVATE
 
 #include <kern/queue.h>
 #include <vm/vm_object.h>
@@ -128,9 +134,9 @@ struct tws_hash_ele {
 };
 typedef struct tws_hash_ele *tws_hash_ele_t;
 
-#define TWS_HASH_OFF_MASK ((vm_object_offset_t)0xFFFFFFFFFFFE0000)
+#define TWS_HASH_OFF_MASK ((vm_object_offset_t)0xFFFFFFFFFFFE0000ULL)
 #define TWS_ADDR_OFF_MASK ((vm_offset_t)0xFFFE0000)
-#define TWS_INDEX_MASK ((vm_object_offset_t)0x000000000001F000)
+#define TWS_INDEX_MASK ((vm_object_offset_t)0x000000000001F000ULL)
 
 struct tws_hash_ptr {
 	tws_hash_ele_t		element;
@@ -139,7 +145,7 @@ struct tws_hash_ptr {
 typedef struct tws_hash_ptr *tws_hash_ptr_t;
 
 struct tws_hash_line {
-	int		ele_count;
+	unsigned int		ele_count;
 	struct tws_hash_ele	list[TWS_ARRAY_SIZE];
 };
 typedef struct tws_hash_line *tws_hash_line_t;
@@ -158,17 +164,17 @@ struct tws_hash {
 	decl_mutex_data(,lock)          /* tws_hash's lock */
 	int		style;
 
-	int		current_line;
+	unsigned int	current_line;
 	unsigned int	pageout_count;
-	int		line_count;
+	unsigned int	line_count;
 
-	int		number_of_lines;
-	int		number_of_elements;
-	int		expansion_count;
+	unsigned int	number_of_lines;
+	unsigned int	number_of_elements;
+	unsigned int	expansion_count;
 	unsigned int	time_of_creation;
 
-	int		lookup_count;
-	int		insert_count;
+	unsigned int	lookup_count;
+	unsigned int	insert_count;
 
 	tws_startup_t	startup_cache;
 	char		*startup_name;
@@ -188,13 +194,6 @@ struct tws_hash {
 
 typedef struct tws_hash *tws_hash_t;
 
-
-extern tws_hash_t tws_hash_create();
-
-extern void tws_hash_line_clear(
-			tws_hash_t	tws,
-			tws_hash_line_t hash_line, 
-			boolean_t live);
 
 extern kern_return_t tws_lookup(
 			tws_hash_t		tws,	
@@ -216,52 +215,41 @@ extern void tws_build_cluster(
 			vm_object_offset_t	*end,
 			vm_size_t		max_length);
 
-extern tws_line_signal(
-		tws_hash_t	tws,
-		vm_map_t	map,
-		tws_hash_line_t hash_line,
-		vm_offset_t	target_page);
+extern void tws_line_signal(
+			tws_hash_t		tws,
+			vm_map_t		map,
+			tws_hash_line_t 	hash_line,
+			vm_offset_t		target_page);
 
 extern void tws_hash_destroy(
-		tws_hash_t	tws);
+			tws_hash_t		tws);
 
-extern void tws_hash_clear(
-		tws_hash_t	tws);
+extern void tws_hash_ws_flush(
+			tws_hash_t		tws);
 
-kern_return_t	task_working_set_create(                
-		task_t  task,
-		unsigned int lines,
-		unsigned int rows,
-		unsigned int style);
+extern kern_return_t tws_expand_working_set(
+			tws_hash_t		old_tws,
+			unsigned int		line_count,
+			boolean_t		dump_data);
 
-kern_return_t	tws_expand_working_set(
-		vm_offset_t	old_tws,
-		int		line_count,
-		boolean_t	dump_data);
+extern kern_return_t task_working_set_create(                
+			task_t  		task,
+			unsigned int 		lines,
+			unsigned int 		rows,
+			unsigned int 		style);
 
-kern_return_t	tws_handle_startup_file(
-		task_t		task,
-		unsigned int	uid,
-		char		*app_name,
-		vm_offset_t	app_vp,
-		boolean_t	*new_info);
+#endif	/* MACH_KERNEL_PRIVATE */
 
-kern_return_t	tws_write_startup_file(
-		task_t		task,
-		int		fid,
-		int		mod,
-		char		*name,
-		unsigned int	string_length);
+extern kern_return_t tws_handle_startup_file(
+			task_t			task,
+			unsigned int		uid,
+			char			*app_name,
+			void			*app_vp,
+			boolean_t		*new_info);
 
-kern_return_t	tws_read_startup_file(
-		task_t			task,
-		tws_startup_t		startup,
-		vm_offset_t		cache_size);
+extern kern_return_t tws_send_startup_info(
+			task_t			task);
 
-void
-tws_hash_ws_flush(
-	tws_hash_t	tws);
-
-
+#endif	/* KERNEL_PRIVATE */
 
 #endif  /* _VM_TASK_WORKING_SET_H_ */

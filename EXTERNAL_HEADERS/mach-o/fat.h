@@ -57,3 +57,18 @@ struct fat_arch {
 	unsigned long	align;		/* alignment as a power of 2 */
 };
 
+#ifdef KERNEL
+
+#include <mach/mach_types.h>
+
+struct vnode;
+
+/* XXX return type should be load_return_t, but mach_loader.h is not in scope */
+int fatfile_getarch_affinity(struct vnode *vp, vm_offset_t data_ptr,
+		struct fat_arch *archret, int affinity);
+int fatfile_getarch(struct vnode *vp, vm_offset_t data_ptr,
+		struct fat_arch *archret);
+int fatfile_getarch_with_bits(struct vnode *vp, integer_t archbits,
+		vm_offset_t data_ptr, struct fat_arch *archret);
+
+#endif	/* KERNEL */

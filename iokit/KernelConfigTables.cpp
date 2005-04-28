@@ -23,23 +23,25 @@
 
 /* This list is used in IOStartIOKit.cpp to declare fake kmod_info
  * structs for kext dependencies that are built into the kernel.
+ * Empty version strings get replaced with osrelease at runtime.
  */
 const char * gIOKernelKmods =
 "{"
-"   'com.apple.kernel'                         = '7.9.0';"
-"   'com.apple.kpi.bsd'                        = '7.9.0';"
-"   'com.apple.kpi.iokit'                      = '7.9.0';"
-"   'com.apple.kpi.libkern'                    = '7.9.0';"
-"   'com.apple.kpi.mach'                       = '7.9.0';"
-"   'com.apple.iokit.IONVRAMFamily'            = '7.9.0';"
-"   'com.apple.driver.AppleNMI'                = '7.9.0';"
-"   'com.apple.iokit.IOSystemManagementFamily' = '7.9.0';"
-"   'com.apple.iokit.ApplePlatformFamily'      = '7.9.0';"
-"   'com.apple.kernel.6.0'                     = '6.9.9';"
-"   'com.apple.kernel.bsd'                     = '6.9.9';"
-"   'com.apple.kernel.iokit'                   = '6.9.9';"
-"   'com.apple.kernel.libkern'                 = '6.9.9';"
-"   'com.apple.kernel.mach'                    = '6.9.9';"
+   "'com.apple.kernel'                         = '';"
+   "'com.apple.kpi.bsd'                        = '';"
+   "'com.apple.kpi.iokit'                      = '';"
+   "'com.apple.kpi.libkern'                    = '';"
+   "'com.apple.kpi.mach'                       = '';"
+   "'com.apple.kpi.unsupported'                = '';"
+   "'com.apple.iokit.IONVRAMFamily'            = '';"
+   "'com.apple.driver.AppleNMI'                = '';"
+   "'com.apple.iokit.IOSystemManagementFamily' = '';"
+   "'com.apple.iokit.ApplePlatformFamily'      = '';"
+   "'com.apple.kernel.6.0'                     = '7.9.9';"
+   "'com.apple.kernel.bsd'                     = '7.9.9';"
+   "'com.apple.kernel.iokit'                   = '7.9.9';"
+   "'com.apple.kernel.libkern'                 = '7.9.9';"
+   "'com.apple.kernel.mach'                    = '7.9.9';"
 "}";
 
 

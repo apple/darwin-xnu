@@ -206,14 +206,14 @@ public:
     
     /*!
         @function isEqualTo
-        @abstract A member function which tests the equality of two OSArray objects.
+        @abstract A member function which tests the equality of the values of two OSArray objects.
         @param anArray The array object being compared against the receiver.
         @result Returns true if the two arrays are equivalent or false otherwise.
     */
     virtual bool isEqualTo(const OSArray *anArray) const;
     /*!
         @function isEqualTo
-        @abstract A member function which compares the equality of the receiving array to an arbitrary object.
+        @abstract A member function which compares the equality of the values of a receiving array to an arbitrary object.
         @param anObject The object to be compared against the receiver.
         @result Returns true if the two objects are equivalent, that is they are either the same object or they are both arrays containing the same or equivalent objects, or false otherwise.
     */
@@ -235,7 +235,7 @@ public:
 
     /*!
         @function getNextIndexOfObject
-        @abstract A member function which returns the next array index of an object, at or beyond the supplied index.
+        @abstract A member function which searches the array for the next instance of a specific object, at or beyond the supplied index.
         @result Returns the next index of the object in the array or (-1) if none is found.
     */
     virtual unsigned int getNextIndexOfObject(const OSMetaClassBase * anObject,
@@ -248,6 +248,24 @@ public:
         @result Returns true if serialization was successful, false if not.
     */
     virtual bool serialize(OSSerialize *s) const;
+
+    /*!
+        @function setOptions
+        @abstract This function is used to recursively set option bits in this array and all child collections.
+	@param options Set the (options & mask) bits.
+        @param mask The mask of bits which need to be set, 0 to get the current value.
+        @result The options before the set operation, NB setOptions(?,0) returns the current value of this collection.
+     */
+    virtual unsigned setOptions(unsigned options, unsigned mask, void * = 0);
+
+    /*!
+        @function copyCollection
+        @abstract Do a deep copy of this array and its collections.
+	@discussion This function copies this array included collections recursively.  Objects that don't derive from OSContainter are NOT copied, that is objects like OSString and OSData.
+	@param cycleDict Is a dictionary of all of the collections that have been, to start the copy at the top level just leave this field 0.
+	@result The newly copied collecton or 0 if insufficient memory
+    */
+    OSCollection *copyCollection(OSDictionary *cycleDict = 0);
 
     OSMetaClassDeclareReservedUnused(OSArray, 0);
     OSMetaClassDeclareReservedUnused(OSArray, 1);

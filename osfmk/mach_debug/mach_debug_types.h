@@ -61,6 +61,7 @@
 #include <mach_debug/zone_info.h>
 #include <mach_debug/page_info.h>
 #include <mach_debug/hash_info.h>
+#include <mach_debug/lockgroup_info.h>
 
 typedef	char	symtab_name_t[32];
 

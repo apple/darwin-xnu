@@ -54,8 +54,8 @@
  *
  */
 
-#ifndef	STD_TYPES_H_
-#define	STD_TYPES_H_
+#ifndef	_MACH_STD_TYPES_H_
+#define	_MACH_STD_TYPES_H_
 
 #include <stdint.h>
 #include <mach/boolean.h>
@@ -63,4 +63,4 @@
 #include <mach/port.h>
 #include <mach/vm_types.h>
 
-#endif	/* STD_TYPES_H_ */
+#endif	/* _MACH_STD_TYPES_H_ */

@@ -64,17 +64,30 @@
 #define _SYS_TIMEB_H_
 
 #include <sys/appleapiopts.h>
+#include <sys/cdefs.h>
+#include <sys/_types.h>
 
-#ifdef __APPLE_API_OBSOLETE
+/* [XSI] The time_t type shall be defined as described in <sys/types.h> */
+#ifndef	_TIME_T
+#define	_TIME_T
+typedef	__darwin_time_t	time_t;
+#endif
 
-/* The ftime(2) system call structure -- deprecated. */
+/*
+ * [XSI] Structure whose address is passed as the first parameter to ftime()
+ */
 struct timeb {
-	time_t	time;			/* seconds since the Epoch */
-	unsigned short millitm;		/* + milliseconds since the Epoch */
-	short	timezone;		/* minutes west of CUT */
-	short	dstflag;		/* DST == non-zero */
+	time_t		time;		/* [XSI] Seconds since the Epoch */
+	unsigned short	millitm;	/* [XSI] Milliseconds since the Epoch */
+	short		timezone;	/* [XSI] Minutes west of CUT */
+	short		dstflag;	/* [XSI] non-zero if DST in effect */
 };
 
-#endif /* __APPLE_API_OBSOLETE */
+#ifndef KERNEL
+__BEGIN_DECLS
+/* [XSI] Legacy interface */
+int	ftime(struct timeb *);
+__END_DECLS
+#endif /* !KERNEL */
 
 #endif /* !_SYS_TIMEB_H_ */

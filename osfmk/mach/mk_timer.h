@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -32,6 +32,9 @@
 #define	_MACH_MK_TIMER_H_
 
 #include <mach/mach_time.h>
+#include <sys/cdefs.h>
+
+__BEGIN_DECLS
 
 mach_port_name_t	mk_timer_create(void);
 
@@ -46,10 +49,14 @@ kern_return_t	mk_timer_cancel(
 					mach_port_name_t	name,
 					uint64_t			*result_time);
 
+__END_DECLS
+
+#pragma pack(4)
 struct mk_timer_expire_msg {
 	mach_msg_header_t	header;
 	uint64_t			unused[3];
 };
+#pragma pack()
 
 typedef struct mk_timer_expire_msg		mk_timer_expire_msg_t;
 

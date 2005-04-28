@@ -107,7 +107,7 @@ extern u_char isonullname[];
  * Initialize hash links for inodes and dnodes.
  */
 int
-cd9660_init()
+cd9660_init(__unused struct vfsconf *cp)
 {
 
 	isohashtbl = hashinit(desiredvnodes, M_ISOFSMNT, &isohash);
@@ -122,10 +122,7 @@ cd9660_init()
  * Enter a new node into the device hash list
  */
 struct iso_dnode *
-iso_dmap(device, inum, create)
-	dev_t	device;
-	ino_t	inum;
-	int	create;
+iso_dmap(dev_t device, ino_t inum, int create)
 {
 	register struct iso_dnode **dpp, *dp, *dq;
 
@@ -154,8 +151,7 @@ iso_dmap(device, inum, create)
 }
 
 void
-iso_dunmap(device)
-	dev_t device;
+iso_dunmap(dev_t device)
 {
 	struct iso_dnode **dpp, *dp, *dq;
 	
@@ -178,48 +174,60 @@ iso_dunmap(device)
  * to it. If it is in core, but locked, wait for it.
  */
 struct vnode *
-cd9660_ihashget(device, inum, p)
-	dev_t device;
-	ino_t inum;
-        struct proc *p;
+cd9660_ihashget(dev_t device, ino_t inum, struct proc *p)
 {
 	register struct iso_node *ip;
 	struct vnode *vp;
+	uint32_t vid;
 
-	for (;;)
-		for (ip = isohashtbl[INOHASH(device, inum)];; ip = ip->i_next) {
-			if (ip == NULL)
-				return (NULL);
-			if (inum == ip->i_number && device == ip->i_dev) {
-				/*
-				 * This is my most dangerous change.  I am not waiting for
-				 * the inode lock anymore (ufs doesn't, why should we) and
-				 * I'm worried because there is not lock on the hashtable,
-				 * but there wasn't before so I'll let it go for now.
-				 * -- chw --
+retry:
+	for (ip = isohashtbl[INOHASH(device, inum)]; ip; ip = ip->i_next) {
+		if (inum == ip->i_number && device == ip->i_dev) {
+			  
+		        if (ISSET(ip->i_flag, ISO_INALLOC)) {
+			        /*
+				 * inode is being created... wait for it
+				 * to be ready for consumption
 				 */
-                                vp = ITOV(ip);
-                                simple_lock(&vp->v_interlock);
-				if (!vget(vp, LK_EXCLUSIVE | LK_INTERLOCK | LK_RETRY, p))
-					return (vp);
-				break;
+			        SET(ip->i_flag, ISO_INWALLOC);
+				tsleep((caddr_t)ip, PINOD, "cd9960_ihashget", 0);
+				goto retry;
 			}
+			vp = ITOV(ip);
+			/*
+			 * the vid needs to be grabbed before we drop
+			 * lock protecting the hash
+			 */
+			vid = vnode_vid(vp);
+
+			/*
+			 * we currently depend on running under the FS funnel
+			 * when we do proper locking and advertise ourselves
+			 * as thread safe, we'll need a lock to protect the
+			 * hash lookup... this is where we would drop it
+			 */
+			if (vnode_getwithvid(vp, vid)) {
+			        /*
+				 * If vnode is being reclaimed, or has
+				 * already changed identity, no need to wait
+				 */
+			        return (NULL);
+			}	
+			return (vp);
 		}
-	/* NOTREACHED */
+	}
+	return (NULL);
 }
 
 /*
  * Insert the inode into the hash table, and return it locked.
  */
 void
-cd9660_ihashins(ip)
-	struct iso_node *ip;
+cd9660_ihashins(struct iso_node *ip)
 {
 	struct iso_node **ipp, *iq;
-	struct proc *p = current_proc();
 
 	/* lock the inode, then put it on the appropriate hash list */
-        lockmgr(&ip->i_lock, LK_EXCLUSIVE, (struct slock *)0, p);
 
 	ipp = &isohashtbl[INOHASH(ip->i_dev, ip->i_number)];
 	if ((iq = *ipp))
@@ -227,14 +235,13 @@ cd9660_ihashins(ip)
 	ip->i_next = iq;
 	ip->i_prev = ipp;
 	*ipp = ip;
-	}
+}
 
 /*
  * Remove the inode from the hash table.
  */
 void
-cd9660_ihashrem(ip)
-	register struct iso_node *ip;
+cd9660_ihashrem(register struct iso_node *ip)
 {
 	register struct iso_node *iq;
 
@@ -248,73 +255,53 @@ cd9660_ihashrem(ip)
 }
 
 /*
- * Last reference to an inode, write the inode out and if necessary,
- * truncate and deallocate the file.
+ * Last reference to an inode... if we're done with
+ * it, go ahead and recycle it for other use
  */
 int
-cd9660_inactive(ap)
-	struct vop_inactive_args /* {
-		struct vnode *a_vp;
-		struct proc *a_p;
-	} */ *ap;
+cd9660_inactive(struct vnop_inactive_args *ap)
 {
-	struct vnode *vp = ap->a_vp;
-	struct proc *p = ap->a_p;
-	register struct iso_node *ip = VTOI(vp);
-	int error = 0;
+	vnode_t	vp = ap->a_vp;
+	struct iso_node *ip = VTOI(vp);
 	
-	if (prtactive && vp->v_usecount != 0)
-		vprint("cd9660_inactive: pushing active", vp);
-	/*
-	 * We need to unlock the inode here. If we don't panics or
-	 * hangs will ensue. Our callers expect us to take care of this.
-	 */
-
-	VOP_UNLOCK(vp,0,p);
-
 	/*
 	 * If we are done with the inode, reclaim it
 	 * so that it can be reused immediately.
 	 */
-	if (vp->v_usecount == 0 && ip->inode.iso_mode == 0)
-		vgone(vp);
+	if (ip->inode.iso_mode == 0)
+		vnode_recycle(vp);
 
-	return error;
+	return 0;
 }
 
 /*
  * Reclaim an inode so that it can be used for other purposes.
  */
 int
-cd9660_reclaim(ap)
-	struct vop_reclaim_args /* {
-		struct vnode *a_vp;
-	} */ *ap;
+cd9660_reclaim(struct vnop_reclaim_args *ap)
 {
-	register struct vnode *vp = ap->a_vp;
-	register struct iso_node *ip = VTOI(vp);
+	vnode_t	vp = ap->a_vp;
+	struct iso_node *ip = VTOI(vp);
 	
-	if (prtactive && vp->v_usecount != 0)
-		vprint("cd9660_reclaim: pushing active", vp);
+	vnode_removefsref(vp);
 	/*
 	 * Remove the inode from its hash chain.
 	 */
 	cd9660_ihashrem(ip);
-	/*
-	 * Purge old data structures associated with the inode.
-	 */
-	cache_purge(vp);
+
 	if (ip->i_devvp) {
-		struct vnode *tvp = ip->i_devvp;
+		vnode_t	devvp = ip->i_devvp;
 		ip->i_devvp = NULL;
-		vrele(tvp);
+		vnode_rele(devvp);
 	}
+	vnode_clearfsnode(vp);
+
 	if (ip->i_namep != isonullname)
 		FREE(ip->i_namep, M_TEMP);
 	if (ip->i_riff != NULL)
 		FREE(ip->i_riff, M_TEMP);
-	FREE_ZONE(vp->v_data, sizeof(struct iso_node), M_ISOFSNODE);
-	vp->v_data = NULL;
+	FREE_ZONE(ip, sizeof(struct iso_node), M_ISOFSNODE);
+
 	return (0);
 }
 
@@ -322,10 +309,8 @@ cd9660_reclaim(ap)
  * File attributes
  */
 void
-cd9660_defattr(isodir, inop, bp)
-	struct iso_directory_record *isodir;
-	struct iso_node *inop;
-	struct buf *bp;
+cd9660_defattr(struct iso_directory_record *isodir, struct iso_node *inop,
+		struct buf *bp)
 {
 	struct buf *bp2 = NULL;
 	struct iso_mnt *imp;
@@ -346,12 +331,11 @@ cd9660_defattr(isodir, inop, bp)
 	if (!bp
 	    && ((imp = inop->i_mnt)->im_flags & ISOFSMNT_EXTATT)
 	    && (off = isonum_711(isodir->ext_attr_length))) {
-		VOP_BLKATOFF(ITOV(inop), (off_t)-(off << imp->im_bshift), NULL,
-			     &bp2);
+		cd9660_blkatoff(ITOV(inop), (off_t)-(off << imp->im_bshift), NULL, &bp2);
 		bp = bp2;
 	}
 	if (bp) {
-		ap = (struct iso_extended_attributes *)bp->b_data;
+		ap = (struct iso_extended_attributes *)buf_dataptr(bp);
 		
 		if (isonum_711(ap->version) == 1) {
 			if (!(ap->perm[0]&0x40))
@@ -372,22 +356,20 @@ cd9660_defattr(isodir, inop, bp)
 			ap = NULL;
 	}
 	if (!ap) {
-		inop->inode.iso_mode |= VREAD|VEXEC|(VREAD|VEXEC)>>3|(VREAD|VEXEC)>>6;
-		inop->inode.iso_uid = (uid_t)0;
-		inop->inode.iso_gid = (gid_t)0;
+		inop->inode.iso_mode |= VREAD|VWRITE|VEXEC|(VREAD|VEXEC)>>3|(VREAD|VEXEC)>>6;
+		inop->inode.iso_uid = ISO_UNKNOWNUID;
+		inop->inode.iso_gid = ISO_UNKNOWNGID;
 	}
 	if (bp2)
-		brelse(bp2);
+		buf_brelse(bp2);
 }
 
 /*
  * Time stamps
  */
 void
-cd9660_deftstamp(isodir,inop,bp)
-	struct iso_directory_record *isodir;
-	struct iso_node *inop;
-	struct buf *bp;
+cd9660_deftstamp(struct iso_directory_record *isodir, struct iso_node *inop,
+		struct buf *bp)
 {
 	struct buf *bp2 = NULL;
 	struct iso_mnt *imp;
@@ -398,11 +380,11 @@ cd9660_deftstamp(isodir,inop,bp)
 	    && ((imp = inop->i_mnt)->im_flags & ISOFSMNT_EXTATT)
 	    && (off = isonum_711(isodir->ext_attr_length))) 
 	{
-		VOP_BLKATOFF(ITOV(inop), (off_t)-(off << imp->im_bshift), NULL, &bp2);
+		cd9660_blkatoff(ITOV(inop), (off_t)-(off << imp->im_bshift), NULL, &bp2);
 		bp = bp2;
 	}
 	if (bp) {
-		ap = (struct iso_extended_attributes *)bp->b_data;
+		ap = (struct iso_extended_attributes *)buf_dataptr(bp);
 		
 		if (isonum_711(ap->version) == 1) {
 			if (!cd9660_tstamp_conv17(ap->ftime,&inop->inode.iso_atime))
@@ -420,16 +402,14 @@ cd9660_deftstamp(isodir,inop,bp)
 		inop->inode.iso_mtime = inop->inode.iso_ctime;
 	}
 	if (bp2)
-		brelse(bp2);
+		buf_brelse(bp2);
 }
 
 int
-cd9660_tstamp_conv7(pi,pu)
-	u_char *pi;
-	struct timespec *pu;
+cd9660_tstamp_conv7(u_char *pi, struct timespec *pu)
 {
 	int crtime, days;
-	int y, m, d, hour, minute, second, tz;
+	int y, m, d, hour, minute, second, mytz;
 	
 	y = pi[0] + 1900;
 	m = pi[1];
@@ -437,7 +417,7 @@ cd9660_tstamp_conv7(pi,pu)
 	hour = pi[3];
 	minute = pi[4];
 	second = pi[5];
-	tz = pi[6];
+	mytz = pi[6];
 	
 	if (y < 1970) {
 		pu->tv_sec  = 0;
@@ -458,8 +438,8 @@ cd9660_tstamp_conv7(pi,pu)
 		crtime = ((((days * 24) + hour) * 60 + minute) * 60) + second;
 		
 		/* timezone offset is unreliable on some disks */
-		if (-48 <= tz && tz <= 52)
-			crtime -= tz * 15 * 60;
+		if (-48 <= mytz && mytz <= 52)
+			crtime -= mytz * 15 * 60;
 	}
 	pu->tv_sec  = crtime;
 	pu->tv_nsec = 0;
@@ -467,9 +447,7 @@ cd9660_tstamp_conv7(pi,pu)
 }
 
 static u_int
-cd9660_chars2ui(begin,len)
-	u_char *begin;
-	int len;
+cd9660_chars2ui(u_char *begin, int len)
 {
 	u_int rc;
 	
@@ -481,9 +459,7 @@ cd9660_chars2ui(begin,len)
 }
 
 int
-cd9660_tstamp_conv17(pi,pu)
-	u_char *pi;
-	struct timespec *pu;
+cd9660_tstamp_conv17(u_char *pi, struct timespec *pu)
 {
 	u_char buf[7];
 	
@@ -512,9 +488,7 @@ cd9660_tstamp_conv17(pi,pu)
 }
 
 ino_t
-isodirino(isodir, imp)
-	struct iso_directory_record *isodir;
-	struct iso_mnt *imp;
+isodirino(struct iso_directory_record *isodir, struct iso_mnt *imp)
 {
 	ino_t ino;
 

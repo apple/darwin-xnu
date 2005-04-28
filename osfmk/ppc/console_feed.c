@@ -59,7 +59,7 @@ console_feed_open(
 {
 	spl_t	s;
 
-        simple_lock_init(&cons_feed_lock, ETAP_IO_TTY);
+        simple_lock_init(&cons_feed_lock, 0);
 #if	MACH_KDB
 	if (console_is_serial()) {
 		return D_DEVICE_DOWN;

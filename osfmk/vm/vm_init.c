@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -68,8 +68,12 @@
 #include <vm/vm_fault.h>
 #include <vm/vm_init.h>
 
+#include <pexpert/pexpert.h>
+
+#include <vm/vm_protos.h>
+
 #define ZONE_MAP_MIN (12 * 1024 * 1024) 
-#define ZONE_MAP_MAX (256 * 1024 * 1024) 
+#define ZONE_MAP_MAX (768 * 1024 * 1024) 
 
 /*
  *	vm_mem_bootstrap initializes the virtual memory system.

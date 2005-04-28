@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -24,9 +24,12 @@
 #ifndef _SYS_EV_H_
 #define _SYS_EV_H_
 
+#if !defined(__LP64__)
+
 #include <sys/appleapiopts.h>
 
 #include <sys/queue.h>
+#include <sys/cdefs.h>
 
 struct eventreq {
   int      er_type;
@@ -59,8 +62,7 @@ typedef struct eventreq *er_t;
 #define EV_TIMEOUT 0x20000
 #define EV_DMASK   0xffffff00
 
-#ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
+#ifdef BSD_KERNEL_PRIVATE
 
 struct eventqelt {
   TAILQ_ENTRY(eventqelt)  ee_slist;
@@ -68,12 +70,13 @@ struct eventqelt {
   struct eventreq  ee_req;
   struct proc *    ee_proc;
   u_int            ee_flags;
-#define EV_QUEUED 1
+#define EV_QUEUED	0x01
   u_int            ee_eventmask;
-  struct socket   *ee_sp;
 };
 
-#endif /* __APPLE_API_PRIVATE */
-#endif /* KERNEL */
+int waitevent_close(struct proc *p, struct fileproc *);
+#endif /* BSD_KERNEL_PRIVATE */
+
+#endif /* !defined(__LP64__) */
 
 #endif /* _SYS_EV_H_ */

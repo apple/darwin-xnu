@@ -107,7 +107,7 @@ IOReturn IOPMchangeNoteList::releaseHeadChangeNote ( void )
 {
     IOPowerConnection *tmp;
 
-    if(tmp = changeNote[firstInList].parent) {
+    if((tmp = changeNote[firstInList].parent)) {
        changeNote[firstInList].parent = 0;
        tmp->release();
     }
@@ -131,7 +131,7 @@ IOReturn IOPMchangeNoteList::releaseTailChangeNote ( void )
 {
     IOPowerConnection *tmp;
     
-    if(tmp = changeNote[firstInList].parent) {
+    if((tmp = changeNote[firstInList].parent)) {
        changeNote[firstInList].parent = 0;
        tmp->release();
     }

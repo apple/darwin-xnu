@@ -28,7 +28,6 @@
 
         .text
         .align	2
-        .globl	EXT(bzero_32)
         
 
 // *******************
@@ -122,4 +121,4 @@ Ltail:
         stb		r0,0(r9)
         blr
 
-        COMMPAGE_DESCRIPTOR(bzero_32,_COMM_PAGE_BZERO,kCache32,0,0)
+	COMMPAGE_DESCRIPTOR(bzero_32,_COMM_PAGE_BZERO,kCache32,0,kCommPage32)

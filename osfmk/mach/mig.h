@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -34,6 +34,31 @@
 #include <mach/port.h>
 #include <mach/message.h>
 #include <mach/vm_types.h>
+
+#include <sys/cdefs.h>
+
+#if defined(MACH_KERNEL)
+
+/* Turn MIG type checking on by default for kernel */
+#define __MigTypeCheck 1
+#define __MigKernelSpecificCode 1
+#define _MIG_KERNEL_SPECIFIC_CODE_ 1
+
+/* Otherwise check legacy setting (temporary) */
+#elif defined(TypeCheck)  
+
+#define __MigTypeCheck TypeCheck
+ 
+#endif /* defined(TypeCheck) */
+
+/*
+ * Pack MIG message structs if we have Power alignment of structs.
+ * This is an indicator of the need to view shared structs in a
+ * binary-compatible format - and MIG message structs are no different.
+ */
+#if __DARWIN_ALIGN_POWER
+#define __MigPackStructs 1
+#endif
 
 /*
  * Definition for MIG-generated server stub routines.  These routines
@@ -103,28 +128,12 @@ typedef struct mig_symtab {
 					 							 */
 } mig_symtab_t;
 
-/* Client side reply port allocate */
-extern mach_port_t mig_get_reply_port(void);
+#ifdef	PRIVATE
 
-/* Client side reply port deallocate */
-extern void mig_dealloc_reply_port(mach_port_t reply_port);
+/* MIG object runtime - not ready for public consumption */
 
-/* Client side reply port "deallocation" */
-extern void mig_put_reply_port(mach_port_t reply_port);
+#ifdef  KERNEL_PRIVATE
 
-/* Bounded string copy */
-extern int mig_strncpy(char	*dest, const char *src,	int	len);
-
-#ifdef	KERNEL_PRIVATE
-#include <sys/appleapiopts.h>
-
-/* Allocate memory for out-of-stack mig structures */
-extern char *mig_user_allocate(vm_size_t size);
-
-/* Deallocate memory used for out-of-stack mig structures */
-extern void mig_user_deallocate(char *data, vm_size_t size);
-
-#ifdef __APPLE_API_EVOLVING
 /*
  * MIG object runtime definitions
  *
@@ -156,11 +165,11 @@ typedef struct IMIGObjectVtbl			IMIGObjectVtbl;
 typedef struct IMIGNotifyObjectVtbl		IMIGNotifyObjectVtbl;
 
 typedef struct IMIGObject {
-	IMIGObjectVtbl				*pVtbl;
+	const IMIGObjectVtbl			*pVtbl;
 } IMIGObject;
 
 typedef struct IMIGNotifyObject {
-	IMIGNotifyObjectVtbl			*pVtbl;
+	const IMIGNotifyObjectVtbl		*pVtbl;
 } IMIGNotifyObject;
 
 struct IMIGObjectVtbl {
@@ -236,8 +245,41 @@ struct IMIGNotifyObjectVtbl {
 			mig_notify_type_t	notify_type);
 };
 
-#endif /* __APPLE_API_EVOLVING */
+#endif	/* KERNEL_PRIVATE */
+#endif  /* PRIVATE */
+
+__BEGIN_DECLS
+
+/* Client side reply port allocate */
+extern mach_port_t mig_get_reply_port(void);
+
+/* Client side reply port deallocate */
+extern void mig_dealloc_reply_port(mach_port_t reply_port);
+
+/* Client side reply port "deallocation" */
+extern void mig_put_reply_port(mach_port_t reply_port);
+
+/* Bounded string copy */
+extern int mig_strncpy(char	*dest, const char *src,	int	len);
+
+#ifdef KERNEL_PRIVATE
+
+/* Allocate memory for out-of-stack mig structures */
+extern char *mig_user_allocate(vm_size_t size);
+
+/* Deallocate memory used for out-of-stack mig structures */
+extern void mig_user_deallocate(char *data, vm_size_t size);
+
+#else
+
+/* Allocate memory for out-of-line mig structures */
+extern void mig_allocate(vm_address_t *, vm_size_t);
+
+/* Deallocate memory used for out-of-line mig structures */
+extern void mig_deallocate(vm_address_t, vm_size_t);
 
 #endif /* KERNEL_PRIVATE */
 
-#endif /* _MACH_MIG_H_ */
+__END_DECLS
+
+#endif	/* _MACH_MIG_H_ */

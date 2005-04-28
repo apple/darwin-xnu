@@ -16,14 +16,6 @@ export INCR_EXPORTHDRS	= FALSE
 endif
 endif
 
-ifndef INCR_INSTALLHDRS
-ifeq ($(shell test -d $$DSTROOT/$INCDIR;echo $$?),0)
-export INCR_INSTALLHDRS	= TRUE
-else
-export INCR_INSTALLHDRS	= FALSE
-endif
-endif
-
 #
 # Component List
 #
@@ -90,7 +82,7 @@ export INSTALL_ARCH_DEFAULT	= PPC
 #
 # Standard defines list
 #
-export DEFINES = -DAPPLE -DNeXT -DKERNEL_PRIVATE -D__MACHO__=1 -Dvolatile=__volatile $(IDENT)
+export DEFINES = -DAPPLE -DNeXT -DKERNEL -DKERNEL_PRIVATE -DXNU_KERNEL_PRIVATE -DPRIVATE -D__MACHO__=1 -Dvolatile=__volatile $(IDENT)
 
 #
 # Compiler command
@@ -98,6 +90,34 @@ export DEFINES = -DAPPLE -DNeXT -DKERNEL_PRIVATE -D__MACHO__=1 -Dvolatile=__vola
 KCC  = /usr/bin/cc
 KC++ = /usr/bin/c++
 CC   = $(KCC)
+
+#
+# Compiler warning flags
+#
+
+CWARNFLAGS_STD = \
+	-Wall -Wno-format-y2k -W -Wstrict-prototypes -Wmissing-prototypes \
+	-Wpointer-arith -Wreturn-type -Wcast-qual -Wwrite-strings -Wswitch \
+	-Wshadow -Wcast-align -Wbad-function-cast -Wchar-subscripts -Winline \
+	-Wnested-externs -Wredundant-decls
+
+export CWARNFLAGS ?= $(CWARNFLAGS_STD)
+
+MWARNFLAGS_STD = \
+	-Wall -Wno-format-y2k -W -Wstrict-prototypes -Wmissing-prototypes \
+	-Wpointer-arith -Wreturn-type -Wcast-qual -Wwrite-strings -Wswitch \
+	-Wshadow -Wcast-align -Wbad-function-cast -Wchar-subscripts -Winline \
+	-Wnested-externs -Wredundant-decls
+
+export MWARNFLAGS ?= $(MWARNFLAGS_STD)
+
+CXXWARNFLAGS_STD = \
+	-Wall -Wno-format-y2k -W -Wstrict-prototypes -Wmissing-prototypes \
+	-Wpointer-arith -Wreturn-type -Wcast-qual -Wwrite-strings -Wswitch \
+	-Wshadow -Wcast-align -Wchar-subscripts -Winline -Wredundant-decls \
+	-fpermissive
+
+export CXXWARNFLAGS ?= $(CXXWARNFLAGS_STD)
 
 
 #
@@ -118,23 +138,23 @@ endif
 
 export CFLAGS_GEN = -static -g -nostdinc -nostdlib -no-cpp-precomp \
 	-fno-builtin -finline -fno-keep-inline-functions -msoft-float \
-	-fsigned-bitfields -Wpointer-arith $(OTHER_CFLAGS)
+	-fsigned-bitfields $(OTHER_CFLAGS)
 
 export CFLAGS_RELEASE 	= 
 export CFLAGS_DEBUG 	= 
 export CFLAGS_PROFILE 	=  -pg
 
 export CFLAGS_PPC 	= -arch ppc -Dppc -DPPC -D__PPC__ -DPAGE_SIZE_FIXED
-export CFLAGS_I386 	= -arch i386 -Di386 -DI386 -D__I386__ \
-	-march=i686 -mpreferred-stack-boundary=2 -falign-functions=4 -mcpu=pentium4
+export CFLAGS_I386 	= -arch i386 -Di386 -DI386 -D__I386__ -DPAGE_SIZE_FIXED \
+	-march=i686 -mpreferred-stack-boundary=2 -falign-functions=4 -mcpu=pentium4 -force_cpusubtype_ALL
 
 export CFLAGS_RELEASEPPC = -O2 -mcpu=750 -mmultiple -fschedule-insns
 export CFLAGS_RELEASE_TRACEPPC = -O2 -mcpu=750 -mmultiple -fschedule-insns
 export CFLAGS_DEBUGPPC = -O2 -mcpu=750 -mmultiple -fschedule-insns
 export CFLAGS_PROFILEPPC = -O2 -mcpu=750 -mmultiple -fschedule-insns
-export CFLAGS_RELEASEI386 = -O2
-export CFLAGS_DEBUGI386 = -O2
-export CFLAGS_PROFILEI386 = -O2
+export CFLAGS_RELEASEI386 = -Os
+export CFLAGS_DEBUGI386 = -Os
+export CFLAGS_PROFILEI386 = -Os
 
 export CFLAGS 	= $(CFLAGS_GEN) \
 		  $($(addsuffix $(ARCH_CONFIG),CFLAGS_)) \
@@ -194,15 +214,33 @@ export LDFLAGS_COMPONENT	= $(LDFLAGS_COMPONENT_GEN) \
 		  $($(addsuffix $(ARCH_CONFIG),LDFLAGS_COMPONENT_)) \
 		  $($(addsuffix $(KERNEL_CONFIG),LDFLAGS_COMPONENT_))
 
-export LDFLAGS_KERNEL_GEN = -static -force_cpusubtype_ALL -segalign 0x1000
+export LDFLAGS_KERNEL_GEN = \
+	-static \
+	-force_cpusubtype_ALL \
+	-e __start \
+	-segalign 0x1000 \
+	-sectalign __TEXT __text 0x1000 \
+	-sectalign __DATA __common 0x1000 \
+	-sectalign __DATA __bss 0x1000 \
+	-sectcreate __PRELINK __text /dev/null \
+	-sectcreate __PRELINK __symtab /dev/null \
+	-sectcreate __PRELINK __info /dev/null
 
 export LDFLAGS_KERNEL_RELEASE 	=
 #  -noseglinkedit
 export LDFLAGS_KERNEL_DEBUG 	= 
 export LDFLAGS_KERNEL_PROFILE 	= 
 
-export LDFLAGS_KERNEL_PPC      = -arch ppc -segaddr __VECTORS 0x0 -segaddr __TEXT 0x7000 -e __start -sectalign __TEXT __text 0x1000 -sectalign __DATA __common 0x1000 -sectalign __DATA __bss 0x1000 -sectcreate __PRELINK __text /dev/null -sectcreate __PRELINK __symtab /dev/null -sectcreate __PRELINK __info /dev/null
-export LDFLAGS_KERNEL_I386     = -arch i386 -segaddr __TEXT 0x100000 -e _pstart -sectcreate __PRELINK __text /dev/null -sectcreate __PRELINK __symtab /dev/null -sectcreate __PRELINK __info /dev/null
+export LDFLAGS_KERNEL_PPC      = \
+	-arch ppc \
+	-segaddr __VECTORS 0x0 \
+	-segaddr __HIB 0x7000  \
+	-segaddr __TEXT 0xe000
+ 
+export LDFLAGS_KERNEL_I386     = \
+	-arch i386 \
+	-segaddr __HIB  0xC0100000 \
+	-segaddr __TEXT 0xC0111000
 
 export LDFLAGS_KERNEL	= $(LDFLAGS_KERNEL_GEN) \
 		  $($(addsuffix $(ARCH_CONFIG),LDFLAGS_KERNEL_)) \
@@ -219,7 +257,7 @@ export LD_KERNEL_LIBS	= -lcc_kext
 #
 export INCFLAGS_IMPORT 	= $(patsubst %, -I$(OBJROOT)/EXPORT_HDRS/%, $(COMPONENT_IMPORT_LIST))
 export INCFLAGS_EXTERN 	= -I$(OBJROOT)/EXTERN_HDRS -I$(SRCROOT)/EXTERNAL_HEADERS -I$(SRCROOT)/EXTERNAL_HEADERS/bsd
-export INCFLAGS_GEN	= -I$(SRCROOT)/$(COMPONENT) 
+export INCFLAGS_GEN	= -I$(SRCROOT)/$(COMPONENT) -I$(OBJROOT)/EXPORT_HDRS/$(COMPONENT)
 export INCFLAGS_POSIX	= -I$(OBJROOT)/EXPORT_HDRS/bsd
 export INCFLAGS_LOCAL	= -I.
 
@@ -265,6 +303,14 @@ KINCVERS = A
 KINCFRAME = $(FRAMEDIR)/Kernel.framework
 KINCDIR = $(KINCFRAME)/Versions/$(KINCVERS)/Headers
 KPINCDIR = $(KINCFRAME)/Versions/$(KINCVERS)/PrivateHeaders
+KRESDIR = $(KINCFRAME)/Versions/$(KINCVERS)/Resources
+
+XNU_PRIVATE_UNIFDEF = -UMACH_KERNEL_PRIVATE -UBSD_KERNEL_PRIVATE -UIOKIT_KERNEL_PRIVATE -ULIBKERN_KERNEL_PRIVATE -ULIBSA_KERNEL_PRIVATE -UPEXPERT_KERNEL_PRIVATE -UXNU_KERNEL_PRIVATE
+
+SPINCFRAME_UNIFDEF = $(XNU_PRIVATE_UNIFDEF) -UKERNEL_PRIVATE -UKERNEL -DPRIVATE
+SINCFRAME_UNIFDEF  = $(XNU_PRIVATE_UNIFDEF) -UKERNEL_PRIVATE -UKERNEL -UPRIVATE
+KPINCFRAME_UNIFDEF = $(XNU_PRIVATE_UNIFDEF) -DKERNEL_PRIVATE -DPRIVATE -DKERNEL
+KINCFRAME_UNIFDEF  = $(XNU_PRIVATE_UNIFDEF) -UKERNEL_PRIVATE -UPRIVATE -DKERNEL
 
 #
 # Compononent Header file destinations

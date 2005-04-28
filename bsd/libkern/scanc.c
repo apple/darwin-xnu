@@ -57,10 +57,7 @@
 #include <libkern/libkern.h>
 
 int
-scanc(size, cp, table, mask0)
-	u_int size;
-	register u_char *cp, table[];
-	int mask0;
+scanc(u_int size, u_char *cp, const u_char table[], int mask0)
 {
 	register u_char *end;
 	register u_char mask;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -23,11 +23,14 @@
 #include <mach/port.h>
 #include <mach/message.h>
 #include <mach/kern_return.h>
-#include <mach/etap_events.h>
+#include <mach/host_priv.h>
 
+#include <kern/kern_types.h>
+#include <kern/kalloc.h>
 #include <kern/host.h>
-#include <ipc/ipc_port.h>
 #include <kern/ipc_kobject.h>
+
+#include <ipc/ipc_port.h>
 
 #include <UserNotification/UNDTypes.h>
 #include <UserNotification/UNDRequest.h>
@@ -56,6 +59,11 @@ struct UNDReply {
 #define UNDReply_lock_try(reply)	mutex_lock_try(&(reply)->lock)
 #define UNDReply_unlock(reply)		mutex_unlock(&(reply)->lock)
 
+/* forward declarations */
+void UNDReply_deallocate(
+	UNDReplyRef		reply);
+
+
 void
 UNDReply_deallocate(
 	UNDReplyRef		reply)
@@ -70,7 +78,7 @@ UNDReply_deallocate(
 	UNDReply_unlock(reply);
 
 	ipc_port_dealloc_kernel(port);
-	kfree((vm_offset_t)reply, sizeof(struct UNDReply));
+	kfree(reply, sizeof(struct UNDReply));
 	return;
 }
 
@@ -108,7 +116,7 @@ UNDAlertCompletedWithResult_rpc (
 	CFStringRef		xmlError = NULL;
 	CFDictionaryRef 	dict = NULL;
 #else
-	void *dict = (void *)keyRef;
+	const void *dict = (const void *)keyRef;
 #endif
 
 	if (reply == UND_REPLY_NULL || !reply->inprogress)
@@ -182,10 +190,10 @@ KUNCGetNotificationID()
 	if (reply != UND_REPLY_NULL) {
 		reply->self_port = ipc_port_alloc_kernel();
 		if (reply->self_port == IP_NULL) {
-			kfree((vm_offset_t)reply, sizeof(struct UNDReply));
+			kfree(reply, sizeof(struct UNDReply));
 			reply = UND_REPLY_NULL;
 		} else {
-			mutex_init(&reply->lock, ETAP_IO_UNDREPLY);
+			mutex_init(&reply->lock, 0);
 			reply->userLandNotificationKey = -1;
 			reply->inprogress = FALSE;
 			ipc_kobject_set(reply->self_port,
@@ -229,7 +237,7 @@ kern_return_t KUNCUserNotificationCancel(
 	}
 
 	reply->inprogress = FALSE;
-	if (ulkey = reply->userLandNotificationKey) {
+	if ((ulkey = reply->userLandNotificationKey) != 0) {
 		UNDServerRef UNDServer;
 
 		reply->userLandNotificationKey = 0;
@@ -251,7 +259,7 @@ kern_return_t KUNCUserNotificationCancel(
 
 kern_return_t
 KUNCUserNotificationDisplayNotice(
-	int		timeout,
+	int		noticeTimeout,
 	unsigned	flags,
 	char		*iconPath,
 	char		*soundPath,
@@ -266,7 +274,7 @@ KUNCUserNotificationDisplayNotice(
 	if (IP_VALID(UNDServer)) {
 		kern_return_t kr;
 		kr = UNDDisplayNoticeSimple_rpc(UNDServer,
-					timeout,
+					noticeTimeout,
 					flags,
 					iconPath,
 					soundPath,
@@ -282,7 +290,7 @@ KUNCUserNotificationDisplayNotice(
 
 kern_return_t
 KUNCUserNotificationDisplayAlert(
-	int		timeout,
+	int		alertTimeout,
 	unsigned	flags,
 	char		*iconPath,
 	char		*soundPath,
@@ -300,7 +308,7 @@ KUNCUserNotificationDisplayAlert(
 	if (IP_VALID(UNDServer)) {
 		kern_return_t	kr;
 		kr = UNDDisplayAlertSimple_rpc(UNDServer,
-				       timeout,
+				       alertTimeout,
 				       flags,
 				       iconPath,
 				       soundPath,
@@ -326,7 +334,7 @@ KUNCUserNotificationDisplayFromBundle(
 	char			     *messageKey,
 	char			     *tokenString,
 	KUNCUserNotificationCallBack callback,
-	int			     contextKey)
+	__unused int			contextKey)
 {
 	UNDReplyRef reply = (UNDReplyRef)id;
 	UNDServerRef UNDServer;
@@ -339,7 +347,7 @@ KUNCUserNotificationDisplayFromBundle(
 		UNDReply_unlock(reply);
 		return KERN_INVALID_ARGUMENT;
 	}
-	reply->inprogress == TRUE;
+	reply->inprogress = TRUE;
 	reply->callback = callback;
 	reply_port = ipc_port_make_send(reply->self_port);
 	UNDReply_unlock(reply);

@@ -61,7 +61,7 @@
 #define _NETINET_IP_FLOW_H
 #include <sys/appleapiopts.h>
 
-#ifdef __APPLE_API_PRIVATE
+#ifdef KERNEL_PRIVATE
 struct ipflow {
 	LIST_ENTRY(ipflow) ipf_next;	/* next ipflow in bucket */
 	struct in_addr ipf_dst;		/* destination address */
@@ -76,6 +76,6 @@ struct ipflow {
 	u_long ipf_errors;		/* other errors returned by if_output */
 	u_long ipf_last_uses;		/* number of uses in last period */
 };
-#endif /* __APPLE_API_PRIVATE */
+#endif /* KERNEL_PRIVATE */
 
 #endif

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -69,7 +69,6 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/buf.h>
 #include <sys/namei.h>
 #include <sys/kernel.h>
 #include <sys/fcntl.h>
@@ -77,16 +76,22 @@
 #include <sys/disklabel.h>
 #include <sys/lock.h>
 #include <sys/stat.h>
-#include <sys/mount.h>
+#include <sys/mount_internal.h>
 #include <sys/proc.h>
+#include <sys/kauth.h>
 #include <sys/time.h>
-#include <sys/vnode.h>
+#include <sys/vnode_internal.h>
 #include <miscfs/specfs/specdev.h>
 #include <sys/dirent.h>
 #include <sys/vmmeter.h>
 #include <sys/vm.h>
+#include <sys/uio_internal.h>
 
 #include "devfsdefs.h"
+
+static int devfs_update(struct vnode *vp, struct timeval *access,
+                        struct timeval *modify);
+
 
 /*
  * Convert a component of a pathname into a pointer to a locked node.
@@ -126,14 +131,17 @@
  * NOTE: (LOOKUP | LOCKPARENT) currently returns the parent node unlocked.
  */
 static int
-devfs_lookup(struct vop_lookup_args *ap)
-        /*struct vop_lookup_args {
+devfs_lookup(struct vnop_lookup_args *ap)
+        /*struct vnop_lookup_args {
                 struct vnode * a_dvp; directory vnode ptr
                 struct vnode ** a_vpp; where to put the result
                 struct componentname * a_cnp; the name we want
+		vfs_context_t a_context;
         };*/
 {
 	struct componentname *cnp = ap->a_cnp;
+	vfs_context_t ctx = cnp->cn_context;
+	struct proc *p = vfs_context_proc(ctx);
 	struct vnode *dir_vnode = ap->a_dvp;
 	struct vnode **result_vnode = ap->a_vpp;
 	devnode_t *   dir_node;       /* the directory we are searching */
@@ -141,68 +149,68 @@ devfs_lookup(struct vop_lookup_args *ap)
 	devdirent_t * nodename;
 	int flags = cnp->cn_flags;
 	int op = cnp->cn_nameiop;       /* LOOKUP, CREATE, RENAME, or DELETE */
-	int lockparent = flags & LOCKPARENT;
 	int wantparent = flags & (LOCKPARENT|WANTPARENT);
 	int error = 0;
-	struct proc *p = cnp->cn_proc;
 	char	heldchar;	/* the char at the end of the name componet */
+
+retry:
 
 	*result_vnode = NULL; /* safe not sorry */ /*XXX*/
 
-	if (dir_vnode->v_usecount == 0)
-	    printf("devfs_lookup: dir had no refs ");
+	//if (dir_vnode->v_usecount == 0)
+	    //printf("devfs_lookup: dir had no refs ");
 	dir_node = VTODN(dir_vnode);
 
 	/*
-	 * Check accessiblity of directory.
+	 * Make sure that our node is a directory as well.
 	 */
 	if (dir_node->dn_type != DEV_DIR) {
 		return (ENOTDIR);
 	}
 
-	if ((error = VOP_ACCESS(dir_vnode, VEXEC, cnp->cn_cred, p)) != 0) {
-		return (error);
-	}
-
-	/* temporarily terminate string component */
+	DEVFS_LOCK();
+	/*
+	 * temporarily terminate string component
+	 */
 	heldchar = cnp->cn_nameptr[cnp->cn_namelen];
 	cnp->cn_nameptr[cnp->cn_namelen] = '\0';
-	DEVFS_LOCK(p);
-	nodename = dev_findname(dir_node,cnp->cn_nameptr);
-	if (nodename) {
-	    /* entry exists */
-	    node = nodename->de_dnp;
-	    node->dn_last_lookup = nodename; /* for unlink */
-	    /* Do potential vnode allocation here inside the lock 
-	     * to make sure that our device node has a non-NULL dn_vn
-	     * associated with it.  The device node might otherwise
-	     * get deleted out from under us (see devfs_dn_free()).
-	     */
-	    error = devfs_dntovn(node, result_vnode, p);
-	}
-	DEVFS_UNLOCK(p);
-	/* restore saved character */
+
+	nodename = dev_findname(dir_node, cnp->cn_nameptr);
+	/*
+	 * restore saved character
+	 */
 	cnp->cn_nameptr[cnp->cn_namelen] = heldchar;
 
-	if (error)
-	    return (error);
+	if (nodename) {
+	        /* entry exists */
+	        node = nodename->de_dnp;
 
-	if (!nodename) { /* no entry */
-		/* If it doesn't exist and we're not the last component,
+		/* Do potential vnode allocation here inside the lock 
+		 * to make sure that our device node has a non-NULL dn_vn
+		 * associated with it.  The device node might otherwise
+		 * get deleted out from under us (see devfs_dn_free()).
+		 */
+		error = devfs_dntovn(node, result_vnode, p);
+	}
+	DEVFS_UNLOCK();
+
+	if (error) {
+	        if (error == EAGAIN)
+		        goto retry;
+		return error;
+	}
+	if (!nodename) {
+		/*
+		 * we haven't called devfs_dntovn if we get here
+		 * we have not taken a reference on the node.. no
+		 * vnode_put is necessary on these error returns
+		 *
+		 * If it doesn't exist and we're not the last component,
 		 * or we're at the last component, but we're not creating
 		 * or renaming, return ENOENT.
 		 */
         	if (!(flags & ISLASTCN) || !(op == CREATE || op == RENAME)) {
 			return ENOENT;
-		}
-		/*
-		 * Access for write is interpreted as allowing
-		 * creation of files in the directory.
-		 */
-		if ((error = VOP_ACCESS(dir_vnode, VWRITE,
-				cnp->cn_cred, p)) != 0)
-		{
-			return (error);
 		}
 		/*
 		 * We return with the directory locked, so that
@@ -211,17 +219,16 @@ devfs_lookup(struct vop_lookup_args *ap)
 		 * We return ni_vp == NULL to indicate that the entry
 		 * does not currently exist; we leave a pointer to
 		 * the (locked) directory vnode in namei_data->ni_dvp.
-		 * The pathname buffer is saved so that the name
-		 * can be obtained later.
 		 *
 		 * NB - if the directory is unlocked, then this
 		 * information cannot be used.
 		 */
-		cnp->cn_flags |= SAVENAME;
-		if (!lockparent)
-			VOP_UNLOCK(dir_vnode, 0, p);
 		return (EJUSTRETURN);
 	}
+	/*
+	 * from this point forward, we need to vnode_put the reference
+	 * picked up in devfs_dntovn if we decide to return an error
+	 */
 
 	/*
 	 * If deleting, and at end of pathname, return
@@ -231,37 +238,20 @@ devfs_lookup(struct vop_lookup_args *ap)
 	 * on and lock the node, being careful with ".".
 	 */
 	if (op == DELETE && (flags & ISLASTCN)) {
-		/*
-		 * Write access to directory required to delete files.
-		 */
-		if ((error = VOP_ACCESS(dir_vnode, VWRITE,
-				cnp->cn_cred, p)) != 0)
-			return (error);
+
 		/*
 		 * we are trying to delete '.'.  What does this mean? XXX
 		 */
 		if (dir_node == node) {
-			VREF(dir_vnode);
-			*result_vnode = dir_vnode;
-			return (0);
+		        if (*result_vnode) {
+			        vnode_put(*result_vnode);
+			        *result_vnode = NULL;
+			}				
+			if ( ((error = vnode_get(dir_vnode)) == 0) ) {
+			        *result_vnode = dir_vnode;
+			}
+			return (error);
 		}
-#ifdef NOTYET
-		/*
-		 * If directory is "sticky", then user must own
-		 * the directory, or the file in it, else she
-		 * may not delete it (unless she's root). This
-		 * implements append-only directories.
-		 */
-		if ((dir_node->mode & ISVTX) &&
-		    cnp->cn_cred->cr_uid != 0 &&
-		    cnp->cn_cred->cr_uid != dir_node->uid &&
-		    cnp->cn_cred->cr_uid != node->uid) {
-			VOP_UNLOCK(*result_vnode, 0, p);
-			return (EPERM);
-		}
-#endif
-		if (!lockparent)
-			VOP_UNLOCK(dir_vnode, 0, p);
 		return (0);
 	}
 
@@ -272,22 +262,15 @@ devfs_lookup(struct vop_lookup_args *ap)
 	 * regular file, or empty directory.
 	 */
 	if (op == RENAME && wantparent && (flags & ISLASTCN)) {
-		/*
-		 * Are we allowed to change the holding directory?
-		 */
-		if ((error = VOP_ACCESS(dir_vnode, VWRITE,
-				cnp->cn_cred, p)) != 0)
-			return (error);
+
 		/*
 		 * Careful about locking second node.
 		 * This can only occur if the target is ".".
 		 */
-		if (dir_node == node)
-			return (EISDIR);
-		/* hmm save the 'from' name (we need to delete it) */
-		cnp->cn_flags |= SAVENAME;
-		if (!lockparent)
-			VOP_UNLOCK(dir_vnode, 0, p);
+		if (dir_node == node) {
+		        error = EISDIR;
+			goto drop_ref;
+		}
 		return (0);
 	}
 
@@ -311,294 +294,193 @@ devfs_lookup(struct vop_lookup_args *ap)
 	 * work if the file system has any hard links other than ".."
 	 * that point backwards in the directory structure.
 	 */
-	if (flags & ISDOTDOT) {
-		VOP_UNLOCK(dir_vnode, 0, p);	/* race to get the node */
-		if (lockparent && (flags & ISLASTCN))
-			vn_lock(dir_vnode, LK_EXCLUSIVE | LK_RETRY, p);
-	} else if (dir_node == node) {
-#if 0
-	    /* 
-	     * this next statement is wrong: we already did a vget in 
-	     * devfs_dntovn(); DWS 4/16/1999
-	     */
-	    	 VREF(dir_vnode);	 /* we want ourself, ie "." */
-#endif
-		*result_vnode = dir_vnode;
-	} else {
-		if (!lockparent || (flags & ISLASTCN))
-			VOP_UNLOCK(dir_vnode, 0, p);
-	}
-
-	return (0);
-}
-
-static int
-devfs_access(struct vop_access_args *ap)
-        /*struct vop_access_args  {
-                struct vnode *a_vp;
-                int  a_mode;
-                struct ucred *a_cred;
-                struct proc *a_p;
-        } */ 
-{
-	/*
- 	 *  mode is filled with a combination of VREAD, VWRITE,
- 	 *  and/or VEXEC bits turned on.  In an octal number these
- 	 *  are the Y in 0Y00.
- 	 */
-	struct vnode *vp = ap->a_vp;
-	int mode = ap->a_mode;
-	struct ucred *cred = ap->a_cred;
-	devnode_t *	file_node;
-	gid_t	*gp;
-	int 	i;
-	struct proc *p = ap->a_p;
-
-	file_node = VTODN(vp);
-	/* 
-	 * if we are not running as a process, we are in the 
-	 * kernel and we DO have permission
-	 */
-	if (p == NULL)
-	    return 0;
-
-	/*
-	 * Access check is based on only one of owner, group, public.
-	 * If not owner, then check group. If not a member of the
-	 * group, then check public access.
-	 */
-	if (cred->cr_uid != file_node->dn_uid)
-	{
-		/* failing that.. try groups */
-		mode >>= 3;
-		gp = cred->cr_groups;
-		for (i = 0; i < cred->cr_ngroups; i++, gp++)
-		{
-			if (file_node->dn_gid == *gp)
-			{
-				goto found;
-			}
+	if ((flags & ISDOTDOT) == 0 && dir_node == node) {
+	        if (*result_vnode) {
+		        vnode_put(*result_vnode);
+		        *result_vnode = NULL;
 		}
-		/* failing that.. try general access */
-		mode >>= 3;
-found:
-		;
+		if ( (error = vnode_get(dir_vnode)) ) {
+			return (error);
+		}
+		*result_vnode = dir_vnode;
 	}
-	if ((file_node->dn_mode & mode) == mode)
-		return (0);
-	/*
-	 *  Root gets to do anything.
-	 * but only use suser prives as a last resort
-	 * (Use of super powers is recorded in ap->a_p->p_acflag)
-	 */
-	if( suser(cred, &ap->a_p->p_acflag) == 0) /* XXX what if no proc? */
-		return 0;
-	return (EACCES);
+	return (0);
+
+drop_ref:
+	if (*result_vnode) {
+	        vnode_put(*result_vnode);
+		*result_vnode = NULL;
+	}
+	return (error);
 }
 
 static int
-devfs_getattr(struct vop_getattr_args *ap)
-        /*struct vop_getattr_args {
+devfs_getattr(struct vnop_getattr_args *ap)
+        /*struct vnop_getattr_args {
                 struct vnode *a_vp;
-                struct vattr *a_vap;
-                struct ucred *a_cred;
+                struct vnode_attr *a_vap;
+                kauth_cred_t a_cred;
                 struct proc *a_p;
         } */ 
 {
 	struct vnode *vp = ap->a_vp;
-	struct vattr *vap = ap->a_vap;
+	struct vnode_attr *vap = ap->a_vap;
 	devnode_t *	file_node;
-	struct timeval  tv;
+	struct timeval now;
 
 	file_node = VTODN(vp);
-	tv = time;
-	dn_times(file_node, tv, tv);
-	vap->va_rdev = 0;/* default value only */
-	vap->va_mode = file_node->dn_mode;
+
+	DEVFS_LOCK();
+
+	microtime(&now);
+	dn_times(file_node, &now, &now, &now);
+
+	VATTR_RETURN(vap, va_mode, file_node->dn_mode);
+
 	switch (file_node->dn_type)
 	{
 	case 	DEV_DIR:
-		vap->va_rdev = (dev_t)file_node->dn_dvm;
+		VATTR_RETURN(vap, va_rdev,  (dev_t)file_node->dn_dvm);
 		vap->va_mode |= (S_IFDIR);
 		break;
 	case	DEV_CDEV:
-		vap->va_rdev = file_node->dn_typeinfo.dev;
+		VATTR_RETURN(vap, va_rdev, file_node->dn_typeinfo.dev);
 		vap->va_mode |= (S_IFCHR);
 		break;
 	case	DEV_BDEV:
-		vap->va_rdev = file_node->dn_typeinfo.dev;
+		VATTR_RETURN(vap, va_rdev, file_node->dn_typeinfo.dev);
 		vap->va_mode |= (S_IFBLK);
 		break;
 	case	DEV_SLNK:
+		VATTR_RETURN(vap, va_rdev, 0);
 		vap->va_mode |= (S_IFLNK);
 		break;
+	default:
+		VATTR_RETURN(vap, va_rdev, 0);	/* default value only */
 	}
-	vap->va_type = vp->v_type;
-	vap->va_nlink = file_node->dn_links;
-	vap->va_uid = file_node->dn_uid;
-	vap->va_gid = file_node->dn_gid;
-	vap->va_fsid = (int32_t)(void *)file_node->dn_dvm;
-	vap->va_fileid = (int32_t)(void *)file_node;
-	vap->va_size = file_node->dn_len; /* now a u_quad_t */
-	/* this doesn't belong here */
+	VATTR_RETURN(vap, va_type, vp->v_type);
+	VATTR_RETURN(vap, va_nlink, file_node->dn_links);
+	VATTR_RETURN(vap, va_uid, file_node->dn_uid);
+	VATTR_RETURN(vap, va_gid, file_node->dn_gid);
+	VATTR_RETURN(vap, va_fsid, (uintptr_t)file_node->dn_dvm);
+	VATTR_RETURN(vap, va_fileid, (uintptr_t)file_node);
+	VATTR_RETURN(vap, va_data_size, file_node->dn_len);
+
+	/* return an override block size (advisory) */
 	if (vp->v_type == VBLK)
-		vap->va_blocksize = BLKDEV_IOSIZE;
+		VATTR_RETURN(vap, va_iosize, BLKDEV_IOSIZE);
 	else if (vp->v_type == VCHR)
-		vap->va_blocksize = MAXPHYSIO;
+		VATTR_RETURN(vap, va_iosize, MAXPHYSIO);
 	else
-		vap->va_blocksize = vp->v_mount->mnt_stat.f_iosize;
+		VATTR_RETURN(vap, va_iosize, vp->v_mount->mnt_vfsstat.f_iosize);
 	/* if the time is bogus, set it to the boot time */
-	if (file_node->dn_ctime.tv_sec == 0)
-	    file_node->dn_ctime.tv_sec = boottime.tv_sec;
+	if (file_node->dn_ctime.tv_sec == 0) {
+		file_node->dn_ctime.tv_sec = boottime_sec();
+		file_node->dn_ctime.tv_nsec = 0;
+	}
 	if (file_node->dn_mtime.tv_sec == 0)
-	    file_node->dn_mtime.tv_sec = boottime.tv_sec;
+	    file_node->dn_mtime = file_node->dn_ctime;
 	if (file_node->dn_atime.tv_sec == 0)
-	    file_node->dn_atime.tv_sec = boottime.tv_sec;
-	vap->va_ctime = file_node->dn_ctime;
-	vap->va_mtime = file_node->dn_mtime;
-	vap->va_atime = file_node->dn_atime;
-	vap->va_gen = 0;
-	vap->va_flags = 0;
-	vap->va_bytes = file_node->dn_len;		/* u_quad_t */
-	vap->va_filerev = 0; /* XXX */		/* u_quad_t */
-	vap->va_vaflags = 0; /* XXX */
+	    file_node->dn_atime = file_node->dn_ctime;
+	VATTR_RETURN(vap, va_change_time, file_node->dn_ctime);
+	VATTR_RETURN(vap, va_modify_time, file_node->dn_mtime);
+	VATTR_RETURN(vap, va_access_time, file_node->dn_atime);
+	VATTR_RETURN(vap, va_gen, 0);
+	VATTR_RETURN(vap, va_flags, 0);
+	VATTR_RETURN(vap, va_filerev, 0);
+	VATTR_RETURN(vap, va_acl, NULL);
+
+	DEVFS_UNLOCK();
+
 	return 0;
 }
 
 static int
-devfs_setattr(struct vop_setattr_args *ap)
-        /*struct vop_setattr_args  {
-                struct vnode *a_vp;
-                struct vattr *a_vap;
-                struct ucred *a_cred;
-                struct proc *a_p;
-        } */ 
+devfs_setattr(struct vnop_setattr_args *ap)
+	/*struct vnop_setattr_args  {
+	  struct vnode *a_vp;
+	  struct vnode_attr *a_vap;
+	  vfs_context_t a_context;
+          } */ 
 {
-	struct vnode *vp = ap->a_vp;
-	struct vattr *vap = ap->a_vap;
-	struct ucred *cred = ap->a_cred;
-	struct proc *p = ap->a_p;
-	int error = 0;
-	gid_t *gp;
-	int i;
-	devnode_t *	file_node;
-	struct timeval atimeval, mtimeval;
-
-	if (vap->va_flags != VNOVAL)	/* XXX needs to be implemented */
-		return (EOPNOTSUPP);
-
-	file_node = VTODN(vp);
-
-	if ((vap->va_type != VNON)  ||
-	    (vap->va_nlink != VNOVAL)  ||
-	    (vap->va_fsid != VNOVAL)  ||
-	    (vap->va_fileid != VNOVAL)  ||
-	    (vap->va_blocksize != VNOVAL)  ||
-	    (vap->va_rdev != VNOVAL)  ||
-	    (vap->va_bytes != VNOVAL)  ||
-	    (vap->va_gen != VNOVAL ))
-	{
-		return EINVAL;
-	}
-
-	/*
-	 * Go through the fields and update iff not VNOVAL.
-	 */
-	if (vap->va_atime.tv_sec != VNOVAL || vap->va_mtime.tv_sec != VNOVAL) {
-	    if (cred->cr_uid != file_node->dn_uid &&
-		(error = suser(cred, &p->p_acflag)) &&
-		((vap->va_vaflags & VA_UTIMES_NULL) == 0 || 
-		 (error = VOP_ACCESS(vp, VWRITE, cred, p))))
-		return (error);
-	    if (vap->va_atime.tv_sec != VNOVAL)
-		file_node->dn_flags |= DN_ACCESS;
-	    if (vap->va_mtime.tv_sec != VNOVAL)
-		file_node->dn_flags |= DN_CHANGE | DN_UPDATE;
-	    atimeval.tv_sec = vap->va_atime.tv_sec;
-	    atimeval.tv_usec = vap->va_atime.tv_nsec / 1000;
-	    mtimeval.tv_sec = vap->va_mtime.tv_sec;
-	    mtimeval.tv_usec = vap->va_mtime.tv_nsec / 1000;
-	    if (error = VOP_UPDATE(vp, &atimeval, &mtimeval, 1))
-		return (error);
-	}
-
-	/*
-	 * Change the permissions.. must be root or owner to do this.
-	 */
-	if (vap->va_mode != (u_short)VNOVAL) {
-		if ((cred->cr_uid != file_node->dn_uid)
-		 && (error = suser(cred, &p->p_acflag)))
-			return (error);
-		file_node->dn_mode &= ~07777;
-		file_node->dn_mode |= vap->va_mode & 07777;
-	}
-
-	/*
-	 * Change the owner.. must be root to do this.
-	 */
-	if (vap->va_uid != (uid_t)VNOVAL) {
-		if (error = suser(cred, &p->p_acflag))
-			return (error);
-		file_node->dn_uid = vap->va_uid;
-	}
-
-	/*
-	 * Change the group.. must be root or owner to do this.
-	 * If we are the owner, we must be in the target group too.
-	 * don't use suser() unless you have to as it reports
-	 * whether you needed suser powers or not.
-	 */
-	if (vap->va_gid != (gid_t)VNOVAL) {
-		if (cred->cr_uid == file_node->dn_uid){
-			gp = cred->cr_groups;
-			for (i = 0; i < cred->cr_ngroups; i++, gp++) {
-				if (vap->va_gid == *gp)
-					goto cando; 
-			}
+  	struct vnode *vp = ap->a_vp;
+ 	struct vnode_attr *vap = ap->a_vap;
+  	kauth_cred_t cred = vfs_context_ucred(ap->a_context);
+  	struct proc *p = vfs_context_proc(ap->a_context);
+  	int error = 0;
+  	devnode_t *	file_node;
+  	struct timeval atimeval, mtimeval;
+  
+  	file_node = VTODN(vp);
+  
+ 	DEVFS_LOCK();
+  	/*
+  	 * Go through the fields and update if set.
+  	 */
+ 	if (VATTR_IS_ACTIVE(vap, va_access_time) || VATTR_IS_ACTIVE(vap, va_modify_time)) {
+  
+  
+		if (VATTR_IS_ACTIVE(vap, va_access_time))
+			file_node->dn_access = 1;
+		if (VATTR_IS_ACTIVE(vap, va_modify_time)) {
+			file_node->dn_change = 1;
+			file_node->dn_update = 1;
 		}
-		/*
-		 * we can't do it with normal privs,
-		 * do we have an ace up our sleeve?
-		 */
-	 	if (error = suser(cred, &p->p_acflag))
-			return (error);
-cando:
-		file_node->dn_gid = vap->va_gid;
-	}
-#if 0
-	/*
- 	 * Copied from somewhere else
-	 * but only kept as a marker and reminder of the fact that
-	 * flags should be handled some day
-	 */
-	if (vap->va_flags != VNOVAL) {
-		if (error = suser(cred, &p->p_acflag))
-			return error;
-		if (cred->cr_uid == 0)
-		;
-		else {
-		}
-	}
-#endif
+		atimeval.tv_sec = vap->va_access_time.tv_sec;
+		atimeval.tv_usec = vap->va_access_time.tv_nsec / 1000;
+		mtimeval.tv_sec = vap->va_modify_time.tv_sec;
+		mtimeval.tv_usec = vap->va_modify_time.tv_nsec / 1000;
+  
+		if ( (error = devfs_update(vp, &atimeval, &mtimeval)) )
+			goto exit;
+ 	}
+ 	VATTR_SET_SUPPORTED(vap, va_access_time);
+ 	VATTR_SET_SUPPORTED(vap, va_change_time);
+  
+  	/*
+  	 * Change the permissions.
+  	 */
+ 	if (VATTR_IS_ACTIVE(vap, va_mode)) {
+  		file_node->dn_mode &= ~07777;
+  		file_node->dn_mode |= vap->va_mode & 07777;
+  	}
+ 	VATTR_SET_SUPPORTED(vap, va_mode);
+  
+  	/*
+  	 * Change the owner.
+  	 */
+ 	if (VATTR_IS_ACTIVE(vap, va_uid))
+  		file_node->dn_uid = vap->va_uid;
+ 	VATTR_SET_SUPPORTED(vap, va_uid);
+  
+  	/*
+  	 * Change the group.
+  	 */
+ 	if (VATTR_IS_ACTIVE(vap, va_gid))
+  		file_node->dn_gid = vap->va_gid;
+ 	VATTR_SET_SUPPORTED(vap, va_gid);
+	exit:
+	DEVFS_UNLOCK();
+
 	return error;
 }
 
 static int
-devfs_read(struct vop_read_args *ap)
-        /*struct vop_read_args {
+devfs_read(struct vnop_read_args *ap)
+        /* struct vnop_read_args {
                 struct vnode *a_vp;
                 struct uio *a_uio;
                 int  a_ioflag;
-                struct ucred *a_cred;
+		vfs_context_t a_context;
         } */
 {
     	devnode_t * dn_p = VTODN(ap->a_vp);
 
 	switch (ap->a_vp->v_type) {
 	  case VDIR: {
-	      dn_p->dn_flags |= DN_ACCESS;
-	      return VOP_READDIR(ap->a_vp, ap->a_uio, ap->a_cred,
-				 NULL, NULL, NULL);
+	      dn_p->dn_access = 1;
+
+	      return VNOP_READDIR(ap->a_vp, ap->a_uio, 0, NULL, NULL, ap->a_context);
 	  }
 	  default: {
 	      printf("devfs_read(): bad file type %d", ap->a_vp->v_type);
@@ -610,79 +492,90 @@ devfs_read(struct vop_read_args *ap)
 }
 
 static int
-devfs_close(ap)
-	struct vop_close_args /* {
+devfs_close(struct vnop_close_args *ap)
+        /* struct vnop_close_args {
 		struct vnode *a_vp;
 		int  a_fflag;
-		struct ucred *a_cred;
-		struct proc *a_p;
-	} */ *ap;
+		vfs_context_t a_context;
+	} */
 {
     	struct vnode *	    	vp = ap->a_vp;
 	register devnode_t * 	dnp = VTODN(vp);
+	struct timeval now;
 
-	simple_lock(&vp->v_interlock);
-	if (vp->v_usecount > 1)
-	    dn_times(dnp, time, time);
-	simple_unlock(&vp->v_interlock);
+	if (vnode_isinuse(vp, 1)) {
+	    DEVFS_LOCK();
+	    microtime(&now);
+	    dn_times(dnp, &now, &now, &now);
+	    DEVFS_UNLOCK();
+	}
 	return (0);
 }
 
 static int
-devfsspec_close(ap)
-	struct vop_close_args /* {
+devfsspec_close(struct vnop_close_args *ap)
+        /* struct vnop_close_args {
 		struct vnode *a_vp;
 		int  a_fflag;
-		struct ucred *a_cred;
-		struct proc *a_p;
-	} */ *ap;
+		vfs_context_t a_context;
+	} */
 {
     	struct vnode *	    	vp = ap->a_vp;
 	register devnode_t * 	dnp = VTODN(vp);
+	struct timeval now;
 
-	simple_lock(&vp->v_interlock);
-	if (vp->v_usecount > 1)
-	    dn_times(dnp, time, time);
-	simple_unlock(&vp->v_interlock);
-	return (VOCALL (spec_vnodeop_p, VOFFSET(vop_close), ap));
+	if (vnode_isinuse(vp, 1)) {
+	    DEVFS_LOCK();
+	    microtime(&now);
+	    dn_times(dnp, &now, &now, &now);
+	    DEVFS_UNLOCK();
+	}
+	return (VOCALL (spec_vnodeop_p, VOFFSET(vnop_close), ap));
 }
 
 static int
-devfsspec_read(struct vop_read_args *ap)
-        /*struct vop_read_args {
+devfsspec_read(struct vnop_read_args *ap)
+        /* struct vnop_read_args {
                 struct vnode *a_vp;
                 struct uio *a_uio;
                 int  a_ioflag;
-                struct ucred *a_cred;
+                kauth_cred_t a_cred;
         } */
 {
-    VTODN(ap->a_vp)->dn_flags |= DN_ACCESS;
-    return (VOCALL (spec_vnodeop_p, VOFFSET(vop_read), ap));
+	register devnode_t * 	dnp = VTODN(ap->a_vp);
+
+	dnp->dn_access = 1;
+
+	return (VOCALL (spec_vnodeop_p, VOFFSET(vnop_read), ap));
 }
 
 static int
-devfsspec_write(struct vop_write_args *ap)
-        /*struct vop_write_args  {
+devfsspec_write(struct vnop_write_args *ap)
+        /* struct vnop_write_args  {
                 struct vnode *a_vp;
                 struct uio *a_uio;
                 int  a_ioflag;
-                struct ucred *a_cred;
+		vfs_context_t a_context;
         } */
 {
-    VTODN(ap->a_vp)->dn_flags |= DN_CHANGE | DN_UPDATE;
-    return (VOCALL (spec_vnodeop_p, VOFFSET(vop_write), ap));
+	register devnode_t * 	dnp = VTODN(ap->a_vp);
+
+	dnp->dn_change = 1;
+	dnp->dn_update = 1;
+
+	return (VOCALL (spec_vnodeop_p, VOFFSET(vnop_write), ap));
 }
 
 /*
  *  Write data to a file or directory.
  */
 static int
-devfs_write(struct vop_write_args *ap)
-        /*struct vop_write_args  {
+devfs_write(struct vnop_write_args *ap)
+        /* struct vnop_write_args  {
                 struct vnode *a_vp;
                 struct uio *a_uio;
                 int  a_ioflag;
-                struct ucred *a_cred;
+                kauth_cred_t a_cred;
         } */
 {
 	switch (ap->a_vp->v_type) {
@@ -696,8 +589,8 @@ devfs_write(struct vop_write_args *ap)
 }
 
 static int
-devfs_remove(struct vop_remove_args *ap)
-        /*struct vop_remove_args  {
+devfs_remove(struct vnop_remove_args *ap)
+        /* struct vnop_remove_args  {
                 struct vnode *a_dvp;
                 struct vnode *a_vp;
                 struct componentname *a_cnp;
@@ -706,34 +599,29 @@ devfs_remove(struct vop_remove_args *ap)
 	struct vnode *vp = ap->a_vp;
 	struct vnode *dvp = ap->a_dvp;
 	struct componentname *cnp = ap->a_cnp;
+	vfs_context_t ctx = cnp->cn_context;
 	devnode_t *  tp;
 	devnode_t *  tdp;
 	devdirent_t * tnp;
 	int doingdirectory = 0;
 	int error = 0;
-	uid_t ouruid = cnp->cn_cred->cr_uid;
-	struct proc *p = cnp->cn_proc;
+	uid_t ouruid = kauth_cred_getuid(vfs_context_ucred(ctx));
 
 	/*
-	 * Lock our directories and get our name pointers
-	 * assume that the names are null terminated as they
+	 * assume that the name is null terminated as they
 	 * are the end of the path. Get pointers to all our
 	 * devfs structures.
 	 */
 	tp = VTODN(vp);
 	tdp = VTODN(dvp);
-	/*
-	 * Assuming we are atomic, dev_lookup left this for us
-	 */
-	tnp = tp->dn_last_lookup;
 
-	/*
-	 * Check we are doing legal things WRT the new flags
-	 */
-	if ((tp->dn_flags & (IMMUTABLE | APPEND))
-	  || (tdp->dn_flags & APPEND) /*XXX eh?*/ ) {
-	    error = EPERM;
-	    goto abort;
+	DEVFS_LOCK();
+
+	tnp = dev_findname(tdp, cnp->cn_nameptr);
+
+	if (tnp == NULL) {
+	        error = ENOENT;
+		goto abort;
 	}
 
 	/*
@@ -754,21 +642,9 @@ devfs_remove(struct vop_remove_args *ap)
 	/***********************************
 	 * Start actually doing things.... *
 	 ***********************************/
-	tdp->dn_flags |= DN_CHANGE | DN_UPDATE;
+	tdp->dn_change = 1;
+	tdp->dn_update = 1;
 
-	/*
-	 * own the parent directory, or the destination of the rename,
-	 * otherwise the destination may not be changed (except by
-	 * root). This implements append-only directories.
-	 * XXX shoudn't this be in generic code? 
-	 */
-	if ((tdp->dn_mode & S_ISTXT)
-	  && ouruid != 0
-	  && ouruid != tdp->dn_uid
-	  && ouruid != tp->dn_uid ) {
-	    error = EPERM;
-	    goto abort;
-	}
 	/*
 	 * Target must be empty if a directory and have no links
 	 * to it. Also, ensure source and target are compatible
@@ -778,37 +654,32 @@ devfs_remove(struct vop_remove_args *ap)
 	    error = ENOTEMPTY;
 	    goto abort;
 	}
-	DEVFS_LOCK(p);
 	dev_free_name(tnp);
-	DEVFS_UNLOCK(p);
- abort:
-	if (dvp == vp)
-	    vrele(vp);
-	else
-	    vput(vp);
-	vput(dvp);
+abort:
+	DEVFS_UNLOCK();
+
 	return (error);
 }
 
 /*
  */
 static int
-devfs_link(struct vop_link_args *ap)
-        /*struct vop_link_args  {
+devfs_link(struct vnop_link_args *ap)
+        /*struct vnop_link_args  {
                 struct vnode *a_tdvp;
                 struct vnode *a_vp;
                 struct componentname *a_cnp;
+		vfs_context_t a_context;
         } */ 
 {
 	struct vnode *vp = ap->a_vp;
 	struct vnode *tdvp = ap->a_tdvp;
 	struct componentname *cnp = ap->a_cnp;
-	struct proc *p = cnp->cn_proc;
 	devnode_t * fp;
 	devnode_t * tdp;
 	devdirent_t * tnp;
 	int error = 0;
-	struct timeval tv;
+	struct timeval now;
 
 	/*
 	 * First catch an arbitrary restriction for this FS
@@ -828,71 +699,26 @@ devfs_link(struct vop_link_args *ap)
 	fp = VTODN(vp);
 	
 	if (tdvp->v_mount != vp->v_mount) {
-		error = EXDEV;
-		VOP_ABORTOP(tdvp, cnp); 
-		goto out2;
+		return (EXDEV);
 	}
-	if (tdvp != vp && (error = vn_lock(vp, LK_EXCLUSIVE, p))) {
-		VOP_ABORTOP(tdvp, cnp);
-		goto out2;
-	}
+	DEVFS_LOCK();
 
-	/*
-	 * Check we are doing legal things WRT the new flags
-	 */
-	if (fp->dn_flags & (IMMUTABLE | APPEND)) {
-		VOP_ABORTOP(tdvp, cnp);
-		error = EPERM;
-		goto out1;
-	}
 
 	/***********************************
 	 * Start actually doing things.... *
 	 ***********************************/
-	fp->dn_flags |= DN_CHANGE;
-	tv = time;
-	error = VOP_UPDATE(vp, &tv, &tv, 1);
+	fp->dn_change = 1;
+
+	microtime(&now);
+	error = devfs_update(vp, &now, &now);
+
 	if (!error) {
-	    DEVFS_LOCK(p);
 	    error = dev_add_name(cnp->cn_nameptr, tdp, NULL, fp, &tnp);
-	    DEVFS_UNLOCK(p);
 	}
 out1:
-	if (tdvp != vp)
-		VOP_UNLOCK(vp, 0, p);
-out2:
-	vput(tdvp);
+	DEVFS_UNLOCK();
+
 	return (error);
-}
-
-/*
- * Check if source directory is in the path of the target directory.
- * Target is supplied locked, source is unlocked.
- * The target is always vput before returning.
- */
-int
-devfs_checkpath(source, target)
-	devnode_t *source, *target;
-{
-    int error = 0;
-    devnode_t * ntmp;
-    devnode_t * tmp;
-    struct vnode *vp;
-
-    vp = target->dn_vn;
-    tmp = target;
-
-    do {
-	if (tmp == source) {
-	    error = EINVAL;
-	    break;
-	}
-	ntmp = tmp;
-    } while ((tmp = tmp->dn_typeinfo.Dir.parent) != ntmp);
-
-    if (vp != NULL)
-	vput(vp);
-    return (error);
 }
 
 /*
@@ -923,14 +749,15 @@ devfs_checkpath(source, target)
  *    directory.
  */
 static int
-devfs_rename(struct vop_rename_args *ap)
-        /*struct vop_rename_args  {
+devfs_rename(struct vnop_rename_args *ap)
+        /*struct vnop_rename_args  {
                 struct vnode *a_fdvp; 
                 struct vnode *a_fvp;  
                 struct componentname *a_fcnp;
                 struct vnode *a_tdvp;
                 struct vnode *a_tvp;
                 struct componentname *a_tcnp;
+		vfs_context_t a_context;
         } */
 {
 	struct vnode *tvp = ap->a_tvp;
@@ -939,23 +766,22 @@ devfs_rename(struct vop_rename_args *ap)
 	struct vnode *fdvp = ap->a_fdvp;
 	struct componentname *tcnp = ap->a_tcnp;
 	struct componentname *fcnp = ap->a_fcnp;
-	struct proc *p = fcnp->cn_proc;
 	devnode_t *fp, *fdp, *tp, *tdp;
 	devdirent_t *fnp,*tnp;
 	int doingdirectory = 0;
 	int error = 0;
-	struct timeval tv;
+	struct timeval now;
 
+	DEVFS_LOCK();
 	/*
 	 * First catch an arbitrary restriction for this FS
 	 */
-	if(tcnp->cn_namelen > DEVMAXNAMESIZE) {
+	if (tcnp->cn_namelen > DEVMAXNAMESIZE) {
 		error = ENAMETOOLONG;
-		goto abortit;
+		goto out;
 	}
 
 	/*
-	 * Lock our directories and get our name pointers
 	 * assume that the names are null terminated as they
 	 * are the end of the path. Get pointers to all our
 	 * devfs structures.
@@ -963,47 +789,26 @@ devfs_rename(struct vop_rename_args *ap)
 	tdp = VTODN(tdvp);
 	fdp = VTODN(fdvp);
 	fp = VTODN(fvp);
-	fnp = fp->dn_last_lookup;
+
+	fnp = dev_findname(fdp, fcnp->cn_nameptr);
+
+	if (fnp == NULL) {
+	        error = ENOENT;
+		goto out;
+	}
 	tp = NULL;
 	tnp = NULL;
+
 	if (tvp) {
-	    tp = VTODN(tvp);
-	    tnp = tp->dn_last_lookup;
+		tnp = dev_findname(tdp, tcnp->cn_nameptr);
+
+		if (tnp == NULL) {
+		        error = ENOENT;
+			goto out;
+		}
+		tp = VTODN(tvp);
 	}
 	
-	/*
-	 * trying to move it out of devfs?
-         * if we move a dir across mnt points. we need to fix all
-	 * the mountpoint pointers! XXX
-	 * so for now keep dirs within the same mount
-	 */
-	if ((fvp->v_mount != tdvp->v_mount) ||
-	    (tvp && (fvp->v_mount != tvp->v_mount))) {
-		error = EXDEV;
-abortit:
-		VOP_ABORTOP(tdvp, tcnp); 
-		if (tdvp == tvp) /* eh? */
-			vrele(tdvp);
-		else
-			vput(tdvp);
-		if (tvp)
-			vput(tvp);
-		VOP_ABORTOP(fdvp, fcnp); /* XXX, why not in NFS? */
-		vrele(fdvp);
-		vrele(fvp);
-		return (error);
-	}
-
-	/*
-	 * Check we are doing legal things WRT the new flags
-	 */
-	if ((tp && (tp->dn_flags & (IMMUTABLE | APPEND)))
-	  || (fp->dn_flags & (IMMUTABLE | APPEND))
-	  || (fdp->dn_flags & APPEND)) {
-		error = EPERM;
-		goto abortit;
-	}
-
 	/*
 	 * Make sure that we don't try do something stupid
 	 */
@@ -1017,7 +822,7 @@ abortit:
 		    || (tcnp->cn_flags&ISDOTDOT) 
 		    || (tdp == fp )) {
 			error = EINVAL;
-			goto abortit;
+			goto out;
 		}
 		doingdirectory++;
 	}
@@ -1032,7 +837,6 @@ abortit:
 	 */
 	if (doingdirectory && (tdp != fdp)) {
 		devnode_t * tmp, *ntmp;
-		error = VOP_ACCESS(fvp, VWRITE, tcnp->cn_cred, tcnp->cn_proc);
 		tmp = tdp;
 		do {
 			if(tmp == fp) {
@@ -1047,11 +851,11 @@ abortit:
 	/***********************************
 	 * Start actually doing things.... *
 	 ***********************************/
-	fp->dn_flags |= DN_CHANGE;
-	tv = time;
-	if (error = VOP_UPDATE(fvp, &tv, &tv, 1)) {
-	    VOP_UNLOCK(fvp, 0, p);
-	    goto bad;
+	fp->dn_change = 1;
+	microtime(&now);
+
+	if ( (error = devfs_update(fvp, &now, &now)) ) {
+	    goto out;
 	}
 	/*
 	 * Check if just deleting a link name.
@@ -1059,24 +863,14 @@ abortit:
 	if (fvp == tvp) {
 		if (fvp->v_type == VDIR) {
 			error = EINVAL;
-			goto abortit;
+			goto out;
 		}
-
 		/* Release destination completely. */
-		VOP_ABORTOP(tdvp, tcnp);
-		vput(tdvp);
-		vput(tvp);
-
-		/* Delete source. */
-		VOP_ABORTOP(fdvp, fcnp); /*XXX*/
-		vrele(fdvp);
-		vrele(fvp);
 		dev_free_name(fnp);
+
+		DEVFS_UNLOCK();
 		return 0;
 	}
-
-	vrele(fdvp);
-
 	/*
 	 * 1) Bump link count while we're moving stuff
 	 *    around.  If we crash somewhere before
@@ -1088,29 +882,15 @@ abortit:
 	 * We could do that as well but won't
  	 */
 	if (tp) {
-		int ouruid = tcnp->cn_cred->cr_uid;
-		/*
-		 * If the parent directory is "sticky", then the user must
-		 * own the parent directory, or the destination of the rename,
-		 * otherwise the destination may not be changed (except by
-		 * root). This implements append-only directories.
-		 * XXX shoudn't this be in generic code? 
-		 */
-		if ((tdp->dn_mode & S_ISTXT)
-		  && ouruid != 0
-		  && ouruid != tdp->dn_uid
-		  && ouruid != tp->dn_uid ) {
-			error = EPERM;
-			goto bad;
-		}
+		int ouruid = kauth_cred_getuid(vfs_context_ucred(tcnp->cn_context));
 		/*
 		 * Target must be empty if a directory and have no links
 		 * to it. Also, ensure source and target are compatible
 		 * (both directories, or both not directories).
 		 */
 		if (( doingdirectory) && (tp->dn_links > 2)) {
-				error = ENOTEMPTY;
-				goto bad;
+		        error = ENOTEMPTY;
+			goto bad;
 		}
 		dev_free_name(tnp);
 		tp = NULL;
@@ -1118,140 +898,112 @@ abortit:
 	dev_add_name(tcnp->cn_nameptr,tdp,NULL,fp,&tnp);
 	fnp->de_dnp = NULL;
 	fp->dn_links--; /* one less link to it.. */
-	dev_free_name(fnp);
-	fp->dn_links--; /* we added one earlier*/
-	if (tdp)
-		vput(tdvp);
-	if (tp)
-		vput(fvp);
-	vrele(fvp);
-	return (error);
 
+	dev_free_name(fnp);
 bad:
-	if (tp)
-		vput(tvp);
-	vput(tdvp);
+	fp->dn_links--; /* we added one earlier*/
 out:
-	if (vn_lock(fvp, LK_EXCLUSIVE | LK_RETRY, p) == 0) {
-		fp->dn_links--; /* we added one earlier*/
-		vput(fvp);
-	} else
-		vrele(fvp);
+	DEVFS_UNLOCK();
 	return (error);
 }
 
 static int
-devfs_symlink(struct vop_symlink_args *ap)
-        /*struct vop_symlink_args {
+devfs_symlink(struct vnop_symlink_args *ap)
+        /*struct vnop_symlink_args {
                 struct vnode *a_dvp;
                 struct vnode **a_vpp;
                 struct componentname *a_cnp;
-                struct vattr *a_vap;
+                struct vnode_attr *a_vap;
                 char *a_target;
+		vfs_context_t a_context;
         } */
 {
 	struct componentname * cnp = ap->a_cnp;
-	struct vnode *vp = NULL;
+	vfs_context_t ctx = cnp->cn_context;
+	struct proc *p = vfs_context_proc(ctx);
 	int error = 0;
 	devnode_t * dir_p;
 	devnode_type_t typeinfo;
 	devdirent_t * nm_p;
 	devnode_t * dev_p;
-	struct vattr *	vap = ap->a_vap;
+	struct vnode_attr *	vap = ap->a_vap;
 	struct vnode * * vpp = ap->a_vpp;
-	struct proc *p = cnp->cn_proc;
-	struct timeval tv;
 
 	dir_p = VTODN(ap->a_dvp);
 	typeinfo.Slnk.name = ap->a_target;
 	typeinfo.Slnk.namelen = strlen(ap->a_target);
-	DEVFS_LOCK(p);
+
+	DEVFS_LOCK();
 	error = dev_add_entry(cnp->cn_nameptr, dir_p, DEV_SLNK, 
 			      &typeinfo, NULL, NULL, &nm_p);
-	DEVFS_UNLOCK(p);
 	if (error) {
 	    goto failure;
 	}
-	
 	dev_p = nm_p->de_dnp;
 	dev_p->dn_uid = dir_p->dn_uid;
 	dev_p->dn_gid = dir_p->dn_gid;
 	dev_p->dn_mode = vap->va_mode;
 	dn_copy_times(dev_p, dir_p);
+
 	error = devfs_dntovn(dev_p, vpp, p);
-	if (error)
-	    goto failure;
-	vp = *vpp;
-	vput(vp);
 failure:
-	if ((cnp->cn_flags & SAVESTART) == 0) {
-		char *tmp = cnp->cn_pnbuf;
-		cnp->cn_pnbuf = NULL;
-		cnp->cn_flags &= ~HASBUF;
-	    FREE_ZONE(tmp, cnp->cn_pnlen, M_NAMEI);
-	}
-	vput(ap->a_dvp);
+	DEVFS_UNLOCK();
+
 	return error;
 }
 
 /*
  * Mknod vnode call
  */
-/* ARGSUSED */
-int
-devfs_mknod(ap)
-	struct vop_mknod_args /* {
+static int
+devfs_mknod(struct vnop_mknod_args *ap)
+        /* struct vnop_mknod_args {
 		struct vnode *a_dvp;
 		struct vnode **a_vpp;
 		struct componentname *a_cnp;
-		struct vattr *a_vap;
-	} */ *ap;
+		struct vnode_attr *a_vap;
+		vfs_context_t a_context;
+	} */
 {
     	struct componentname * cnp = ap->a_cnp;
+	vfs_context_t ctx = cnp->cn_context;
+	struct proc *p = vfs_context_proc(ctx);
 	devnode_t *	dev_p;
 	devdirent_t *	devent;
 	devnode_t *	dir_p;	/* devnode for parent directory */
     	struct vnode * 	dvp = ap->a_dvp;
 	int 		error = 0;
 	devnode_type_t	typeinfo;
-	struct vattr *	vap = ap->a_vap;
+	struct vnode_attr *	vap = ap->a_vap;
 	struct vnode ** vpp = ap->a_vpp;
-	struct proc *	p = cnp->cn_proc;
 
 	*vpp = NULL;
-	if (!vap->va_type == VBLK && !vap->va_type == VCHR) {
-	    error = EINVAL; /* only support mknod of special files */
-	    goto failure;
+	if (!(vap->va_type == VBLK) && !(vap->va_type == VCHR)) {
+	        return (EINVAL); /* only support mknod of special files */
 	}
 	dir_p = VTODN(dvp);
 	typeinfo.dev = vap->va_rdev;
-	DEVFS_LOCK(p);
+
+	DEVFS_LOCK();
 	error = dev_add_entry(cnp->cn_nameptr, dir_p, 
 			      (vap->va_type == VBLK) ? DEV_BDEV : DEV_CDEV,
 			      &typeinfo, NULL, NULL, &devent);
-	DEVFS_UNLOCK(p);
 	if (error) {
-	    goto failure;
+	        goto failure;
 	}
 	dev_p = devent->de_dnp;
 	error = devfs_dntovn(dev_p, vpp, p);
 	if (error)
-	    goto failure;
-	dev_p->dn_uid = cnp->cn_cred->cr_uid;
-	dev_p->dn_gid = dir_p->dn_gid;
+	        goto failure;
+	dev_p->dn_uid = vap->va_uid;
+	dev_p->dn_gid = vap->va_gid;
 	dev_p->dn_mode = vap->va_mode;
+	VATTR_SET_SUPPORTED(vap, va_uid);
+	VATTR_SET_SUPPORTED(vap, va_gid);
+	VATTR_SET_SUPPORTED(vap, va_mode);
 failure:
-	if (*vpp) {
-	    vput(*vpp);
-	    *vpp = 0;
-	}
-	if ((cnp->cn_flags & SAVESTART) == 0) {
-		char *tmp = cnp->cn_pnbuf;
-		cnp->cn_pnbuf = NULL;
-		cnp->cn_flags &= ~HASBUF;
-	    FREE_ZONE(tmp, cnp->cn_pnlen, M_NAMEI);
-	}
-	vput(dvp);
+	DEVFS_UNLOCK();
+
 	return (error);
 }
 
@@ -1259,14 +1011,14 @@ failure:
  * Vnode op for readdir
  */
 static int
-devfs_readdir(struct vop_readdir_args *ap)
-        /*struct vop_readdir_args {
+devfs_readdir(struct vnop_readdir_args *ap)
+        /*struct vnop_readdir_args {
                 struct vnode *a_vp;
                 struct uio *a_uio;
-                struct ucred *a_cred;
-        	int *eofflag;
-        	int *ncookies;
-        	u_int **cookies;
+		int a_flags;
+		int *a_eofflag;
+		int *a_numdirent;
+		vfs_context_t a_context;
         } */
 {
 	struct vnode *vp = ap->a_vp;
@@ -1279,21 +1031,25 @@ devfs_readdir(struct vop_readdir_args *ap)
 	int reclen;
 	int nodenumber;
 	int	startpos,pos;
-	struct proc *	p = uio->uio_procp;
+
+	if (ap->a_flags & (VNODE_READDIR_EXTENDED | VNODE_READDIR_REQSEEKOFF))
+		return (EINVAL);
 
 	/*  set up refs to dir */
 	dir_node = VTODN(vp);
-	if(dir_node->dn_type != DEV_DIR)
+	if (dir_node->dn_type != DEV_DIR)
 		return(ENOTDIR);
-
 	pos = 0;
 	startpos = uio->uio_offset;
-	DEVFS_LOCK(p);
+
+	DEVFS_LOCK();
+
 	name_node = dir_node->dn_typeinfo.Dir.dirlist;
 	nodenumber = 0;
-	dir_node->dn_flags |= DN_ACCESS;
 
-	while ((name_node || (nodenumber < 2)) && (uio->uio_resid > 0))
+	dir_node->dn_access = 1;
+
+	while ((name_node || (nodenumber < 2)) && (uio_resid(uio) > 0))
 	{
 		switch(nodenumber)
 		{
@@ -1341,7 +1097,7 @@ devfs_readdir(struct vop_readdir_args *ap)
 
 		if(pos >= startpos)	/* made it to the offset yet? */
 		{
-			if (uio->uio_resid < reclen) /* will it fit? */
+			if (uio_resid(uio) < reclen) /* will it fit? */
 				break;
 			strcpy( dirent.d_name,name);
 			if ((error = uiomove ((caddr_t)&dirent,
@@ -1353,7 +1109,7 @@ devfs_readdir(struct vop_readdir_args *ap)
 			name_node = name_node->de_next;
 		nodenumber++;
 	}
-	DEVFS_UNLOCK(p);
+	DEVFS_UNLOCK();
 	uio->uio_offset = pos;
 
 	return (error);
@@ -1363,11 +1119,11 @@ devfs_readdir(struct vop_readdir_args *ap)
 /*
  */
 static int
-devfs_readlink(struct vop_readlink_args *ap)
-        /*struct vop_readlink_args {
+devfs_readlink(struct vnop_readlink_args *ap)
+        /*struct vnop_readlink_args {
                 struct vnode *a_vp;
                 struct uio *a_uio;
-                struct ucred *a_cred;
+		vfs_context_t a_context;
         } */
 {
 	struct vnode *vp = ap->a_vp;
@@ -1377,25 +1133,28 @@ devfs_readlink(struct vop_readlink_args *ap)
 
 	/*  set up refs to dir */
 	lnk_node = VTODN(vp);
-	if(lnk_node->dn_type != DEV_SLNK)
-		return(EINVAL);
-	if ((error = VOP_ACCESS(vp, VREAD, ap->a_cred, NULL)) != 0) { /* XXX */
-		return error;
+
+	if (lnk_node->dn_type != DEV_SLNK) {
+	        error = EINVAL;
+		goto out;
 	}
 	error = uiomove(lnk_node->dn_typeinfo.Slnk.name, 
 			lnk_node->dn_typeinfo.Slnk.namelen, uio);
+out:	
 	return error;
 }
 
 static int
-devfs_reclaim(struct vop_reclaim_args *ap)
-        /*struct vop_reclaim_args {
+devfs_reclaim(struct vnop_reclaim_args *ap)
+        /*struct vnop_reclaim_args {
 		struct vnode *a_vp;
         } */
 {
     struct vnode *	vp = ap->a_vp;
     devnode_t * 	dnp = VTODN(vp);
     
+    DEVFS_LOCK();
+
     if (dnp) {
 	/* 
 	 * do the same as devfs_inactive in case it is not called
@@ -1403,25 +1162,60 @@ devfs_reclaim(struct vop_reclaim_args *ap)
 	 */
 	dnp->dn_vn = NULL;
 	vp->v_data = NULL;
+
 	if (dnp->dn_delete) {
 	    devnode_free(dnp);
 	}
     }
+    DEVFS_UNLOCK();
+
     return(0);
 }
 
+
 /*
- * Print out the contents of a /devfs vnode.
+ * Get configurable pathname variables.
  */
 static int
-devfs_print(struct vop_print_args *ap)
-	/*struct vop_print_args {
+devs_vnop_pathconf(
+	struct vnop_pathconf_args /* {
 		struct vnode *a_vp;
-	} */
+		int a_name;
+		int *a_retval;
+		vfs_context_t a_context;
+	} */ *ap)
 {
+	switch (ap->a_name) {
+	case _PC_LINK_MAX:
+		/* arbitrary limit matching HFS; devfs has no hard limit */
+		*ap->a_retval = 32767;
+		break;
+	case _PC_NAME_MAX:
+		*ap->a_retval = DEVMAXNAMESIZE - 1;	/* includes NUL */
+		break;
+	case _PC_PATH_MAX:
+		*ap->a_retval = DEVMAXPATHSIZE - 1;	/* XXX nonconformant */
+		break;
+	case _PC_CHOWN_RESTRICTED:
+		*ap->a_retval = 1;
+		break;
+	case _PC_NO_TRUNC:
+		*ap->a_retval = 0;
+		break;
+	case _PC_CASE_SENSITIVE:
+		*ap->a_retval = 1;
+		break;
+	case _PC_CASE_PRESERVING:
+		*ap->a_retval = 1;
+		break;
+	default:
+		return (EINVAL);
+	}
 
 	return (0);
 }
+
+
 
 /**************************************************************************\
 * pseudo ops *
@@ -1429,52 +1223,38 @@ devfs_print(struct vop_print_args *ap)
 
 /*
  *
- *	struct vop_inactive_args {
+ *	struct vnop_inactive_args {
  *		struct vnode *a_vp;
- *		struct proc *a_p;
+ *		vfs_context_t a_context;
  *	} 
  */
 
 static int
-devfs_inactive(struct vop_inactive_args *ap)
+devfs_inactive(__unused struct vnop_inactive_args *ap)
 {
-    struct vnode *	vp = ap->a_vp;
-    devnode_t * 	dnp = VTODN(vp);
-    
-    if (dnp) {
-	dnp->dn_vn = NULL;
-	vp->v_data = NULL;
-	if (dnp->dn_delete) {
-	    devnode_free(dnp);
-	}
-    }
-    VOP_UNLOCK(vp, 0, ap->a_p);
     return (0);
 }
 
-int
-devfs_update(ap)
-	struct vop_update_args /* {
-		struct vnode *a_vp;
-		struct timeval *a_access;
-		struct timeval *a_modify;
-		int a_waitfor;
-	} */ *ap;
+/*
+ * called with DEVFS_LOCK held
+ */
+static int
+devfs_update(struct vnode *vp, struct timeval *access, struct timeval *modify)
 {
-	register struct fs *fs;
-	int error;
 	devnode_t * ip;
+	struct timeval now;
 
-	ip = VTODN(ap->a_vp);
-	if (ap->a_vp->v_mount->mnt_flag & MNT_RDONLY) {
-		ip->dn_flags &=
-		    ~(DN_ACCESS | DN_CHANGE | DN_MODIFIED | DN_UPDATE);
+	ip = VTODN(vp);
+	if (vp->v_mount->mnt_flag & MNT_RDONLY) {
+	        ip->dn_access = 0;
+	        ip->dn_change = 0;
+	        ip->dn_update = 0;
+
 		return (0);
 	}
-	if ((ip->dn_flags &
-	    (DN_ACCESS | DN_CHANGE | DN_MODIFIED | DN_UPDATE)) == 0)
-		return (0);
-	dn_times(ip, time, time);
+	microtime(&now);
+	dn_times(ip, access, modify, &now);
+
 	return (0);
 }
 
@@ -1483,57 +1263,42 @@ devfs_update(ap)
 /* The following ops are used by directories and symlinks */
 int (**devfs_vnodeop_p)(void *);
 static struct vnodeopv_entry_desc devfs_vnodeop_entries[] = {
-	{ &vop_default_desc, (VOPFUNC)vn_default_error },
-	{ &vop_lookup_desc, (VOPFUNC)devfs_lookup },		/* lookup */
-	{ &vop_create_desc, (VOPFUNC)err_create },		/* create */
-	{ &vop_whiteout_desc, (VOPFUNC)err_whiteout },		/* whiteout */
-	{ &vop_mknod_desc, (VOPFUNC)devfs_mknod },		/* mknod */
-	{ &vop_open_desc, (VOPFUNC)nop_open },			/* open */
-	{ &vop_close_desc, (VOPFUNC)devfs_close },		/* close */
-	{ &vop_access_desc, (VOPFUNC)devfs_access },		/* access */
-	{ &vop_getattr_desc, (VOPFUNC)devfs_getattr },		/* getattr */
-	{ &vop_setattr_desc, (VOPFUNC)devfs_setattr },		/* setattr */
-	{ &vop_read_desc, (VOPFUNC)devfs_read },		/* read */
-	{ &vop_write_desc, (VOPFUNC)devfs_write },		/* write */
-	{ &vop_lease_desc, (VOPFUNC)nop_lease },		/* lease */
-	{ &vop_ioctl_desc, (VOPFUNC)err_ioctl },		/* ioctl */
-	{ &vop_select_desc, (VOPFUNC)err_select },		/* select */
-	{ &vop_revoke_desc, (VOPFUNC)err_revoke },		/* revoke */
-	{ &vop_mmap_desc, (VOPFUNC)err_mmap },			/* mmap */
-	{ &vop_fsync_desc, (VOPFUNC)nop_fsync },		/* fsync */
-	{ &vop_seek_desc, (VOPFUNC)err_seek },			/* seek */
-	{ &vop_remove_desc, (VOPFUNC)devfs_remove },		/* remove */
-	{ &vop_link_desc, (VOPFUNC)devfs_link },		/* link */
-	{ &vop_rename_desc, (VOPFUNC)devfs_rename },		/* rename */
-	{ &vop_mkdir_desc, (VOPFUNC)err_mkdir },		/* mkdir */
-	{ &vop_rmdir_desc, (VOPFUNC)err_rmdir },		/* rmdir */
-	{ &vop_symlink_desc, (VOPFUNC)devfs_symlink },		/* symlink */
-	{ &vop_readdir_desc, (VOPFUNC)devfs_readdir },		/* readdir */
-	{ &vop_readlink_desc, (VOPFUNC)devfs_readlink },	/* readlink */
-	{ &vop_abortop_desc, (VOPFUNC)nop_abortop },		/* abortop */
-	{ &vop_inactive_desc, (VOPFUNC)devfs_inactive },	/* inactive */
-	{ &vop_reclaim_desc, (VOPFUNC)devfs_reclaim },		/* reclaim */
-	{ &vop_lock_desc, (VOPFUNC)nop_lock },			/* lock */
-	{ &vop_unlock_desc, (VOPFUNC)nop_unlock },		/* unlock */
-	{ &vop_bmap_desc, (VOPFUNC)err_bmap },			/* bmap */
-	{ &vop_strategy_desc, (VOPFUNC)err_strategy },		/* strategy */
-	{ &vop_print_desc, (VOPFUNC)err_print },		/* print */
-	{ &vop_islocked_desc, (VOPFUNC)nop_islocked },		/* islocked */
-	{ &vop_pathconf_desc, (VOPFUNC)err_pathconf },		/* pathconf */
-	{ &vop_advlock_desc, (VOPFUNC)err_advlock },		/* advlock */
-	{ &vop_blkatoff_desc, (VOPFUNC)err_blkatoff },		/* blkatoff */
-	{ &vop_valloc_desc, (VOPFUNC)err_valloc },		/* valloc */
-	{ &vop_reallocblks_desc, (VOPFUNC)err_reallocblks },	/* reallocblks */
-	{ &vop_vfree_desc, (VOPFUNC)err_vfree },		/* vfree */
-	{ &vop_truncate_desc, (VOPFUNC)err_truncate },		/* truncate */
-	{ &vop_update_desc, (VOPFUNC)devfs_update },		/* update */
-	{ &vop_bwrite_desc, (VOPFUNC)err_bwrite },
-	{ &vop_pagein_desc, (VOPFUNC)err_pagein },		/* Pagein */
-	{ &vop_pageout_desc, (VOPFUNC)err_pageout },		/* Pageout */
-	{ &vop_copyfile_desc, (VOPFUNC)err_copyfile },		/* Copyfile */
-	{ &vop_blktooff_desc, (VOPFUNC)err_blktooff },		/* blktooff */
-	{ &vop_offtoblk_desc, (VOPFUNC)err_offtoblk },		/* offtoblk */
-	{ &vop_cmap_desc, (VOPFUNC)err_cmap },		/* cmap */
+	{ &vnop_default_desc, (VOPFUNC)vn_default_error },
+	{ &vnop_lookup_desc, (VOPFUNC)devfs_lookup },		/* lookup */
+	{ &vnop_create_desc, (VOPFUNC)err_create },		/* create */
+	{ &vnop_whiteout_desc, (VOPFUNC)err_whiteout },		/* whiteout */
+	{ &vnop_mknod_desc, (VOPFUNC)devfs_mknod },		/* mknod */
+	{ &vnop_open_desc, (VOPFUNC)nop_open },			/* open */
+	{ &vnop_close_desc, (VOPFUNC)devfs_close },		/* close */
+	{ &vnop_getattr_desc, (VOPFUNC)devfs_getattr },		/* getattr */
+	{ &vnop_setattr_desc, (VOPFUNC)devfs_setattr },		/* setattr */
+	{ &vnop_read_desc, (VOPFUNC)devfs_read },		/* read */
+	{ &vnop_write_desc, (VOPFUNC)devfs_write },		/* write */
+	{ &vnop_ioctl_desc, (VOPFUNC)err_ioctl },		/* ioctl */
+	{ &vnop_select_desc, (VOPFUNC)err_select },		/* select */
+	{ &vnop_revoke_desc, (VOPFUNC)err_revoke },		/* revoke */
+	{ &vnop_mmap_desc, (VOPFUNC)err_mmap },			/* mmap */
+	{ &vnop_fsync_desc, (VOPFUNC)nop_fsync },		/* fsync */
+	{ &vnop_remove_desc, (VOPFUNC)devfs_remove },		/* remove */
+	{ &vnop_link_desc, (VOPFUNC)devfs_link },		/* link */
+	{ &vnop_rename_desc, (VOPFUNC)devfs_rename },		/* rename */
+	{ &vnop_mkdir_desc, (VOPFUNC)err_mkdir },		/* mkdir */
+	{ &vnop_rmdir_desc, (VOPFUNC)err_rmdir },		/* rmdir */
+	{ &vnop_symlink_desc, (VOPFUNC)devfs_symlink },		/* symlink */
+	{ &vnop_readdir_desc, (VOPFUNC)devfs_readdir },		/* readdir */
+	{ &vnop_readlink_desc, (VOPFUNC)devfs_readlink },	/* readlink */
+	{ &vnop_inactive_desc, (VOPFUNC)devfs_inactive },	/* inactive */
+	{ &vnop_reclaim_desc, (VOPFUNC)devfs_reclaim },		/* reclaim */
+	{ &vnop_strategy_desc, (VOPFUNC)err_strategy },		/* strategy */
+	{ &vnop_pathconf_desc, (VOPFUNC)devs_vnop_pathconf },	/* pathconf */
+	{ &vnop_advlock_desc, (VOPFUNC)err_advlock },		/* advlock */
+	{ &vnop_bwrite_desc, (VOPFUNC)err_bwrite },
+	{ &vnop_pagein_desc, (VOPFUNC)err_pagein },		/* Pagein */
+	{ &vnop_pageout_desc, (VOPFUNC)err_pageout },		/* Pageout */
+	{ &vnop_copyfile_desc, (VOPFUNC)err_copyfile },		/* Copyfile */
+	{ &vnop_blktooff_desc, (VOPFUNC)err_blktooff },		/* blktooff */
+	{ &vnop_offtoblk_desc, (VOPFUNC)err_offtoblk },		/* offtoblk */
+	{ &vnop_blockmap_desc, (VOPFUNC)err_blockmap },		/* blockmap */
 	{ (struct vnodeop_desc*)NULL, (int(*)())NULL }
 };
 struct vnodeopv_desc devfs_vnodeop_opv_desc =
@@ -1542,57 +1307,42 @@ struct vnodeopv_desc devfs_vnodeop_opv_desc =
 /* The following ops are used by the device nodes */
 int (**devfs_spec_vnodeop_p)(void *);
 static struct vnodeopv_entry_desc devfs_spec_vnodeop_entries[] = {
-	{ &vop_default_desc, (VOPFUNC)vn_default_error },
-	{ &vop_lookup_desc, (VOPFUNC)spec_lookup },		/* lookup */
-	{ &vop_create_desc, (VOPFUNC)spec_create },		/* create */
-	{ &vop_mknod_desc, (VOPFUNC)spec_mknod },		/* mknod */
-	{ &vop_open_desc, (VOPFUNC)spec_open },			/* open */
-	{ &vop_close_desc, (VOPFUNC)devfsspec_close },		/* close */
-	{ &vop_access_desc, (VOPFUNC)devfs_access },		/* access */
-	{ &vop_getattr_desc, (VOPFUNC)devfs_getattr },		/* getattr */
-	{ &vop_setattr_desc, (VOPFUNC)devfs_setattr },		/* setattr */
-	{ &vop_read_desc, (VOPFUNC)devfsspec_read },		/* read */
-	{ &vop_write_desc, (VOPFUNC)devfsspec_write },		/* write */
-	{ &vop_lease_desc, (VOPFUNC)spec_lease_check },		/* lease */
-	{ &vop_ioctl_desc, (VOPFUNC)spec_ioctl },		/* ioctl */
-	{ &vop_select_desc, (VOPFUNC)spec_select },		/* select */
-	{ &vop_revoke_desc, (VOPFUNC)spec_revoke },		/* revoke */
-	{ &vop_mmap_desc, (VOPFUNC)spec_mmap },			/* mmap */
-	{ &vop_fsync_desc, (VOPFUNC)spec_fsync },		/* fsync */
-	{ &vop_seek_desc, (VOPFUNC)spec_seek },			/* seek */
-	{ &vop_remove_desc, (VOPFUNC)devfs_remove },		/* remove */
-	{ &vop_link_desc, (VOPFUNC)devfs_link },		/* link */
-	{ &vop_rename_desc, (VOPFUNC)spec_rename },		/* rename */
-	{ &vop_mkdir_desc, (VOPFUNC)spec_mkdir },		/* mkdir */
-	{ &vop_rmdir_desc, (VOPFUNC)spec_rmdir },		/* rmdir */
-	{ &vop_symlink_desc, (VOPFUNC)spec_symlink },		/* symlink */
-	{ &vop_readdir_desc, (VOPFUNC)spec_readdir },		/* readdir */
-	{ &vop_readlink_desc, (VOPFUNC)spec_readlink },		/* readlink */
-	{ &vop_abortop_desc, (VOPFUNC)spec_abortop },		/* abortop */
-	{ &vop_inactive_desc, (VOPFUNC)devfs_inactive },	/* inactive */
-	{ &vop_reclaim_desc, (VOPFUNC)devfs_reclaim },		/* reclaim */
-	{ &vop_lock_desc, (VOPFUNC)nop_lock },			/* lock */
-	{ &vop_unlock_desc, (VOPFUNC)nop_unlock },		/* unlock */
-	{ &vop_bmap_desc, (VOPFUNC)spec_bmap },			/* bmap */
-	{ &vop_strategy_desc, (VOPFUNC)spec_strategy },		/* strategy */
-	{ &vop_print_desc, (VOPFUNC)devfs_print },		/* print */
-	{ &vop_islocked_desc, (VOPFUNC)nop_islocked },		/* islocked */
-	{ &vop_pathconf_desc, (VOPFUNC)spec_pathconf },		/* pathconf */
-	{ &vop_advlock_desc, (VOPFUNC)spec_advlock },		/* advlock */
-	{ &vop_blkatoff_desc, (VOPFUNC)spec_blkatoff },		/* blkatoff */
-	{ &vop_valloc_desc, (VOPFUNC)spec_valloc },		/* valloc */
-	{ &vop_reallocblks_desc, (VOPFUNC)spec_reallocblks },	/* reallocblks */
-	{ &vop_vfree_desc, (VOPFUNC)nop_vfree },		/* vfree */
-	{ &vop_truncate_desc, (VOPFUNC)spec_truncate },		/* truncate */
-	{ &vop_update_desc, (VOPFUNC)devfs_update },		/* update */
-	{ &vop_bwrite_desc, (VOPFUNC)vn_bwrite },
-	{ &vop_devblocksize_desc, (VOPFUNC)spec_devblocksize },	/* devblocksize */
-	{ &vop_pagein_desc, (VOPFUNC)err_pagein },		/* Pagein */
-	{ &vop_pageout_desc, (VOPFUNC)err_pageout },		/* Pageout */
-	{ &vop_copyfile_desc, (VOPFUNC)err_copyfile },		/* Copyfile */
-	{ &vop_blktooff_desc, (VOPFUNC)spec_blktooff },	/* blktooff */
-	{ &vop_blktooff_desc, (VOPFUNC)spec_offtoblk  },	/* blkofftoblk */
-	{ &vop_cmap_desc, (VOPFUNC)spec_cmap },	/* cmap */
+	{ &vnop_default_desc, (VOPFUNC)vn_default_error },
+	{ &vnop_lookup_desc, (VOPFUNC)spec_lookup },		/* lookup */
+	{ &vnop_create_desc, (VOPFUNC)spec_create },		/* create */
+	{ &vnop_mknod_desc, (VOPFUNC)spec_mknod },		/* mknod */
+	{ &vnop_open_desc, (VOPFUNC)spec_open },			/* open */
+	{ &vnop_close_desc, (VOPFUNC)devfsspec_close },		/* close */
+	{ &vnop_getattr_desc, (VOPFUNC)devfs_getattr },		/* getattr */
+	{ &vnop_setattr_desc, (VOPFUNC)devfs_setattr },		/* setattr */
+	{ &vnop_read_desc, (VOPFUNC)devfsspec_read },		/* read */
+	{ &vnop_write_desc, (VOPFUNC)devfsspec_write },		/* write */
+	{ &vnop_ioctl_desc, (VOPFUNC)spec_ioctl },		/* ioctl */
+	{ &vnop_select_desc, (VOPFUNC)spec_select },		/* select */
+	{ &vnop_revoke_desc, (VOPFUNC)spec_revoke },		/* revoke */
+	{ &vnop_mmap_desc, (VOPFUNC)spec_mmap },			/* mmap */
+	{ &vnop_fsync_desc, (VOPFUNC)spec_fsync },		/* fsync */
+	{ &vnop_remove_desc, (VOPFUNC)devfs_remove },		/* remove */
+	{ &vnop_link_desc, (VOPFUNC)devfs_link },		/* link */
+	{ &vnop_rename_desc, (VOPFUNC)spec_rename },		/* rename */
+	{ &vnop_mkdir_desc, (VOPFUNC)spec_mkdir },		/* mkdir */
+	{ &vnop_rmdir_desc, (VOPFUNC)spec_rmdir },		/* rmdir */
+	{ &vnop_symlink_desc, (VOPFUNC)spec_symlink },		/* symlink */
+	{ &vnop_readdir_desc, (VOPFUNC)spec_readdir },		/* readdir */
+	{ &vnop_readlink_desc, (VOPFUNC)spec_readlink },		/* readlink */
+	{ &vnop_inactive_desc, (VOPFUNC)devfs_inactive },	/* inactive */
+	{ &vnop_reclaim_desc, (VOPFUNC)devfs_reclaim },		/* reclaim */
+	{ &vnop_strategy_desc, (VOPFUNC)spec_strategy },		/* strategy */
+	{ &vnop_pathconf_desc, (VOPFUNC)spec_pathconf },		/* pathconf */
+	{ &vnop_advlock_desc, (VOPFUNC)spec_advlock },		/* advlock */
+	{ &vnop_bwrite_desc, (VOPFUNC)vn_bwrite },
+	{ &vnop_devblocksize_desc, (VOPFUNC)spec_devblocksize },	/* devblocksize */
+	{ &vnop_pagein_desc, (VOPFUNC)err_pagein },		/* Pagein */
+	{ &vnop_pageout_desc, (VOPFUNC)err_pageout },		/* Pageout */
+	{ &vnop_copyfile_desc, (VOPFUNC)err_copyfile },		/* Copyfile */
+	{ &vnop_blktooff_desc, (VOPFUNC)spec_blktooff },	/* blktooff */
+	{ &vnop_blktooff_desc, (VOPFUNC)spec_offtoblk  },	/* blkofftoblk */
+	{ &vnop_blockmap_desc, (VOPFUNC)spec_blockmap },	/* blockmap */
 	{ (struct vnodeop_desc*)NULL, (int(*)())NULL }
 };
 struct vnodeopv_desc devfs_spec_vnodeop_opv_desc =

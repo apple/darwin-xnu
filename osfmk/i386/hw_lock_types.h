@@ -83,10 +83,11 @@
  *	dependent optimizations for the locking constructs defined
  *	later in kern/lock.h..
  */
-typedef volatile int	hw_lock_data_t;
-typedef	hw_lock_data_t	*hw_lock_t;
-#define hw_lock_addr(hwl)	(&(hwl))
-
+struct hslock {
+	int		lock_data;
+};
+typedef struct hslock hw_lock_data_t, *hw_lock_t;
+#define hw_lock_addr(hwl)	(&((hwl).lock_data))
 
 #endif	/* _I386_HW_LOCK_TYPES_H_ */
 

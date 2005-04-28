@@ -47,7 +47,7 @@ argument specifies the process ID of the traced process.
 can be:
 .Bl -tag -width 12n
 .It Dv PT_TRACE_ME
-This request is the only one used by the traced process; it declares
+This request is one of two used by the traced process; it declares
 that the process expects to be traced by its parent.  All the other
 arguments are ignored.  (If the parent process does not expect to trace
 the child, it will probably be rather confused by the results; once the
@@ -65,70 +65,14 @@ such as
 it will stop before executing the first instruction of the new image.
 Also, any setuid or setgid bits on the executable being executed will
 be ignored.
-.It Dv PT_READ_I , Dv PT_READ_D
-These requests read a single
-.Li int
-of data from the traced process' address space.  Traditionally,
-.Fn ptrace
-has allowed for machines with distinct address spaces for instruction
-and data, which is why there are two requests: conceptually,
-.Dv PT_READ_I
-reads from the instruction space and
-.Dv PT_READ_D
-reads from the data space.  In the current OpenBSD implementation, these
-two requests are completely identical.  The
-.Fa addr
-argument specifies the address (in the traced process' virtual address
-space) at which the read is to be done.  This address does not have to
-meet any alignment constraints.  The value read is returned as the
-return value from
-.Eo \&
-.Fn ptrace
-.Ec .
-.It Dv PT_WRITE_I , Dv PT_WRITE_D
-These requests parallel
-.Dv PT_READ_I
-and
-.Dv PT_READ_D ,
-except that they write rather than read.  The
-.Fa data
-argument supplies the value to be written.
-.\" .It Dv PT_READ_U
-.\" This request reads an
-.\" .Li int
-.\" from the traced process' user structure.  The
-.\" .Fa addr
-.\" argument specifies the location of the int relative to the base of the
-.\" user structure; it will usually be an integer value cast to
-.\" .Li caddr_t
-.\" either explicitly or via the presence of a prototype for
-.\" .Eo \&
-.\" .Fn ptrace
-.\" .Ec .
-.\" Unlike
-.\" .Dv PT_READ_I
-.\" and
-.\" .Dv PT_READ_D ,
-.\" .Fa addr
-.\" must be aligned on an
-.\" .Li int
-.\" boundary.  The value read is returned as the return value from
-.\" .Eo \&
-.\" .Fn ptrace
-.\" .Ec .
-.\" .It Dv PT_WRITE_U
-.\" This request writes an
-.\" .Li int
-.\" into the traced process' user structure.
-.\" .Fa addr
-.\" specifies the offset, just as for
-.\" .Dv PT_READ_U ,
-.\" and
-.\" .Fa data
-.\" specifies the value to be written, just as for
-.\" .Dv PT_WRITE_I
-.\" and
-.\" .Dv PT_WRITE_D .
+.It Dv PT_DENY_ATTACH
+This request is the other operation used by the traced process; it allows
+a process that is not currently being traced to deny future traces by its
+parent.  All other arguments are ignored.  If the process is currently
+being traced, it will exit with the exit status of ENOTSUP; otherwise,
+it sets a flag that denies future traces.  An attempt by the parent to
+trace a process which has set this flag will result in a segmentation violation
+in the parent.
 .It Dv PT_CONTINUE
 The traced process continues execution.
 .Fa addr
@@ -139,6 +83,10 @@ to indicate that execution is to pick up where it left off.
 .Fa data
 provides a signal number to be delivered to the traced process as it
 resumes execution, or 0 if no signal is to be sent.
+.It Dv PT_STEP
+The traced process continues execution for a single step.  The
+parameters are identical to those passed to
+.Dv PT_CONTINUE.
 .It Dv PT_KILL
 The traced process terminates, as if
 .Dv PT_CONTINUE
@@ -164,138 +112,6 @@ succeeds, the traced process is no longer traced and continues
 execution normally.
 .El
 .Pp
-Additionally, machine-specific requests can exist.  On the SPARC, these
-are:
-.Bl -tag -width 12n
-.It Dv PT_GETREGS
-This request reads the traced process' machine registers into the
-.Dq Li "struct reg"
-(defined in
-.Aq Pa machine/reg.h )
-pointed to by
-.Fa addr .
-.It Dv PT_SETREGS
-This request is the converse of
-.Dv PT_GETREGS ;
-it loads the traced process' machine registers from the
-.Dq Li "struct reg"
-(defined in
-.Aq Pa machine/reg.h )
-pointed to by
-.Fa addr .
-.It Dv PT_GETFPREGS
-This request reads the traced process' floating-point registers into
-the
-.Dq Li "struct fpreg"
-(defined in
-.Aq Pa machine/reg.h )
-pointed to by
-.Fa addr .
-.It Dv PT_SETFPREGS
-This request is the converse of
-.Dv PT_GETFPREGS ;
-it loads the traced process' floating-point registers from the
-.Dq Li "struct fpreg"
-(defined in
-.Aq Pa machine/reg.h )
-pointed to by
-.Fa addr .
-.\" .It Dv PT_SYSCALL
-.\" This request is like
-.\" .Dv PT_CONTINUE
-.\" except that the process will stop next time it executes any system
-.\" call.  Information about the system call can be examined with
-.\" .Dv PT_READ_U
-.\" and potentially modified with
-.\" .Dv PT_WRITE_U
-.\" through the
-.\" .Li u_kproc.kp_proc.p_md
-.\" element of the user structure (see below).  If the process is continued
-.\" with another
-.\" .Dv PT_SYSCALL
-.\" request, it will stop again on exit from the syscall, at which point
-.\" the return values can be examined and potentially changed.  The
-.\" .Li u_kproc.kp_proc.p_md
-.\" element is of type
-.\" .Dq Li "struct mdproc" ,
-.\" which should be declared by including
-.\" .Aq Pa sys/param.h ,
-.\" .Aq Pa sys/user.h ,
-.\" and
-.\" .Aq Pa machine/proc.h ,
-.\" and contains the following fields (among others):
-.\" .Bl -item -compact -offset indent
-.\" .It
-.\" .Li syscall_num
-.\" .It
-.\" .Li syscall_nargs
-.\" .It
-.\" .Li syscall_args[8]
-.\" .It
-.\" .Li syscall_err
-.\" .It
-.\" .Li syscall_rv[2]
-.\" .El
-.\" When a process stops on entry to a syscall,
-.\" .Li syscall_num
-.\" holds the number of the syscall,
-.\" .Li syscall_nargs
-.\" holds the number of arguments it expects, and
-.\" .Li syscall_args
-.\" holds the arguments themselves.  (Only the first
-.\" .Li syscall_nargs
-.\" elements of
-.\" .Li syscall_args
-.\" are guaranteed to be useful.)  When a process stops on exit from a
-.\" syscall,
-.\" .Li syscall_num
-.\" is
-.\" .Eo \&
-.\" .Li -1
-.\" .Ec ,
-.\" .Li syscall_err
-.\" holds the error number
-.\" .Po
-.\" see
-.\" .Xr errno 2
-.\" .Pc ,
-.\" or 0 if no error occurred, and
-.\" .Li syscall_rv
-.\" holds the return values.  (If the syscall returns only one value, only
-.\" .Li syscall_rv[0]
-.\" is useful.)  The tracing process can modify any of these with
-.\" .Dv PT_WRITE_U ;
-.\" only some modifications are useful.
-.\" .Pp
-.\" On entry to a syscall,
-.\" .Li syscall_num
-.\" can be changed, and the syscall actually performed will correspond to
-.\" the new number (it is the responsibility of the tracing process to fill
-.\" in
-.\" .Li syscall_args
-.\" appropriately for the new call, but there is no need to modify
-.\" .Eo \&
-.\" .Li syscall_nargs
-.\" .Ec ).
-.\" If the new syscall number is 0, no syscall is actually performed;
-.\" instead,
-.\" .Li syscall_err
-.\" and
-.\" .Li syscall_rv
-.\" are passed back to the traced process directly (and therefore should be
-.\" filled in).  If the syscall number is otherwise out of range, a dummy
-.\" syscall which simply produces an
-.\" .Er ENOSYS
-.\" error is effectively performed.
-.\" .Pp
-.\" On exit from a syscall, only
-.\" .Li syscall_err
-.\" and
-.\" .Li syscall_rv
-.\" can usefully be changed; they are set to the values returned by the
-.\" syscall and will be passed back to the traced process by the normal
-.\" syscall return mechanism.
-.El
 .Sh ERRORS
 Some requests can cause
 .Fn ptrace
@@ -318,22 +134,11 @@ on itself.
 The
 .Fa request
 was not one of the legal requests.
-.\" .It
-.\" The
-.\" .Fa addr
-.\" to
-.\" .Dv PT_READ_U
-.\" or
-.\" .Dv PT_WRITE_U
-.\" was not
-.\" .Li int Ns \&-aligned.
 .It
 The signal number (in
 .Fa data )
 to
 .Dv PT_CONTINUE
-.\" or
-.\" .Dv PT_SYSCALL
 was neither 0 nor a legal signal number.
 .It
 .Dv PT_GETREGS ,
@@ -371,27 +176,3 @@ on a process in violation of the requirements listed under
 above.
 .El
 .El
-.Sh BUGS
-On the SPARC, the PC is set to the provided PC value for
-.Dv PT_CONTINUE
-and similar calls, but the NPC is set willy-nilly to 4 greater than the
-PC value.  Using
-.Dv PT_GETREGS
-and
-.Dv PT_SETREGS
-to modify the PC, passing
-.Li (caddr_t)1
-to
-.Eo \&
-.Fn ptrace
-.Ec ,
-should be able to sidestep this.
-.Pp
-Single-stepping is not available.
-.\" .Pp
-.\" When using
-.\" .Dv PT_SYSCALL ,
-.\" there is no easy way to tell whether the traced process stopped because
-.\" it made a syscall or because a signal was sent at a moment that it just
-.\" happened to have valid-looking garbage in its
-.\" .Dq Li "struct mdproc" .

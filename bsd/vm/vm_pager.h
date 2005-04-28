@@ -53,11 +53,11 @@ typedef	struct pager_struct	*vm_pager_t;
 #ifdef	KERNEL
 typedef	int		pager_return_t;
 
-vm_pager_t	vm_pager_allocate();
-void		vm_pager_deallocate();
-pager_return_t	vm_pager_get();
-pager_return_t	vm_pager_put();
-boolean_t	vm_pager_has_page();
+extern vm_pager_t		vm_pager_allocate(void);
+extern void				vm_pager_deallocate(void);
+extern pager_return_t	vm_pager_get(void);
+extern pager_return_t	vm_pager_put(void);
+extern boolean_t		vm_pager_has_page(void);
 #endif	/* KERNEL */
 
 #endif	/* _VM_PAGER_ */

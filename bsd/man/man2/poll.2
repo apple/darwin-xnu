@@ -1,0 +1,198 @@
+.\"
+.\" Copyright (c) 2005 Apple Computer, Inc. All rights reserved.
+.\"
+.\" @APPLE_LICENSE_HEADER_START@
+.\"
+.\" This file contains Original Code and/or Modifications of Original Code
+.\" as defined in and that are subject to the Apple Public Source License
+.\" Version 2.0 (the 'License'). You may not use this file except in
+.\" compliance with the License. Please obtain a copy of the License at
+.\" http://www.opensource.apple.com/apsl/ and read it before using this
+.\" file.
+.\"
+.\" The Original Code and all software distributed under the License are
+.\" distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+.\" EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+.\" INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+.\" FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+.\" Please see the License for the specific language governing rights and
+.\" limitations under the License.
+.\"
+.\" @APPLE_LICENSE_HEADER_END@
+.\"
+.\"
+.\" Copyright (c) 1996 Charles M. Hannum.  All rights reserved.
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\" 3. All advertising materials mentioning features or use of this software
+.\"    must display the following acknowledgement:
+.\"	This product includes software developed by Charles M. Hannum.
+.\" 4. The name of the author may not be used to endorse or promote products
+.\"    derived from this software without specific prior written permission.
+.\"
+.\" THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
+.\" IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+.\" OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+.\" IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
+.\" INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
+.\" NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+.\" DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+.\" THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+.\" (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+.\" THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+.\"
+.Dd February 27, 2005
+.Dt POLL 2
+.Os
+.Sh NAME
+.Nm poll
+.Nd synchronous I/O multiplexing
+.Sh SYNOPSIS
+.In poll.h
+.Ft int
+.Fn poll "struct pollfd *fds" "nfds_t nfds" "int timeout"
+.Sh DESCRIPTION
+.Fn Poll
+examines a set of file descriptors to see if some of them are ready for
+I/O or if certain events have occurred on them.
+The
+.Fa fds
+argument is a pointer to an array of pollfd structures as defined in
+.Aq Pa poll.h
+(shown below).  The
+.Fa nfds
+argument determines the size of the
+.Fa fds
+array.
+.Bd -literal
+struct pollfd {
+    int    fd;       /* file descriptor */
+    short  events;   /* events to look for */
+    short  revents;  /* events returned */
+};
+.Ed
+.Pp
+The fields of
+.Fa struct pollfd
+are as follows:
+.Bl -tag -width XXXrevents
+.It fd
+File descriptor to poll.
+.It events
+Events to poll for.  (See below.)
+.It revents
+Events which may occur or have occurred.  (See below.)
+.El
+.Pp
+The event bitmasks in
+.Fa events
+and
+.Fa revents
+have the following bits:
+.Bl -tag -width XXXPOLLWRNORM
+.It POLLIN
+Data other than high priority data may be read without blocking.
+This is equivalent to ( POLLRDNORM | POLLRDBAND ).
+.It POLLRDNORM
+Normal data may be read without blocking.
+.It POLLRDBAND
+Priority data may be read without blocking.
+.It POLLPRI
+High priority data may be read without blocking.
+.It POLLOUT
+.It POLLWRNORM
+Normal data may be written without blocking.
+.It POLLWRBAND
+Priority data may be written without blocking.
+.It POLLERR
+An exceptional condition has occurred on the device or socket.  This
+flag is output only, and ignored if present in the input
+.Fa events
+bitmask.
+.It POLLHUP
+The device or socket has been disconnected.  This flag is output only,
+and ignored if present in the input
+.Fa events
+bitmask.  Note that
+POLLHUP
+and
+POLLOUT
+are mutually exclusive and should never be present in the
+.Fa revents
+bitmask at the same time.
+.It POLLNVAL
+The file descriptor is not open.  This flag is output only, and ignored if present in the input
+.Fa events
+bitmask.
+.El
+.Pp
+The distinction between normal, priority, and high-priority data is file type
+or device specific.
+.Pp
+If
+.Fa timeout
+is greater than zero, it specifies a maximum interval to
+wait for any file descriptor to become ready, in milliseconds.  If
+.Fa timeout
+is zero, then
+.Fn poll
+will return without blocking. If the value of
+.Fa timeout
+is -1, the poll blocks indefinitely.
+.Sh RETURN VALUES
+.Fn Poll
+returns the number of descriptors that are ready for I/O, or -1 if an
+error occured.  If the time limit expires,
+.Fn poll
+returns 0.
+If
+.Fn poll
+returns with an error,
+including one due to an interrupted call,
+the
+.Fa fds
+array will be unmodified.
+.Sh ERRORS
+An error return from
+.Fn poll
+indicates:
+.Bl -tag -width Er
+.It Bq Er EFAULT
+.Fa Fds
+points outside the process's allocated address space.
+.It Bq Er EINTR
+A signal was delivered before the time limit expired and
+before any of the selected events occurred.
+.It Bq Er EINVAL
+The
+.Fa nfds
+argument is greater than OPEN_MAX, or the
+.Fa timeout
+argument is less than -1.
+.El
+.Sh BUGS
+The
+.Fn poll
+system call currently does not support devices.
+.Sh SEE ALSO
+.Xr accept 2 ,
+.Xr connect 2 ,
+.Xr kevent 2 ,
+.Xr read 2 ,
+.Xr recv 2 ,
+.Xr select 2 ,
+.Xr send 2 ,
+.Xr write 2
+.Sh HISTORY
+The
+.Fn poll
+function call appeared in
+.At V .
+

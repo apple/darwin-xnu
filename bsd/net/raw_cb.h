@@ -60,7 +60,7 @@
 
 #include <sys/queue.h>
 
-#ifdef __APPLE_API_PRIVATE
+#ifdef PRIVATE
 /*
  * Raw protocol interface control block.  Used
  * to tie a socket to the generic raw interface.
@@ -73,7 +73,6 @@ struct rawcb {
 	struct	sockproto rcb_proto;	/* protocol family, protocol */
 	u_long	reserved[4];		/* for future use */
 };
-#endif /* __APPLE_API_PRIVATE */
 
 #define	sotorawcb(so)		((struct rawcb *)(so)->so_pcb)
 
@@ -82,21 +81,20 @@ struct rawcb {
  */
 #define	RAWSNDQ		8192
 #define	RAWRCVQ		8192
+#endif /* PRIVATE */
 
-#ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
+#ifdef KERNEL_PRIVATE
 extern LIST_HEAD(rawcb_list_head, rawcb) rawcb_list;
 
-int	 raw_attach __P((struct socket *, int));
-void	 raw_ctlinput __P((int, struct sockaddr *, void *));
-void	 raw_detach __P((struct rawcb *));
-void	 raw_disconnect __P((struct rawcb *));
-void	 raw_init __P((void));
-void	 raw_input __P((struct mbuf *,
-	    struct sockproto *, struct sockaddr *, struct sockaddr *));
+int	 raw_attach(struct socket *, int);
+void	 raw_ctlinput(int, struct sockaddr *, void *);
+void	 raw_detach(struct rawcb *);
+void	 raw_disconnect(struct rawcb *);
+void	 raw_init(void);
+void	 raw_input(struct mbuf *,
+	    struct sockproto *, struct sockaddr *, struct sockaddr *);
 
 extern	struct pr_usrreqs raw_usrreqs;
-#endif /* __APPLE_API_PRIVATE */
-#endif
+#endif KERNEL_PRIVATE
 
 #endif

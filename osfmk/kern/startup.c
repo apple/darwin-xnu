@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -57,13 +57,12 @@
 #include <debug.h>
 #include <xpr_debug.h>
 #include <mach_kdp.h>
-#include <cpus.h>
 #include <mach_host.h>
 #include <norma_vm.h>
-#include <etap.h>
 
 #include <mach/boolean.h>
 #include <mach/machine.h>
+#include <mach/thread_act.h>
 #include <mach/task_special_ports.h>
 #include <mach/vm_param.h>
 #include <ipc/ipc_init.h>
@@ -71,18 +70,17 @@
 #include <kern/misc_protos.h>
 #include <kern/clock.h>
 #include <kern/cpu_number.h>
-#include <kern/etap_macros.h>
+#include <kern/ledger.h>
 #include <kern/machine.h>
 #include <kern/processor.h>
 #include <kern/sched_prim.h>
-#include <kern/mk_sp.h>
 #include <kern/startup.h>
 #include <kern/task.h>
 #include <kern/thread.h>
 #include <kern/timer.h>
-#include <kern/timer_call.h>
 #include <kern/xpr.h>
 #include <kern/zalloc.h>
+#include <kern/locks.h>
 #include <vm/vm_shared_memory_server.h>
 #include <vm/vm_kern.h>
 #include <vm/vm_init.h>
@@ -92,32 +90,29 @@
 #include <vm/vm_pageout.h>
 #include <machine/pmap.h>
 #include <machine/commpage.h>
-#include <sys/version.h>
+#include <libkern/version.h>
 
 #ifdef __ppc__
 #include <ppc/Firmware.h>
 #include <ppc/mappings.h>
+#include <ppc/serial_io.h>
 #endif
 
-/* Externs XXX */
-extern void	rtclock_reset(void);
+static void		kernel_bootstrap_thread(void);
 
-/* Forwards */
-void		cpu_launch_first_thread(
-				thread_t		thread);
-void		start_kernel_threads(void);
+static void		load_context(
+					thread_t	thread);
 
 /*
  *	Running in virtual memory, on the interrupt stack.
- *	Does not return.  Dispatches initial thread.
- *
- *	Assumes that master_cpu is set.
  */
 void
-setup_main(void)
+kernel_bootstrap(void)
 {
-	thread_t	startup_thread;
+	kern_return_t	result;
+	thread_t		thread;
 
+	lck_mod_init();
 	sched_init();
 	vm_mem_bootstrap();
 	ipc_bootstrap();
@@ -130,22 +125,16 @@ setup_main(void)
 	 */
 	PMAP_ACTIVATE_KERNEL(master_cpu);
 
-#ifdef __ppc__
 	mapping_free_prime();						/* Load up with temporary mapping blocks */
-#endif
 
 	machine_init();
 	kmod_init();
 	clock_init();
 
-	init_timers();
-	timer_call_initialize();
-
-	machine_info.max_cpus = NCPUS;
 	machine_info.memory_size = mem_size;
-	machine_info.avail_cpus = 0;
-	machine_info.major_version = KERNEL_MAJOR_VERSION;
-	machine_info.minor_version = KERNEL_MINOR_VERSION;
+	machine_info.max_mem = max_mem;
+	machine_info.major_version = version_major;
+	machine_info.minor_version = version_minor;
 
 	/*
 	 *	Initialize the IPC, task, and thread subsystems.
@@ -153,89 +142,54 @@ setup_main(void)
 	ledger_init();
 	task_init();
 	thread_init();
-
-	/*
-	 *	Initialize the Event Trace Analysis Package.
-	 * 	Dynamic Phase: 2 of 2
-	 */
-	etap_init_phase2();
 	
 	/*
-	 *	Create a kernel thread to start the other kernel
-	 *	threads.
+	 *	Create a kernel thread to execute the kernel bootstrap.
 	 */
-	startup_thread = kernel_thread_create(start_kernel_threads, MAXPRI_KERNEL);
+	result = kernel_thread_create((thread_continue_t)kernel_bootstrap_thread, NULL, MAXPRI_KERNEL, &thread);
+	if (result != KERN_SUCCESS)
+		panic("kernel_bootstrap");
 
-	/*
-	 * Start the thread.
-	 */
-	startup_thread->state = TH_RUN;
-	pset_run_incr(startup_thread->processor_set);
+	thread->state = TH_RUN;
+	thread_deallocate(thread);
 
-	cpu_launch_first_thread(startup_thread);
+	load_context(thread);
 	/*NOTREACHED*/
-	panic("cpu_launch_first_thread returns!");
 }
 
 /*
- * Now running in a thread.  Create the rest of the kernel threads
- * and the bootstrap task.
+ * Now running in a thread.  Kick off other services,
+ * invoke user bootstrap, enter pageout loop.
  */
-void
-start_kernel_threads(void)
+static void
+kernel_bootstrap_thread(void)
 {
-	register int				i;
-
-	thread_bind(current_thread(), cpu_to_processor(cpu_number()));
-
-	/*
-	 *	Create the idle threads and the other
-	 *	service threads.
-	 */
-	for (i = 0; i < NCPUS; i++) {
-		processor_t		processor = cpu_to_processor(i);
-		thread_t		thread;
-		spl_t			s;
-
-		thread = kernel_thread_create(idle_thread, MAXPRI_KERNEL);
-
-		s = splsched();
-		thread_lock(thread);
-		thread->bound_processor = processor;
-		processor->idle_thread = thread;
-		thread->ref_count++;
-		thread->sched_pri = thread->priority = IDLEPRI;
-		thread->state = (TH_RUN | TH_IDLE);
-		thread_unlock(thread);
-		splx(s);
-	}
+	processor_t		processor = current_processor();
+	thread_t		self = current_thread();
 
 	/*
-	 * Initialize the thread reaper mechanism.
+	 * Create the idle processor thread.
 	 */
-	thread_reaper_init();
+	idle_thread_create(processor);
 
 	/*
-	 * Initialize the stack swapin mechanism.
+	 * N.B. Do not stick anything else
+	 * before this point.
+	 *
+	 * Start up the scheduler services.
 	 */
-	swapin_init();
+	sched_startup();
 
 	/*
-	 * Initialize the periodic scheduler mechanism.
+	 * Remain on current processor as
+	 * additional processors come online.
 	 */
-	sched_tick_init();
+	thread_bind(self, processor);
 
 	/*
-	 * Initialize the thread callout mechanism.
+	 * Kick off memory mapping adjustments.
 	 */
-	thread_call_initialize();
-
-	/*
-	 * Invoke some black magic.
-	 */
-#if __ppc__
 	mapping_adjust();
-#endif
 
 	/*
 	 *	Create the clock service.
@@ -247,7 +201,7 @@ start_kernel_threads(void)
 	 */
 	device_service_create();
 
-	shared_file_boot_time_init(ENV_DEFAULT_ROOT, machine_slot[cpu_number()].cpu_type);
+	shared_file_boot_time_init(ENV_DEFAULT_ROOT, cpu_type());
 
 #ifdef	IOKIT
 	{
@@ -265,10 +219,8 @@ start_kernel_threads(void)
 	/*
 	 *	Start the user bootstrap.
 	 */
-	
 #ifdef	MACH_BSD
 	{ 
-		extern void bsd_init(void);
 		bsd_init();
 	}
 #endif
@@ -277,75 +229,114 @@ start_kernel_threads(void)
 	serial_keyboard_init();		/* Start serial keyboard if wanted */
 #endif
 
-	thread_bind(current_thread(), PROCESSOR_NULL);
+	thread_bind(self, PROCESSOR_NULL);
 
 	/*
 	 *	Become the pageout daemon.
 	 */
-
 	vm_pageout();
 	/*NOTREACHED*/
 }
 
+/*
+ *	slave_main:
+ *
+ *	Load the first thread to start a processor.
+ */
 void
 slave_main(void)
 {
-	processor_t		myprocessor = current_processor();
+	processor_t		processor = current_processor();
 	thread_t		thread;
 
-	thread = myprocessor->next_thread;
-	myprocessor->next_thread = THREAD_NULL;
-	if (thread == THREAD_NULL) {
-		thread = machine_wake_thread;
-		machine_wake_thread = THREAD_NULL;
+	/*
+	 *	Use the idle processor thread if there
+	 *	is no dedicated start up thread.
+	 */
+	if (processor->next_thread == THREAD_NULL) {
+		thread = processor->idle_thread;
+		thread->continuation = (thread_continue_t)processor_start_thread;
+		thread->parameter = NULL;
+	}
+	else {
+		thread = processor->next_thread;
+		processor->next_thread = THREAD_NULL;
 	}
 
-	cpu_launch_first_thread(thread);
+	load_context(thread);
 	/*NOTREACHED*/
-	panic("slave_main");
 }
 
 /*
- * Now running in a thread context
+ *	processor_start_thread:
+ *
+ *	First thread to execute on a started processor.
+ *
+ *	Called at splsched.
  */
 void
-start_cpu_thread(void)
+processor_start_thread(void)
 {
+	processor_t		processor = current_processor();
+	thread_t		self = current_thread();
+
 	slave_machine_init();
 
-	(void) thread_terminate(current_act());
+	/*
+	 *	If running the idle processor thread,
+	 *	reenter the idle loop, else terminate.
+	 */
+	if (self == processor->idle_thread)
+		thread_block((thread_continue_t)idle_thread);
+
+	thread_terminate(self);
+	/*NOTREACHED*/
 }
 
 /*
- *	Start up the first thread on a CPU.
+ *	load_context:
+ *
+ *	Start the first thread on a processor.
  */
-void
-cpu_launch_first_thread(
+static void
+load_context(
 	thread_t		thread)
 {
-	register int	mycpu = cpu_number();
-	processor_t		processor = cpu_to_processor(mycpu);
+	processor_t		processor = current_processor();
 
-	clock_get_uptime(&processor->last_dispatch);
-	start_timer(&kernel_timer[mycpu]);
-	machine_thread_set_current(thread);
-	cpu_up(mycpu);
+	machine_set_current_thread(thread);
+	processor_up(processor);
 
-	rtclock_reset();		/* start realtime clock ticking */
-	PMAP_ACTIVATE_KERNEL(mycpu);
+	PMAP_ACTIVATE_KERNEL(PROCESSOR_DATA(processor, slot_num));
 
-	thread_lock(thread);
-	thread->state &= ~TH_UNINT;
-	thread->last_processor = processor;
+	/*
+	 * Acquire a stack if none attached.  The panic
+	 * should never occur since the thread is expected
+	 * to have reserved stack.
+	 */
+	if (!thread->kernel_stack) {
+		if (!stack_alloc_try(thread))
+			panic("load_context");
+	}
+
+	/*
+	 * The idle processor threads are not counted as
+	 * running for load calculations.
+	 */
+	if (!(thread->state & TH_IDLE))
+		pset_run_incr(thread->processor_set);
+
 	processor->active_thread = thread;
 	processor->current_pri = thread->sched_pri;
-	_mk_sp_thread_begin(thread, processor);
-	thread_unlock(thread);
-	timer_switch(&thread->system_timer);
+	processor->deadline = UINT64_MAX;
+	thread->last_processor = processor;
 
-	PMAP_ACTIVATE_USER(thread->top_act, mycpu);
+	processor->last_dispatch = mach_absolute_time();
+	timer_switch((uint32_t)processor->last_dispatch,
+							&PROCESSOR_DATA(processor, offline_timer));
 
-	/* preemption enabled by load_context */
+	PMAP_ACTIVATE_USER(thread, PROCESSOR_DATA(processor, slot_num));
+
 	machine_load_context(thread);
 	/*NOTREACHED*/
 }

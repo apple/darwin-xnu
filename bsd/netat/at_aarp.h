@@ -22,6 +22,12 @@
 #ifndef _NETAT_AT_AARP_H_
 #define _NETAT_AT_AARP_H_
 #include <sys/appleapiopts.h>
+#ifdef KERNEL_PRIVATE
+#include <netat/at_var.h>
+#endif KERNEL_PRIVATE
+
+#ifdef __APPLE_API_OBSOLETE
+
 /*
  *	Copyright (c) 1988, 1989 Apple Computer, Inc. 
  */
@@ -89,6 +95,8 @@ typedef struct {
 						/* assigned for the given node*/
 /* Errors returned by AARP routines */
 #define AARP_ERR_NOT_OURS		1	/* not our appletalk address */
+
+#ifdef KERNEL_PRIVATE
 
 /*************************************************/
 /* Declarations for AARP Address Map Table (AMT) */
@@ -174,13 +182,10 @@ typedef struct {
 	 ) ? 1 : 0								\
 	)
 
-#ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
-
 int aarp_chk_addr(at_ddp_t  *, at_ifaddr_t *);
 int aarp_rcv_pkt(aarp_pkt_t *, at_ifaddr_t *);
 
-#endif /* __APPLE_API_PRIVATE */
-#endif /* KERNEL */
+#endif /* KERNEL_PRIVATE */
 
+#endif /* __APPLE_API_OBSOLETE */
 #endif /* _NETAT_AT_AARP_H_ */

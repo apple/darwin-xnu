@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -22,146 +22,6 @@
 /*
  * @OSF_COPYRIGHT@
  */
-/*
- * HISTORY
- * 
- * Revision 1.1.1.1  1998/09/22 21:05:48  wsanchez
- * Import of Mac OS X kernel (~semeria)
- *
- * Revision 1.1.1.1  1998/03/07 02:26:09  wsanchez
- * Import of OSF Mach kernel (~mburg)
- *
- * Revision 1.2.20.6  1996/01/09  19:16:22  devrcs
- * 	Add proto for db_task_getlinenum().
- * 	[1995/12/01  21:42:34  jfraser]
- *
- * Revision 1.2.20.5  1995/02/28  01:58:53  dwm
- * 	Merged with changes from 1.2.20.4
- * 	[1995/02/28  01:53:54  dwm]
- * 
- * 	mk6 CR1120 - Merge mk6pro_shared into cnmk_shared
- * 	[1995/02/28  01:12:57  dwm]
- * 
- * Revision 1.2.20.4  1995/02/23  21:43:48  alanl
- * 	Prepend a "db_" to qsort and qsort_limit_search
- * 	(collisions with the real qsort in stdlib.h)
- * 	[95/02/14            travos]
- * 
- * 	Expanded db_sym_switch structure to make ddb object format dependent;
- * 	this allows us to remove all of the aout dependencies.
- * 	[95/01/24            sjs]
- * 
- * Revision 1.2.23.4  1994/12/22  20:36:20  bolinger
- * 	Fix ri-osc CR881:  Fixed glitch in use of symtab cloning hack.
- * 	[1994/12/22  20:35:17  bolinger]
- * 
- * Revision 1.2.23.3  1994/11/02  18:36:07  dwm
- * 	mk6 CR668 - 1.3b26 merge
- * 	64bit cleanup, prototypes
- * 	fix X_db_search_by_addr macro to match prototype
- * 	[1994/11/02  18:16:20  dwm]
- * 
- * Revision 1.2.20.4  1995/02/23  21:43:48  alanl
- * 	Prepend a "db_" to qsort and qsort_limit_search
- * 	(collisions with the real qsort in stdlib.h)
- * 	[95/02/14            travos]
- * 
- * 	Expanded db_sym_switch structure to make ddb object format dependent;
- * 	this allows us to remove all of the aout dependencies.
- * 	[95/01/24            sjs]
- * 
- * Revision 1.2.23.4  1994/12/22  20:36:20  bolinger
- * 	Fix ri-osc CR881:  Fixed glitch in use of symtab cloning hack.
- * 	[1994/12/22  20:35:17  bolinger]
- * 
- * Revision 1.2.23.3  1994/11/02  18:36:07  dwm
- * 	mk6 CR668 - 1.3b26 merge
- * 	64bit cleanup, prototypes
- * 	fix X_db_search_by_addr macro to match prototype
- * 	[1994/11/02  18:16:20  dwm]
- * 
- * Revision 1.2.20.2  1994/09/23  01:21:51  ezf
- * 	change marker to not FREE
- * 	[1994/09/22  21:11:04  ezf]
- * 
- * Revision 1.2.20.1  1994/06/11  21:12:25  bolinger
- * 	Merge up to NMK17.2.
- * 	[1994/06/11  20:04:14  bolinger]
- * 
- * Revision 1.2.14.1  1994/02/08  10:58:56  bernadat
- * 	Added db_sym_print_completion
- * 	      db_sym_parse_and_lookup_incomplete
- * 	      db_sym_parse_and_print_completion
- * 	      db_print_completion
- * 	      db_lookup_incomplete
- * 	      ddb_init
- * 	prototypes
- * 
- * 	Changed func type to db_sym_parse_and_lookup prototype
- * 
- * 	Added definition of db_maxoff.
- * 	[93/08/12            paire]
- * 	[94/02/07            bernadat]
- * 
- * Revision 1.2.18.1  1994/06/08  19:11:28  dswartz
- * 	Preemption merge.
- * 	[1994/06/08  19:10:27  dswartz]
- * 
- * Revision 1.2.17.2  1994/06/01  21:34:50  klj
- * 	Initial preemption code base merge
- * 
- * Revision 1.2.4.3  1993/07/27  18:28:12  elliston
- * 	Add ANSI prototypes.  CR #9523.
- * 	[1993/07/27  18:13:02  elliston]
- * 
- * Revision 1.2.4.2  1993/06/09  02:20:56  gm
- * 	Added to OSF/1 R1.3 from NMK15.0.
- * 	[1993/06/02  20:57:18  jeffc]
- * 
- * Revision 1.2  1993/04/19  16:03:18  devrcs
- * 	Added 3 new fields in db_symtab_t for sorting.
- * 	[barbou@gr.osf.org]
- * 	[92/12/03            bernadat]
- * 
- * Revision 1.1  1992/09/30  02:24:22  robert
- * 	Initial revision
- * 
- * $EndLog$
- */
-/* CMU_HIST */
-/*
- * Revision 2.6  91/10/09  16:02:45  af
- * 	 Revision 2.5.1.1  91/10/05  13:07:39  jeffreyh
- * 	 	Added macro definitions of db_find_task_sym_and_offset(),
- * 	 	  db_find_xtrn_task_sym_and_offset(), db_search_symbol().
- * 	 	[91/08/29            tak]
- * 
- * Revision 2.5.1.1  91/10/05  13:07:39  jeffreyh
- * 	Added macro definitions of db_find_task_sym_and_offset(),
- * 	  db_find_xtrn_task_sym_and_offset(), db_search_symbol().
- * 	[91/08/29            tak]
- * 
- * Revision 2.5  91/07/31  17:31:49  dbg
- * 	Add map pointer and storage for name to db_symtab_t.
- * 	[91/07/30  16:45:08  dbg]
- * 
- * Revision 2.4  91/05/14  15:36:08  mrt
- * 	Correcting copyright
- * 
- * Revision 2.3  91/02/05  17:07:12  mrt
- * 	Changed to new Mach copyright
- * 	[91/01/31  16:19:27  mrt]
- * 
- * Revision 2.2  90/08/27  21:52:39  dbg
- * 	Changed type of db_sym_t to char * - it's a better type for an
- * 	opaque pointer.
- * 	[90/08/22            dbg]
- * 
- * 	Created.
- * 	[90/08/19            af]
- * 
- */
-/* CMU_ENDHIST */
 /* 
  * Mach Operating System
  * Copyright (c) 1991,1990 Carnegie Mellon University
@@ -381,7 +241,7 @@ extern void db_clone_symtabXXX(char *, char *, vm_offset_t);
 
 extern db_symtab_t *db_symtab_cloneeXXX(char *);
 
-extern db_task_getlinenum( db_expr_t, task_t);
+extern int db_task_getlinenum( db_expr_t, task_t);
 
 /* Some convenience macros.
  */

@@ -34,60 +34,27 @@
 
 #include <i386/machdep_call.h>
 
-extern kern_return_t	kern_invalid();
-extern kern_return_t	thread_get_cthread_self();
-extern kern_return_t	thread_set_cthread_self();
-extern kern_return_t	thread_fast_set_cthread_self();
+extern kern_return_t	kern_invalid(void);
+#ifdef	FIXME
 extern kern_return_t	PCcreate(), PCldt(), PCresume();
 extern kern_return_t	PCcopyBIOSData(), PCmapBIOSRom();
 extern kern_return_t	PCsizeBIOSExtData(), PCcopyBIOSExtData();
+#endif
 
 machdep_call_t		machdep_call_table[] = {
-    {
-	thread_get_cthread_self,
-	0
-    },
-    {
-	thread_set_cthread_self,
-	1
-    },
-    {
-    	kern_invalid,	/* old th_create() */
-	0
-    },
-    {
-      thread_fast_set_cthread_self,
-	1
-    },
+	MACHDEP_CALL_ROUTINE(thread_get_cthread_self,0),
+	MACHDEP_CALL_ROUTINE(thread_set_cthread_self,1),
+	MACHDEP_CALL_ROUTINE(kern_invalid,0),
+	MACHDEP_CALL_ROUTINE(thread_fast_set_cthread_self,1),
+	MACHDEP_CALL_ROUTINE(thread_set_user_ldt,3),
 #ifdef	FIXME
-    {
-	PCcreate,
-	3
-    },
-    {
-    	PCldt,
-	3
-    },
-    {
-    	PCresume,
-	0
-    },
-    {
-	PCcopyBIOSData,
-	1
-    },
-    {
-    	PCsizeBIOSExtData,
-	0
-    },
-    {
-    	PCcopyBIOSExtData,
-	1
-    },
-    {
-    	PCmapBIOSRom,
-	3
-    },
+	MACHDEP_CALL_ROUTINE(PCcreate,3),
+	MACHDEP_CALL_ROUTINE(PCldt,3),
+	MACHDEP_CALL_ROUTINE(PCresume,0),
+	MACHDEP_CALL_ROUTINE(PCcopyBIOSData,1),
+	MACHDEP_CALL_ROUTINE(PCsizeBIOSExtData,0),
+	MACHDEP_CALL_ROUTINE(PCcopyBIOSExtData,1),
+	MACHDEP_CALL_ROUTINE(PCmapBIOSRom,3),
 #endif
 };
 

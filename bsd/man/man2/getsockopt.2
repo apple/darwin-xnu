@@ -44,9 +44,9 @@
 .Fd #include <sys/types.h>
 .Fd #include <sys/socket.h>
 .Ft int
-.Fn getsockopt "int s" "int level" "int optname" "void *optval" "int *optlen"
+.Fn getsockopt "int s" "int level" "int optname" "void *optval" "socklen_t *optlen"
 .Ft int
-.Fn setsockopt "int s" "int level" "int optname" "const void *optval" "int optlen"
+.Fn setsockopt "int s" "int level" "int optname" "const void *optval" "socklen_t optlen"
 .Sh DESCRIPTION
 .Fn Getsockopt
 and
@@ -295,8 +295,7 @@ receiving additional data, it returns with a short count
 or with the error
 .Er EWOULDBLOCK
 if no data were received. The struct timeval parameter must represent a 
-positive time interval less than SHRT_MAX * 10 milliseconds (5 minutes 
-and 28 seconds) otherwise 
+positive time interval otherwise 
 .Fn setsockopt 
 returns with the error
 .Er EDOM .

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -34,12 +34,12 @@
 
 #ifndef ASSEMBLER
 
-#include <cpus.h>
 #include <mach_kdb.h>
 #include <mach_kdp.h>
 
 #include <mach/machine/vm_types.h>
 #include <mach/boolean.h>
+#include <kern/ast.h>
 #include <kern/cpu_data.h>
 #include <pexpert/pexpert.h>
 #include <IOKit/IOInterrupts.h>
@@ -237,9 +237,14 @@ struct hwCtrs {
 	unsigned int	numSIGPtimo;			/* Number of SIGP send timeouts */
 	unsigned int	numSIGPmast;			/* Number of SIGPast messages merged */
 	unsigned int	numSIGPmwake;			/* Number of SIGPwake messages merged */
+	
+	unsigned int	hwWalkPhys;				/* Number of entries to hw_walk_phys */
+	unsigned int	hwWalkFull;				/* Full purge of connected PTE's */
+	unsigned int	hwWalkMerge;			/* RC merge of connected PTE's */
+	unsigned int	hwWalkQuick;			/* Quick scan of connected PTE's */
 	unsigned int	numSIGPcall;			/* Number of SIGPcall messages received */
 	
-	unsigned int	hwspare3[20];			/* Pad to 512 */
+	unsigned int	hwspare3[16];			/* Pad to 512 */
 	
 };
 #pragma pack()
@@ -258,8 +263,7 @@ typedef struct patch_entry patch_entry_t;
 #define	PATCH_INVALID		0
 #define	PATCH_PROCESSOR		1
 #define	PATCH_FEATURE		2
-
-#define PATCH_TABLE_SIZE	12
+#define PATCH_END_OF_TABLE  3
 
 #define PatchExt32		0x80000000
 #define PatchExt32b		0
@@ -280,13 +284,14 @@ struct per_proc_info {
 	vm_offset_t  	debstack_top_ss;
 
 	unsigned int 	spcFlags;			/* Special thread flags */
-	unsigned int 	Uassist;			/* User Assist Word */
 	unsigned int	old_thread;
+	ast_t			pending_ast;		/* mask of pending ast(s) */
 
 	/* PPC cache line boundary here - 020 */
 
-	uint64_t		rtcPop;				/* Real Time Clock pop */
-	unsigned int	need_ast;			/* pointer to need_ast[CPU_NO] */
+	int				cpu_type;
+	int				cpu_subtype;
+	int				cpu_threadtype;
 /*
  *	Note: the following two pairs of words need to stay in order and each pair must
  *	be in the same reservation (line) granule 
@@ -294,16 +299,15 @@ struct per_proc_info {
 	struct facility_context	*FPU_owner;	/* Owner of the FPU on this cpu */
 	unsigned int 	liveVRSave;			/* VRSave assiciated with live vector registers */
 	struct facility_context	*VMX_owner;	/* Owner of the VMX on this cpu */
-	unsigned int 	holdQFret;			/* Hold off releasing quickfret list */
-	unsigned int 	save_exception_type;
+	unsigned int	spcTRc;				/* Special trace count */
+	unsigned int	spcTRp;				/* Special trace buffer pointer */
 
 	/* PPC cache line boundary here - 040 */
 	addr64_t		quickfret;			/* List of saveareas to release */
 	addr64_t		lclfree;			/* Pointer to local savearea list */
 	unsigned int	lclfreecnt;			/* Entries in local savearea list */
-	unsigned int	spcTRc;				/* Special trace count */
-	unsigned int	spcTRp;				/* Special trace buffer pointer */
-	unsigned int	ppbbTaskEnv;		/* BlueBox Task Environment */
+	unsigned int 	holdQFret;			/* Hold off releasing quickfret list */
+	uint64_t		rtcPop;				/* Real Time Clock pop */
 
 	/* PPC cache line boundary here - 060 */
 	boolean_t		interrupts_enabled;
@@ -326,20 +330,6 @@ struct per_proc_info {
 #define MPsigpFunc		0x0000FF00		/* Current function */
 #define MPsigpIdle		0x00			/* No function pending */
 #define MPsigpSigp		0x04			/* Signal a processor */
-
-#define SIGPast		0					/* Requests an ast on target processor */
-#define SIGPcpureq	1					/* Requests CPU specific function */
-#define SIGPdebug	2					/* Requests a debugger entry */
-#define SIGPwake	3					/* Wake up a sleeping processor */
-#define SIGPcall	4					/* Call a function on a processor */
-
-#define CPRQtemp	0					/* Get temprature of processor */
-#define CPRQtimebase	1				/* Get timebase of processor */
-#define CPRQsegload	2					/* Segment registers reload */
-#define CPRQscom	3					/* SCOM */
-#define CPRQchud	4					/* CHUD perfmon */
-#define CPRQsps		5					/* Set Processor Speed */
-
 	unsigned int	MPsigpParm0;		/* SIGP parm 0 */
 	unsigned int	MPsigpParm1;		/* SIGP parm 1 */
 	unsigned int	MPsigpParm2;		/* SIGP parm 2 */
@@ -351,15 +341,30 @@ struct per_proc_info {
 	procFeatures 	pf;					/* Processor features */
 	
 	/* PPC cache line boundary here - 140 */
-	unsigned int	ppRsvd140[8];		/* Reserved */
-	
+	void *			pp_cbfr;
+	void *			pp_chud;
+	uint64_t		rtclock_tick_deadline;
+	struct rtclock_timer {
+		uint64_t		deadline;
+		uint32_t
+		/*boolean_t*/	is_set:1,
+						has_expired:1,
+				  		:0;
+	}				rtclock_timer;
+	unsigned int	ppbbTaskEnv;		/* BlueBox Task Environment */
+    
 	/* PPC cache line boundary here - 160 */
+	struct savearea *	db_saved_state;
 	time_base_enable_t	time_base_enable;
-	unsigned int	ppRsvd164[4];		/* Reserved */
-	cpu_data_t		pp_cpu_data;		/* cpu data info */
+	int				ppXFlags;
+	int				running;
+	int				debugger_is_slave;
+	int				debugger_active;
+	int				debugger_pending;
+	int				debugger_holdoff;
 	
 	/* PPC cache line boundary here - 180 */
-	unsigned int	ppRsvd180[2];		/* Reserved */
+    uint64_t        Uassist;            /* User Assist DoubleWord */
 	uint64_t		validSegs;			/* Valid SR/STB slots */
 	addr64_t		ppUserPmap;			/* Current user state pmap (physical address) */
 	unsigned int	ppUserPmapVirt;		/* Current user state pmap (virtual address) */
@@ -372,10 +377,12 @@ struct per_proc_info {
 	ppnum_t			VMMareaPhys;		/* vmm state page physical addr */
 	unsigned int	VMMXAFlgs;			/* vmm extended flags */
 	unsigned int	FAMintercept;		/* vmm FAM Exceptions to intercept */
-	unsigned int	rsrvd1B4[3];		/* Reserved slots */
+	unsigned int	ppinfo_reserved1;
+	uint32_t		save_tbl;
+	uint32_t		save_tbu;
 	
 	/* PPC cache line boundary here - 1C0 */
-	unsigned int	ppCIOmp[16];		/* Linkage mapping for copyin/out - 64 bytes */
+	unsigned int	ppUMWmp[16];		/* Linkage mapping for user memory window - 64 bytes */
 	
 	/* PPC cache line boundary here - 200 */
 	uint64_t		tempr0;				/* temporary savearea */
@@ -512,20 +519,33 @@ struct per_proc_info {
 	hwCtrs			hwCtr;					/* Hardware exception counters */
 /*								   - A00 */
 
-	unsigned int	pppadpage[384];			/* Pad to end of page */
+	unsigned int	processor[384];			/* processor structure */
 /*								   - 1000 */
 
 
 };
 
-#define	pp_preemption_count	pp_cpu_data.preemption_level
-#define	pp_simple_lock_count	pp_cpu_data.simple_lock_count
-#define	pp_interrupt_level	pp_cpu_data.interrupt_level
-
 #pragma pack()
 
 
-extern struct per_proc_info per_proc_info[NCPUS];
+/*
+ * Macro to conver a processor_t processor to its attached per_proc_info_t per_proc
+ */
+#define PROCESSOR_TO_PER_PROC(x)										\
+			((struct per_proc_info*)((unsigned int)(x)					\
+			- (unsigned int)(((struct per_proc_info *)0)->processor)))
+
+extern struct per_proc_info BootProcInfo;
+
+#define	MAX_CPUS	256
+
+struct per_proc_entry {
+	addr64_t				ppe_paddr;
+	unsigned int			ppe_pad4[1];
+	struct per_proc_info	*ppe_vaddr;
+};
+
+extern	struct per_proc_entry PerProcTable[MAX_CPUS-1];
 
 
 extern char *trap_type[];
@@ -544,6 +564,9 @@ extern char *trap_type[];
 #define SignalReady	0x0200
 #define BootDone	0x0100
 #define loadMSR		0x7FF4
+
+/* ppXFlags defs */
+#define SignalReadyWait	0x00000001
 
 #define T_VECTOR_SIZE	4					/* function pointer size */
 
@@ -620,9 +643,10 @@ extern char *trap_type[];
 #define failBadLiveContext 6
 #define	failSkipLists 7
 #define	failUnalignedStk 8
+#define	failPmap 9
 
 /* Always must be last - update failNames table in model_dep.c as well */
-#define failUnknown 9
+#define failUnknown 10
 
 #ifndef ASSEMBLER
 

@@ -19,12 +19,12 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
+#ifdef	PRIVATE
 
 #ifndef _MACHINE_CPU_CAPABILITIES_H
 #define _MACHINE_CPU_CAPABILITIES_H
 
-#ifdef __APPLE_API_PRIVATE
-
+#ifdef KERNEL_PRIVATE
 #if defined (__ppc__)
 #include "ppc/cpu_capabilities.h"
 #elif defined (__i386__)
@@ -33,5 +33,15 @@
 #error architecture not supported
 #endif
 
-#endif /* __APPLE_API_PRIVATE */
+#else /* !KERNEL_PRIVATE -- System Framework header */
+#if defined (__ppc__) || defined(__ppc64__)
+#include <System/ppc/cpu_capabilities.h>
+#elif defined (__i386__)
+#include <System/i386/cpu_capabilities.h>
+#else
+#error architecture not supported
+#endif
+#endif /* KERNEL_PRIVATE */
+
 #endif /* _MACHINE_CPU_CAPABILITIES_H */
+#endif /* PRIVATE */

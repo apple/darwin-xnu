@@ -33,6 +33,8 @@
  *	packet.
  */
 
+#include <netinet/udp.h>
+
 #define iaddr_t struct in_addr
 
 struct bootp {

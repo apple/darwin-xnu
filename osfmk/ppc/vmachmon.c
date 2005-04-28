@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -30,18 +30,19 @@
 #include <mach/kern_return.h>
 #include <mach/host_info.h>
 #include <kern/kern_types.h>
+#include <kern/kalloc.h>
 #include <kern/host.h>
 #include <kern/task.h>
 #include <kern/thread.h>
-#include <kern/thread_act.h>
 #include <ppc/exception.h>
 #include <ppc/mappings.h>
-#include <ppc/thread_act.h>
+#include <ppc/thread.h>
 #include <vm/vm_kern.h>
+#include <vm/vm_fault.h>
 
 #include <ppc/vmachmon.h>
+#include <ppc/lowglobals.h>
 
-extern struct	Saveanchor saveanchor;			/* Aligned savearea anchor */
 extern double FloatInit;
 extern unsigned long QNaNbarbarian[4];
 
@@ -62,8 +63,8 @@ extern unsigned long QNaNbarbarian[4];
 **		address of a vmmCntrlEntry or 0 if not found
 -----------------------------------------------------------------------*/
 
-vmmCntrlEntry *vmm_get_entry(
-	thread_act_t		act,
+static vmmCntrlEntry *vmm_get_entry(
+	thread_t			act,
 	vmm_thread_index_t 	index)
 {
 	vmmCntrlTable *CTable;
@@ -71,10 +72,10 @@ vmmCntrlEntry *vmm_get_entry(
 
 	index = index & vmmTInum;								/* Clean up the index */
 
-	if (act->mact.vmmControl == 0) return NULL;				/* No control table means no vmm */
+	if (act->machine.vmmControl == 0) return NULL;			/* No control table means no vmm */
 	if ((index - 1) >= kVmmMaxContexts) return NULL;		/* Index not in range */	
 
-	CTable = act->mact.vmmControl;							/* Make the address a bit more convienient */
+	CTable = act->machine.vmmControl;						/* Make the address a bit more convienient */
 	CEntry = &CTable->vmmc[index - 1];						/* Point to the entry */
 	
 	if (!(CEntry->vmmFlags & vmmInUse)) return NULL;		/* See if the slot is actually in use */
@@ -97,24 +98,246 @@ vmmCntrlEntry *vmm_get_entry(
 **		Note that if there is no pmap for the address space it will be created.
 -----------------------------------------------------------------------*/
 
-pmap_t vmm_get_adsp(thread_act_t act, vmm_thread_index_t index)
+static pmap_t vmm_get_adsp(thread_t act, vmm_thread_index_t index)
 {
 	pmap_t pmap;
 
-	if (act->mact.vmmControl == 0) return NULL;				/* No control table means no vmm */
+	if (act->machine.vmmControl == 0) return NULL;			/* No control table means no vmm */
 	if ((index - 1) >= kVmmMaxContexts) return NULL;		/* Index not in range */	
 
-	pmap = act->mact.vmmControl->vmmAdsp[index - 1];		/* Get the pmap */
-	if(pmap) return pmap;									/* We've got it... */
-
-	pmap = pmap_create(0);									/* Make a fresh one */
-	act->mact.vmmControl->vmmAdsp[index - 1] = pmap;		/* Remember it */
-/*
- *	Note that if the create fails, we will return a null.
- */
-	return pmap;											/* Return it... */
+	pmap = act->machine.vmmControl->vmmAdsp[index - 1];		/* Get the pmap */
+	return (pmap);											/*  and return it. */
 }
 
+/*-----------------------------------------------------------------------
+** vmm_build_shadow_hash
+**
+** Allocate and initialize a shadow hash table.
+**
+** This function assumes that PAGE_SIZE is 4k-bytes.
+**
+-----------------------------------------------------------------------*/
+static pmap_vmm_ext *vmm_build_shadow_hash(pmap_t pmap)
+{
+	pmap_vmm_ext   *ext;									/* VMM pmap extension we're building */
+	ppnum_t			extPP;									/* VMM pmap extension physical page number */
+	kern_return_t	ret;									/* Return code from various calls */
+	uint32_t		pages = GV_HPAGES;						/* Number of pages in the hash table */
+	vm_offset_t		free = VMX_HPIDX_OFFSET;				/* Offset into extension page of free area (128-byte aligned) */
+	uint32_t		freeSize  = PAGE_SIZE - free;			/* Number of free bytes in the extension page */
+															
+	if ((pages * sizeof(addr64_t)) + (pages * sizeof(vm_offset_t)) > freeSize) {
+		panic("vmm_build_shadow_hash: too little pmap_vmm_ext free space\n");
+	}
+	
+	ret = kmem_alloc_wired(kernel_map, (vm_offset_t *)&ext, PAGE_SIZE);
+															/* Allocate a page-sized extension block */
+	if (ret != KERN_SUCCESS) return (NULL);					/* Return NULL for failed allocate */
+	bzero((char *)ext, PAGE_SIZE);							/* Zero the entire extension block page */
+	
+	extPP = pmap_find_phys(kernel_pmap, (vm_offset_t)ext);
+															/* Get extension block's physical page number */
+	if (!extPP) {											/* This should not fail, but then again... */
+		panic("vmm_build_shadow_hash: could not translate pmap_vmm_ext vaddr %08X\n", ext);
+	}
+	
+	ext->vmxSalt	     = (addr64_t)(vm_offset_t)ext ^ ptoa_64(extPP);
+															/* Set effective<->physical conversion salt */
+	ext->vmxHostPmapPhys = (addr64_t)(vm_offset_t)pmap ^ pmap->pmapvr;
+															/* Set host pmap's physical address */
+	ext->vmxHostPmap     = pmap;							/* Set host pmap's effective address */
+	ext->vmxHashPgIdx    = (addr64_t *)((vm_offset_t)ext + VMX_HPIDX_OFFSET);
+															/* Allocate physical index */
+	ext->vmxHashPgList	 = (vm_offset_t *)((vm_offset_t)ext + VMX_HPLIST_OFFSET);
+															/* Allocate page list */
+	ext->vmxActiveBitmap = (vm_offset_t *)((vm_offset_t)ext + VMX_ACTMAP_OFFSET);
+															/* Allocate active mapping bitmap */
+	
+	/* The hash table is typically larger than a single page, but we don't require it to be in a
+	   contiguous virtual or physical chunk. So, we allocate it page by page, noting the effective and
+	   physical address of each page in vmxHashPgList and vmxHashPgIdx, respectively. */
+	uint32_t	idx;
+	for (idx = 0; idx < pages; idx++) {
+		ret = kmem_alloc_wired(kernel_map, &ext->vmxHashPgList[idx], PAGE_SIZE);
+															/* Allocate a hash-table page */
+		if (ret != KERN_SUCCESS) goto fail;					/* Allocation failed, exit through cleanup */
+		bzero((char *)ext->vmxHashPgList[idx], PAGE_SIZE);	/* Zero the page */
+		ext->vmxHashPgIdx[idx] = ptoa_64(pmap_find_phys(kernel_pmap, (addr64_t)ext->vmxHashPgList[idx]));
+															/* Put page's physical address into index */
+		if (!ext->vmxHashPgIdx[idx]) {						/* Hash-table page's LRA failed */
+			panic("vmm_build_shadow_hash: could not translate hash-table vaddr %08X\n", ext->vmxHashPgList[idx]);
+		}
+		mapping_t *map = (mapping_t *)ext->vmxHashPgList[idx];
+		uint32_t mapIdx;
+		for (mapIdx = 0; mapIdx < GV_SLTS_PPG; mapIdx++) {	/* Iterate over mappings in this page */
+			map->mpFlags = (mpGuest | mpgFree);				/* Mark guest type and free */
+			map = (mapping_t *)((char *)map + GV_SLOT_SZ);	/* Next slot-sized mapping */
+		}
+	}
+	
+	return (ext);											/* Return newly-minted VMM pmap extension */
+	
+fail:
+	for (idx = 0; idx < pages; idx++) {						/* De-allocate any pages we managed to allocate */
+		if (ext->vmxHashPgList[idx]) {
+			kmem_free(kernel_map, ext->vmxHashPgList[idx], PAGE_SIZE);
+		}
+	}
+	kmem_free(kernel_map, (vm_offset_t)ext, PAGE_SIZE);		/* Release the VMM pmap extension page */
+	return (NULL);											/* Return NULL for failure */
+}
+
+
+/*-----------------------------------------------------------------------
+** vmm_release_shadow_hash
+**
+** Release shadow hash table and VMM extension block
+**
+-----------------------------------------------------------------------*/
+static void vmm_release_shadow_hash(pmap_vmm_ext *ext)
+{
+	uint32_t		idx;
+
+	for (idx = 0; idx < GV_HPAGES; idx++) {					/* Release the hash table page by page */
+		kmem_free(kernel_map, ext->vmxHashPgList[idx], PAGE_SIZE);
+	}
+
+	kmem_free(kernel_map, (vm_offset_t)ext, PAGE_SIZE);		/* Release the VMM pmap extension page */
+}
+
+/*-----------------------------------------------------------------------
+** vmm_activate_gsa
+**
+** Activate guest shadow assist
+**
+-----------------------------------------------------------------------*/
+static kern_return_t vmm_activate_gsa(
+	thread_t			act,
+	vmm_thread_index_t	index)
+{
+	vmmCntrlTable	*CTable = act->machine.vmmControl;		/* Get VMM control table */
+	if (!CTable) {											/* Caller guarantees that this will work */
+		panic("vmm_activate_gsa: VMM control table not present; act = %08X, idx = %d\n",
+			act, index);
+		return KERN_FAILURE;
+	}
+	vmmCntrlEntry	*CEntry = vmm_get_entry(act, index);	/* Get context from index */
+	if (!CEntry) {											/* Caller guarantees that this will work */
+		panic("vmm_activate_gsa: Unexpected failure of vmm_get_entry; act = %08X, idx = %d\n",
+			act, index);
+		return KERN_FAILURE;
+	}
+
+	pmap_t	hpmap = act->map->pmap;							/* Get host pmap */
+	pmap_t	gpmap = vmm_get_adsp(act, index);				/* Get guest pmap */
+	if (!gpmap) {											/* Caller guarantees that this will work */
+		panic("vmm_activate_gsa: Unexpected failure of vmm_get_adsp; act = %08X, idx = %d\n",
+			act, index);
+		return KERN_FAILURE;
+	}
+	
+	if (!hpmap->pmapVmmExt) {								/* If there's no VMM extension for this host, create one */
+		hpmap->pmapVmmExt = vmm_build_shadow_hash(hpmap);	/* Build VMM extension plus shadow hash and attach */
+		if (hpmap->pmapVmmExt) {							/* See if we succeeded */
+			hpmap->pmapVmmExtPhys = (addr64_t)(vm_offset_t)hpmap->pmapVmmExt ^ hpmap->pmapVmmExt->vmxSalt;
+															/* Get VMM extensions block physical address */
+		} else {
+			return KERN_RESOURCE_SHORTAGE;					/* Not enough mojo to go */
+		}
+	}
+	gpmap->pmapVmmExt = hpmap->pmapVmmExt;					/* Copy VMM extension block virtual address into guest */
+	gpmap->pmapVmmExtPhys = hpmap->pmapVmmExtPhys;			/*  and its physical address, too */
+	gpmap->pmapFlags |= pmapVMgsaa;							/* Enable GSA for this guest */
+	CEntry->vmmXAFlgs |= vmmGSA;							/* Show GSA active here, too */
+
+	return KERN_SUCCESS;
+}
+
+
+/*-----------------------------------------------------------------------
+** vmm_deactivate_gsa
+**
+** Deactivate guest shadow assist
+**
+-----------------------------------------------------------------------*/
+static void vmm_deactivate_gsa(
+	thread_t			act,
+	vmm_thread_index_t	index)
+{
+	vmmCntrlEntry	*CEntry = vmm_get_entry(act, index);	/* Get context from index */
+	if (!CEntry) {											/* Caller guarantees that this will work */
+		panic("vmm_deactivate_gsa: Unexpected failure of vmm_get_entry; act = %08X, idx = %d\n",
+			act, index);
+		return KERN_FAILURE;
+	}
+
+	pmap_t	gpmap = vmm_get_adsp(act, index);				/* Get guest pmap */
+	if (!gpmap) {											/* Caller guarantees that this will work */
+		panic("vmm_deactivate_gsa: Unexpected failure of vmm_get_adsp; act = %08X, idx = %d\n",
+			act, index);
+		return KERN_FAILURE;
+	}
+	
+	gpmap->pmapFlags &= ~pmapVMgsaa;						/* Deactivate GSA for this guest */
+	CEntry->vmmXAFlgs &= ~vmmGSA;							/* Show GSA deactivated here, too */
+}
+
+
+/*-----------------------------------------------------------------------
+** vmm_flush_context
+**
+** Flush specified guest context, purging all guest mappings and clearing
+** the context page.
+**
+-----------------------------------------------------------------------*/
+static void vmm_flush_context(
+	thread_t			act,
+	vmm_thread_index_t	index)
+{
+	vmmCntrlEntry 		*CEntry;
+	vmmCntrlTable		*CTable;
+	vmm_state_page_t 	*vks;
+	vmm_version_t 		version;
+
+	CEntry = vmm_get_entry(act, index);				/* Convert index to entry */
+	if (!CEntry) {									/* Caller guarantees that this will work */
+		panic("vmm_flush_context: Unexpected failure of vmm_get_entry; act = %08X, idx = %d\n",
+			act, index);
+		return;
+	}
+
+	if(CEntry->vmmFacCtx.FPUsave) {					/* Is there any floating point context? */
+		toss_live_fpu(&CEntry->vmmFacCtx);			/* Get rid of any live context here */
+		save_release((savearea *)CEntry->vmmFacCtx.FPUsave);	/* Release it */
+	}
+
+	if(CEntry->vmmFacCtx.VMXsave) {					/* Is there any vector context? */
+		toss_live_vec(&CEntry->vmmFacCtx);			/* Get rid of any live context here */
+		save_release((savearea *)CEntry->vmmFacCtx.VMXsave);	/* Release it */
+	}
+	
+	vmm_unmap_all_pages(act, index);				/* Blow away all mappings for this context */
+
+	CTable = act->machine.vmmControl;				/* Get the control table address */
+	CTable->vmmGFlags = CTable->vmmGFlags & ~vmmLastAdSp;	/* Make sure we don't try to automap into this */
+	
+	CEntry->vmmFlags &= vmmInUse;					/* Clear out all of the flags for this entry except in use */
+	CEntry->vmmFacCtx.FPUsave = 0;					/* Clear facility context control */
+	CEntry->vmmFacCtx.FPUlevel = 0;					/* Clear facility context control */
+	CEntry->vmmFacCtx.FPUcpu = 0;					/* Clear facility context control */
+	CEntry->vmmFacCtx.VMXsave = 0;					/* Clear facility context control */
+	CEntry->vmmFacCtx.VMXlevel = 0;					/* Clear facility context control */
+	CEntry->vmmFacCtx.VMXcpu = 0;					/* Clear facility context control */
+	
+	vks = CEntry->vmmContextKern;					/* Get address of the context page */
+	version = vks->interface_version;				/* Save the version code */
+	bzero((char *)vks, 4096);						/* Clear all */
+
+	vks->interface_version = version;				/* Set our version code */
+	vks->thread_index = index % vmmTInum;			/* Tell the user the index for this virtual machine */
+		
+	return;											/* Context is now flushed */
+}
 
 
 /*************************************************************************************
@@ -168,7 +391,7 @@ int vmm_get_version(struct savearea *save)
 int vmm_get_features(struct savearea *save)
 {
 	save->save_r3 = kVmmCurrentFeatures;		/* Return the features */
-	if(per_proc_info->pf.Available & pf64Bit) {
+	if(getPerProc()->pf.Available & pf64Bit) {
 		save->save_r3 &= ~kVmmFeature_LittleEndian;	/* No little endian here */
 		save->save_r3 |= kVmmFeature_SixtyFourBit;	/* Set that we can do 64-bit */
 	}
@@ -185,7 +408,7 @@ int vmm_get_features(struct savearea *save)
 **		Returns max address
 -----------------------------------------------------------------------*/
 
-addr64_t vmm_max_addr(thread_act_t act) 
+addr64_t vmm_max_addr(thread_t act) 
 {
 	return vm_max_address;							/* Return the maximum address */
 }
@@ -211,7 +434,7 @@ addr64_t vmm_max_addr(thread_act_t act)
 -----------------------------------------------------------------------*/
 
 unsigned int vmm_get_XA(
-	thread_act_t 		act,
+	thread_t	 		act,
 	vmm_thread_index_t 	index)
 {
 	vmmCntrlEntry 		*CEntry;
@@ -245,7 +468,7 @@ unsigned int vmm_get_XA(
 int vmm_init_context(struct savearea *save)
 {
 
-	thread_act_t		act;
+	thread_t			act;
 	vmm_version_t 		version;
 	vmm_state_page_t *	vmm_user_state;
 	vmmCntrlTable		*CTable;
@@ -253,10 +476,9 @@ int vmm_init_context(struct savearea *save)
 	vmm_state_page_t *	vks;
 	ppnum_t				conphys;
 	kern_return_t 		ret;
-	pmap_t				new_pmap;	
 	int					cvi, i;
     task_t				task;
-    thread_act_t		fact, gact;
+    thread_t			fact, gact;
 
 	vmm_user_state = CAST_DOWN(vmm_state_page_t *, save->save_r4);  /* Get the user address of the comm area */
 	if ((unsigned int)vmm_user_state & (PAGE_SIZE - 1)) {	/* Make sure the comm area is page aligned */
@@ -276,7 +498,7 @@ int vmm_init_context(struct savearea *save)
 		return 1;
 	}
 
-	act = current_act();						/* Pick up our activation */
+	act = current_thread();						/* Pick up our activation */
 	
 	ml_set_interrupts_enabled(TRUE);			/* This can take a bit of time so pass interruptions */
 	
@@ -284,15 +506,15 @@ int vmm_init_context(struct savearea *save)
 
 	task_lock(task);							/* Lock our task */
 
-	fact = (thread_act_t)task->threads.next;	/* Get the first activation on task */
+	fact = (thread_t)task->threads.next;	/* Get the first activation on task */
 	gact = 0;									/* Pretend we didn't find it yet */
 
 	for(i = 0; i < task->thread_count; i++) {	/* All of the activations */
-		if(fact->mact.vmmControl) {				/* Is this a virtual machine monitor? */
+		if(fact->machine.vmmControl) {				/* Is this a virtual machine monitor? */
 			gact = fact;						/* Yeah... */
 			break;								/* Bail the loop... */
 		}
-		fact = (thread_act_t)fact->task_threads.next;	/* Go to the next one */
+		fact = (thread_t)fact->task_threads.next;	/* Go to the next one */
 	}
 	
 
@@ -312,21 +534,21 @@ int vmm_init_context(struct savearea *save)
 		return 1;
 	}
 	
-	if(!gact) act->mact.vmmControl = (vmmCntrlTable *)1;	/* Temporarily mark that we are the vmm thread */
+	if(!gact) act->machine.vmmControl = (vmmCntrlTable *)1;	/* Temporarily mark that we are the vmm thread */
 
 	task_unlock(task);							/* Safe to release now (because we've marked ourselves) */
 
-	CTable = act->mact.vmmControl;				/* Get the control table address */
+	CTable = act->machine.vmmControl;				/* Get the control table address */
 	if ((unsigned int)CTable == 1) {			/* If we are marked, try to allocate a new table, otherwise we have one */
 		if(!(CTable = (vmmCntrlTable *)kalloc(sizeof(vmmCntrlTable)))) {	/* Get a fresh emulation control table */
-			act->mact.vmmControl = 0;			/* Unmark us as vmm 'cause we failed */
+			act->machine.vmmControl = 0;			/* Unmark us as vmm 'cause we failed */
 			ml_set_interrupts_enabled(FALSE);	/* Set back interruptions */
 			save->save_r3 = KERN_RESOURCE_SHORTAGE;		/* No storage... */
 			return 1;
 		}
 		
 		bzero((void *)CTable, sizeof(vmmCntrlTable));	/* Clean it up */
-		act->mact.vmmControl = CTable;			/* Initialize the table anchor */
+		act->machine.vmmControl = CTable;			/* Initialize the table anchor */
 	}
 
 	for(cvi = 0; cvi < kVmmMaxContexts; cvi++) {	/* Search to find a free slot */
@@ -380,7 +602,7 @@ int vmm_init_context(struct savearea *save)
 	
 	CTable->vmmc[cvi].vmmFlags = vmmInUse;		/* Mark the slot in use and make sure the rest are clear */
 	CTable->vmmc[cvi].vmmContextKern = vks;		/* Remember the kernel address of comm area */
-	CTable->vmmc[cvi].vmmContextPhys = (vmm_state_page_t *)conphys;	/* Remember the state page physical addr */
+	CTable->vmmc[cvi].vmmContextPhys = conphys;	/* Remember the state page physical addr */
 	CTable->vmmc[cvi].vmmContextUser = vmm_user_state;		/* Remember user address of comm area */
 	
 	CTable->vmmc[cvi].vmmFacCtx.FPUsave = 0;	/* Clear facility context control */
@@ -393,10 +615,20 @@ int vmm_init_context(struct savearea *save)
 
 	hw_atomic_add((int *)&saveanchor.savetarget, 2);	/* Account for the number of extra saveareas we think we might "need" */
 
-	if (!(act->map->pmap->pmapFlags & pmapVMhost)) {
-		simple_lock(&(act->map->pmap->lock));
-		act->map->pmap->pmapFlags |= pmapVMhost;
-		simple_unlock(&(act->map->pmap->lock));
+	pmap_t hpmap = act->map->pmap;						/* Get host pmap */
+	pmap_t gpmap = pmap_create(0);						/* Make a fresh guest pmap */
+	if (gpmap) {										/* Did we succeed ? */
+		CTable->vmmAdsp[cvi] = gpmap;					/* Remember guest pmap for new context */
+		if (lowGlo.lgVMMforcedFeats & vmmGSA) {			/* Forcing on guest shadow assist ? */
+			vmm_activate_gsa(act, cvi+1);				/* Activate GSA */ 
+		}
+	} else {
+		ret = KERN_RESOURCE_SHORTAGE;					/* We've failed to allocate a guest pmap */
+		goto return_in_shame;							/* Shame on us. */
+	}
+
+	if (!(hpmap->pmapFlags & pmapVMhost)) {				/* Do this stuff if this is our first time hosting */
+		hpmap->pmapFlags |= pmapVMhost;					/* We're now hosting */
 	}
 	
 	ml_set_interrupts_enabled(FALSE);			/* Set back interruptions */
@@ -404,8 +636,8 @@ int vmm_init_context(struct savearea *save)
 	return 1;
 
 return_in_shame:
-	if(!gact) kfree((vm_offset_t)CTable, sizeof(vmmCntrlTable));	/* Toss the table if we just allocated it */
-	act->mact.vmmControl = 0;					/* Unmark us as vmm 'cause we failed */
+	if(!gact) kfree(CTable, sizeof(vmmCntrlTable));	/* Toss the table if we just allocated it */
+	act->machine.vmmControl = 0;					/* Unmark us as vmm 'cause we failed */
 	ml_set_interrupts_enabled(FALSE);			/* Set back interruptions */
 	save->save_r3 = ret;						/* Pass back return code... */	
 	return 1;
@@ -434,7 +666,7 @@ return_in_shame:
 -----------------------------------------------------------------------*/
 
 kern_return_t vmm_tear_down_context(
-	thread_act_t 		act,
+	thread_t	 		act,
 	vmm_thread_index_t 	index)
 {
 	vmmCntrlEntry 		*CEntry;
@@ -442,29 +674,35 @@ kern_return_t vmm_tear_down_context(
 	int					cvi;
 	register savearea 	*sv;
 
-	CEntry = vmm_get_entry(act, index);				/* Convert index to entry */		
-	if (CEntry == NULL) return KERN_FAILURE;		/* Either this isn't vmm thread or the index is bogus */
+	CEntry = vmm_get_entry(act, index);					/* Convert index to entry */		
+	if (CEntry == NULL) return KERN_FAILURE;			/* Either this isn't vmm thread or the index is bogus */
 
-	ml_set_interrupts_enabled(TRUE);				/* This can take a bit of time so pass interruptions */
+	ml_set_interrupts_enabled(TRUE);					/* This can take a bit of time so pass interruptions */
 
 	hw_atomic_sub((int *)&saveanchor.savetarget, 2);	/* We don't need these extra saveareas anymore */
 
-	if(CEntry->vmmFacCtx.FPUsave) {					/* Is there any floating point context? */
-		toss_live_fpu(&CEntry->vmmFacCtx);			/* Get rid of any live context here */
+	if(CEntry->vmmFacCtx.FPUsave) {						/* Is there any floating point context? */
+		toss_live_fpu(&CEntry->vmmFacCtx);				/* Get rid of any live context here */
 		save_release((savearea *)CEntry->vmmFacCtx.FPUsave);	/* Release it */
 	}
 
-	if(CEntry->vmmFacCtx.VMXsave) {					/* Is there any vector context? */
-		toss_live_vec(&CEntry->vmmFacCtx);			/* Get rid of any live context here */
+	if(CEntry->vmmFacCtx.VMXsave) {						/* Is there any vector context? */
+		toss_live_vec(&CEntry->vmmFacCtx);				/* Get rid of any live context here */
 		save_release((savearea *)CEntry->vmmFacCtx.VMXsave);	/* Release it */
 	}
 	
-	CEntry->vmmPmap = 0;							/* Remove this trace */
-	if(act->mact.vmmControl->vmmAdsp[index - 1]) {	/* Check if there is an address space assigned here */
-		mapping_remove(act->mact.vmmControl->vmmAdsp[index - 1], 0xFFFFFFFFFFFFF000LL);	/* Remove final page explicitly because we might have mapped it */	
-		pmap_remove(act->mact.vmmControl->vmmAdsp[index - 1], 0, 0xFFFFFFFFFFFFF000LL);	/* Remove all entries from this map */
-		pmap_destroy(act->mact.vmmControl->vmmAdsp[index - 1]);	/* Toss the pmap for this context */
-		act->mact.vmmControl->vmmAdsp[index - 1] = NULL;	/* Clean it up */
+	CEntry->vmmPmap = 0;								/* Remove this trace */
+	pmap_t gpmap = act->machine.vmmControl->vmmAdsp[index - 1];
+														/* Get context's guest pmap (if any) */
+	if (gpmap) {										/* Check if there is an address space assigned here */
+		if (gpmap->pmapFlags & pmapVMgsaa) {			/* Handle guest shadow assist case specially */
+			hw_rem_all_gv(gpmap);						/* Remove all guest mappings from shadow hash table */
+		} else {
+			mapping_remove(gpmap, 0xFFFFFFFFFFFFF000LL);/* Remove final page explicitly because we might have mapped it */	
+			pmap_remove(gpmap, 0, 0xFFFFFFFFFFFFF000LL);/* Remove all entries from this map */
+		}
+		pmap_destroy(gpmap);							/* Toss the pmap for this context */
+		act->machine.vmmControl->vmmAdsp[index - 1] = NULL;	/* Clean it up */
 	}
 	
 	(void) vm_map_unwire(							/* Unwire the user comm page */
@@ -475,7 +713,7 @@ kern_return_t vmm_tear_down_context(
 	
 	kmem_free(kernel_map, (vm_offset_t)CEntry->vmmContextKern, PAGE_SIZE);	/* Remove kernel's view of the comm page */
 	
-	CTable = act->mact.vmmControl;					/* Get the control table address */
+	CTable = act->machine.vmmControl;					/* Get the control table address */
 	CTable->vmmGFlags = CTable->vmmGFlags & ~vmmLastAdSp;	/* Make sure we don't try to automap into this */
 
 	CEntry->vmmFlags = 0;							/* Clear out all of the flags for this entry including in use */
@@ -503,15 +741,23 @@ kern_return_t vmm_tear_down_context(
  */
 
 	for(cvi = 1; cvi <= kVmmMaxContexts; cvi++) {	/* Look at all slots */
-		if(!act->mact.vmmControl->vmmAdsp[index - 1]) continue;	/* Nothing to remove here */
-		mapping_remove(act->mact.vmmControl->vmmAdsp[index - 1], 0xFFFFFFFFFFFFF000LL);	/* Remove final page explicitly because we might have mapped it */	
-		pmap_remove(act->mact.vmmControl->vmmAdsp[index - 1], 0, 0xFFFFFFFFFFFFF000LL);	/* Remove all entries from this map */
-		pmap_destroy(act->mact.vmmControl->vmmAdsp[index - 1]);	/* Toss the pmap for this context */
-		act->mact.vmmControl->vmmAdsp[index - 1] = 0;	/* Clear just in case */
-	}		
+		if(!act->machine.vmmControl->vmmAdsp[index - 1]) continue;	/* Nothing to remove here */
+		mapping_remove(act->machine.vmmControl->vmmAdsp[index - 1], 0xFFFFFFFFFFFFF000LL);	/* Remove final page explicitly because we might have mapped it */	
+		pmap_remove(act->machine.vmmControl->vmmAdsp[index - 1], 0, 0xFFFFFFFFFFFFF000LL);	/* Remove all entries from this map */
+		pmap_destroy(act->machine.vmmControl->vmmAdsp[index - 1]);	/* Toss the pmap for this context */
+		act->machine.vmmControl->vmmAdsp[index - 1] = 0;	/* Clear just in case */
+	}
+	
+	pmap_t pmap = act->map->pmap;					/* Get our pmap */
+	if (pmap->pmapVmmExt) {							/* Release any VMM pmap extension block and shadow hash table */
+		vmm_release_shadow_hash(pmap->pmapVmmExt);	/* Release extension block and shadow hash table */
+		pmap->pmapVmmExt     = 0;					/* Forget extension block */
+		pmap->pmapVmmExtPhys = 0;					/* Forget extension block's physical address, too */
+	}
+	pmap->pmapFlags &= ~pmapVMhost;					/* We're no longer hosting */
 
-	kfree((vm_offset_t)CTable, sizeof(vmmCntrlTable));	/* Toss the table because to tossed the last context */
-	act->mact.vmmControl = 0;						/* Unmark us as vmm */
+	kfree(CTable, sizeof(vmmCntrlTable));	/* Toss the table because to tossed the last context */
+	act->machine.vmmControl = 0;						/* Unmark us as vmm */
 
 	ml_set_interrupts_enabled(FALSE);				/* No more interruptions */
 	
@@ -520,9 +766,9 @@ kern_return_t vmm_tear_down_context(
 
 
 /*-----------------------------------------------------------------------
-** vmm_set_XA
+** vmm_activate_XA
 **
-** This function sets the eXtended Architecture flags for the specifed VM.
+** This function activates the eXtended Architecture flags for the specifed VM.
 ** 
 ** We need to return the result in the return code rather than in the return parameters
 ** because we need an architecture independent format so the results are actually 
@@ -542,56 +788,70 @@ kern_return_t vmm_tear_down_context(
 **		KERN_SUCCESS if vm is valid and initialized. KERN_FAILURE if not.
 **		Also, the internal flags are set and, additionally, the VM is completely reset.
 -----------------------------------------------------------------------*/
-
-kern_return_t vmm_set_XA(
-	thread_act_t 		act,
+kern_return_t vmm_activate_XA(
+	thread_t	 		act,
 	vmm_thread_index_t 	index,
 	unsigned int xaflags)
 {
 	vmmCntrlEntry 		*CEntry;
-	vmmCntrlTable		*CTable;
-	vmm_state_page_t 	*vks;
-	vmm_version_t 		version;
+	kern_return_t		result	= KERN_SUCCESS;		/* Assume success */
 
-	if(xaflags & ~vmm64Bit) return KERN_FAILURE;	/* We only support this one kind now */
-
+	if ((xaflags & ~kVmmSupportedSetXA) || ((xaflags & vmm64Bit) && (!getPerProc()->pf.Available & pf64Bit)))
+		return (KERN_FAILURE);						/* Unknown or unsupported feature requested */
+		
 	CEntry = vmm_get_entry(act, index);				/* Convert index to entry */		
 	if (CEntry == NULL) return KERN_FAILURE;		/* Either this isn't a vmm or the index is bogus */
 
 	ml_set_interrupts_enabled(TRUE);				/* This can take a bit of time so pass interruptions */
 	
-	if(CEntry->vmmFacCtx.FPUsave) {					/* Is there any floating point context? */
-		toss_live_fpu(&CEntry->vmmFacCtx);			/* Get rid of any live context here */
-		save_release((savearea *)CEntry->vmmFacCtx.FPUsave);	/* Release it */
+	vmm_flush_context(act, index);					/* Flush the context */
+
+	if (xaflags & vmm64Bit) {						/* Activating 64-bit mode ? */	
+		CEntry->vmmXAFlgs |= vmm64Bit;				/* Activate 64-bit mode */
 	}
-
-	if(CEntry->vmmFacCtx.VMXsave) {					/* Is there any vector context? */
-		toss_live_vec(&CEntry->vmmFacCtx);			/* Get rid of any live context here */
-		save_release((savearea *)CEntry->vmmFacCtx.VMXsave);	/* Release it */
+	
+	if (xaflags & vmmGSA) {							/* Activating guest shadow assist ? */
+		result = vmm_activate_gsa(act, index);		/* Activate guest shadow assist */
 	}
-
-	CTable = act->mact.vmmControl;					/* Get the control table address */
-	CTable->vmmGFlags = CTable->vmmGFlags & ~vmmLastAdSp;	/* Make sure we don't try to automap into this */
-	
-	CEntry->vmmFlags &= vmmInUse;					/* Clear out all of the flags for this entry except in use */
-	CEntry->vmmXAFlgs = (xaflags & vmm64Bit) | (CEntry->vmmXAFlgs & ~vmm64Bit);	/* Set the XA flags */
-	CEntry->vmmFacCtx.FPUsave = 0;					/* Clear facility context control */
-	CEntry->vmmFacCtx.FPUlevel = 0;					/* Clear facility context control */
-	CEntry->vmmFacCtx.FPUcpu = 0;					/* Clear facility context control */
-	CEntry->vmmFacCtx.VMXsave = 0;					/* Clear facility context control */
-	CEntry->vmmFacCtx.VMXlevel = 0;					/* Clear facility context control */
-	CEntry->vmmFacCtx.VMXcpu = 0;					/* Clear facility context control */
-	
-	vks = CEntry->vmmContextKern;					/* Get address of the context page */
-	version = vks->interface_version;				/* Save the version code */
-	bzero((char *)vks, 4096);						/* Clear all */
-
-	vks->interface_version = version;				/* Set our version code */
-	vks->thread_index = index % vmmTInum;			/* Tell the user the index for this virtual machine */
 	
 	ml_set_interrupts_enabled(FALSE);				/* No more interruptions */
 	
-	return KERN_SUCCESS;							/* Return the flags */
+	return result;									/* Return activate result */
+}
+
+/*-----------------------------------------------------------------------
+** vmm_deactivate_XA
+**
+-----------------------------------------------------------------------*/
+kern_return_t vmm_deactivate_XA(
+	thread_t	 		act,
+	vmm_thread_index_t 	index,
+	unsigned int xaflags)
+{
+	vmmCntrlEntry 		*CEntry;
+	kern_return_t		result	= KERN_SUCCESS;		/* Assume success */
+
+	if ((xaflags & ~kVmmSupportedSetXA) || ((xaflags & vmm64Bit) && (getPerProc()->pf.Available & pf64Bit)))
+		return (KERN_FAILURE);						/* Unknown or unsupported feature requested */
+		
+	CEntry = vmm_get_entry(act, index);				/* Convert index to entry */		
+	if (CEntry == NULL) return KERN_FAILURE;		/* Either this isn't a vmm or the index is bogus */
+
+	ml_set_interrupts_enabled(TRUE);				/* This can take a bit of time so pass interruptions */
+	
+	vmm_flush_context(act, index);					/* Flush the context */
+
+	if (xaflags & vmm64Bit) {						/* Deactivating 64-bit mode ? */	
+		CEntry->vmmXAFlgs &= ~vmm64Bit;				/* Deactivate 64-bit mode */
+	}
+	
+	if (xaflags & vmmGSA) {							/* Deactivating guest shadow assist ? */
+		vmm_deactivate_gsa(act, index);				/* Deactivate guest shadow assist */
+	}
+	
+	ml_set_interrupts_enabled(FALSE);				/* No more interruptions */
+	
+	return result;									/* Return deactivate result */
 }
 
 
@@ -612,7 +872,7 @@ kern_return_t vmm_set_XA(
 ** Outputs:
 **		All vmm contexts released and VMM shut down
 -----------------------------------------------------------------------*/
-void vmm_tear_down_all(thread_act_t act) {
+void vmm_tear_down_all(thread_t act) {
 
 	vmmCntrlTable		*CTable;
 	int					cvi;
@@ -620,7 +880,7 @@ void vmm_tear_down_all(thread_act_t act) {
 	savearea			*save;
 	spl_t				s;
 	
-	if(act->mact.specFlags & runningVM) {			/* Are we actually in a context right now? */
+	if(act->machine.specFlags & runningVM) {			/* Are we actually in a context right now? */
 		save = find_user_regs(act);					/* Find the user state context */
 		if(!save) {									/* Did we find it? */
 			panic("vmm_tear_down_all: runningVM marked but no user state context\n");
@@ -633,7 +893,7 @@ void vmm_tear_down_all(thread_act_t act) {
 		splx(s);									/* Restore interrupts */
 	}
 	
-	if(CTable = act->mact.vmmControl) {				/* Do we have a vmm control block? */
+	if(CTable = act->machine.vmmControl) {				/* Do we have a vmm control block? */
 
 
 		for(cvi = 1; cvi <= kVmmMaxContexts; cvi++) {	/* Look at all slots */
@@ -649,7 +909,7 @@ void vmm_tear_down_all(thread_act_t act) {
 /*
  *		Note that all address apces should be gone here.
  */
-		if(act->mact.vmmControl) {						/* Did we find one? */
+		if(act->machine.vmmControl) {						/* Did we find one? */
 			panic("vmm_tear_down_all: control table did not get deallocated\n");	/* Table did not go away */
 		}
 	}
@@ -695,55 +955,111 @@ void vmm_tear_down_all(thread_act_t act) {
 -----------------------------------------------------------------------*/
 
 kern_return_t vmm_map_page(
-	thread_act_t 		act,
+	thread_t	 		act,
 	vmm_adsp_id_t	 	index,
 	addr64_t	 		cva,
 	addr64_t	 		ava,
 	vm_prot_t 			prot)
 {
 	kern_return_t		ret;
-	vmmCntrlEntry 		*CEntry;
-	register mapping 	*mp;
-	struct phys_entry 	*pp;
+	register mapping_t 	*mp;
 	vm_map_t 			map;
 	addr64_t			ova, nextva;
 	pmap_t				pmap;
 
-	pmap = vmm_get_adsp(act, index);			/* Get the pmap for this address space */
+	pmap = vmm_get_adsp(act, index);			/* Get the guest pmap for this address space */
 	if(!pmap) return KERN_FAILURE;				/* Bogus address space, no VMs, or we can't make a pmap, failure... */
 
 	if(ava > vm_max_address) return kVmmInvalidAddress;	/* Does the machine support an address of this size? */
 
-	map = current_act()->map;					/* Get the current map */
-	
-	while(1) {									/* Keep trying until we get it or until we fail */
+	map = current_thread()->map;				/* Get the host's map */
 
-		mp = mapping_find(map->pmap, cva, &nextva, 0);	/* Find the mapping for this address */
+	if (pmap->pmapFlags & pmapVMgsaa) {			/* Guest shadow assist active ? */
+		ret = hw_res_map_gv(map->pmap, pmap, cva, ava, getProtPPC(prot));
+												/* Attempt to resume an existing gv->phys mapping */
+		if (mapRtOK != ret) {					/* Nothing to resume, construct a new mapping */
+			
+			while (1) {							/* Find host mapping or fail */
+				mp = mapping_find(map->pmap, cva, &nextva, 0);
+												/* Attempt to find host mapping and pin it */
+				if (mp) break;					/* Got it */
+				
+				ml_set_interrupts_enabled(TRUE);
+												/* Open 'rupt window */
+				ret = vm_fault(map,				/* Didn't find it, try to fault in host page read/write */
+					vm_map_trunc_page(cva), 
+					VM_PROT_READ | VM_PROT_WRITE,
+					FALSE, /* change wiring */
+					THREAD_UNINT,
+					NULL,
+					0);
+				ml_set_interrupts_enabled(FALSE);
+												/* Close 'rupt window */
+				if (ret != KERN_SUCCESS)
+					return KERN_FAILURE;		/* Fault failed, return failure */
+			}
+			
+			if (mpNormal != (mp->mpFlags & mpType)) {
+												/* Host mapping must be a vanilla page */
+				mapping_drop_busy(mp);			/* Un-pin host mapping */
+				return KERN_FAILURE;			/* Return failure */
+			}
+	
+												/* Partially construct gv->phys mapping */
+			unsigned int  pindex;
+			phys_entry_t *physent = mapping_phys_lookup(mp->mpPAddr, &pindex);
+			if (!physent) {
+				mapping_drop_busy(mp);
+				return KERN_FAILURE;
+			}
+			unsigned int pattr = ((physent->ppLink & (ppI | ppG)) >> 60);
+			unsigned int wimg = 0x2;
+			if (pattr & mmFlgCInhib)  wimg |= 0x4;
+			if (pattr & mmFlgGuarded) wimg |= 0x1;
+			unsigned int mflags = (pindex << 16) | mpGuest;
+			addr64_t	 gva = ((ava & ~mpHWFlags) | (wimg << 3) | getProtPPC(prot));
+			
+			hw_add_map_gv(map->pmap, pmap, gva, mflags, mp->mpPAddr);
+												/* Construct new guest->phys mapping */
+			
+			mapping_drop_busy(mp);				/* Un-pin host mapping */
+		}
+	} else {
+		while(1) {								/* Keep trying until we get it or until we fail */
+	
+			mp = mapping_find(map->pmap, cva, &nextva, 0);	/* Find the mapping for this address */
+			
+			if(mp) break;						/* We found it */
+	
+			ml_set_interrupts_enabled(TRUE);	/* Enable interruptions */
+			ret = vm_fault(map,					/* Didn't find it, try to fault it in read/write... */
+					vm_map_trunc_page(cva), 
+					VM_PROT_READ | VM_PROT_WRITE,
+					FALSE, /*change wiring */
+					THREAD_UNINT,
+					NULL,
+					0);
+			ml_set_interrupts_enabled(FALSE);	/* Disable interruptions */
+			if (ret != KERN_SUCCESS) return KERN_FAILURE;	/* There isn't a page there, return... */
+		}
+	
+		if((mp->mpFlags & mpType) != mpNormal) {	/* If this is a block, a nest, or some other special thing, we can't map it */
+			mapping_drop_busy(mp);				/* We have everything we need from the mapping */
+			return KERN_FAILURE;				/* Leave in shame */
+		}
 		
-		if(mp) break;							/* We found it */
-
-		ml_set_interrupts_enabled(TRUE);		/* Enable interruptions */
-		ret = vm_fault(map, trunc_page_32((vm_offset_t)cva), VM_PROT_READ | VM_PROT_WRITE, FALSE);	/* Didn't find it, try to fault it in read/write... */
-		ml_set_interrupts_enabled(FALSE);		/* Disable interruptions */
-		if (ret != KERN_SUCCESS) return KERN_FAILURE;	/* There isn't a page there, return... */
-	}
-
-	if(mp->mpFlags & (mpBlock | mpNest | mpSpecial)) {	/* If this is a block, a nest, or some other special thing, we can't map it */
-		mapping_drop_busy(mp);					/* We have everything we need from the mapping */
-		return KERN_FAILURE;					/* Leave in shame */
-	}
+		while(1) {								/* Keep trying the enter until it goes in */
+			ova = mapping_make(pmap, ava, mp->mpPAddr, 0, 1, prot);	/* Enter the mapping into the pmap */
+			if(!ova) break;						/* If there were no collisions, we are done... */
+			mapping_remove(pmap, ova);			/* Remove the mapping that collided */
+		}
 	
-	while(1) {										/* Keep trying the enter until it goes in */
-		ova = mapping_make(pmap, ava, mp->mpPAddr, 0, 1, prot);	/* Enter the mapping into the pmap */
-		if(!ova) break;							/* If there were no collisions, we are done... */
-		mapping_remove(pmap, ova);				/* Remove the mapping that collided */
+		mapping_drop_busy(mp);					/* We have everything we need from the mapping */
 	}
 
-	mapping_drop_busy(mp);						/* We have everything we need from the mapping */
-
-	if (!((per_proc_info[cpu_number()].spcFlags) & FamVMmode)) {
-		act->mact.vmmControl->vmmLastMap = ava & 0xFFFFFFFFFFFFF000ULL;	/* Remember the last mapping we made */
-		act->mact.vmmControl->vmmGFlags = (act->mact.vmmControl->vmmGFlags & ~vmmLastAdSp) | index;	/* Remember last address space */
+	if (!((getPerProc()->spcFlags) & FamVMmode)) {
+		act->machine.vmmControl->vmmLastMap = ava & 0xFFFFFFFFFFFFF000ULL;	/* Remember the last mapping we made */
+		act->machine.vmmControl->vmmGFlags = (act->machine.vmmControl->vmmGFlags & ~vmmLastAdSp) | index;	/* Remember last address space */
 	}
 
 	return KERN_SUCCESS;
@@ -771,7 +1087,7 @@ kern_return_t vmm_map_page(
 -----------------------------------------------------------------------*/
 
 vmm_return_code_t vmm_map_execute(
-	thread_act_t 		act,
+	thread_t	 		act,
 	vmm_thread_index_t 	index,
 	addr64_t	 		cva,
 	addr64_t	 		ava,
@@ -787,7 +1103,7 @@ vmm_return_code_t vmm_map_execute(
 	CEntry = vmm_get_entry(act, cndx);				/* Get and validate the index */
 	if (CEntry == NULL) return kVmmBogusContext;	/* Return bogus context */
 	
-	if (((per_proc_info[cpu_number()].spcFlags) & FamVMmode) && (CEntry != act->mact.vmmCEntry))
+	if (((getPerProc()->spcFlags) & FamVMmode) && (CEntry != act->machine.vmmCEntry))
 		return kVmmBogusContext;			/* Yes, invalid index in Fam */
 	
 	adsp = (index >> 8) & 0xFF;						/* Get any requested address space */
@@ -797,8 +1113,8 @@ vmm_return_code_t vmm_map_execute(
 	
 	
 	if(ret == KERN_SUCCESS) {
-		act->mact.vmmControl->vmmLastMap = ava & 0xFFFFFFFFFFFFF000ULL;	/* Remember the last mapping we made */
-		act->mact.vmmControl->vmmGFlags = (act->mact.vmmControl->vmmGFlags & ~vmmLastAdSp) | cndx;	/* Remember last address space */
+		act->machine.vmmControl->vmmLastMap = ava & 0xFFFFFFFFFFFFF000ULL;	/* Remember the last mapping we made */
+		act->machine.vmmControl->vmmGFlags = (act->machine.vmmControl->vmmGFlags & ~vmmLastAdSp) | cndx;	/* Remember last address space */
 		vmm_execute_vm(act, cndx);				/* Return was ok, launch the VM */
 	}
 	
@@ -826,7 +1142,7 @@ vmm_return_code_t vmm_map_execute(
 -----------------------------------------------------------------------*/
 
 kern_return_t vmm_map_list(
-	thread_act_t 		act,
+	thread_t	 		act,
 	vmm_adsp_id_t 		index,
 	unsigned int		cnt,
 	unsigned int		flavor)
@@ -875,60 +1191,65 @@ kern_return_t vmm_map_list(
 /*-----------------------------------------------------------------------
 ** vmm_get_page_mapping
 **
-** This function determines whether the specified VMM
-** virtual address is mapped.
+** Given a context index and a guest virtual address, convert the address
+** to its corresponding host virtual address.
 **
 ** Inputs:
 **		act   - pointer to current thread activation
-**		index - index of vmm state for this page
-**		va    - virtual address within the alternate's address
-**			    space
+**		index - context index
+**		gva   - guest virtual address 
 **
 ** Outputs:
-**		Non-alternate's virtual address (page aligned) or -1 if not mapped or any failure
+**		Host virtual address (page aligned) or -1 if not mapped or any failure
 **
 ** Note:
-**      If there are aliases to the page in the non-alternate address space,
-**	    this call could return the wrong one.  Moral of the story: no aliases.
+**		If the host address space contains multiple virtual addresses mapping
+**		to the physical address corresponding to the specified guest virtual
+**		address (i.e., host virtual aliases), it is unpredictable which host
+**		virtual address (alias) will be returned. Moral of the story: No host
+**		virtual aliases.
 -----------------------------------------------------------------------*/
 
 addr64_t vmm_get_page_mapping(
-	thread_act_t 		act,
+	thread_t 			act,
 	vmm_adsp_id_t	 	index,
-	addr64_t	 		va)
+	addr64_t	 		gva)
 {
-	vmmCntrlEntry 		*CEntry;
-	register mapping 	*mp;
+	register mapping_t 	*mp;
 	pmap_t				pmap;
-	addr64_t			nextva, sva;
+	addr64_t			nextva, hva;
 	ppnum_t				pa;
 
-	pmap = vmm_get_adsp(act, index);						/* Get and validate the index */
-	if (!pmap)return -1;									/* No good, failure... */
-
-	mp = mapping_find(pmap, va, &nextva, 0);				/* Find our page */
+	pmap = vmm_get_adsp(act, index);				/* Get and validate the index */
+	if (!pmap)return -1;							/* No good, failure... */
 	
-	if(!mp) return -1;										/* Not mapped, return -1 */
-
-	pa = mp->mpPAddr;										/* Remember the page address */
-
-	mapping_drop_busy(mp);									/* Go ahead and relase the mapping now */
+	if (pmap->pmapFlags & pmapVMgsaa) {				/* Guest shadow assist (GSA) active ? */
+		return (hw_gva_to_hva(pmap, gva));			/* Convert guest to host virtual address */			
+	} else {
+		mp = mapping_find(pmap, gva, &nextva, 0);	/* Find guest mapping for this virtual address */
 	
-	pmap = current_act()->map->pmap;						/* Get the current pmap */
-	sva = mapping_p2v(pmap, pa);							/* Now find the source virtual */
+		if(!mp) return -1;							/* Not mapped, return -1 */
 
-	if(sva != 0) return sva;								/* We found it... */
+		pa = mp->mpPAddr;							/* Remember the physical page address */
+
+		mapping_drop_busy(mp);						/* Go ahead and relase the mapping now */
 	
-	panic("vmm_get_page_mapping: could not back-map alternate va (%016llX)\n", va);	/* We are bad wrong if we can't find it */
+		pmap = current_thread()->map->pmap;			/* Get the host pmap */
+		hva = mapping_p2v(pmap, pa);				/* Now find the source virtual */
 
-	return -1;
+		if(hva != 0) return hva;					/* We found it... */
+	
+		panic("vmm_get_page_mapping: could not back-map guest va (%016llX)\n", gva);
+													/* We are bad wrong if we can't find it */
+
+		return -1;									/* Never executed, prevents compiler warning */
+	}
 }
 
 /*-----------------------------------------------------------------------
 ** vmm_unmap_page
 **
-** This function unmaps a page from the alternate's logical
-** address space.
+** This function unmaps a page from the guest address space.
 **
 ** Inputs:
 **		act   - pointer to current thread activation
@@ -941,21 +1262,25 @@ addr64_t vmm_get_page_mapping(
 -----------------------------------------------------------------------*/
 
 kern_return_t vmm_unmap_page(
-	thread_act_t 		act,
+	thread_t	 		act,
 	vmm_adsp_id_t	 	index,
 	addr64_t	 		va)
 {
 	vmmCntrlEntry 		*CEntry;
 	addr64_t			nadd;
 	pmap_t				pmap;
-	kern_return_t		kern_result = KERN_SUCCESS;
 
 	pmap = vmm_get_adsp(act, index);						/* Get and validate the index */
 	if (!pmap)return -1;									/* No good, failure... */
 	
-	nadd = mapping_remove(pmap, va);						/* Toss the mapping */
-	
-	return ((nadd & 1) ? KERN_FAILURE : KERN_SUCCESS);		/* Return... */
+	if (pmap->pmapFlags & pmapVMgsaa) {						/* Handle guest shadow assist specially */
+		hw_susp_map_gv(act->map->pmap, pmap, va);			/* Suspend the mapping */
+		return (KERN_SUCCESS);								/* Always returns success */
+	} else {
+		nadd = mapping_remove(pmap, va);					/* Toss the mapping */
+		
+		return ((nadd & 1) ? KERN_FAILURE : KERN_SUCCESS);	/* Return... */
+	}
 }
 
 /*-----------------------------------------------------------------------
@@ -977,7 +1302,7 @@ kern_return_t vmm_unmap_page(
 -----------------------------------------------------------------------*/
 
 kern_return_t vmm_unmap_list(
-	thread_act_t 		act,
+	thread_t	 		act,
 	vmm_adsp_id_t	 	index,
 	unsigned int 		cnt,
 	unsigned int		flavor)
@@ -1010,11 +1335,16 @@ kern_return_t vmm_unmap_list(
 
 		adsp = (gva & vmmlAdID) >> 4;				/* Extract an explicit address space request */	
 		if(!adsp) adsp = index - 1;					/* If no explicit, use supplied default */
-		pmap = act->mact.vmmControl->vmmAdsp[adsp];	/* Get the pmap for this request */
+		pmap = act->machine.vmmControl->vmmAdsp[adsp];	/* Get the pmap for this request */
 		if(!pmap) continue;							/* Ain't nuthin' mapped here, no durn map... */
 
-		gva = gva &= 0xFFFFFFFFFFFFF000ULL;			/* Clean up the address */		
-		(void)mapping_remove(pmap, gva);			/* Toss the mapping */
+		gva = gva &= 0xFFFFFFFFFFFFF000ULL;			/* Clean up the address */	
+		if (pmap->pmapFlags & pmapVMgsaa) {			/* Handle guest shadow assist specially */
+			hw_susp_map_gv(act->map->pmap, pmap, gva);
+													/* Suspend the mapping */
+		} else {
+			(void)mapping_remove(pmap, gva);		/* Toss the mapping */
+		}
 	}
 	
 	return KERN_SUCCESS	;							/* Return... */
@@ -1038,7 +1368,7 @@ kern_return_t vmm_unmap_list(
 -----------------------------------------------------------------------*/
 
 void vmm_unmap_all_pages(
-	thread_act_t 		act,
+	thread_t	 		act,
 	vmm_adsp_id_t	 	index)
 {
 	vmmCntrlEntry 		*CEntry;
@@ -1046,12 +1376,16 @@ void vmm_unmap_all_pages(
 
 	pmap = vmm_get_adsp(act, index);						/* Convert index to entry */		
 	if (!pmap) return;										/* Either this isn't vmm thread or the index is bogus */
-	
-/*
- *	Note: the pmap code won't deal with the last page in the address space, so handle it explicitly
- */
-	mapping_remove(pmap, 0xFFFFFFFFFFFFF000LL);				/* Remove final page explicitly because we might have mapped it */	
-	pmap_remove(pmap, 0, 0xFFFFFFFFFFFFF000LL);				/* Remove all entries from this map */
+
+	if (pmap->pmapFlags & pmapVMgsaa) {						/* Handle guest shadow assist specially */
+		hw_rem_all_gv(pmap);								/* Remove all guest's mappings from shadow hash table */
+	} else {
+		/*
+		 *	Note: the pmap code won't deal with the last page in the address space, so handle it explicitly
+		 */
+		mapping_remove(pmap, 0xFFFFFFFFFFFFF000LL);			/* Remove final page explicitly because we might have mapped it */	
+		pmap_remove(pmap, 0, 0xFFFFFFFFFFFFF000LL);			/* Remove all entries from this map */
+	}
 	return;
 }
 
@@ -1078,20 +1412,24 @@ void vmm_unmap_all_pages(
 -----------------------------------------------------------------------*/
 
 boolean_t vmm_get_page_dirty_flag(
-	thread_act_t 				act,
+	thread_t			act,
 	vmm_adsp_id_t	 	index,
 	addr64_t	 		va,
 	unsigned int		reset)
 {
 	vmmCntrlEntry 		*CEntry;
-	register mapping 	*mpv, *mp;
+	register mapping_t 	*mpv, *mp;
 	unsigned int		RC;
 	pmap_t				pmap;
 
 	pmap = vmm_get_adsp(act, index);						/* Convert index to entry */		
 	if (!pmap) return 1;									/* Either this isn't vmm thread or the index is bogus */
-	
-	RC = hw_test_rc(pmap, (addr64_t)va, reset);				/* Fetch the RC bits and clear if requested */	
+
+	if (pmap->pmapFlags & pmapVMgsaa) {						/* Handle guest shadow assist specially */
+		RC = hw_test_rc_gv(act->map->pmap, pmap, va, reset);/* Fetch the RC bits and clear if requested */	
+	} else {
+		RC = hw_test_rc(pmap, (addr64_t)va, reset);			/* Fetch the RC bits and clear if requested */
+	}
 
 	switch (RC & mapRetCode) {								/* Decode return code */
 	
@@ -1131,7 +1469,7 @@ boolean_t vmm_get_page_dirty_flag(
 -----------------------------------------------------------------------*/
 
 kern_return_t vmm_protect_page(
-	thread_act_t 		act,
+	thread_t	 		act,
 	vmm_adsp_id_t	 	index,
 	addr64_t	 		va,
 	vm_prot_t			prot)
@@ -1144,7 +1482,11 @@ kern_return_t vmm_protect_page(
 	pmap = vmm_get_adsp(act, index);						/* Convert index to entry */		
 	if (!pmap) return KERN_FAILURE;							/* Either this isn't vmm thread or the index is bogus */
 	
-	ret = hw_protect(pmap, va, prot, &nextva);				/* Try to change the protect here */
+	if (pmap->pmapFlags & pmapVMgsaa) {						/* Handle guest shadow assist specially */
+		ret = hw_protect_gv(pmap, va, prot);				/* Try to change protection, GSA varient */
+	} else {
+		ret = hw_protect(pmap, va, prot, &nextva);			/* Try to change protection */
+	}
 
 	switch (ret) {											/* Decode return code */
 	
@@ -1160,9 +1502,9 @@ kern_return_t vmm_protect_page(
 		
 	}
 
-	if (!((per_proc_info[cpu_number()].spcFlags) & FamVMmode)) {
-		act->mact.vmmControl->vmmLastMap = va & 0xFFFFFFFFFFFFF000ULL;	/* Remember the last mapping we made */
-		act->mact.vmmControl->vmmGFlags = (act->mact.vmmControl->vmmGFlags & ~vmmLastAdSp) | index;	/* Remember last address space */
+	if (!((getPerProc()->spcFlags) & FamVMmode)) {
+		act->machine.vmmControl->vmmLastMap = va & 0xFFFFFFFFFFFFF000ULL;	/* Remember the last mapping we made */
+		act->machine.vmmControl->vmmGFlags = (act->machine.vmmControl->vmmGFlags & ~vmmLastAdSp) | index;	/* Remember last address space */
 	}
 
 	return KERN_SUCCESS;									/* Return */
@@ -1187,7 +1529,7 @@ kern_return_t vmm_protect_page(
 -----------------------------------------------------------------------*/
 
 vmm_return_code_t vmm_protect_execute(
-	thread_act_t 		act,
+	thread_t	 		act,
 	vmm_thread_index_t 	index,
 	addr64_t	 		va,
 	vm_prot_t			prot)
@@ -1204,14 +1546,14 @@ vmm_return_code_t vmm_protect_execute(
 	adsp = (index >> 8) & 0xFF;						/* Get any requested address space */
 	if(!adsp) adsp = (index & 0xFF);				/* If 0, use context ID as address space ID */
 	
-	if (((per_proc_info[cpu_number()].spcFlags) & FamVMmode) && (CEntry != act->mact.vmmCEntry))
+	if (((getPerProc()->spcFlags) & FamVMmode) && (CEntry != act->machine.vmmCEntry))
 		return kVmmBogusContext;			/* Yes, invalid index in Fam */
 	
 	ret = vmm_protect_page(act, adsp, va, prot);	/* Go try to change access */
 	
 	if(ret == KERN_SUCCESS) {
-		act->mact.vmmControl->vmmLastMap = va & 0xFFFFFFFFFFFFF000ULL;	/* Remember the last mapping we made */
-		act->mact.vmmControl->vmmGFlags = (act->mact.vmmControl->vmmGFlags & ~vmmLastAdSp) | cndx;	/* Remember last address space */
+		act->machine.vmmControl->vmmLastMap = va & 0xFFFFFFFFFFFFF000ULL;	/* Remember the last mapping we made */
+		act->machine.vmmControl->vmmGFlags = (act->machine.vmmControl->vmmGFlags & ~vmmLastAdSp) | cndx;	/* Remember last address space */
 		vmm_execute_vm(act, cndx);	/* Return was ok, launch the VM */
 	}
 	
@@ -1236,7 +1578,7 @@ vmm_return_code_t vmm_protect_execute(
 -----------------------------------------------------------------------*/
 
 kern_return_t vmm_get_float_state(
-	thread_act_t 		act,
+	thread_t	 		act,
 	vmm_thread_index_t 	index)
 {
 	vmmCntrlEntry 		*CEntry;
@@ -1247,7 +1589,7 @@ kern_return_t vmm_get_float_state(
 	CEntry = vmm_get_entry(act, index);				/* Convert index to entry */		
 	if (CEntry == NULL) return KERN_FAILURE;		/* Either this isn't vmm thread or the index is bogus */
 	
-	act->mact.specFlags &= ~floatCng;				/* Clear the special flag */
+	act->machine.specFlags &= ~floatCng;				/* Clear the special flag */
 	CEntry->vmmContextKern->vmmStat &= ~vmmFloatCngd;	/* Clear the change indication */
 
 	fpu_save(&CEntry->vmmFacCtx);					/* Save context if live */
@@ -1281,7 +1623,7 @@ kern_return_t vmm_get_float_state(
 -----------------------------------------------------------------------*/
 
 kern_return_t vmm_get_vector_state(
-	thread_act_t 		act,
+	thread_t	 		act,
 	vmm_thread_index_t 	index)
 {
 	vmmCntrlEntry 		*CEntry;
@@ -1295,7 +1637,7 @@ kern_return_t vmm_get_vector_state(
 
 	vec_save(&CEntry->vmmFacCtx);					/* Save context if live */
 	
-	act->mact.specFlags &= ~vectorCng;				/* Clear the special flag */
+	act->machine.specFlags &= ~vectorCng;				/* Clear the special flag */
 	CEntry->vmmContextKern->vmmStat &= ~vmmVectCngd;	/* Clear the change indication */
 	
 	if(sv = CEntry->vmmFacCtx.VMXsave) {			/* Is there context yet? */
@@ -1354,7 +1696,7 @@ kern_return_t vmm_get_vector_state(
 -----------------------------------------------------------------------*/
 
 kern_return_t vmm_set_timer(
-	thread_act_t 		act,
+	thread_t 			act,
 	vmm_thread_index_t 	index,
 	unsigned int 		timerhi, 
 	unsigned int 		timerlo)
@@ -1392,7 +1734,7 @@ kern_return_t vmm_set_timer(
 -----------------------------------------------------------------------*/
 
 kern_return_t vmm_get_timer(
-	thread_act_t 		act,
+	thread_t 			act,
 	vmm_thread_index_t 	index)
 {
 	vmmCntrlEntry 		*CEntry;
@@ -1431,7 +1773,7 @@ kern_return_t vmm_get_timer(
 -----------------------------------------------------------------------*/
 
 void vmm_timer_pop(
-	thread_act_t 		act)
+	thread_t	 		act)
 {
 	vmmCntrlEntry 		*CEntry;
 	vmmCntrlTable		*CTable;
@@ -1439,7 +1781,7 @@ void vmm_timer_pop(
 	uint64_t			now, soonest;
 	savearea			*sv;
 		
-	if(!((unsigned int)act->mact.vmmControl & 0xFFFFFFFE)) {	/* Are there any virtual machines? */
+	if(!((unsigned int)act->machine.vmmControl & 0xFFFFFFFE)) {	/* Are there any virtual machines? */
 		panic("vmm_timer_pop: No virtual machines defined; act = %08X\n", act);
 	}
 
@@ -1447,7 +1789,7 @@ void vmm_timer_pop(
 
 	clock_get_uptime(&now);							/* What time is it? */
 	
-	CTable = act->mact.vmmControl;					/* Make this easier */	
+	CTable = act->machine.vmmControl;					/* Make this easier */	
 	any = 0;										/* Haven't found a running unexpired timer yet */
 	
 	for(cvi = 0; cvi < kVmmMaxContexts; cvi++) {	/* Cycle through all and check time now */
@@ -1463,7 +1805,7 @@ void vmm_timer_pop(
 		if (CTable->vmmc[cvi].vmmTimer <= now) {
 			CTable->vmmc[cvi].vmmFlags |= vmmTimerPop;	/* Set timer popped here */
 			CTable->vmmc[cvi].vmmContextKern->vmmStat |= vmmTimerPop;	/* Set timer popped here */
-			if((unsigned int)&CTable->vmmc[cvi] == (unsigned int)act->mact.vmmCEntry) {	/* Is this the running VM? */
+			if((unsigned int)&CTable->vmmc[cvi] == (unsigned int)act->machine.vmmCEntry) {	/* Is this the running VM? */
 				sv = find_user_regs(act);			/* Get the user state registers */
 				if(!sv) {							/* Did we find something? */
 					panic("vmm_timer_pop: no user context; act = %08X\n", act);
@@ -1485,8 +1827,8 @@ void vmm_timer_pop(
 	}
 	
 	if(any) {
-		if (act->mact.qactTimer == 0 || soonest <= act->mact.qactTimer)
-			act->mact.qactTimer = soonest;	/* Set lowest timer */
+		if (act->machine.qactTimer == 0 || soonest <= act->machine.qactTimer)
+			act->machine.qactTimer = soonest;	/* Set lowest timer */
 	}
 
 	return;
@@ -1519,11 +1861,11 @@ void vmm_timer_pop(
 int vmm_stop_vm(struct savearea *save)
 {
 
-	thread_act_t		act;
+	thread_t			act;
 	vmmCntrlTable		*CTable;
 	int					cvi, i;
     task_t				task;
-    thread_act_t		fact;
+    thread_t			fact;
     unsigned int		vmmask;
     ReturnHandler		*stopapc;
 
@@ -1533,15 +1875,15 @@ int vmm_stop_vm(struct savearea *save)
 
 	task_lock(task);							/* Lock our task */
 
-	fact = (thread_act_t)task->threads.next;	/* Get the first activation on task */
+	fact = (thread_t)task->threads.next;	/* Get the first activation on task */
 	act = 0;									/* Pretend we didn't find it yet */
 
 	for(i = 0; i < task->thread_count; i++) {	/* All of the activations */
-		if(fact->mact.vmmControl) {				/* Is this a virtual machine monitor? */
+		if(fact->machine.vmmControl) {				/* Is this a virtual machine monitor? */
 			act = fact;							/* Yeah... */
 			break;								/* Bail the loop... */
 		}
-		fact = (thread_act_t)fact->task_threads.next;	/* Go to the next one */
+		fact = (thread_t)fact->task_threads.next;	/* Go to the next one */
 	}
 
 	if(!((unsigned int)act)) {					/* See if we have VMMs yet */
@@ -1550,19 +1892,24 @@ int vmm_stop_vm(struct savearea *save)
 		return 0;								/* Go generate a syscall exception */
 	}
 
-	act_lock_thread(act);						/* Make sure this stays 'round */
+	thread_reference(act);
+
 	task_unlock(task);							/* Safe to release now */
 
-	CTable = act->mact.vmmControl;				/* Get the pointer to the table */
+	thread_mtx_lock(act);
+
+	CTable = act->machine.vmmControl;				/* Get the pointer to the table */
 	
 	if(!((unsigned int)CTable & -2)) {			/* Are there any all the way up yet? */
-		act_unlock_thread(act);					/* Unlock the activation */
+		thread_mtx_unlock(act);					/* Unlock the activation */
+		thread_deallocate(act);
 		ml_set_interrupts_enabled(FALSE);		/* Set back interruptions */
 		return 0;								/* Go generate a syscall exception */
 	}
 	
 	if(!(vmmask = save->save_r3)) {				/* Get the stop mask and check if all zeros */
-		act_unlock_thread(act);					/* Unlock the activation */
+		thread_mtx_unlock(act);					/* Unlock the activation */
+		thread_deallocate(act);
 		ml_set_interrupts_enabled(FALSE);		/* Set back interruptions */
 		save->save_r3 = KERN_SUCCESS;			/* Set success */	
 		return 1;								/* Return... */
@@ -1575,16 +1922,18 @@ int vmm_stop_vm(struct savearea *save)
 		vmmask = vmmask << 1;					/* Slide mask over */
 	}
 	
-	if(hw_compare_and_store(0, 1, &act->mact.emPendRupts)) {	/* See if there is already a stop pending and lock out others if not */
-		act_unlock_thread(act);					/* Already one pending, unlock the activation */
+	if(hw_compare_and_store(0, 1, &act->machine.emPendRupts)) {	/* See if there is already a stop pending and lock out others if not */
+		thread_mtx_unlock(act);					/* Already one pending, unlock the activation */
+		thread_deallocate(act);
 		ml_set_interrupts_enabled(FALSE);		/* Set back interruptions */
 		save->save_r3 = KERN_SUCCESS;			/* Say we did it... */	
 		return 1;								/* Leave */
 	}
 
 	if(!(stopapc = (ReturnHandler *)kalloc(sizeof(ReturnHandler)))) {	/* Get a return handler control block */
-		act->mact.emPendRupts = 0;				/* No memory, say we have given up request */
-		act_unlock_thread(act);					/* Unlock the activation */
+		act->machine.emPendRupts = 0;				/* No memory, say we have given up request */
+		thread_mtx_unlock(act);					/* Unlock the activation */
+		thread_deallocate(act);
 		ml_set_interrupts_enabled(FALSE);		/* Set back interruptions */
 		save->save_r3 = KERN_RESOURCE_SHORTAGE;	/* No storage... */
 		return 1;								/* Return... */
@@ -1600,7 +1949,8 @@ int vmm_stop_vm(struct savearea *save)
 	act_set_apc(act);							/* Set an APC AST */
 	ml_set_interrupts_enabled(TRUE);			/* Enable interruptions now */
 
-	act_unlock_thread(act);						/* Unlock the activation */
+	thread_mtx_unlock(act);						/* Unlock the activation */
+	thread_deallocate(act);
 	
 	ml_set_interrupts_enabled(FALSE);			/* Set back interruptions */
 	save->save_r3 = KERN_SUCCESS;				/* Hip, hip, horay... */	
@@ -1617,13 +1967,13 @@ int vmm_stop_vm(struct savearea *save)
 **
 ** Inputs:
 **		ReturnHandler *rh - the return handler control block as required by the APC.
-**		thread_act_t act  - the activation
+**		thread_t act  - the activation
 **
 ** Outputs:
 **		Whatever needed to be done is done.
 -----------------------------------------------------------------------*/
 
-void vmm_interrupt(ReturnHandler *rh, thread_act_t act) {
+void vmm_interrupt(ReturnHandler *rh, thread_t act) {
 
 	vmmCntrlTable		*CTable;
 	savearea			*sv;
@@ -1631,16 +1981,16 @@ void vmm_interrupt(ReturnHandler *rh, thread_act_t act) {
 
 
 
-	kfree((vm_offset_t)rh, sizeof(ReturnHandler));	/* Release the return handler block */
+	kfree(rh, sizeof(ReturnHandler));	/* Release the return handler block */
 	
 	inter  = ml_set_interrupts_enabled(FALSE);	/* Disable interruptions for now */
 
-	act->mact.emPendRupts = 0;					/* Say that there are no more interrupts pending */
-	CTable = act->mact.vmmControl;				/* Get the pointer to the table */
+	act->machine.emPendRupts = 0;					/* Say that there are no more interrupts pending */
+	CTable = act->machine.vmmControl;				/* Get the pointer to the table */
 	
 	if(!((unsigned int)CTable & -2)) return;	/* Leave if we aren't doing VMs any more... */
 
-	if(act->mact.vmmCEntry && (act->mact.vmmCEntry->vmmFlags & vmmXStop)) {	/* Do we need to stop the running guy? */
+	if(act->machine.vmmCEntry && (act->machine.vmmCEntry->vmmFlags & vmmXStop)) {	/* Do we need to stop the running guy? */
 		sv = find_user_regs(act);				/* Get the user state registers */
 		if(!sv) {								/* Did we find something? */
 			panic("vmm_interrupt: no user context; act = %08X\n", act);

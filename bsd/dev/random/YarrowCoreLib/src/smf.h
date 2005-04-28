@@ -79,7 +79,7 @@ extern "C" {
 #define MM_NULL	0
 
 /* Function forward declarations */
-SMFAPI void mmInit();
+SMFAPI void mmInit( void );
 SMFAPI MMPTR mmMalloc(DWORD request);
 SMFAPI void mmFree(MMPTR ptrnum);
 SMFAPI LPVOID mmGetPtr(MMPTR ptrnum);

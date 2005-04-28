@@ -104,6 +104,11 @@ const OSSymbol * IODTInterruptControllerName(
 
 bool IODTMapInterrupts( IORegistryEntry * regEntry );
 
+enum {
+    kIODTInterruptShared = 0x00000001
+};
+IOReturn IODTGetInterruptOptions( IORegistryEntry * regEntry, int source, IOOptionBits * options );
+
 #ifdef __cplusplus
 extern "C" {
 #endif

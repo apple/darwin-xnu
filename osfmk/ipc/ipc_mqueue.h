@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -66,6 +66,7 @@
 
 #include <kern/assert.h>
 #include <kern/macro_help.h>
+#include <kern/kern_types.h>
 #include <kern/wait_queue.h>
 
 #include <ipc/ipc_kmsg.h>
@@ -118,11 +119,38 @@ extern int ipc_mqueue_rcv;
 
 /* Initialize a newly-allocated message queue */
 extern void ipc_mqueue_init(
-	ipc_mqueue_t	mqueue,
-	boolean_t	is_set);
+	ipc_mqueue_t		mqueue,
+	boolean_t		is_set);
+
+/* destroy an mqueue */
+extern void ipc_mqueue_destroy(
+	ipc_mqueue_t		mqueue);
 
 /* Wake up receivers waiting in a message queue */
 extern void ipc_mqueue_changed(
+	ipc_mqueue_t		mqueue);
+
+/* Add the specific mqueue as a member of the set */
+extern kern_return_t ipc_mqueue_add(
+	ipc_mqueue_t		mqueue,
+	ipc_mqueue_t	 	set_mqueue);
+
+/* Check to see if mqueue is member of set_mqueue */
+extern boolean_t ipc_mqueue_member(
+	ipc_mqueue_t		mqueue,
+	ipc_mqueue_t		set_mqueue);
+
+/* Remove an mqueue from a specific set */
+extern kern_return_t ipc_mqueue_remove(
+	ipc_mqueue_t	 	mqueue,
+	ipc_mqueue_t		set_mqueue);
+
+/* Remove an mqueue from all sets */
+extern void ipc_mqueue_remove_from_all(
+	ipc_mqueue_t		mqueue);
+
+/* Remove all the members of the specifiied set */
+extern void ipc_mqueue_remove_all(
 	ipc_mqueue_t		mqueue);
 
 /* Send a message to a port */
@@ -130,7 +158,7 @@ extern mach_msg_return_t ipc_mqueue_send(
 	ipc_mqueue_t		mqueue,
 	ipc_kmsg_t		kmsg,
 	mach_msg_option_t	option,
-	mach_msg_timeout_t	timeout);
+	mach_msg_timeout_t	timeout_val);
 
 /* Deliver message to message queue or waiting receiver */
 extern void ipc_mqueue_post(
@@ -142,11 +170,13 @@ extern void ipc_mqueue_receive(
 	ipc_mqueue_t		mqueue,
 	mach_msg_option_t	option,
 	mach_msg_size_t		max_size,
-	mach_msg_timeout_t	timeout,
+	mach_msg_timeout_t	timeout_val,
 	int                     interruptible);
 
 /* Continuation routine for message receive */
-extern void ipc_mqueue_receive_continue(void);
+extern void ipc_mqueue_receive_continue(
+	void			*param,
+	wait_result_t		wresult);
 
 /* Select a message from a queue and try to post it to ourself */
 extern void ipc_mqueue_select(

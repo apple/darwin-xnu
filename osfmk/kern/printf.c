@@ -155,7 +155,6 @@
 #include <mach_kdp.h>
 #include <platforms.h>
 #include <mach/boolean.h>
-#include <cpus.h>
 #include <kern/cpu_number.h>
 #include <kern/lock.h>
 #include <kern/thread.h>
@@ -646,7 +645,11 @@ boolean_t	new_printf_cpu_number = FALSE;
 
 
 decl_simple_lock_data(,printf_lock)
+decl_simple_lock_data(,bsd_log_spinlock)
 decl_mutex_data(,sprintf_lock)
+extern void bsd_log_init(void);
+void bsd_log_lock(void);
+void bsd_log_unlock(void);
 
 void
 printf_init(void)
@@ -654,8 +657,22 @@ printf_init(void)
 	/*
 	 * Lock is only really needed after the first thread is created.
 	 */
-	simple_lock_init(&printf_lock, ETAP_MISC_PRINTF);
-	mutex_init(&sprintf_lock, ETAP_MISC_PRINTF);
+	simple_lock_init(&printf_lock, 0);
+	simple_lock_init(&bsd_log_spinlock, 0);
+	bsd_log_init();
+	mutex_init(&sprintf_lock, 0);
+}
+
+void
+bsd_log_lock()
+{
+	simple_lock(&bsd_log_spinlock);
+}
+
+void
+bsd_log_unlock()
+{
+	simple_unlock(&bsd_log_spinlock);
 }
 
 /* derived from boot_gets */
@@ -759,6 +776,11 @@ consdebug_putc(
 		cnputc(c);
 
 	debug_putc(c);
+
+#ifdef __ppc__
+	if (!console_is_serial())
+                PE_kputc(c);
+#endif
 }
 
 void

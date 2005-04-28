@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -56,9 +56,7 @@
 #include	<mach/thread_act_server.h>
 
 #if MACH_PROF
-#include        <cpus.h>
 #include	<kern/thread.h>
-#include	<kern/thread_swap.h>
 #include	<kern/queue.h>
 #include	<kern/profile.h>
 #include	<kern/sched_prim.h>
@@ -100,8 +98,6 @@ profile_thread(void)
     prof_data_t	    pbuf;
     kern_return_t   kr;
     int		    j;
-
-    thread_swappable(current_act(), FALSE);
 
     /* Initialise the queue header for the prof_queue */
     mpqueue_init(&prof_queue);
@@ -334,9 +330,18 @@ pbuf_free(
  *****************************************************************************
  */
 
+#if !MACH_PROF
 kern_return_t
 thread_sample(
-	thread_act_t	thr_act,
+	__unused thread_t	thread,
+	__unused ipc_port_t		reply)
+{
+    return KERN_FAILURE;
+}
+#else 
+kern_return_t
+thread_sample(
+	thread_t	thread,
 	ipc_port_t	reply)
 {
     /* 
@@ -346,18 +351,15 @@ thread_sample(
      * we are going to use as a reply port to send out the samples resulting 
      * from its execution. 
      */
-#if !MACH_PROF
-    return KERN_FAILURE;
-#else 
     prof_data_t	    pbuf;
     vm_offset_t	    vmpbuf;
 
     if (reply != MACH_PORT_NULL) {
-	if (thr_act->act_profiled) 	/* yuck! */
+	if (thread->profiled) 	/* yuck! */
 		return KERN_INVALID_ARGUMENT;
 	/* Start profiling this activation, do the initialization. */
 	pbuf = pbuf_alloc();
-	if ((thr_act->profil_buffer = pbuf) == NULLPROFDATA) {
+	if ((thread->profil_buffer = pbuf) == NULLPROFDATA) {
 	    printf("thread_sample: cannot allocate pbuf\n");
 	    return KERN_RESOURCE_SHORTAGE;
 	} 
@@ -369,29 +371,29 @@ thread_sample(
 	    reset_pbuf_area(pbuf);
 	}
 	pbuf->prof_port = reply;
-	thr_act->act_profiled = TRUE;
-	thr_act->act_profiled_own = TRUE;
+	thread->profiled = TRUE;
+	thread->profiled_own = TRUE;
 	if (profile_thread_id == THREAD_NULL)
 	    profile_thread_id = kernel_thread(kernel_task, profile_thread);
     } else {
-	if (!thr_act->act_profiled)
+	if (!thread->profiled)
 		return(KERN_INVALID_ARGUMENT);
 
-	thr_act->act_profiled = FALSE;
+	thread->profiled = FALSE;
 	/* do not stop sampling if thread is not profiled by its own */
 
-	if (!thr_act->act_profiled_own)
+	if (!thread->profiled_own)
 	    return KERN_SUCCESS;
 	else
-	    thr_act->act_profiled_own = FALSE;
+	    thread->profiled_own = FALSE;
 
-	send_last_sample_buf(thr_act->profil_buffer);
-	pbuf_free(thr_act->profil_buffer);
-	thr_act->profil_buffer = NULLPROFDATA;
+	send_last_sample_buf(thread->profil_buffer);
+	pbuf_free(thread->profil_buffer);
+	thread->profil_buffer = NULLPROFDATA;
     }
     return KERN_SUCCESS;
-#endif /* MACH_PROF */
 }
+#endif /* MACH_PROF */
 
 /*
  *****************************************************************************
@@ -403,14 +405,20 @@ thread_sample(
  *****************************************************************************
  */
 
+#if !MACH_PROF
+kern_return_t
+task_sample(
+	__unused task_t	task,
+	__unused ipc_port_t	reply)
+{
+    return KERN_FAILURE;
+}
+#else
 kern_return_t
 task_sample(
 	task_t		task,
 	ipc_port_t	reply)
 {
-#if !MACH_PROF
-    return KERN_FAILURE;
-#else
     prof_data_t	    pbuf=task->profil_buffer;
     vm_offset_t	    vmpbuf;
     boolean_t	    turnon = (reply != MACH_PORT_NULL);
@@ -455,24 +463,24 @@ task_sample(
 
     if (turnon != task->task_profiled) {
 	int actual, i;
-	thread_act_t thr_act;
+	thread_t thread;
 
 	if (turnon && profile_thread_id == THREAD_NULL)	/* 1st time thru? */
 	    profile_thread_id =	/* then start profile thread. */
 		kernel_thread(kernel_task, profile_thread);
 	task->task_profiled = turnon;  
 	actual = task->thread_count; 
-	for (i = 0, thr_act = (thread_act_t)queue_first(&task->threads);
+	for (i = 0, thread = (thread_t)queue_first(&task->threads);
 	     i < actual;
-	     i++, thr_act = (thread_act_t)queue_next(&thr_act->task_threads)) {
-		  if (!thr_act->act_profiled_own) {
-		    thr_act->act_profiled = turnon;
+	     i++, thread = (thread_t)queue_next(&thr_act->task_threads)) {
+		  if (!thread->profiled_own) {
+		    threadt->profiled = turnon;
 		    if (turnon) {
-			thr_act->profil_buffer = task->profil_buffer;
-		  	thr_act->act_profiled = TRUE;
+			threadt->profil_buffer = task->profil_buffer;
+		  	thread->profiled = TRUE;
 		    } else {
-			thr_act->act_profiled = FALSE;
-		        thr_act->profil_buffer = NULLPROFDATA;
+			thread->profiled = FALSE;
+		        thread->profil_buffer = NULLPROFDATA;
 		    }
 		  }
 	}
@@ -485,6 +493,6 @@ task_sample(
 
     task_unlock(task);
     return KERN_SUCCESS;
-#endif /* MACH_PROF */
 }
+#endif /* MACH_PROF */
 

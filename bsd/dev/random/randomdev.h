@@ -29,12 +29,14 @@
 
 #include <sys/random.h>
 
+void PreliminarySetup( void );
+void random_init( void );
 int random_open(dev_t dev, int flags, int devtype, struct proc *pp);
 int random_close(dev_t dev, int flags, int mode, struct proc *pp);
 int random_read(dev_t dev, struct uio *uio, int ioflag);
 int random_write(dev_t dev, struct uio *uio, int ioflag);
 
-u_long RandomULong();
+u_long RandomULong( void );
 
 #endif /* __APPLE_API_PRIVATE */
 #endif /* __DEV_RANDOMDEV_H__ */

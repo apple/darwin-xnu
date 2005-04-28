@@ -70,6 +70,8 @@ enum {
     kIOLogServiceTree 	= 0x00001000ULL,
     kIOLogDTree 	= 0x00002000ULL,
     kIOLogMemory 	= 0x00004000ULL,
+    // available	= 0x00008000ULL,
+    kOSLogRegistryMods  = 0x00010000ULL,	// Log attempts to modify registry collections
 
 // debug aids - change behaviour
     kIONoFreeObjects 	= 0x00100000ULL,
@@ -77,7 +79,6 @@ enum {
 };
 
 extern SInt64	gIOKitDebug;
-extern char 	iokit_version[];
 
 #ifdef __cplusplus
 extern "C" {

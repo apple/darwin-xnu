@@ -5,6 +5,42 @@
 CFLAGS+= -DAT386=1
 SFLAGS+= -DAT386=1
 
+# Enable -Werror for i386 builds
+CFLAGS+= $(WERROR)
+CWARNFLAGS= $(filter-out -Wbad-function-cast, $(CWARNFLAGS_STD))
+
+# Objects that don't compile cleanly:
+OBJS_NO_WERROR=				\
+	ioconf.o			\
+	UNDRequest.o			\
+	KUNCUserNotifications.o		\
+	panic_dialog.o			\
+	panic_image.o			\
+	rendered_numbers.o		\
+	video_console.o			\
+	iokit_rpc.o			\
+	subrs.o				\
+	kdp.o				\
+	kdp_udp.o			\
+	bsd_kern.o			\
+	debug.o				\
+	kmod.o				\
+	mk_sp.o				\
+	printf.o			\
+	syscall_emulation.o		\
+	mach_header.o
+
+OBJS_WERROR=$(filter-out $(OBJS_NO_WERROR),$(OBJS))
+
+$(OBJS_WERROR):		WERROR=-Werror
+
+
+
+# Files that must go in the __HIB segment:
+HIB_FILES=                              \
+           gdt.o                        \
+           idt.o
+
 ######################################################################
 #END	Machine dependent Makefile fragment for i386
 ######################################################################

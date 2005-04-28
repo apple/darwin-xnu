@@ -26,26 +26,42 @@
 
 #include <sys/appleapiopts.h>
 #include <mach/thread_status.h>
-#include <signal.h>
-
 
 #ifdef __APPLE_API_UNSTABLE
 /* WARNING: THIS WILL CHANGE;  DO NOT COUNT ON THIS */
 /* Needs to be finalized as to what it should contain */
-struct mcontext {
+#ifndef _POSIX_C_SOURCE
+struct mcontext
+#else /* _POSIX_C_SOURCE */
+struct __darwin_mcontext
+#endif /* _POSIX_C_SOURCE */
+{
 	struct sigcontext sc;
 };
 
+#ifndef _POSIX_C_SOURCE
 #define I386_MCONTEXT_SIZE	sizeof(struct mcontext)	
+#endif /* _POSIX_C_SOURCE */
 
-typedef struct mcontext * mcontext_t;
+#ifndef _MCONTEXT_T
+#define _MCONTEXT_T
+typedef __darwin_mcontext_t	mcontext_t;
+#endif
 
-struct mcontext64 {
+#ifndef _POSIX_C_SOURCE
+
+struct mcontext64
+{
 	struct sigcontext sc;
 };
 #define I386_MCONTEXT64_SIZE	sizeof(struct mcontext64)	
 
+#ifndef _MCONTEXT64_T
+#define _MCONTEXT64_T
 typedef struct mcontext64 * mcontext64_t;
+#endif
+
+#endif /* _POSIX_C_SOURCE */
 
 #endif /* __APPLE_API_UNSTABLE */
 

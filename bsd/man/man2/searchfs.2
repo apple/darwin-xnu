@@ -1,0 +1,804 @@
+.\" Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+.\" 
+.\" The contents of this file constitute Original Code as defined in and
+.\" are subject to the Apple Public Source License Version 1.1 (the
+.\" "License").  You may not use this file except in compliance with the
+.\" License.  Please obtain a copy of the License at
+.\" http://www.apple.com/publicsource and read it before using this file.
+.\" 
+.\" This Original Code and all software distributed under the License are
+.\" distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+.\" EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+.\" INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+.\" FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+.\" License for the specific language governing rights and limitations
+.\" under the License.
+.\" 
+.\"     @(#)searchfs.2
+.
+.Dd December 15, 2003
+.Dt SEARCHFS 2
+.Os Darwin
+.Sh NAME
+.Nm searchfs
+.Nd search a volume quickly
+.Sh SYNOPSIS
+.Fd #include <sys/attr.h>
+.Fd #include <unistd.h>
+.Ft int
+.Fn searchfs "const char * path" "struct fssearchblock * searchBlock" "unsigned long * numMatches" "unsigned long scriptCode" "unsigned long options" "struct searchstate * state"
+.
+.Sh DESCRIPTION
+The
+.Fn searchfs
+function searches the volume (that is, mounted file system) specified by  
+.Fa path 
+for file system objects matching the criteria specified by 
+.Fa searchBlock , 
+.Fa scriptCode , 
+and 
+.Fa options .
+The 
+.Fa numMatches 
+parameter returns the number of matching file system objects found.
+The function also returns attributes of those file system objects in a buffer 
+specified by 
+.Fa searchBlock .
+The 
+.Fa searchState 
+parameter allows you search the volume using multiple calls to 
+.Fn searchfs ,
+resuming the search where it left off.
+The routine will only return objects to which you have access (that is, you 
+have execute permissions on the directories leading to this object from the root).
+.Pp
+.
+.\" path parameter
+.
+The
+.Fa path 
+parameter must reference a valid file system object on the volume to be searched. 
+Typically the path is to the volume's root directory.
+The entire volume is always searched.
+All directories listed in the path name leading to this object must be 
+searchable.
+.Pp
+.
+.\" searchBlock parameter
+.
+The
+.Fa searchBlock
+parameter is a pointer to an 
+.Vt fssearchblock 
+structure, as defined by
+.Aq Pa sys/attr.h
+(shown below).
+You are responsible for filling out all fields of this structure before calling the function. 
+.Bd -literal
+struct fssearchblock {
+    struct attrlist *   returnattrs;
+    void *              returnbuffer;
+    size_t              returnbuffersize;
+    unsigned long       maxmatches;
+    struct timeval      timelimit;
+    void *              searchparams1;
+    size_t              sizeofsearchparams1;
+    void *              searchparams2;
+    size_t              sizeofsearchparams2;
+    struct attrlist     searchattrs;
+};
+.Ed
+.Pp
+.
+For information about the 
+.Vt attrlist 
+structure, see the discussion of 
+.Xr getattrlist 2 .
+.Pp
+.
+.\" searchBlock elements
+.
+The fields of the 
+.Vt fssearchblock
+structure are defined as follows.
+.Bl -tag -width sizeofsearchparams1
+.
+.It returnattrs
+.Fn searchfs 
+can return arbitrary attributes of the file system objects that it finds. 
+This field must point to an 
+.Vt attrlist 
+structure that specifies the attributes that you want returned. 
+To request an attribute you must set the corresponding bit in the appropriate 
+.Vt attrgroup_t 
+field of the 
+.Vt attrlist 
+structure.
+You are responsible for filling out all fields of this structure before calling the function. 
+You must not request volume attributes.
+.
+.It returnbuffer
+.Fn searchfs 
+places attributes of the matching file system objects into this returned attributes buffer. 
+The attributes for any given object are grouped together and 
+packed in exactly the same way as they would be returned from 
+.Xr getdirentriesattr 2 .
+The initial contents of this buffer are ignored.
+.
+.It returnbuffersize
+Set this field to the size, in bytes, of the buffer pointed to by 
+.Fa returnbuffer .
+.
+.It maxmatches
+Specifies the maximum number of matches that you want this call to 
+.Fn searchfs 
+to return.
+.
+.It timelimit
+Specifies the maximum time that you want this call to 
+.Fn searchfs 
+to run.
+.Pp
+.
+If you're implementing a volume format, you should impose your own internal 
+limit on the duration of this call to prevent a malicious user program 
+from monopolising kernel resources.
+.Pp
+.
+.It searchparams1
+Specifies the lower bound of the search criteria. 
+This is discussed in detail below. 
+You must place attribute values into the buffer in the same 
+way as they would be returned by 
+.Xr getattrlist 2 ,
+where the 
+.Fa searchattrs
+field determines the exact layout of the attribute values.
+.
+.It sizeofsearchparams1
+Set this field to the size, in bytes, of the buffer pointed to by 
+.Fa searchparams1 .
+.
+.It searchparams2
+Specifies the upper bound of the search criteria. 
+This is discussed in detail below. 
+You must place attribute values into the buffer in the same 
+way as they would be returned by 
+.Xr getattrlist 2 ,
+where the 
+.Fa searchattrs
+field determines the exact layout of the attribute values.
+.
+.It sizeofsearchparams2
+Set this field to the size, in bytes, of the buffer pointed to by 
+.Fa searchparams2 .
+.
+.It searchattrs
+Specifies the attributes that you want you use for your search criteria. 
+You are responsible for filling out all fields of this structure before calling the function. 
+To search for an attribute you must set the corresponding bit in the appropriate 
+.Vt attrgroup_t 
+field of the 
+.Vt attrlist 
+structure, and place the appropriate values into the 
+.Fa searchparam1 
+and 
+.Fa searchparam2 
+buffers.
+The attributes specified here determine the format of those buffers. 
+This is discussed in detail below. 
+.
+.El
+.Pp
+.
+.\" numMatches parameter
+.
+The 
+.Fa numMatches 
+parameter points to an 
+.Vt unsigned long 
+variable. 
+The initial value of this variable is ignored.
+On return, this variable contains the number of matching file system objects found.
+The is always less than or equal to the 
+.Fa maxmatches 
+field of the 
+.Fa searchBlock 
+parameter.
+The attributes for the matching objects have been placed into the returned attributes buffer.
+.Pp
+.
+.\" scriptCode parameter
+.
+The 
+.Fa scriptCode 
+parameter is currently ignored. 
+You should always pass in the value 0x08000103, which corresponds to the 
+UTF-8 text encoding value defined by 
+.Aq Pa CarbonCore/TextCommon.h .
+.Pp
+.
+.\" options parameter
+.
+The
+.Fa options
+parameter is a bit set that controls the behaviour of
+.Fn searchfs .
+The following option bits are defined.
+.
+.Bl -tag -width SRCHFS_MATCHPARTIALNAMES
+.
+.It SRCHFS_START
+If this bit is set, 
+.Fn searchfs 
+will ignore the 
+.Fa state 
+parameter and start a new search. 
+Otherwise 
+.Fn searchfs 
+assumes that 
+.Fa searchstate 
+is valid and attempts to resume a previous search based on that state.
+.
+.It SRCHFS_MATCHPARTIALNAMES
+If this bit is set, 
+.Fn searchfs 
+will consider substrings to be successful matches when evaluating the 
+.Dv ATTR_CMN_NAME
+attribute.
+.
+.It SRCHFS_MATCHDIRS
+If this bit is set, 
+.Fn searchfs 
+will search for directories that match the search criteria.
+To get meaningful results you must specify either this bit or 
+.Dv SRCHFS_MATCHFILES , 
+or both.
+.
+.It SRCHFS_MATCHFILES
+If this bit is set, 
+.Fn searchfs 
+will search for files that match the search criteria.
+To get meaningful results you must specify either this bit or 
+.Dv SRCHFS_MATCHDIRS , 
+or both.
+.
+.It SRCHFS_SKIPLINKS
+If this bit is set, 
+.Fn searchfs 
+will only return one reference for a hard linked file, rather that a reference 
+for each hard link to the file.
+.Pp
+This option is not recommended for general development.
+Its primary client is the 
+.Xr quotacheck 2 
+utility.
+.Pp
+.
+This option is privileged (the caller's effective UID must be 0) and cannot 
+be used if you request the 
+.Dv ATTR_CMN_NAME 
+or 
+.Dv ATTR_CMN_PAROBJID 
+attributes.
+.Pp
+Introduced with Darwin 7.0 (Mac OS X version 10.3).
+.
+.It SRCHFS_SKIPINVISIBLE
+If this bit is set, 
+.Fn searchfs 
+will not match any invisible file system objects (that is, objects whose 
+.Dv ATTR_CMN_FNDRINFO 
+attribute has bit 6 set in the ninth byte) or any objects within 
+invisible directories.
+.Pp
+Introduced with Darwin 7.0 (Mac OS X version 10.3).
+.
+.It SRCHFS_SKIPPACKAGES
+If this bit is set, 
+.Fn searchfs 
+will not match any file system objects that are inside a package. 
+A package is defined as a directory whose extension matches one 
+of the extensions that are configured into the kernel by Launch Services.
+.Pp
+Introduced with Darwin 7.0 (Mac OS X version 10.3).
+.
+.It SRCHFS_SKIPINAPPROPRIATE
+If this bit is set, 
+.Fn searchfs 
+will not match any file system objects that are within an inappropriate directory. 
+The current list of inappropriate directories contains one item: /System.
+.Pp
+Introduced with Darwin 7.0 (Mac OS X version 10.3).
+.
+.It SRCHFS_NEGATEPARAMS
+If this bit is set, 
+.Fn searchfs 
+will return all the file system objects that do not match the search criteria.
+.Pp
+Introduced with Darwin 7.0 (Mac OS X version 10.3).
+.
+.El
+.Pp
+.
+.\" state parameter
+.
+The 
+.Fa state 
+parameter is a pointer to an opaque data structure that 
+.Fn searchfs 
+uses to maintain the state of a search between successive calls. 
+In your first call to 
+.Fn searchfs ,
+you specify the 
+.Dv SRCHFS_START 
+flag in the 
+.Fa options 
+parameter. 
+This tells 
+.Fn searchfs 
+that the search state is invalid and that it should start a new search. 
+When this call completes, it may have only returned partial results;
+in that case, it will have updated the structure pointed to by 
+.Fa state .
+If you call 
+.Fn searchfs 
+again, this time without specifying the 
+.Dv SRCHFS_START 
+flag in the 
+.Fa options 
+parameter, it will resume the search where it left off, using the search state 
+that it previously stored in the state structure.
+You do not need to explicitly dispose of this state.
+.Pp
+.
+The 
+.Fn searchfs 
+function returns significant errors in the followings cases.
+.
+.Bl -bullet
+.
+.It
+If it has found as many objects as you requested in the 
+.Fa maxmatches 
+field of the 
+.Fa searchBlock 
+parameter, it will return 
+.Dv EAGAIN . 
+.
+.It
+If there is not enough space in the returned attributes buffer for the first match, 
+it will return 
+.Dv ENOBUFS .
+You should allocate a larger returned attributes buffer and try again.
+.Fa numMatches 
+will be zero in this case.
+.
+.It
+If the timeout expires it will return 
+.Dv EAGAIN .
+.
+.It
+If you attempt to resume a search (that is, 
+.Dv SRCHFS_START 
+is not specified in the 
+.Fa options 
+parameter) and the catalog has changed since the last search, 
+the function will return 
+.Dv EBUSY . 
+You must start your search again from the beginning.
+.
+.El
+.Pp
+.
+If 
+.Fn searchfs
+returns 
+.Dv EAGAIN ,
+the value in 
+.Fa numMatches 
+may be greater than zero. 
+This is known as a partial result. 
+You should be sure to process these matches before calling 
+.Fn searchfs 
+again.
+.
+.Sh SEARCH CRITERIA
+.
+You specify the search criteria using a combination of the 
+.Fa searchattrs , 
+.Fa searchparams1 ,
+.Fa sizeofsearchparams1, 
+.Fa searchparams2 ,
+and
+.Fa sizeofsearchparams2 
+fields of the 
+.Fa searchBlock 
+parameter, and various flags in the 
+.Fa options 
+parameter. 
+The 
+.Fa searchattrs 
+field determines the attributes considered when comparing a file system object to 
+the search criteria.
+You can specify that an attribute should be considered by setting the corresponding 
+bit in the appropriate 
+.Vt attrgroup_t 
+field of the 
+.Vt attrlist 
+structure. 
+See the discussion of 
+.Xr getattrlist 2 
+for a detailed description of this structure. 
+.Pp
+.
+The 
+.Fa searchparams1 ,
+.Fa sizeofsearchparams1 , 
+.Fa searchparams2 ,
+and
+.Fa sizeofsearchparams2 
+fields specify the attribute values that must be matched. 
+The format of each of these buffers is determined by the attributes that you're searching for. 
+The values are packed in exactly the same way as they would be returned from 
+.Xr getattrlist 2 ,
+including the leading
+.Vt unsigned long 
+length value.
+.Pp
+.
+The attribute values in the first and second search buffers form a lower and upper bound for 
+the search, respectively.
+These have different meanings depending on the type of attribute.
+.
+.Bl -bullet
+.
+.It
+For string attributes (specifically 
+.Dv ATTR_CMN_NAME ,
+the object name), the value in the first search 
+buffer is significant and the value in the second search buffer is ignored.
+The string comparison is either an exact match or a substring match depending on 
+the 
+.Dv SRCHFS_MATCHPARTIALNAMES 
+flag in the 
+.Fa options 
+parameter.
+.
+.It
+For structured attributes (specifically 
+.Dv ATTR_CMN_FNDRINFO ,
+the Finder information), the value from the 
+file system object is masked (logical AND) with the value in the second search buffer and then 
+compared, byte for byte, against the value in the first search buffer.
+If it is equal, the object is a match.
+.
+.It
+For scalar attributes (all other attributes, for example, 
+.Dv ATTR_CMN_MODTIME ,
+the modification date), the values in the first and second search 
+buffers are literally a lower and upper bound. 
+An object matches the criteria if its value is greater than or equal to the value in 
+the first buffer and less than or equal to the value in the second. 
+.
+.El
+.
+.Sh RETURN VALUES
+Upon successful completion, a value of 0 is returned.
+This means that the entire volume has been searched and all matches returned.
+Otherwise, a value of -1 is returned and
+.Va errno
+is set to indicate the error.
+.Pp
+.
+See the discussion of the 
+.Dv EAGAIN ,
+.Dv ENOBUFS ,
+and
+.Dv EBUSY 
+error codes above.
+.
+.Sh COMPATIBILITY
+Not all volumes support 
+.Fn searchfs .
+You can test whether a volume supports 
+.Fn searchfs 
+by using 
+.Xr getattrlist 2 
+to get the volume capabilities attribute 
+.Dv ATTR_VOL_CAPABILITIES ,
+and then testing the 
+.Dv VOL_CAP_INT_SEARCHFS 
+flag.
+.Pp
+.
+The 
+.Fn searchfs 
+function has been undocumented for more than two years. 
+In that time a number of volume format implementations have been created without 
+a proper specification for the behaviour of this routine. 
+You may encounter volume format implementations with slightly different 
+behaviour than what is described here. 
+Your program is expected to be tolerant of this variant behaviour.
+.Pp
+.
+If you're implementing a volume format that supports 
+.Fn searchfs ,
+you should be careful to support the behaviour specified by this document.
+.Pp
+.
+A bug in systems prior to Darwin 7.0 (Mac OS X version 10.3) makes searching for the 
+.Dv ATTR_CMN_BKUPTIME 
+attribute tricky. 
+The bug causes the attribute to consume two items in the search attribute buffers, the 
+first in the proper place and the second between 
+.Dv ATTR_CMN_FNDRINFO
+and 
+.Dv ATTR_CMN_OWNERID .
+.
+.Sh ERRORS
+.Fn searchfs
+will fail if:
+.Bl -tag -width Er
+.
+.It Bq Er ENOTSUP
+The volume does not support
+.Fn searchfs .
+.
+.It Bq Er ENOTDIR
+A component of the path prefix is not a directory.
+.
+.It Bq Er ENAMETOOLONG
+A component of a path name exceeded 
+.Dv NAME_MAX
+characters, or an entire path name exceeded 
+.Dv PATH_MAX
+characters.
+.
+.It Bq Er ENOENT
+The file system object does not exist.
+.
+.It Bq Er EACCES
+Search permission is denied for a component of the path prefix.
+.
+.It Bq Er ELOOP
+Too many symbolic links were encountered in translating the pathname.
+.
+.It Bq Er EFAULT
+One of the pointer parameters points to an invalid address.
+.
+.It Bq Er EINVAL
+The 
+.Fa options 
+parameter contains an invalid flag or sizeofsearchparams1/2 is greater than
+SEARCHFS_MAX_SEARCHPARMS (see attr.h).
+.
+.It Bq Er EAGAIN
+The search terminated with partial results, either because 
+.Fa numMatches 
+has hit the limit specified by 
+.Fa maxmatches 
+or because the timeout expired.
+Process the matches returned so far and then call 
+.Fn searchfs 
+again to look for more.
+.Pp
+.
+.It Bq Er ENOBUFS
+The returned attributes buffer is too small for the first match.
+You should allocate a larger returned attributes buffer and try again.
+.Fa numMatches 
+will be zero in this case.
+.
+.It Bq Er EBUSY
+The search could not be resumed because the volume has changed.
+.
+.It Bq Er EIO
+An I/O error occurred while reading from or writing to the file system.
+.El
+.Pp
+.
+.Sh CAVEATS
+Not all attributes can be searched for using 
+.Fn searchfs . 
+The list currently includes:
+.Pp
+.
+.Bl -item -compact
+.It 
+ATTR_CMN_NAME
+.It 
+ATTR_CMN_OBJID
+.It
+ATTR_CMN_PAROBJID
+.It
+ATTR_CMN_CRTIME
+.It
+ATTR_CMN_MODTIME
+.It
+ATTR_CMN_CHGTIME
+.It
+ATTR_CMN_ACCTIME
+.It
+ATTR_CMN_BKUPTIME
+.It
+ATTR_CMN_FNDRINFO
+.It
+ATTR_CMN_BKUPTIME
+.It
+ATTR_CMN_OWNERID
+.It
+ATTR_CMN_GRPID
+.It
+ATTR_CMN_ACCESSMASK
+.Pp
+.
+.It
+ATTR_DIR_ENTRYCOUNT
+.Pp
+.
+.It
+ATTR_FILE_DATALENGTH
+.It
+ATTR_FILE_DATAALLOCSIZE
+.It
+ATTR_FILE_RSRCLENGTH
+.It
+ATTR_FILE_RSRCALLOCSIZE
+.El
+.
+.Sh EXAMPLES
+.
+The following code searches a volume for files of the specified type and creator.
+.
+.Bd -literal
+#include <assert.h>
+#include <stdio.h>
+#include <stddef.h>
+#include <string.h>
+#include <sys/attr.h>
+#include <sys/errno.h>
+#include <unistd.h>
+.Pp
+.
+typedef struct attrlist         attrlist_t;
+typedef struct fssearchblock    fssearchblock_t;
+typedef struct searchstate      searchstate_t;
+.Pp
+.
+struct SearchAttrBuf {
+    unsigned long   length;
+    char            finderInfo[32];
+};
+typedef struct SearchAttrBuf SearchAttrBuf;
+.Pp
+.
+struct ResultAttrBuf {
+    unsigned long   length;
+    attrreference_t name;
+    fsobj_id_t      parObjID;
+};
+typedef struct ResultAttrBuf ResultAttrBuf;
+.Pp
+.
+enum {
+    kMatchesPerCall = 16
+};
+.Pp
+.
+static int SearchFSDemo(
+    const char *volPath, 
+    const char *type, 
+    const char *creator
+)
+{
+    int             err;
+    fssearchblock_t searchBlock;
+    SearchAttrBuf   lower;
+    SearchAttrBuf   upper;
+    static const unsigned char kAllOnes[4] = { 0xFF, 0xFF, 0xFF, 0xFF };
+    unsigned long   matchCount;
+    unsigned long   matchIndex;
+    unsigned long   options;
+    searchstate_t   state;
+    ResultAttrBuf * thisEntry;
+    attrlist_t      returnAttrList;
+    char            resultAttrBuf[  kMatchesPerCall 
+                                  * (sizeof(ResultAttrBuf) + 64)];
+.Pp
+.
+    // resultAttrBuf is big enough for kMatchesPerCall entries, 
+    // assuming that the average name length is less than 64.
+.Pp
+.
+    assert(strlen(type)    == 4);
+    assert(strlen(creator) == 4);
+.Pp
+    
+    memset(&searchBlock, 0, sizeof(searchBlock));
+    searchBlock.searchattrs.bitmapcount = ATTR_BIT_MAP_COUNT;
+    searchBlock.searchattrs.commonattr  = ATTR_CMN_FNDRINFO;
+.Pp
+    
+    memset(&lower, 0, sizeof(lower));
+    memset(&upper, 0, sizeof(upper));
+    lower.length = sizeof(lower);
+    upper.length = sizeof(upper);
+    memcpy(&lower.finderInfo[0], type,     4);
+    memcpy(&lower.finderInfo[4], creator,  4);
+    memcpy(&upper.finderInfo[0], kAllOnes, 4);
+    memcpy(&upper.finderInfo[4], kAllOnes, 4);
+    searchBlock.searchparams1       = &lower;
+    searchBlock.sizeofsearchparams1 = sizeof(lower);
+    searchBlock.searchparams2       = &upper;
+    searchBlock.sizeofsearchparams2 = sizeof(lower);
+.Pp
+    
+    searchBlock.timelimit.tv_sec  = 0;
+    searchBlock.timelimit.tv_usec = 100 * 1000;
+.Pp
+    
+    searchBlock.maxmatches = kMatchesPerCall;
+.Pp
+    
+    memset(&returnAttrList, 0, sizeof(returnAttrList));
+    returnAttrList.bitmapcount = ATTR_BIT_MAP_COUNT;
+    returnAttrList.commonattr  = ATTR_CMN_NAME | ATTR_CMN_PAROBJID;
+.Pp
+.
+    searchBlock.returnattrs = &returnAttrList;
+    searchBlock.returnbuffer = resultAttrBuf;
+    searchBlock.returnbuffersize = sizeof(resultAttrBuf);
+.Pp
+    
+    options = SRCHFS_START | SRCHFS_MATCHFILES;
+.Pp
+    
+    do {
+        err = searchfs(
+            volPath, 
+            &searchBlock, 
+            &matchCount, 
+            0x08000103, 
+            options, 
+            &state
+        );
+        if (err != 0) {
+            err = errno;
+        }
+        if ( (err == 0) || (err == EAGAIN) ) {
+            thisEntry = (ResultAttrBuf *) resultAttrBuf;
+.Pp
+            
+            for (matchIndex = 0; matchIndex < matchCount; matchIndex++) {
+                printf("%08x ", thisEntry->parObjID.fid_objno);
+                printf(
+                    "%s\en", 
+                    ((char *) &thisEntry->name) 
+                        + thisEntry->name.attr_dataoffset
+                );
+.
+                // Advance to the next entry.
+.
+                ((char *) thisEntry) += thisEntry->length;
+            }
+        }
+.Pp
+        
+        options &= ~SRCHFS_START;
+    } while (err == EAGAIN);
+.Pp
+    
+    return err;
+}
+.Ed
+.
+.Sh SEE ALSO
+.
+.Xr getattrlist 2
+.
+.Sh HISTORY
+A
+.Fn searchfs
+function call appeared in Darwin 1.3.1 (Mac OS X version 10.0).
+.

@@ -222,7 +222,7 @@ int  AbortIO(sp, err)
     /*
      * Complete all outstanding transactions.  
      */
-    total += CompleteQueue(&sp->sapb, err); /* Abort outstanding send attentions */
+    total = CompleteQueue(&sp->sapb, err); /* Abort outstanding send attentions */
     CompleteQueue(&sp->frpb, err); /* Abort outstanding forward resets */
 
     if (sp->sbuf_mb) { /* clear the send queue */

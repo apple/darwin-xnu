@@ -93,6 +93,10 @@ packet can be processed per write.
 Currently, only writes to Ethernets and
 .Tn SLIP
 links are supported.
+.Pp
+When the last minor device is opened, an additional minor device is 
+created on demand. The maximum number of devices that can be created is 
+controlled by the sysctl debug.bpf_maxdevices.
 .Sh IOCTLS
 The
 .Xr ioctl 2

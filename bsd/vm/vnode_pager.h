@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -34,13 +34,12 @@
 #include <kern/queue.h>
 
 #ifdef	KERNEL
-
 #include <mach/boolean.h>
+#include <mach/memory_object_types.h>
+#include <mach/vm_types.h>
 #include <vm/vm_pager.h>
 
-vm_pager_t	vnode_pager_setup();
-boolean_t	vnode_has_page();
-boolean_t	vnode_pager_active();
+vm_pager_t	vnode_pager_setup(struct vnode *, memory_object_t);
 
 /*
  *  Vstructs are the internal (to us) description of a unit of backing store.
@@ -89,6 +88,7 @@ struct bs_map {
 	struct vnode    *vp;   
 	void     	*bs;
 };
+extern struct bs_map  bs_port_table[];
 
 
 
@@ -123,11 +123,15 @@ typedef struct vstruct {
 #define	VNODE_PAGER_NULL	((vnode_pager_t) 0)
 
 
+pager_return_t	vnode_pagein(struct vnode *, upl_t,
+			     upl_offset_t, vm_object_offset_t,
+			     upl_size_t, int, int *);
+pager_return_t	vnode_pageout(struct vnode *, upl_t,
+			      upl_offset_t, vm_object_offset_t,
+			      upl_size_t, int, int *);
 
-pager_return_t	pager_vnode_pagein();
-pager_return_t	pager_vnode_pageout();
-pager_return_t	vnode_pagein();
-pager_return_t	vnode_pageout();
+extern vm_object_offset_t vnode_pager_get_filesize(
+	struct vnode *vp);
 
 #endif	/* KERNEL */
 

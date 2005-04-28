@@ -56,7 +56,7 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/file.h>
+#include <sys/file_internal.h>
 #include <sys/event.h>
 #include <sys/protosw.h>
 #include <sys/socket.h>
@@ -66,141 +66,106 @@
 #include <sys/stat.h>
 #include <sys/uio.h>
 #include <sys/filedesc.h>
+#include <sys/kauth.h>
+#include <sys/signalvar.h>
 
 #include <net/if.h>
 #include <net/route.h>
 
-int soo_read __P((struct file *fp, struct uio *uio, 
-		struct ucred *cred, int flags, struct proc *p));
-int soo_write __P((struct file *fp, struct uio *uio, 
-		struct ucred *cred, int flags, struct proc *p));
-int soo_close __P((struct file *fp, struct proc *p));
-
-int soo_select __P((struct file *fp, int which, void * wql, struct proc *p));
-
-int soo_kqfilter __P((struct file *fp, struct knote *kn, struct proc *p));
+/*
+ * File operations on sockets.
+ */
+int	soo_read(struct fileproc *fp, struct uio *uio, kauth_cred_t cred,
+		int flags, struct proc *p);
+int	soo_write(struct fileproc *fp, struct uio *uio, kauth_cred_t cred,
+		int flags, struct proc *p);
+int soo_close(struct fileglob *fp, struct proc *p);
+int	soo_ioctl(struct fileproc *fp, u_long cmd, caddr_t data, struct proc *p);
+int	soo_stat(struct socket *so, struct stat *ub);
+int	soo_select(struct fileproc *fp, int which, void * wql, struct proc *p);
+int     soo_kqfilter(struct fileproc *fp, struct knote *kn, struct proc *p);
+int	soo_drain(struct fileproc *fp, struct proc *p);
 
 struct	fileops socketops =
-    { soo_read, soo_write, soo_ioctl, soo_select, soo_close, soo_kqfilter };
+    { soo_read, soo_write, soo_ioctl, soo_select, soo_close, soo_kqfilter, soo_drain };
 
 /* ARGSUSED */
 int
-soo_read(fp, uio, cred, flags, p)
-	struct file *fp;
-	struct uio *uio;
-	struct ucred *cred;
-	int flags;
-	struct proc *p;
+soo_read(
+	struct fileproc *fp,
+	struct uio *uio,
+	__unused kauth_cred_t cred,
+	__unused int flags,
+	__unused struct proc *p)
 {
 	struct socket *so;
-	struct kextcb *kp;
 	int stat;
-	int (*fsoreceive) __P((struct socket *so, 
+	int (*fsoreceive)(struct socket *so2, 
 			       struct sockaddr **paddr,
-			       struct uio *uio, struct mbuf **mp0,
-			       struct mbuf **controlp, int *flagsp));
+			       struct uio *uio2, struct mbuf **mp0,
+			       struct mbuf **controlp, int *flagsp);
 
 
-	thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
 
-        if ((so = (struct socket *)fp->f_data) == NULL) {
+        if ((so = (struct socket *)fp->f_fglob->fg_data) == NULL) {
                 /* This is not a valid open file descriptor */
-                thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
-                return (EBADF);
+		return(EBADF);
         }
-
+//###LD will have to change
 	fsoreceive = so->so_proto->pr_usrreqs->pru_soreceive;
-	if (fsoreceive != soreceive)
-	{	kp = sotokextcb(so);
-		while (kp)
-		{	if (kp->e_soif && kp->e_soif->sf_soreceive)
-				(*kp->e_soif->sf_soreceive)(so, 0, &uio,
-							    0, 0, 0, kp);
-			kp = kp->e_next;
-		}
-
-	}
 	
 	stat = (*fsoreceive)(so, 0, uio, 0, 0, 0);
-	thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
 	return stat;
 }
 
 /* ARGSUSED */
 int
-soo_write(fp, uio, cred, flags, p)
-	struct file *fp;
-	struct uio *uio;
-	struct ucred *cred;
-	int flags;
-	struct proc *p;
+soo_write(
+	struct fileproc *fp,
+	struct uio *uio,
+	__unused kauth_cred_t cred,
+	__unused int flags,
+	struct proc *procp)
 {
 	struct socket *so;
-	int	(*fsosend) __P((struct socket *so, struct sockaddr *addr,
-				struct uio *uio, struct mbuf *top,
-				struct mbuf *control, int flags));
-	struct kextcb *kp;
+	int	(*fsosend)(struct socket *so2, struct sockaddr *addr,
+				struct uio *uio2, struct mbuf *top,
+				struct mbuf *control, int flags2);
 	int           stat;
 
-	thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
-
-        if ((so = (struct socket *)fp->f_data) == NULL) {
-                /* This is not a valid open file descriptor */
-                thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
-                return (EBADF);
-        }
-
-	fsosend = so->so_proto->pr_usrreqs->pru_sosend;
-	if (fsosend != sosend)
-	{	kp = sotokextcb(so);
-		while (kp)
-		{	if (kp->e_soif && kp->e_soif->sf_sosend)
-			(*kp->e_soif->sf_sosend)(so, 0, &uio,
-						 0, 0, 0, kp);
-			kp = kp->e_next;
-		}
-	}
-
-	stat = (*fsosend)(so, 0, uio, 0, 0, 0);
-	thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
-
-        /* Generation of SIGPIPE can be controlled per socket */
-        if (stat == EPIPE && uio->uio_procp && !(so->so_flags & SOF_NOSIGPIPE))
-            psignal(uio->uio_procp, SIGPIPE);
-
-        return stat;
-}
-
-int
-soo_ioctl(fp, cmd, data, p)
-	struct file *fp;
-	u_long cmd;
-	register caddr_t data;
-	struct proc *p;
-{
-	register struct socket *so;
-	struct sockopt sopt;
-	struct kextcb *kp;
-	int    error = 0;
-
-	thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
-
-	if ((so = (struct socket *)fp->f_data) == NULL) {
+	if ((so = (struct socket *)fp->f_fglob->fg_data) == NULL) {
 		/* This is not a valid open file descriptor */
-		thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
 		return (EBADF);
 	}
 
-        kp = sotokextcb(so);
-        sopt.sopt_level = cmd;
-        sopt.sopt_name = (int)data;
-        sopt.sopt_p = p;
+	fsosend = so->so_proto->pr_usrreqs->pru_sosend;
 
-	while (kp)
-	{	if (kp->e_soif && kp->e_soif->sf_socontrol)
-			(*kp->e_soif->sf_socontrol)(so, &sopt, kp);
-		kp = kp->e_next;
-	}
+	stat = (*fsosend)(so, 0, uio, 0, 0, 0);
+
+	/* Generation of SIGPIPE can be controlled per socket */
+	if (stat == EPIPE && procp && !(so->so_flags & SOF_NOSIGPIPE))
+		psignal(procp, SIGPIPE);
+
+	return stat;
+}
+
+__private_extern__ int
+soioctl(
+	struct socket *so,
+	u_long cmd,
+	caddr_t data,
+	struct proc *p)
+{
+	struct sockopt sopt;
+	int    error = 0;
+	int dropsockref = -1;
+
+
+	socket_lock(so, 1);
+
+	sopt.sopt_level = cmd;
+	sopt.sopt_name = (int)data;
+	sopt.sopt_p = p;
 
 	switch (cmd) {
 
@@ -210,8 +175,7 @@ soo_ioctl(fp, cmd, data, p)
 		else
 			so->so_state &= ~SS_NBIO;
 
-		thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
-		return (0);
+		goto out;
 
 	case FIOASYNC:
 		if (*(int *)data) {
@@ -223,28 +187,23 @@ soo_ioctl(fp, cmd, data, p)
 			so->so_rcv.sb_flags &= ~SB_ASYNC;
 			so->so_snd.sb_flags &= ~SB_ASYNC;
 		}
-		thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
-		return (0);
+		goto out;
 
 	case FIONREAD:
 		*(int *)data = so->so_rcv.sb_cc;
-		thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
-		return (0);
+		goto out;
 
 	case SIOCSPGRP:
 		so->so_pgid = *(int *)data;
-		thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
-		return (0);
+		goto out;
 
 	case SIOCGPGRP:
 		*(int *)data = so->so_pgid;
-		thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
-		return (0);
+		goto out;
 
 	case SIOCATMARK:
 	     *(int *)data = (so->so_state&SS_RCVATMARK) != 0;
-		thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
-		return (0);
+		goto out;
 
 	case SIOCSETOT: {
 	     /*
@@ -256,18 +215,14 @@ soo_ioctl(fp, cmd, data, p)
 
 	     /* let's make sure it's either -1 or a valid file descriptor */
 	     if (cloned_fd != -1) {
-		  struct file     *cloned_fp;
-		  error = getsock(p->p_fd, cloned_fd, &cloned_fp);
+		  error = file_socket(cloned_fd, &cloned_so);
 		  if (error) {
-		       thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
-		       return (error);
+			goto out;
 		  }
-
-		  cloned_so = (struct socket *)cloned_fp->f_data;
+		 dropsockref = cloned_fd;
 	     }
 
 	     /* Always set socket non-blocking for OT */
-	     fp->f_flag |= FNONBLOCK;
 	     so->so_state |= SS_NBIO;
 	     so->so_options |= SO_DONTTRUNC | SO_WANTMORE;
           so->so_flags |= SOF_NOSIGPIPE;
@@ -284,15 +239,13 @@ soo_ioctl(fp, cmd, data, p)
 		  if (cloned_so->so_snd.sb_hiwat > 0) {
 		       if (sbreserve(&so->so_snd, cloned_so->so_snd.sb_hiwat) == 0) {
 			    error = ENOBUFS;
-			    thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
-			    return (error);
+			    goto out;
 		       }
 		  }
 		  if (cloned_so->so_rcv.sb_hiwat > 0) {
 		       if (sbreserve(&so->so_rcv, cloned_so->so_rcv.sb_hiwat) == 0) {
 			    error = ENOBUFS;
-			    thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
-			    return (error);
+			    goto out;
 		       }
 		  }
 
@@ -304,7 +257,7 @@ soo_ioctl(fp, cmd, data, p)
 		       (cloned_so->so_rcv.sb_lowat > so->so_rcv.sb_hiwat) ?
 		       so->so_rcv.sb_hiwat : cloned_so->so_rcv.sb_lowat;
 
-            /* SO_SNDTIMEO, SO_RCVTIMEO */
+            	  /* SO_SNDTIMEO, SO_RCVTIMEO */
 		  so->so_snd.sb_timeo = cloned_so->so_snd.sb_timeo;
 		  so->so_rcv.sb_timeo = cloned_so->so_rcv.sb_timeo;
 	     }
@@ -314,8 +267,7 @@ soo_ioctl(fp, cmd, data, p)
 	     if (error == EOPNOTSUPP)
 		  error = 0;
 
-	     thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
-	     return (error);
+		goto out;
         }
 	}
 	/*
@@ -324,36 +276,64 @@ soo_ioctl(fp, cmd, data, p)
 	 * different entry since a socket's unnecessary
 	 */
 	if (IOCGROUP(cmd) == 'i')
-	     error = ifioctl(so, cmd, data, p);
+	     error = ifioctllocked(so, cmd, data, p);
 	else 
 	     if (IOCGROUP(cmd) == 'r')
 		  error = rtioctl(cmd, data, p);
 	     else
 		  error = (*so->so_proto->pr_usrreqs->pru_control)(so, cmd, data, 0, p);
 
-	thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
+out:
+	if (dropsockref != -1)
+		file_drop(dropsockref);
+	socket_unlock(so, 1);
+
+	return error;
+}
+
+int
+soo_ioctl(fp, cmd, data, p)
+	struct fileproc *fp;
+	u_long cmd;
+	register caddr_t data;
+	struct proc *p;
+{
+	register struct socket *so;
+	int error;
+
+
+	if ((so = (struct socket *)fp->f_fglob->fg_data) == NULL) {
+		/* This is not a valid open file descriptor */
+		return (EBADF);
+	}
+	
+	error = soioctl(so, cmd, data, p);
+	
+	if (error == 0 && cmd == SIOCSETOT)
+		fp->f_fglob->fg_flag |= FNONBLOCK;
+
 	return error;
 }
 
 int
 soo_select(fp, which, wql, p)
-	struct file *fp;
+	struct fileproc *fp;
 	int which;
 	void * wql;
 	struct proc *p;
 {
-	register struct socket *so = (struct socket *)fp->f_data;
-	register int s = splnet();
+	register struct socket *so = (struct socket *)fp->f_fglob->fg_data;
 	int retnum=0;
 
-	if (so == NULL || so == (struct socket*)-1) goto done;
+	if (so == NULL || so == (struct socket*)-1)
+		return (0);
 
+	socket_lock(so, 1);
 	switch (which) {
 
 	case FREAD:
 		so->so_rcv.sb_flags |= SB_SEL;
 		if (soreadable(so)) {
-			splx(s);
 			retnum = 1;
 			so->so_rcv.sb_flags &= ~SB_SEL;
 			goto done;
@@ -364,7 +344,6 @@ soo_select(fp, which, wql, p)
 	case FWRITE:
 		so->so_snd.sb_flags |= SB_SEL;
 		if (sowriteable(so)) {
-			splx(s);
 			retnum = 1;
 			so->so_snd.sb_flags &= ~SB_SEL;
 			goto done;
@@ -375,7 +354,6 @@ soo_select(fp, which, wql, p)
 	case 0:
 		so->so_rcv.sb_flags |= SB_SEL;
 		if (so->so_oobmark || (so->so_state & SS_RCVATMARK)) {
-			splx(s);
 			retnum = 1;
 			so->so_rcv.sb_flags &= ~SB_SEL;
 			goto done;
@@ -383,8 +361,9 @@ soo_select(fp, which, wql, p)
 		selrecord(p, &so->so_rcv.sb_sel, wql);
 		break;
 	}
-	splx(s);
+	
 done:
+	socket_unlock(so, 1);
 	return (retnum);
 }
 
@@ -396,36 +375,49 @@ soo_stat(so, ub)
 {
 	int stat;
 
-	/*
-	 * DANGER: by the time we get the network funnel the socket 
-	 * may have been closed
-	 */
-	thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
 	bzero((caddr_t)ub, sizeof (*ub));
+	socket_lock(so, 1);
 	ub->st_mode = S_IFSOCK;
 	stat = (*so->so_proto->pr_usrreqs->pru_sense)(so, ub);
-	thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
+	socket_unlock(so, 1);
 	return stat;
 }
 
 /* ARGSUSED */
 int
-soo_close(fp, p)
-	struct file *fp;
-	struct proc *p;
+soo_close(struct fileglob *fg, __unused proc_t p)
 {
 	int error = 0;
 	struct socket *sp;
 
-	sp = (struct socket *)fp->f_data;
-	fp->f_data = NULL;
+	sp = (struct socket *)fg->fg_data;
+	fg->fg_data = NULL;
 
-	thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
 
 	if (sp)
 	     error = soclose(sp);
 
-	thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
 
 	return (error);
 }
+
+int
+soo_drain(struct fileproc *fp, __unused struct proc *p)
+{
+	int error = 0;
+	struct socket *so = (struct socket *)fp->f_fglob->fg_data;
+
+	if (so) {
+		socket_lock(so, 1);
+		so->so_state |= SS_DRAINING;
+
+		wakeup((caddr_t)&so->so_timeo);
+		sorwakeup(so);
+		sowwakeup(so);
+	
+		socket_unlock(so, 1);
+	}
+
+	return error;
+}
+

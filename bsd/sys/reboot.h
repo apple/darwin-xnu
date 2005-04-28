@@ -122,6 +122,9 @@
 	((partition) << B_PARTITIONSHIFT) | B_DEVMAGIC)
 
 #endif /* __APPLE_API_OBSOLETE */
+
+#ifdef BSD_KERNEL_PRIVATE
 #include <machine/reboot.h>
+#endif /* BSD_KERNEL_PRIVATE */
 
 #endif	/* _SYS_REBOOT_H_ */

@@ -115,7 +115,6 @@ options		NORMA_VM	# NORMA virtual memory support	# <norma_vm>
 options		NORMA_TASK	# NORMA task support		# <norma_task>
 options		NORMA_ETHER	# NORMA across ethernet		# <norma_ether>
 options		SIMPLE_CLOCK	# don't assume fixed tick	# <simple_clock>
-options		STAT_TIME	# Use statistical timing	# <!timing>
 options		XPR_DEBUG	# kernel tracing		# <xpr_debug>
 options		KDEBUG		# kernel tracing		# <kdebug>
 options		DDM_DEBUG	# driverkit-style tracing	# <ddm_debug>
@@ -133,12 +132,16 @@ options		ROUTING		# routing			# <routing>
 options		TPIP		#				# <tpip>
 options		TUN		#				# <tun>
 options		VLAN		#				# <vlan>
+options		BOND		#				# <bond>
+options		NETMIBS		#				# <netmibs>
 options         IPDIVERT        # Divert sockets (for NAT)      # <ipdivert>
 options         IPFIREWALL      # IP Firewalling (used by NAT)  # <ipfirewall>
 #options        IPFIREWALL_VERBOSE      #                       # <ipfirewall>
 options         IPFIREWALL_FORWARD      #Transparent proxy      # <ipfirewall>
 options         IPFIREWALL_DEFAULT_TO_ACCEPT    # allow everything by default   # <ipfirewall>
-options         IPFIREWALL_KEXT # Kernel extension              # <ipfirewall>
+#options         IPFIREWALL_KEXT # Kernel extension              # <ipfirewall>
+options		DUMMYNET	# dummynet support		# <dummynet>
+options		IPFW2		# IP firewall (new version)	# <ipfw2>
 options		MULTICAST	# Internet Protocol Class-D	$
 options		TCPDEBUG	# TCP debug			# <tcpdebug>
 options		RANDOM_IP_ID	# random (not sequential) ip ids	# <randomipid>
@@ -150,7 +153,8 @@ options		AUDIT		# Security event auditing	# <audit>
 #
 #	4.4 general kernel 
 #
-options 	COMPAT_43	# 4.3 BSD compatibility		# <compat_43>
+options 	COMPAT_43_TTY	# 4.3 BSD tty compat	# <compat_43_tty>
+options		COMPAT_43_SOCKET	# 4.3 BSD socket compat	# <compat_43_socket>
 options 	DIAGNOSTIC	# diagnostics				# <diagnostic>
 options		KTRACE		# ktrace support			# <ktrace>
 options		GPROF		# build profiling			# <profile>
@@ -202,8 +206,8 @@ options         "INET6"         		# kernel IPv6 Support           # <inet6>
 options         IPSEC                  		# IP security            	# <ipsec>
 options         IPSEC_ESP              		# IP security            	# <ipsec>
 options         "IPV6FIREWALL"         		# IPv6 Firewall Feature   	# <ipv6firewall>
-options         "IPV6FIREWALL_DEFAULT_TO_ACCEPT"  #IPv6 Firewall Feature   	# <ipv6firewall>
-options         "IPV6FIREWALL_VERBOSE" 		#IPv6 Firewall Feature   	# <ipv6firewall>
+options         "IPV6FIREWALL_DEFAULT_TO_ACCEPT"	#IPv6 Firewall Feature   	# <ipv6firewall>
+#options         "IPV6FIREWALL_VERBOSE" 		#IPv6 Firewall Feature   	# <ipv6firewall>
 
 pseudo-device   gif     1		# <gif>
 pseudo-device   dummy   2		# <dummy>
@@ -257,6 +261,10 @@ pseudo-device	mdevdevice	1	init	mdevinit
 # packet filter device
 #
 pseudo-device	bpfilter	4	init	bpf_init
+
+#
+# fsevents device
+pseudo-device	fsevents	1	init	fsevents_init
 
 #
 #  shim to "linux" mach disk drivers  (mach drivers must also be turned on)

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -59,11 +59,16 @@
 
 #include <mach_rt.h>
 
+#include <mach/mach_types.h>
 #include <mach/boolean.h>
 #include <mach/kern_return.h>
 #include <mach/port.h>
 #include <mach/message.h>
+
+#include <kern/kern_types.h>
 #include <kern/misc_protos.h>
+
+#include <ipc/ipc_types.h>
 #include <ipc/port.h>
 #include <ipc/ipc_space.h>
 #include <ipc/ipc_entry.h>
@@ -231,9 +236,6 @@ ipc_object_alloc_dead(
 	ipc_entry_t entry;
 	kern_return_t kr;
 
-	int i;
-
-
 	kr = ipc_entry_alloc(space, namep, &entry);
 	if (kr != KERN_SUCCESS)
 		return kr;
@@ -268,9 +270,6 @@ ipc_object_alloc_dead_name(
 {
 	ipc_entry_t entry;
 	kern_return_t kr;
-
-	int i;
-
 
 	kr = ipc_entry_alloc_name(space, name, &entry);
 	if (kr != KERN_SUCCESS)
@@ -485,8 +484,6 @@ ipc_object_copyin(
 	ipc_port_t soright;
 	kern_return_t kr;
 
-	int i;
-
 	/*
 	 *	Could first try a read lock when doing
 	 *	MACH_MSG_TYPE_COPY_SEND, MACH_MSG_TYPE_MAKE_SEND,
@@ -595,8 +592,7 @@ ipc_object_copyin_from_kernel(
 
 	    case MACH_MSG_TYPE_MOVE_SEND: {
 		/* move naked send right into the message */
-		ipc_port_t port = (ipc_port_t) object;
-		assert(port->ip_srights);
+		assert(((ipc_port_t)object)->ip_srights);
 		break;
 	    }
 
@@ -615,8 +611,7 @@ ipc_object_copyin_from_kernel(
 
 	    case MACH_MSG_TYPE_MOVE_SEND_ONCE: {
 		/* move naked send-once right into the message */
-		ipc_port_t port = (ipc_port_t) object;
-	    	assert(port->ip_sorights);
+	    	assert(((ipc_port_t)object)->ip_sorights);
 		break;
 	    }
 
@@ -781,8 +776,6 @@ ipc_object_copyout_name(
 	ipc_entry_t entry;
 	kern_return_t kr;
 
-	int i;
-
 	assert(IO_VALID(object));
 	assert(io_otype(object) == IOT_PORT);
 
@@ -925,6 +918,7 @@ ipc_object_copyout_dest(
 
 	    default:
 		panic("ipc_object_copyout_dest: strange rights");
+		name = MACH_PORT_DEAD;
 	}
 
 	*namep = name;
@@ -953,8 +947,6 @@ ipc_object_rename(
 	ipc_entry_t oentry, nentry;
 	kern_return_t kr;
 	
-	int i;
-
 	kr = ipc_entry_alloc_name(space, nname, &nentry);
 	if (kr != KERN_SUCCESS)
 		return kr;
@@ -998,7 +990,7 @@ io_free(
 		ipc_port_track_dealloc(port);
 #endif	/* MACH_ASSERT */
 	}
-	zfree(ipc_object_zones[otype], (vm_offset_t) object);
+	zfree(ipc_object_zones[otype], object);
 }
 #endif	/* MACH_ASSERT */
 
@@ -1006,6 +998,7 @@ io_free(
 #if	MACH_KDB
 
 #include <ddb/db_output.h>
+#include <kern/ipc_kobject.h>
 
 #define	printf	kdbprintf 
 
@@ -1015,7 +1008,7 @@ io_free(
  *		Pretty-print an object for kdb.
  */
 
-char *ikot_print_array[IKOT_MAX_TYPE] = {
+const char *ikot_print_array[IKOT_MAX_TYPE] = {
 	"(NONE)             ",
 	"(THREAD)           ",
 	"(TASK)             ",

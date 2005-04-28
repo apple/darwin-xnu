@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -27,9 +27,9 @@
 #ifndef _PPC_FPU_PROTOS_H_
 #define _PPC_FPU_PROTOS_H_
 
-#include <ppc/thread_act.h>
+#include <ppc/thread.h>
 
-extern void fpu_save(thread_act_t act);
+extern void fpu_save(struct facility_context *);
 extern void fpu_disable(void);
 
 #endif /* _PPC_FPU_PROTOS_H_ */

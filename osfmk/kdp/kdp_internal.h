@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -56,6 +56,7 @@ typedef boolean_t
     unsigned short *
 );
 
+extern
 boolean_t
 kdp_packet(
     unsigned char *,
@@ -63,9 +64,11 @@ kdp_packet(
     unsigned short *
 );
 
+extern
 boolean_t
-kdp_remove_all_breakpoints ();
+kdp_remove_all_breakpoints (void);
 
+extern
 void
 kdp_exception(
     unsigned char *,
@@ -76,42 +79,44 @@ kdp_exception(
     unsigned int
 );
 
+extern
 boolean_t
 kdp_exception_ack(
     unsigned char *,
     int
 );
 
+extern
 void
 kdp_panic(
     const char		*msg
 );
 
-void
-kdp_reset(
-    void
-);
-
+extern
 void
 kdp_reboot(
     void
 );
 
+extern
 void
 kdp_us_spin(
     int usec
 );
 
+extern
 int
 kdp_intr_disbl(
     void
 );
 
+extern
 void
 kdp_intr_enbl(
     int s
 );
 
+extern
 kdp_error_t
 kdp_machine_read_regs(
     unsigned int cpu,
@@ -120,6 +125,7 @@ kdp_machine_read_regs(
     int *size
 );
 
+extern
 kdp_error_t
 kdp_machine_write_regs(
     unsigned int cpu,
@@ -128,13 +134,19 @@ kdp_machine_write_regs(
     int *size
 );
 
+extern
 void
 kdp_machine_hostinfo(
     kdp_hostinfo_t *hostinfo
 );
 
+extern
 void
 kdp_sync_cache(
     void
 );
 
+unsigned int
+kdp_ml_get_breakinsn(
+    void
+);

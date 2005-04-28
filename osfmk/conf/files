@@ -1,3 +1,4 @@
+
 #
 # @OSF_COPYRIGHT@
 #
@@ -26,21 +27,12 @@
 # the rights to redistribute these changes.
 #
 
-#
-# N.B. "kern/lock.c" is listed as "optional cpus" so that config will
-# create a "cpus.h" file.
-#
-
 OPTIONS/dli			optional dli
-OPTIONS/etap			optional etap
-OPTIONS/etap_lock_accumulate	optional etap_lock_accumulate
-OPTIONS/etap_lock_monitor	optional etap_lock_monitor
-OPTIONS/etap_event_monitor	optional etap_event_monitor
-OPTIONS/fast_idle		optional fast_idle
 OPTIONS/kdebug			optional kdebug
 OPTIONS/mach_assert		optional mach_assert
 OPTIONS/mach_debug		optional mach_debug
 OPTIONS/mach_machine_routines.h	optional mach_machine_routines
+OPTIONS/machine_timer_routines	optional machine_timer_routines
 #
 OPTIONS/norma_vm		optional norma_vm
 OPTIONS/norma_task		optional norma_task
@@ -56,7 +48,6 @@ OPTIONS/mach_kgdb		optional mach_kgdb
 OPTIONS/mach_kdp		optional mach_kdp
 OPTIONS/mach_kprof		optional mach_kprof
 OPTIONS/mach_ldebug		optional mach_ldebug
-OPTIONS/mach_lock_mon		optional mach_lock_mon
 OPTIONS/mach_mp_debug		optional mach_mp_debug
 OPTIONS/mach_pagemap		optional mach_pagemap
 OPTIONS/mach_prof		optional mach_prof
@@ -70,7 +61,6 @@ OPTIONS/mach_tr			optional mach_tr
 OPTIONS/mach_vm_debug		optional mach_vm_debug
 OPTIONS/mach_page_hash_stats    optional mach_page_hash_stats
 OPTIONS/mig_debug		optional mig_debug
-OPTIONS/simple_clock		optional simple_clock
 OPTIONS/stat_time		optional stat_time
 OPTIONS/time_stamp		optional time_stamp
 OPTIONS/xpr_debug		optional xpr_debug
@@ -142,8 +132,6 @@ osfmk/kern/clock.c			standard
 osfmk/kern/counters.c			standard
 osfmk/kern/debug.c			standard
 osfmk/kern/exception.c		standard
-osfmk/kern/etap.c			standard
-osfmk/kern/etap_pool.c		optional etap
 osfmk/kern/host.c			standard
 osfmk/kern/host_notify.c		standard
 osfmk/kern/ipc_clock.c		standard
@@ -154,10 +142,8 @@ osfmk/kern/ipc_sync.c			standard
 osfmk/kern/ipc_tt.c			standard
 osfmk/kern/kalloc.c			standard
 osfmk/kern/ledger.c			standard
-osfmk/kern/lock.c			optional cpus
-osfmk/kern/lock_mon.c			optional mach_lock_mon
+osfmk/kern/locks.c			standard
 osfmk/kern/mach_clock.c		standard
-osfmk/kern/mach_factor.c		standard
 osfmk/kern/machine.c			standard
 osfmk/kern/mk_sp.c			standard
 osfmk/kern/mk_timer.c		standard
@@ -165,9 +151,11 @@ osfmk/kern/profile.c			standard
 osfmk/kern/printf.c			standard
 osfmk/kern/priority.c			standard
 osfmk/kern/processor.c		standard
+osfmk/kern/processor_data.c		standard
 osfmk/kern/queue.c			standard
+osfmk/kern/sched_average.c		standard
 osfmk/kern/sched_prim.c		standard
-osfmk/kern/sscanf.c			standard
+osfmk/kern/stack.c			standard
 osfmk/kern/startup.c			standard
 osfmk/kern/sync_lock.c		standard
 osfmk/kern/sync_sema.c		standard
@@ -181,7 +169,6 @@ osfmk/kern/thread.c			standard
 osfmk/kern/thread_act.c		standard
 osfmk/kern/thread_call.c	standard
 osfmk/kern/thread_policy.c	standard
-osfmk/kern/thread_swap.c	standard
 osfmk/kern/timer.c			standard
 osfmk/kern/timer_call.c		standard
 osfmk/kern/wait_queue.c		standard
@@ -200,6 +187,7 @@ osfmk/kern/bsd_kern.c		optional mach_bsd
 ./mach/mach_host_server.c		standard
 ./mach/mach_notify_user.c		standard
 ./mach/mach_port_server.c		standard
+./mach/mach_vm_server.c			standard
 ./mach/memory_object_server.c		standard
 ./mach/memory_object_control_server.c	standard
 ./mach/memory_object_default_server.c	standard

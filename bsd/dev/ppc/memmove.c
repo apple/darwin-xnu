@@ -36,11 +36,13 @@ void *memcpy(void *dst, const void *src, unsigned int ulen)
 	bcopy(src, dst, ulen);
 	return dst;
 }
-#endif /* 0 */
+
 void *memmove(void *dst, const void *src, unsigned int ulen)
 {
 	bcopy(src, dst, ulen);
 	return dst;
 }
+
+#endif /* 0 */
 
 

@@ -7,13 +7,9 @@ export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
-SETUP_SUBDIRS = \
-	doconf \
-	newvers
+SETUP_SUBDIRS = doconf
 
-COMP_SUBDIRS = \
-	doconf \
-	newvers
+COMP_SUBDIRS = doconf
 
 INST_SUBDIRS = \
 

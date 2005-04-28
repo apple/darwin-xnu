@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -650,7 +650,7 @@ db_search_task_symbol(
 	db_addr_t		*offp,	/* better be unsigned */
 	task_t			task)
 {
-	unsigned long	diff, newdiff;
+	db_addr_t diff, newdiff;
 	register int	i;
 	db_symtab_t	*sp;
 	db_sym_t	ret = DB_SYM_NULL, sym;
@@ -660,16 +660,16 @@ db_search_task_symbol(
 	    task = db_current_task();
 	map_for_val = (task == TASK_NULL)? VM_MAP_NULL: task->map;
 again:
-	newdiff = diff = ~0UL;
+	newdiff = diff = -1;
 	db_last_symtab = 0;
 	for (sp = &db_symtabs[0], i = 0;
 	     i < db_nsymtab;
 	     sp++, i++) {
-	    if (((vm_map_t)sp->map_pointer == VM_MAP_NULL ||
-		 (vm_map_t)sp->map_pointer == map_for_val) &&
-		(sp->maxsym == 0 ||
-		 ((unsigned long) val >= sp->minsym &&
-		  (unsigned long) val <= sp->maxsym))) {
+	    if ((((vm_map_t)sp->map_pointer == VM_MAP_NULL) ||
+			((vm_map_t)sp->map_pointer == map_for_val)) &&
+			((sp->maxsym == 0) ||
+			((val >= (db_addr_t)sp->minsym) &&
+			(val <= (db_addr_t)sp->maxsym)))) {
 		sym = X_db_search_symbol(sp, val, strategy,
 						(db_expr_t *)&newdiff);
 		if (newdiff < diff) {
@@ -704,7 +704,7 @@ db_search_task_symbol_and_line(
 	task_t			task,
 	int			*argsp)
 {
-	unsigned long	diff, newdiff;
+	db_addr_t diff, newdiff;
 	register int	i;
 	db_symtab_t	*sp;
 	db_sym_t	ret = DB_SYM_NULL, sym;
@@ -728,24 +728,25 @@ db_search_task_symbol_and_line(
 	for (sp = &db_symtabs[0], i = 0;
 	     i < db_nsymtab;
 	     sp++, i++) {
-	    if (((vm_map_t)sp->map_pointer == VM_MAP_NULL ||
-		 (vm_map_t)sp->map_pointer == map_for_val) &&
-		(sp->maxsym == 0 ||
-		 ((unsigned long) val >= sp->minsym &&
-		  (unsigned long) val <= sp->maxsym))) {
-		sym = X_db_search_by_addr(sp, val, &filename, &func,
-					  &linenum, (db_expr_t *)&newdiff,
-					  &args);
-		if (sym && newdiff < diff) {
-		    db_last_symtab = sp;
-		    diff = newdiff;
-		    ret = sym;
-		    *filenamep = filename;
-		    *linenump = linenum;
-		    *argsp = args;
-		    if (diff <= db_search_maxoff)
-			break;
-		}
+	    if ((((vm_map_t)sp->map_pointer == VM_MAP_NULL) ||
+			((vm_map_t)sp->map_pointer == map_for_val)) &&
+			((sp->maxsym == 0) ||
+			((val >= (db_addr_t)sp->minsym) &&
+			(val <= (db_addr_t)sp->maxsym)))) {
+		
+			sym = X_db_search_by_addr(sp, val, &filename, &func,
+						  &linenum, (db_expr_t *)&newdiff,
+						  &args);
+			if (sym && newdiff < diff) {
+				db_last_symtab = sp;
+				diff = newdiff;
+				ret = sym;
+				*filenamep = filename;
+				*linenump = linenum;
+				*argsp = args;
+				if (diff <= db_search_maxoff)
+				break;
+			}
 	    }
 	}
 	if (ret == DB_SYM_NULL && map_for_val != VM_MAP_NULL) {
@@ -808,11 +809,11 @@ db_symbol_values(
 
 void
 db_task_printsym(
-	db_expr_t	off,
+	db_addr_t	off,
 	db_strategy_t	strategy,
 	task_t		task)
 {
-	db_addr_t	d;
+	db_expr_t	d;
 	char 		*filename;
 	char		*name;
 	db_expr_t	value;
@@ -820,19 +821,19 @@ db_task_printsym(
 	db_sym_t	cursym;
 
 	if (off >= db_maxval || off < db_minval) {
-		db_printf("%#n", off);
+		db_printf("%#lln", (unsigned long long)off);
 		return;
 	}
 	cursym = db_search_task_symbol(off, strategy, &d, task);
 
 	db_symbol_values(0, cursym, &name, &value);
 	if (name == 0 || d >= db_maxoff || value == 0) {
-		db_printf("%#n", off);
+		db_printf("%#lln",(unsigned long long) off);
 		return;
 	}
 	db_printf("%s", name);
 	if (d)
-		db_printf("+0x%x", d);
+		db_printf("+%llx", (unsigned long long)d);
 	if (strategy == DB_STGY_PROC) {
 		if (db_line_at_pc(cursym, &filename, &linenum, off)) {
 			db_printf(" [%s", filename);
@@ -908,7 +909,7 @@ db_task_getlinenum(
 	db_strategy_t	strategy = DB_STGY_PROC;
 
 	if (off >= db_maxval || off < db_minval) {
-		db_printf("%#n", off);
+		db_printf("%#lln", (unsigned long long)off);
 		return(-1);
 	}
 	cursym = db_search_task_symbol(off, strategy, &d, task);
@@ -1299,7 +1300,6 @@ db_clone_symtabXXX(
 	char *		memp;
 	vm_size_t	size;
 	long		offset;
-	extern vm_offset_t kalloc(vm_size_t);
 	extern void db_clone_offsetXXX(char *, long);
 
 	if (db_nsymtab >= MAXNOSYMTABS) {
@@ -1316,7 +1316,7 @@ db_clone_symtabXXX(
 	}
 					/* alloc new symbols		*/
 	size = (vm_size_t)(st_src->end - st_src->private);
-	memp = (char *)kalloc( round_page_32(size) );
+	memp = (char *)kalloc( round_page(size) );
 	if (!memp) {
 	    db_printf("db_clone_symtab: no memory for symtab\n");
 	    return;
@@ -1402,7 +1402,7 @@ static db_sym_t no_search(
 	db_strategy_t strategy,
 	db_expr_t *diffp)
 {
-	db_printf("Bogus search for offset %#Xn", off);
+	db_printf("Bogus search for offset %#llXn", (unsigned long long)off);
 	return DB_SYM_NULL;
 }
 
@@ -1413,7 +1413,7 @@ static boolean_t no_line_at_pc(
 	int *line,
 	db_expr_t pc)
 {
-	db_printf("Bogus search for pc %#X\n", pc);
+	db_printf("Bogus search for pc %#llX\n", (unsigned long long)pc);
 	return FALSE;
 }
 
@@ -1436,7 +1436,7 @@ static db_sym_t no_search_by_addr(
 	db_expr_t *diffp,
 	int *args)
 {
-	db_printf("Bogus search for address %#X\n", off);
+	db_printf("Bogus search for address %#llX\n", (unsigned long long)off);
 	return DB_SYM_NULL;
 }
 	

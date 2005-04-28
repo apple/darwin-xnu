@@ -20,25 +20,39 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 /*
- * Copyright (c) 1998 Luigi Rizzo
+ * Copyright (c) 1998-2002 Luigi Rizzo, Universita` di Pisa
+ * Portions Copyright (c) 2000 Akamba Corp.
+ * All rights reserved
  *
- * Redistribution and use in source forms, with and without modification,
- * are permitted provided that this entire comment appears intact.
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
  *
- * Redistribution in binary form may occur without any restrictions.
- * Obviously, it would be nice if you gave credit where credit is due
- * but requiring it would be too onerous.
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
  *
- * This software is provided ``AS IS'' without any warranties of any kind.
- *
- * $FreeBSD: src/sys/netinet/ip_dummynet.h,v 1.10.2.3 2001/02/01 20:25:09 luigi Exp $
+ * $FreeBSD: src/sys/netinet/ip_dummynet.h,v 1.32 2004/08/17 22:05:54 andre Exp $
  */
 
 #ifndef _IP_DUMMYNET_H
 #define _IP_DUMMYNET_H
 #include <sys/appleapiopts.h>
-#ifdef __APPLE_API_PRIVATE
 
+#ifdef PRIVATE
 /*
  * Definition of dummynet data structures. In the structures, I decided
  * not to use the macros in <sys/queue.h> in the hope of making the code
@@ -86,6 +100,12 @@ typedef u_int64_t dn_key ;      /* sorting key */
 #define OFFSET_OF(type, field) ((int)&( ((type *)0)->field) )
 
 /*
+ * The maximum hash table size for queues.  This value must be a power
+ * of 2.
+ */
+#define DN_MAX_HASH_SIZE 65536
+
+/*
  * A heap entry is made of a key and a pointer to the actual
  * object stored in the heap.
  * The heap is an array of dn_heap_entry entries, dynamically allocated.
@@ -113,39 +133,28 @@ struct dn_heap {
 } ;
 
 /*
- * MT_DUMMYNET is a new (fake) mbuf type that is prepended to the
- * packet when it comes out of a pipe. The definition
- * ought to go in /sys/sys/mbuf.h but here it is less intrusive.
+ * Packets processed by dummynet have an mbuf tag associated with
+ * them that carries their dummynet state.  This is used within
+ * the dummynet code as well as outside when checking for special
+ * processing requirements.
  */
-
-#define MT_DUMMYNET MT_CONTROL
-
-/*
- * struct dn_pkt identifies a packet in the dummynet queue. The
- * first part is really an m_hdr for implementation purposes, and some
- * fields are saved there. When passing the packet back to the ip_input/
- * ip_output()/bdg_forward, the struct is prepended to the mbuf chain with type
- * MT_DUMMYNET, and contains the pointer to the matching rule.
- *
- * Note: there is no real need to make this structure contain an m_hdr,
- * in the future this should be changed to a normal data structure.
- */
-struct dn_pkt {
-	struct m_hdr hdr ;
-#define dn_next	hdr.mh_nextpkt	/* next element in queue */
-#define DN_NEXT(x)	(struct dn_pkt *)(x)->dn_next
-#define dn_m	hdr.mh_next	/* packet to be forwarded */
-#define dn_dir	hdr.mh_flags	/* action when pkt extracted from a queue */
+#ifdef KERNEL
+struct dn_pkt_tag {
+    struct ip_fw *rule;		/* matching rule */
+    int dn_dir;			/* action when packet comes out. */
 #define DN_TO_IP_OUT	1
 #define DN_TO_IP_IN	2
 #define DN_TO_BDG_FWD	3
 
-	dn_key  output_time;    /* when the pkt is due for delivery */
-        struct ifnet *ifp;	/* interface, for ip_output		*/
-	struct sockaddr_in *dn_dst ;
-        struct route ro;	/* route, for ip_output. MUST COPY	*/
-	int flags ;		/* flags, for ip_output (IPv6 ?) */
+    dn_key output_time;		/* when the pkt is due for delivery	*/
+    struct ifnet *ifp;		/* interface, for ip_output		*/
+    struct sockaddr_in *dn_dst ;
+    struct route ro;		/* route, for ip_output. MUST COPY	*/
+    int flags ;			/* flags, for ip_output (IPv6 ?)	*/
 };
+#else
+struct dn_pkt;
+#endif /* KERNEL */
 
 /*
  * Overall structure of dummynet (with WF2Q+):
@@ -211,19 +220,24 @@ flow using a number of heaps defined into the pipe itself.
  * per flow queue. This contains the flow identifier, the queue
  * of packets, counters, and parameters used to support both RED and
  * WF2Q+.
+ *
+ * A dn_flow_queue is created and initialized whenever a packet for
+ * a new flow arrives.
  */
 struct dn_flow_queue {
     struct dn_flow_queue *next ;
     struct ipfw_flow_id id ;
-    struct dn_pkt *head, *tail ;	/* queue of packets */
+
+    struct mbuf *head, *tail ;	/* queue of packets */
     u_int len ;
     u_int len_bytes ;
-    long numbytes ;		/* credit for transmission (dynamic queues) */
+    u_long numbytes ;		/* credit for transmission (dynamic queues) */
 
     u_int64_t tot_pkts ;	/* statistics counters	*/
     u_int64_t tot_bytes ;
     u_int32_t drops ;
-    int hash_slot ;	/* debugging/diagnostic */
+
+    int hash_slot ;		/* debugging/diagnostic */
 
     /* RED parameters */
     int avg ;                   /* average queue length est. (scaled) */
@@ -232,12 +246,13 @@ struct dn_flow_queue {
     u_int32_t q_time ;          /* start of queue idle time */
 
     /* WF2Q+ support */
-    struct dn_flow_set *fs ; /* parent flow set */
-    int heap_pos ;	/* position (index) of struct in heap */
-    dn_key sched_time ; /* current time when queue enters ready_heap */
+    struct dn_flow_set *fs ;	/* parent flow set */
+    int heap_pos ;		/* position (index) of struct in heap */
+    dn_key sched_time ;		/* current time when queue enters ready_heap */
 
-    dn_key S,F ; /* start-time, finishing time */
-    /* setting F < S means the timestamp is invalid. We only need
+    dn_key S,F ;		/* start time, finish time */
+    /*
+     * Setting F < S means the timestamp is invalid. We only need
      * to test this when the queue is empty.
      */
 } ;
@@ -250,6 +265,9 @@ struct dn_flow_queue {
  * hashing the flow-id, then scan the list looking for a match.
  * The size of the hash table (buckets) is configurable on a per-queue
  * basis.
+ *
+ * A dn_flow_set is created whenever a new queue or pipe is created (in the
+ * latter case, the structure is located inside the struct dn_pipe).
  */
 struct dn_flow_set {
     struct dn_flow_set *next; /* next flow set in all_flow_sets list */
@@ -257,26 +275,28 @@ struct dn_flow_set {
     u_short fs_nr ;             /* flow_set number       */
     u_short flags_fs;
 #define DN_HAVE_FLOW_MASK	0x0001
-#define DN_IS_PIPE		0x4000
-#define DN_IS_QUEUE		0x8000
 #define DN_IS_RED		0x0002
 #define DN_IS_GENTLE_RED	0x0004
-#define DN_QSIZE_IS_BYTES	0x0008	/* queue measured in bytes */
+#define DN_QSIZE_IS_BYTES	0x0008	/* queue size is measured in bytes */
+#define DN_NOERROR		0x0010	/* do not report ENOBUFS on drops  */
+#define DN_IS_PIPE		0x4000
+#define DN_IS_QUEUE		0x8000
 
-    struct dn_pipe *pipe ;		/* pointer to parent pipe */
+    struct dn_pipe *pipe ;	/* pointer to parent pipe */
     u_short parent_nr ;		/* parent pipe#, 0 if local to a pipe */
 
-    int weight ; /* WFQ queue weight */
-    int qsize ;		/* queue size in slots or bytes */
-    int plr ;           /* pkt loss rate (2^31-1 means 100%) */
+    int weight ;		/* WFQ queue weight */
+    int qsize ;			/* queue size in slots or bytes */
+    int plr ;			/* pkt loss rate (2^31-1 means 100%) */
 
     struct ipfw_flow_id flow_mask ;
+
     /* hash table of queues onto this flow_set */
     int rq_size ;		/* number of slots */
     int rq_elements ;		/* active elements */
     struct dn_flow_queue **rq;	/* array of rq_size entries */
+
     u_int32_t last_expired ;	/* do not expire too frequently */
-	/* XXX some RED parameters as well ? */
     int backlogged ;		/* #active queues for this flowset */
 
         /* RED parameters */
@@ -284,64 +304,61 @@ struct dn_flow_set {
 #define SCALE(x)                ( (x) << SCALE_RED )
 #define SCALE_VAL(x)            ( (x) >> SCALE_RED )
 #define SCALE_MUL(x,y)          ( ( (x) * (y) ) >> SCALE_RED )
-    int w_q ;               /* queue weight (scaled) */
-    int max_th ;            /* maximum threshold for queue (scaled) */
-    int min_th ;            /* minimum threshold for queue (scaled) */
-    int max_p ;             /* maximum value for p_b (scaled) */
-    u_int c_1 ;             /* max_p/(max_th-min_th) (scaled) */
-    u_int c_2 ;             /* max_p*min_th/(max_th-min_th) (scaled) */
-    u_int c_3 ;             /* for GRED, (1-max_p)/max_th (scaled) */
-    u_int c_4 ;             /* for GRED, 1 - 2*max_p (scaled) */
-    u_int * w_q_lookup ;    /* lookup table for computing (1-w_q)^t */
-    u_int lookup_depth ;    /* depth of lookup table */
-    int lookup_step ;       /* granularity inside the lookup table */
-    int lookup_weight ;     /* equal to (1-w_q)^t / (1-w_q)^(t+1) */
-    int avg_pkt_size ;      /* medium packet size */
-    int max_pkt_size ;      /* max packet size */
+    int w_q ;			/* queue weight (scaled) */
+    int max_th ;		/* maximum threshold for queue (scaled) */
+    int min_th ;		/* minimum threshold for queue (scaled) */
+    int max_p ;			/* maximum value for p_b (scaled) */
+    u_int c_1 ;			/* max_p/(max_th-min_th) (scaled) */
+    u_int c_2 ;			/* max_p*min_th/(max_th-min_th) (scaled) */
+    u_int c_3 ;			/* for GRED, (1-max_p)/max_th (scaled) */
+    u_int c_4 ;			/* for GRED, 1 - 2*max_p (scaled) */
+    u_int * w_q_lookup ;	/* lookup table for computing (1-w_q)^t */
+    u_int lookup_depth ;	/* depth of lookup table */
+    int lookup_step ;		/* granularity inside the lookup table */
+    int lookup_weight ;		/* equal to (1-w_q)^t / (1-w_q)^(t+1) */
+    int avg_pkt_size ;		/* medium packet size */
+    int max_pkt_size ;		/* max packet size */
 } ;
 
 /*
  * Pipe descriptor. Contains global parameters, delay-line queue,
  * and the flow_set used for fixed-rate queues.
- * 
- * For WF2Q support it also has 4 heaps holding dn_flow_queue:
+ *
+ * For WF2Q+ support it also has 3 heaps holding dn_flow_queue:
  *   not_eligible_heap, for queues whose start time is higher
  *	than the virtual time. Sorted by start time.
  *   scheduler_heap, for queues eligible for scheduling. Sorted by
  *	finish time.
- *   backlogged_heap, all flows in the two heaps above, sorted by
- *	start time. This is used to compute the virtual time.
  *   idle_heap, all flows that are idle and can be removed. We
  *	do that on each tick so we do not slow down too much
  *	operations during forwarding.
  *
  */
-struct dn_pipe {			/* a pipe */
-	struct dn_pipe *next ;
+struct dn_pipe {		/* a pipe */
+    struct dn_pipe *next ;
 
     int	pipe_nr ;		/* number	*/
-	int	bandwidth;		/* really, bytes/tick.	*/
-	int	delay ;			/* really, ticks	*/
+    int bandwidth;		/* really, bytes/tick.	*/
+    int	delay ;			/* really, ticks	*/
 
-    struct	dn_pkt *head, *tail ;	/* packets in delay line */
+    struct	mbuf *head, *tail ;	/* packets in delay line */
 
     /* WF2Q+ */
     struct dn_heap scheduler_heap ; /* top extract - key Finish time*/
     struct dn_heap not_eligible_heap; /* top extract- key Start time */
     struct dn_heap idle_heap ; /* random extract - key Start=Finish time */
 
-    dn_key V ; /* virtual time */
-    int sum;	/* sum of weights of all active sessions */
-    int numbytes;	/* bit i can transmit (more or less). */
+    dn_key V ;			/* virtual time */
+    int sum;			/* sum of weights of all active sessions */
+    int numbytes;		/* bits I can transmit (more or less). */
 
-    dn_key sched_time ; /* first time pipe is scheduled in ready_heap */
+    dn_key sched_time ;		/* time pipe was scheduled in ready_heap */
 
-    /* the tx clock can come from an interface. In this case, the
-     * name is below, and the pointer is filled when the rule is
-     * configured. We identify this by setting the if_name to a
-     * non-empty string.
+    /*
+     * When the tx clock come from an interface (if_name[0] != '\0'), its name
+     * is stored below, whereas the ifp is filled when the rule is configured.
      */
-    char if_name[16];
+    char if_name[IFNAMSIZ];
     struct ifnet *ifp ;
     int ready ; /* set if ifp != NULL and we got a signal from it */
 
@@ -350,17 +367,33 @@ struct dn_pipe {			/* a pipe */
 
 #ifdef KERNEL
 
-MALLOC_DECLARE(M_IPFW);
+void ip_dn_init(void); /* called from raw_ip.c:load_ipfw() */
 
-typedef int ip_dn_ctl_t __P((struct sockopt *)) ;
-extern ip_dn_ctl_t *ip_dn_ctl_ptr;
+typedef	int ip_dn_ctl_t(struct sockopt *); /* raw_ip.c */
+typedef	void ip_dn_ruledel_t(void *); /* ip_fw.c */
+typedef	int ip_dn_io_t(struct mbuf *m, int pipe_nr, int dir,
+	struct ip_fw_args *fwa);
+extern	ip_dn_ctl_t *ip_dn_ctl_ptr;
+extern	ip_dn_ruledel_t *ip_dn_ruledel_ptr;
+extern	ip_dn_io_t *ip_dn_io_ptr;
+#define	DUMMYNET_LOADED	(ip_dn_io_ptr != NULL)
 
-void dn_rule_delete(void *r);		/* used in ip_fw.c */
-int dummynet_io(int pipe, int dir,
-	struct mbuf *m, struct ifnet *ifp, struct route *ro,
-	struct sockaddr_in * dst,
-	struct ip_fw_chain *rule, int flags);
-#endif
+/*
+ * Return the IPFW rule associated with the dummynet tag; if any.
+ * Make sure that the dummynet tag is not reused by lower layers.
+ */
+static __inline struct ip_fw *
+ip_dn_claim_rule(struct mbuf *m)
+{
+	struct m_tag *mtag = m_tag_locate(m, KERNEL_MODULE_TAG_ID,
+									  KERNEL_TAG_TYPE_DUMMYNET, NULL);
+	if (mtag != NULL) {
+		mtag->m_tag_type = KERNEL_TAG_TYPE_NONE;
+		return (((struct dn_pkt_tag *)(mtag+1))->rule);
+	} else
+		return (NULL);
+}
+#endif /* KERNEL */
 
-#endif /* __APPLE_API_PRIVATE */
+#endif /* PRIVATE */
 #endif /* _IP_DUMMYNET_H */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -20,13 +20,7 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
-/*
-*
- * The NEXTSTEP Software License Agreement specifies the terms
- * and conditions for redistribution.
- *
- */
- 
+
 #ifndef _BSD_PPC_DISKLABEL_H_
 #define _BSD_PPC_DISKLABEL_H_
 

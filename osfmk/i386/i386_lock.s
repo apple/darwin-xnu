@@ -29,48 +29,88 @@
  * the terms and conditions for use and redistribution.
  */
 
-#include <cpus.h>
 #include <mach_rt.h>
 #include <platforms.h>
 #include <mach_ldebug.h>
 #include <i386/asm.h>
-#include <kern/etap_options.h>
 
 #include "assym.s"
+
+#define	PAUSE		rep; nop
 
 /*
  *	When performance isn't the only concern, it's
  *	nice to build stack frames...
  */
-#define	BUILD_STACK_FRAMES   ((MACH_LDEBUG || ETAP_LOCK_TRACE) && MACH_KDB)
+#define	BUILD_STACK_FRAMES   (GPROF || \
+				((MACH_LDEBUG || ETAP_LOCK_TRACE) && MACH_KDB))
 
 #if	BUILD_STACK_FRAMES
 
-#define	L_PC		4(%ebp)
-#define	L_ARG0		8(%ebp)
-#define	L_ARG1		12(%ebp)
+/* STack-frame-relative: */
+#define	L_PC		B_PC
+#define	L_ARG0		B_ARG0
+#define	L_ARG1		B_ARG1
 
-#define SWT_HI          -4(%ebp)
-#define SWT_LO          -8(%ebp)
-#define MISSED          -12(%ebp)
+#define LEAF_ENTRY(name)	\
+	Entry(name);		\
+	FRAME;			\
+	MCOUNT
 
-#else   /* BUILD_STACK_FRAMES */
+#define LEAF_ENTRY2(n1,n2)	\
+	Entry(n1);		\
+	Entry(n2);		\
+	FRAME;			\
+	MCOUNT
 
-#undef	FRAME
-#undef	EMARF
-#define	FRAME
-#define	EMARF
-#define	L_PC		(%esp)
-#define	L_ARG0		4(%esp)
-#define	L_ARG1		8(%esp)
+#define LEAF_RET		\
+	EMARF;			\
+	ret
 
-#endif   /* BUILD_STACK_FRAMES */
+#else	/* BUILD_STACK_FRAMES */
+
+/* Stack-pointer-relative: */
+#define	L_PC		S_PC
+#define	L_ARG0		S_ARG0
+#define	L_ARG1		S_ARG1
+
+#define LEAF_ENTRY(name)	\
+	Entry(name)
+
+#define LEAF_ENTRY2(n1,n2)	\
+	Entry(n1);		\
+	Entry(n2)
+
+#define LEAF_RET		\
+	ret
+
+#endif	/* BUILD_STACK_FRAMES */
+
+
+/* Non-leaf routines always have a stack frame: */
+
+#define NONLEAF_ENTRY(name)	\
+	Entry(name);		\
+	FRAME;			\
+	MCOUNT
+
+#define NONLEAF_ENTRY2(n1,n2)	\
+	Entry(n1);		\
+	Entry(n2);		\
+	FRAME;			\
+	MCOUNT
+
+#define NONLEAF_RET		\
+	EMARF;			\
+	ret
 
 
 #define	M_ILK		(%edx)
 #define	M_LOCKED	MUTEX_LOCKED(%edx)
 #define	M_WAITERS	MUTEX_WAITERS(%edx)
 #define	M_PROMOTED_PRI	MUTEX_PROMOTED_PRI(%edx)
+#define M_ITAG		MUTEX_ITAG(%edx)
+#define M_PTR		MUTEX_PTR(%edx)
 #if	MACH_LDEBUG
 #define	M_TYPE		MUTEX_TYPE(%edx)
 #define	M_PC		MUTEX_PC(%edx)
@@ -78,12 +118,7 @@
 #endif	/* MACH_LDEBUG */
 
 #include <i386/mp.h>
-#if	(NCPUS > 1)
 #define	CX(addr,reg)	addr(,reg,4)
-#else
-#define	CPU_NUMBER(reg)
-#define	CX(addr,reg)	addr
-#endif	/* (NCPUS > 1) */
 
 #if	MACH_LDEBUG
 /*
@@ -128,10 +163,9 @@
  * (since a mutex lock may context switch, holding a simplelock
  * is not a good thing).
  */
-#if	0 /*MACH_RT - 11/12/99 - lion@apple.com disable check for now*/
+#if	MACH_RT
 #define CHECK_PREEMPTION_LEVEL()				\
-	movl	$ CPD_PREEMPTION_LEVEL,%eax		;	\
-	cmpl	$0,%gs:(%eax)				;	\
+	cmpl	$0,%gs:CPU_PREEMPTION_LEVEL		;	\
 	je	1f					;	\
 	pushl	$2f					;	\
 	call	EXT(panic)				;	\
@@ -145,8 +179,7 @@
 #endif	/* MACH_RT */
 
 #define	CHECK_NO_SIMPLELOCKS()					\
-	movl	$ CPD_SIMPLE_LOCK_COUNT,%eax		;	\
-	cmpl	$0,%gs:(%eax)				;	\
+	cmpl	$0,%gs:CPU_SIMPLE_LOCK_COUNT		;	\
 	je	1f					;	\
 	pushl	$2f					;	\
 	call	EXT(panic)				;	\
@@ -160,8 +193,7 @@
  * Verifies return to the correct thread in "unlock" situations.
  */
 #define	CHECK_THREAD(thd)					\
-	movl	$ CPD_ACTIVE_THREAD,%eax			;	\
-	movl	%gs:(%eax),%ecx				;	\
+	movl	%gs:CPU_ACTIVE_THREAD,%ecx		;	\
 	testl	%ecx,%ecx				;	\
 	je	1f					;	\
 	cmpl	%ecx,thd				;	\
@@ -175,8 +207,7 @@
 1:
 
 #define	CHECK_MYLOCK(thd)					\
-	movl	$ CPD_ACTIVE_THREAD,%eax			;	\
-	movl	%gs:(%eax),%ecx				;	\
+	movl	%gs:CPU_ACTIVE_THREAD,%ecx		;	\
 	testl	%ecx,%ecx				;	\
 	je	1f					;	\
 	cmpl	%ecx,thd				;	\
@@ -216,13 +247,10 @@
  *
  *	Initialize a hardware lock.
  */
-ENTRY(hw_lock_init)
-	FRAME
+LEAF_ENTRY(hw_lock_init)
 	movl	L_ARG0,%edx		/* fetch lock pointer */
-	xorl	%eax,%eax
-	movl	%eax,0(%edx)		/* clear the lock */
-	EMARF
-	ret
+	movl	$0,0(%edx)		/* clear the lock */
+	LEAF_RET
 
 /*
  *	void hw_lock_lock(hw_lock_t)
@@ -230,27 +258,22 @@ ENTRY(hw_lock_init)
  *	Acquire lock, spinning until it becomes available.
  *	MACH_RT:  also return with preemption disabled.
  */
-ENTRY(hw_lock_lock)
-	FRAME
+LEAF_ENTRY(hw_lock_lock)
 	movl	L_ARG0,%edx		/* fetch lock pointer */
 
-1:	DISABLE_PREEMPTION(%eax)
-	movl	$1,%ecx
-	xchgl	0(%edx),%ecx		/* try to acquire the HW lock */
-	testl	%ecx,%ecx		/* success? */
+	movl	L_PC,%ecx
+1:	DISABLE_PREEMPTION
+	movl	0(%edx), %eax
+	testl	%eax,%eax		/* lock locked? */
+	jne	3f			/* branch if so */
+	lock; cmpxchgl	%ecx,0(%edx)	/* try to acquire the HW lock */
 	jne	3f
 	movl	$1,%eax			/* In case this was a timeout call */
-	EMARF				/* if yes, then nothing left to do */
-	ret
+	LEAF_RET			/* if yes, then nothing left to do */
 
-3:	ENABLE_PREEMPTION(%eax)		/* no reason we can't be preemptable now */
-
-	movl	$1,%ecx
-2:
-	rep; nop			/* pause for hyper-threading */
-	testl	%ecx,0(%edx)		/* spin checking lock value in cache */
-	jne	2b			/* non-zero means locked, keep spinning */
-	jmp	1b			/* zero means unlocked, try to grab it */
+3:	ENABLE_PREEMPTION		/* no reason we can't be preemptable */
+	PAUSE				/* pause for hyper-threading */
+	jmp	1b			/* try again */
 
 /*
  *	unsigned int hw_lock_to(hw_lock_t, unsigned int)
@@ -258,22 +281,22 @@ ENTRY(hw_lock_lock)
  *	Acquire lock, spinning until it becomes available or timeout.
  *	MACH_RT:  also return with preemption disabled.
  */
-ENTRY(hw_lock_to)
-	FRAME
-	movl	L_ARG0,%edx		/* fetch lock pointer */
+LEAF_ENTRY(hw_lock_to)
 1:
+	movl	L_ARG0,%edx		/* fetch lock pointer */
+	movl	L_PC,%ecx
 	/*
 	 * Attempt to grab the lock immediately
 	 * - fastpath without timeout nonsense.
 	 */
-	DISABLE_PREEMPTION(%eax)
+	DISABLE_PREEMPTION
+	movl	0(%edx), %eax
+	testl	%eax,%eax		/* lock locked? */
+	jne	2f			/* branch if so */
+	lock; cmpxchgl	%ecx,0(%edx)	/* try to acquire the HW lock */
+	jne	2f			/* branch on failure */
 	movl	$1,%eax
-	xchgl	0(%edx),%eax		/* try to acquire the HW lock */
-	testl	%eax,%eax			/* success? */
-	jne	2f			/* no */
-	movl	$1,%eax			/* yes, return true */
-	EMARF
-	ret
+	LEAF_RET
 
 2:
 #define	INNER_LOOP_COUNT	1000
@@ -293,16 +316,16 @@ ENTRY(hw_lock_to)
 	mov	%edx,%ecx
 	mov	%eax,%ebx		/* %ecx:%ebx is the timeout expiry */
 3:
-	ENABLE_PREEMPTION(%eax)		/* no reason not to be preempted now */
+	ENABLE_PREEMPTION		/* no reason not to be preempted now */
 4:
 	/*
 	 * The inner-loop spin to look for the lock being freed.
 	 */
-	movl	$1,%eax
 	mov	$(INNER_LOOP_COUNT),%edx
 5:
-	rep; nop			/* pause for hyper-threading */
-	testl	%eax,0(%edi)		/* spin checking lock value in cache */
+	PAUSE				/* pause for hyper-threading */
+	movl	0(%edi),%eax		/* spin checking lock value in cache */
+	testl	%eax,%eax
 	je	6f			/* zero => unlocked, try to grab it */
 	decl	%edx			/* decrement inner loop count */
 	jnz	5b			/* time to check for timeout? */
@@ -314,28 +337,25 @@ ENTRY(hw_lock_to)
 	cmpl	%ecx,%edx		/* compare high-order 32-bits */
 	jb	4b			/* continue spinning if less, or */
 	cmpl	%ebx,%eax		/* compare low-order 32-bits */ 
-	jb	5b			/* continue is less, else bail */
+	jb	5b			/* continue if less, else bail */
 	xor	%eax,%eax		/* with 0 return value */
 	pop	%ebx
 	pop	%edi
-	EMARF
-	ret
+	LEAF_RET
 
 6:
 	/*
 	 * Here to try to grab the lock that now appears to be free
 	 * after contention.
 	 */
-	DISABLE_PREEMPTION(%eax)
-	movl	$1,%eax
-	xchgl	0(%edi),%eax		/* try to acquire the HW lock */
-	testl	%eax,%eax		/* success? */
+	movl	8+L_PC,%edx		/* calling pc (8+ for pushed regs) */
+	DISABLE_PREEMPTION
+	lock; cmpxchgl	%edx,0(%edi)	/* try to acquire the HW lock */
 	jne	3b			/* no - spin again */
 	movl	$1,%eax			/* yes */
 	pop	%ebx
 	pop	%edi
-	EMARF
-	ret
+	LEAF_RET
 
 /*
  *	void hw_lock_unlock(hw_lock_t)
@@ -343,203 +363,49 @@ ENTRY(hw_lock_to)
  *	Unconditionally release lock.
  *	MACH_RT:  release preemption level.
  */
-ENTRY(hw_lock_unlock)
-	FRAME
+LEAF_ENTRY(hw_lock_unlock)
 	movl	L_ARG0,%edx		/* fetch lock pointer */
-	xorl	%eax,%eax
-	xchgl	0(%edx),%eax		/* clear the lock... a mov instruction */
-					/* ...might be cheaper and less paranoid */
-	ENABLE_PREEMPTION(%eax)
-	EMARF
-	ret
+	movl	$0,0(%edx)		/* clear the lock */
+	ENABLE_PREEMPTION
+	LEAF_RET
 
 /*
  *	unsigned int hw_lock_try(hw_lock_t)
  *	MACH_RT:  returns with preemption disabled on success.
  */
-ENTRY(hw_lock_try)
-	FRAME
+LEAF_ENTRY(hw_lock_try)
 	movl	L_ARG0,%edx		/* fetch lock pointer */
 
-	DISABLE_PREEMPTION(%eax)
-	movl	$1,%ecx
-	xchgl	0(%edx),%ecx		/* try to acquire the HW lock */
-	testl	%ecx,%ecx		/* success? */
-	jne	1f			/* if yes, let the caller know */
+	movl	L_PC,%ecx
+	DISABLE_PREEMPTION
+	movl	0(%edx),%eax
+	testl	%eax,%eax
+	jne	1f
+	lock; cmpxchgl	%ecx,0(%edx)	/* try to acquire the HW lock */
+	jne	1f
 
 	movl	$1,%eax			/* success */
-	EMARF
-	ret
+	LEAF_RET
 
-1:	ENABLE_PREEMPTION(%eax)		/* failure:  release preemption... */
+1:	ENABLE_PREEMPTION		/* failure:  release preemption... */
 	xorl	%eax,%eax		/* ...and return failure */
-	EMARF
-	ret	
+	LEAF_RET
 
 /*
  *	unsigned int hw_lock_held(hw_lock_t)
  *	MACH_RT:  doesn't change preemption state.
  *	N.B.  Racy, of course.
  */
-ENTRY(hw_lock_held)
-	FRAME
+LEAF_ENTRY(hw_lock_held)
 	movl	L_ARG0,%edx		/* fetch lock pointer */
 
+	movl	0(%edx),%eax		/* check lock value */
+	testl	%eax,%eax
 	movl	$1,%ecx
-	testl	%ecx,0(%edx)		/* check lock value */
-	jne	1f			/* non-zero means locked */
-	xorl	%eax,%eax		/* tell caller:  lock wasn't locked */
-	EMARF
-	ret	
+	cmovne	%ecx,%eax		/* 0 => unlocked, 1 => locked */
+	LEAF_RET
 
-1:	movl	$1,%eax			/* tell caller:  lock was locked */
-	EMARF
-	ret
-	
-
-
-#if	0
-
-
-ENTRY(_usimple_lock_init)
-	FRAME
-	movl	L_ARG0,%edx		/* fetch lock pointer */
-	xorl	%eax,%eax
-	movl	%eax,USL_INTERLOCK(%edx)	/* unlock the HW lock */
-	EMARF
-	ret
-
-ENTRY(_simple_lock)
-	FRAME
-	movl	L_ARG0,%edx		/* fetch lock pointer */
-
-	CHECK_SIMPLE_LOCK_TYPE()
-
-	DISABLE_PREEMPTION(%eax)
-
-sl_get_hw:
-	movl	$1,%ecx
-	xchgl	USL_INTERLOCK(%edx),%ecx/* try to acquire the HW lock */
-	testl	%ecx,%ecx		/* did we succeed? */
-
-#if	MACH_LDEBUG
-	je	5f
-	CHECK_MYLOCK(S_THREAD)
-	jmp	sl_get_hw
-5:
-#else	/* MACH_LDEBUG */
-	jne	sl_get_hw		/* no, try again */
-#endif	/* MACH_LDEBUG */
-
-#if	MACH_LDEBUG
-	movl	L_PC,%ecx
-	movl	%ecx,S_PC
-	movl	$ CPD_ACTIVE_THREAD,%eax
-	movl	%gs:(%eax),%ecx
-	movl	%ecx,S_THREAD
-	incl	CX(EXT(simple_lock_count),%eax)
-#if 0
-	METER_SIMPLE_LOCK_LOCK(%edx)
-#endif
-#if	NCPUS == 1
-	pushf
-	pushl	%edx
-	cli
-	call	EXT(lock_stack_push)
-	popl	%edx
-	popfl
-#endif	/* NCPUS == 1 */
-#endif	/* MACH_LDEBUG */
-
-	EMARF
-	ret
-
-ENTRY(_simple_lock_try)
-	FRAME
-	movl	L_ARG0,%edx		/* fetch lock pointer */
-
-	CHECK_SIMPLE_LOCK_TYPE()
-
-	DISABLE_PREEMPTION(%eax)
-
-	movl	$1,%ecx
-	xchgl	USL_INTERLOCK(%edx),%ecx/* try to acquire the HW lock */
-	testl	%ecx,%ecx		/* did we succeed? */
-	jne	1f			/* no, return failure */
-
-#if	MACH_LDEBUG
-	movl	L_PC,%ecx
-	movl	%ecx,S_PC
-	movl	$ CPD_ACTIVE_THREAD,%eax
-	movl	%gs:(%eax),%ecx
-	movl	%ecx,S_THREAD
-	incl	CX(EXT(simple_lock_count),%eax)
-#if 0
-	METER_SIMPLE_LOCK_LOCK(%edx)
-#endif
-#if	NCPUS == 1
-	pushf
-	pushl	%edx
-	cli
-	call	EXT(lock_stack_push)
-	popl	%edx
-	popfl
-#endif	/* NCPUS == 1 */
-#endif	/* MACH_LDEBUG */
-
-	movl	$1,%eax			/* return success */
-
-	EMARF
-	ret
-
-1:
-	ENABLE_PREEMPTION(%eax)
-
-	xorl	%eax,%eax		/* and return failure */
-
-	EMARF
-	ret
-
-ENTRY(_simple_unlock)
-	FRAME
-	movl	L_ARG0,%edx		/* fetch lock pointer */
-
-	CHECK_SIMPLE_LOCK_TYPE()
-	CHECK_THREAD(S_THREAD)
-
-#if	MACH_LDEBUG
-	xorl	%eax,%eax
-	movl	%eax,S_THREAD		/* disown thread */
-	MP_DISABLE_PREEMPTION(%eax)
-	CPU_NUMBER(%eax)
-	decl	CX(EXT(simple_lock_count),%eax)
-	MP_ENABLE_PREEMPTION(%eax)
-#if 0
-	METER_SIMPLE_LOCK_UNLOCK(%edx)
-#endif
-#if	NCPUS == 1
-	pushf
-	pushl	%edx
-	cli
-	call	EXT(lock_stack_pop)
-	popl	%edx
-	popfl
-#endif	/* NCPUS == 1 */
-#endif	/* MACH_LDEBUG */
-
-	xorl	%ecx,%ecx
-	xchgl	USL_INTERLOCK(%edx),%ecx	/* unlock the HW lock */
-
-	ENABLE_PREEMPTION(%eax)
-
-	EMARF
-	ret
-
-#endif	/* 0 */
-
-
-ENTRY(mutex_init)
-	FRAME
+LEAF_ENTRY(mutex_init)
 	movl	L_ARG0,%edx		/* fetch lock pointer */
 	xorl	%eax,%eax
 	movl	%eax,M_ILK		/* clear interlock */
@@ -552,283 +418,352 @@ ENTRY(mutex_init)
 	movl	%eax,M_PC		/* init caller pc */
 	movl	%eax,M_THREAD		/* and owning thread */
 #endif
-#if	ETAP_LOCK_TRACE
-	movl	L_ARG1,%ecx		/* fetch event type */
-	pushl	%ecx			/* push event type */
-	pushl	%edx			/* push mutex address */
-	call	EXT(etap_mutex_init)	/* init ETAP data */
-	addl	$8,%esp
-#endif	/* ETAP_LOCK_TRACE */
 
-	EMARF
-	ret
+	LEAF_RET
 
-ENTRY2(mutex_lock,_mutex_lock)
-	FRAME
+NONLEAF_ENTRY2(mutex_lock,_mutex_lock)
 
-#if	ETAP_LOCK_TRACE
-	subl	$12,%esp		/* make room for locals */
-	movl	$0,SWT_HI		/* set wait time to zero (HI) */
-	movl	$0,SWT_LO		/* set wait time to zero (LO) */
-	movl	$0,MISSED		/* clear local miss marker */
-#endif	/* ETAP_LOCK_TRACE */
-
-	movl	L_ARG0,%edx		/* fetch lock pointer */
+	movl	B_ARG0,%edx		/* fetch lock pointer */
 
 	CHECK_MUTEX_TYPE()
 	CHECK_NO_SIMPLELOCKS()
 	CHECK_PREEMPTION_LEVEL()
 
+	pushf				/* save interrupt state */
+	cli				/* disable interrupts */
+
 ml_retry:
-	DISABLE_PREEMPTION(%eax)
+	movl	B_PC,%ecx
 
 ml_get_hw:
-	movl	$1,%ecx
-	xchgl	%ecx,M_ILK
-	testl	%ecx,%ecx		/* did we succeed? */
-	jne	ml_get_hw		/* no, try again */
+	movl	M_ILK,%eax		/* read interlock */
+	testl	%eax,%eax		/* unlocked? */
+	je	1f			/* yes - attempt to lock it */
+	PAUSE				/* no  - pause */
+	jmp	ml_get_hw		/* try again */
+1:
+	lock; cmpxchgl	%ecx,M_ILK	/* atomic compare and exchange */
+	jne	ml_get_hw		/* branch on failure to retry */
 
-	movl	$1,%ecx
-	xchgl	%ecx,M_LOCKED		/* try to set locked flag */
+	movl	M_LOCKED,%ecx		/* get lock owner */
 	testl	%ecx,%ecx		/* is the mutex locked? */
 	jne	ml_fail			/* yes, we lose */
-
-	pushl	%edx
-	call	EXT(mutex_lock_acquire)
-	addl	$4,%esp
-	movl	L_ARG0,%edx
+	movl	%gs:CPU_ACTIVE_THREAD,%ecx
+	movl	%ecx,M_LOCKED
 
 #if	MACH_LDEBUG
-	movl	L_PC,%ecx
-	movl	%ecx,M_PC
-	movl	$ CPD_ACTIVE_THREAD,%eax
-	movl	%gs:(%eax),%ecx
 	movl	%ecx,M_THREAD
-	testl	%ecx,%ecx
-	je	3f
-	incl	TH_MUTEX_COUNT(%ecx)
-3:
+	movl	B_PC,%ecx
+	movl	%ecx,M_PC
 #endif
 
-	xorl	%ecx,%ecx
-	xchgl	%ecx,M_ILK
+	pushl	%edx			/* save mutex address */
+	pushl	%edx
+	call	EXT(lck_mtx_lock_acquire)
+	addl	$4,%esp
+	popl	%edx			/* restore mutex address */
 
-	ENABLE_PREEMPTION(%eax)
+	xorl	%eax,%eax
+	movl	%eax,M_ILK
 
-#if	ETAP_LOCK_TRACE
-	movl	L_PC,%eax		/* fetch pc */
-	pushl	SWT_LO			/* push wait time (low) */
-	pushl	SWT_HI			/* push wait time (high) */
-	pushl	%eax			/* push pc */
-	pushl	%edx			/* push mutex address */
-	call	EXT(etap_mutex_hold)	/* collect hold timestamp */
-	addl	$16+12,%esp		/* clean up stack, adjusting for locals */
-#endif	/* ETAP_LOCK_TRACE */
+	popf				/* restore interrupt state */
 
-	EMARF
-	ret
+	NONLEAF_RET
 
 ml_fail:
-#if	ETAP_LOCK_TRACE
-	cmp	$0,MISSED		/* did we already take a wait timestamp? */
-	jne	ml_block		/* yup. carry-on */
-	pushl	%edx			/* push mutex address */
-	call	EXT(etap_mutex_miss)	/* get wait timestamp */
-	movl	%eax,SWT_HI		/* set wait time (high word) */
-	movl	%edx,SWT_LO		/* set wait time (low word) */
-	popl	%edx			/* clean up stack */
-	movl	$1,MISSED		/* mark wait timestamp as taken */
-#endif	/* ETAP_LOCK_TRACE */
-
 ml_block:
 	CHECK_MYLOCK(M_THREAD)
-	xorl	%eax,%eax
-	pushl	%eax			/* no promotion here yet */
+	pushl	M_LOCKED
 	pushl	%edx			/* push mutex address */
-	call	EXT(mutex_lock_wait)	/* wait for the lock */
+	call	EXT(lck_mtx_lock_wait)	/* wait for the lock */
 	addl	$8,%esp
-	movl	L_ARG0,%edx		/* refetch lock pointer */
+	movl	B_ARG0,%edx		/* refetch mutex address */
 	jmp	ml_retry		/* and try again */
 
-ENTRY2(mutex_try,_mutex_try)	
-	FRAME
+NONLEAF_ENTRY2(mutex_try,_mutex_try)	
 
-#if	ETAP_LOCK_TRACE
-	subl	$8,%esp			/* make room for locals */
-	movl	$0,SWT_HI		/* set wait time to zero (HI) */
-	movl	$0,SWT_LO		/* set wait time to zero (LO) */
-#endif	/* ETAP_LOCK_TRACE */
-
-	movl	L_ARG0,%edx		/* fetch lock pointer */
+	movl	B_ARG0,%edx		/* fetch lock pointer */
 
 	CHECK_MUTEX_TYPE()
 	CHECK_NO_SIMPLELOCKS()
 
-	DISABLE_PREEMPTION(%eax)
+	movl	B_PC,%ecx
+
+	pushf				/* save interrupt state */
+	cli				/* disable interrupts */
 
 mt_get_hw:
-	movl	$1,%ecx
-	xchgl	%ecx,M_ILK
-	testl	%ecx,%ecx
-	jne		mt_get_hw
+	movl	M_ILK,%eax		/* read interlock */
+	testl	%eax,%eax		/* unlocked? */
+	je	1f			/* yes - attempt to lock it */
+	PAUSE				/* no  - pause */
+	jmp	mt_get_hw		/* try again */
+1:
+	lock; cmpxchgl	%ecx,M_ILK	/* atomic compare and exchange */
+	jne	mt_get_hw		/* branch on failure to retry */
 
-	movl	$1,%ecx
-	xchgl	%ecx,M_LOCKED
-	testl	%ecx,%ecx
-	jne		mt_fail
-
-	pushl	%edx
-	call	EXT(mutex_lock_acquire)
-	addl	$4,%esp
-	movl	L_ARG0,%edx
+	movl	M_LOCKED,%ecx		/* get lock owner */
+	testl	%ecx,%ecx		/* is the mutex locked? */
+	jne	mt_fail			/* yes, we lose */
+	movl	%gs:CPU_ACTIVE_THREAD,%ecx
+	movl	%ecx,M_LOCKED
 
 #if	MACH_LDEBUG
-	movl	L_PC,%ecx
-	movl	%ecx,M_PC
-	movl	$ CPD_ACTIVE_THREAD,%ecx
-	movl	%gs:(%ecx),%ecx
 	movl	%ecx,M_THREAD
-	testl	%ecx,%ecx
-	je	1f
-	incl	TH_MUTEX_COUNT(%ecx)
-1:
+	movl	B_PC,%ecx
+	movl	%ecx,M_PC
 #endif
 
-	xorl	%ecx,%ecx
-	xchgl	%ecx,M_ILK
+	pushl	%edx			/* save mutex address */
+	pushl	%edx
+	call	EXT(lck_mtx_lock_acquire)
+	addl	$4,%esp
+	popl	%edx			/* restore mutex address */
 
-	ENABLE_PREEMPTION(%eax)
+	xorl	%eax,%eax
+	movl	%eax,M_ILK
 
-#if	ETAP_LOCK_TRACE
-	movl	L_PC,%eax		/* fetch pc */
-	pushl	SWT_LO			/* push wait time (low) */
-	pushl	SWT_HI			/* push wait time (high) */
-	pushl	%eax			/* push pc */
-	pushl	%edx			/* push mutex address */
-	call	EXT(etap_mutex_hold)	/* get start hold timestamp */
-	addl	$16,%esp		/* clean up stack, adjusting for locals */
-#endif	/* ETAP_LOCK_TRACE */
+	popf				/* restore interrupt state */
 
 	movl	$1,%eax
 
-#if	MACH_LDEBUG || ETAP_LOCK_TRACE
-#if	ETAP_LOCK_TRACE
-	addl	$8,%esp			/* pop stack claimed on entry */
-#endif
-#endif
-
-	EMARF
-	ret
+	NONLEAF_RET
 
 mt_fail:
-	xorl	%ecx,%ecx
-	xchgl	%ecx,M_ILK
+	xorl	%eax,%eax
+	movl	%eax,M_ILK
 
-	ENABLE_PREEMPTION(%eax)
-
-#if	ETAP_LOCK_TRACE
-	movl	L_PC,%eax		/* fetch pc */
-	pushl	SWT_LO			/* push wait time (low) */
-	pushl	SWT_HI			/* push wait time (high) */
-	pushl	%eax			/* push pc */
-	pushl	%edx			/* push mutex address */
-	call	EXT(etap_mutex_hold)	/* get start hold timestamp */
-	addl	$16,%esp		/* clean up stack, adjusting for locals */
-#endif	/* ETAP_LOCK_TRACE */
+	popf				/* restore interrupt state */
 
 	xorl	%eax,%eax
 
-#if	MACH_LDEBUG || ETAP_LOCK_TRACE
-#if	ETAP_LOCK_TRACE
-	addl	$8,%esp			/* pop stack claimed on entry */
-#endif
-#endif
+	NONLEAF_RET
 
-	EMARF
-	ret
-
-ENTRY(mutex_unlock)
-	FRAME
-	movl	L_ARG0,%edx		/* fetch lock pointer */
-
-#if	ETAP_LOCK_TRACE
-	pushl	%edx			/* push mutex address */
-	call	EXT(etap_mutex_unlock)	/* collect ETAP data */
-	popl	%edx			/* restore mutex address */
-#endif	/* ETAP_LOCK_TRACE */
+NONLEAF_ENTRY(mutex_unlock)
+	movl	B_ARG0,%edx		/* fetch lock pointer */
 
 	CHECK_MUTEX_TYPE()
 	CHECK_THREAD(M_THREAD)
 
-	DISABLE_PREEMPTION(%eax)
+	movl	B_PC,%ecx
+
+	pushf				/* save interrupt state */
+	cli				/* disable interrupts */
 
 mu_get_hw:
-	movl	$1,%ecx
-	xchgl	%ecx,M_ILK
-	testl	%ecx,%ecx		/* did we succeed? */
-	jne	mu_get_hw		/* no, try again */
+	movl	M_ILK,%eax		/* read interlock */
+	testl	%eax,%eax		/* unlocked? */
+	je	1f			/* yes - attempt to lock it */
+	PAUSE				/* no  - pause */
+	jmp	mu_get_hw		/* try again */
+1:
+	lock; cmpxchgl	%ecx,M_ILK	/* atomic compare and exchange */
+	jne	mu_get_hw		/* branch on failure to retry */
 
 	cmpw	$0,M_WAITERS		/* are there any waiters? */
 	jne	mu_wakeup		/* yes, more work to do */
 
 mu_doit:
+
 #if	MACH_LDEBUG
-	xorl	%eax,%eax
-	movl	%eax,M_THREAD		/* disown thread */
-	movl	$ CPD_ACTIVE_THREAD,%eax
-	movl	%gs:(%eax),%ecx
-	testl	%ecx,%ecx
-	je	0f
-	decl	TH_MUTEX_COUNT(%ecx)
-0:
+	movl	$0,M_THREAD		/* disown thread */
 #endif
 
 	xorl	%ecx,%ecx
-	xchgl	%ecx,M_LOCKED		/* unlock the mutex */
+	movl	%ecx,M_LOCKED		/* unlock the mutex */
 
-	xorl	%ecx,%ecx
-	xchgl	%ecx,M_ILK
+	movl	%ecx,M_ILK
 
-	ENABLE_PREEMPTION(%eax)
+	popf				/* restore interrupt state */
 
-	EMARF
-	ret
+	NONLEAF_RET
 
 mu_wakeup:
-	xorl	%eax,%eax
-	pushl	%eax			/* no promotion here yet */
+	pushl	M_LOCKED
 	pushl	%edx			/* push mutex address */
-	call	EXT(mutex_unlock_wakeup)/* yes, wake a thread */
+	call	EXT(lck_mtx_unlock_wakeup)/* yes, wake a thread */
 	addl	$8,%esp
-	movl	L_ARG0,%edx		/* refetch lock pointer */
+	movl	B_ARG0,%edx		/* restore lock pointer */
 	jmp	mu_doit
 
-ENTRY(interlock_unlock)
-	FRAME
-	movl	L_ARG0,%edx
+/*
+ * lck_mtx_lock()
+ * lck_mtx_try_lock()
+ * lck_mutex_unlock()
+ *
+ * These are variants of mutex_lock(), mutex_try() and mutex_unlock() without
+ * DEBUG checks (which require fields not present in lck_mtx_t's).
+ */
+NONLEAF_ENTRY(lck_mtx_lock)
 
+	movl	B_ARG0,%edx		/* fetch lock pointer */
+	cmpl	$(MUTEX_IND),M_ITAG	/* is this indirect? */
+	cmove	M_PTR,%edx		/* yes - take indirection */
+
+	CHECK_NO_SIMPLELOCKS()
+	CHECK_PREEMPTION_LEVEL()
+
+	pushf				/* save interrupt state */
+	cli				/* disable interrupts */
+
+lml_retry:
+	movl	B_PC,%ecx
+
+lml_get_hw:
+	movl	M_ILK,%eax		/* read interlock */
+	testl	%eax,%eax		/* unlocked? */
+	je	1f			/* yes - attempt to lock it */
+	PAUSE				/* no  - pause */
+	jmp	lml_get_hw		/* try again */
+1:
+	lock; cmpxchgl	%ecx,M_ILK	/* atomic compare and exchange */
+	jne	lml_get_hw		/* branch on failure to retry */
+
+	movl	M_LOCKED,%ecx		/* get lock owner */
+	testl	%ecx,%ecx		/* is the mutex locked? */
+	jne	lml_fail		/* yes, we lose */
+	movl	%gs:CPU_ACTIVE_THREAD,%ecx
+	movl	%ecx,M_LOCKED
+
+	pushl	%edx			/* save mutex address */
+	pushl	%edx
+	call	EXT(lck_mtx_lock_acquire)
+	addl	$4,%esp
+	popl	%edx			/* restore mutex address */
+
+	xorl	%eax,%eax
+	movl	%eax,M_ILK
+
+	popf				/* restore interrupt state */
+
+	NONLEAF_RET
+
+lml_fail:
+	CHECK_MYLOCK(M_THREAD)
+	pushl	%edx			/* save mutex address */
+	pushl	M_LOCKED
+	pushl	%edx			/* push mutex address */
+	call	EXT(lck_mtx_lock_wait)	/* wait for the lock */
+	addl	$8,%esp
+	popl	%edx			/* restore mutex address */
+	jmp	lml_retry		/* and try again */
+
+NONLEAF_ENTRY(lck_mtx_try_lock)
+
+	movl	B_ARG0,%edx		/* fetch lock pointer */
+	cmpl	$(MUTEX_IND),M_ITAG	/* is this indirect? */
+	cmove	M_PTR,%edx		/* yes - take indirection */
+
+	CHECK_NO_SIMPLELOCKS()
+	CHECK_PREEMPTION_LEVEL()
+
+	movl	B_PC,%ecx
+
+	pushf				/* save interrupt state */
+	cli				/* disable interrupts */
+
+lmt_get_hw:
+	movl	M_ILK,%eax		/* read interlock */
+	testl	%eax,%eax		/* unlocked? */
+	je	1f			/* yes - attempt to lock it */
+	PAUSE				/* no  - pause */
+	jmp	lmt_get_hw		/* try again */
+1:
+	lock; cmpxchgl	%ecx,M_ILK	/* atomic compare and exchange */
+	jne	lmt_get_hw		/* branch on failure to retry */
+
+	movl	M_LOCKED,%ecx		/* get lock owner */
+	testl	%ecx,%ecx		/* is the mutex locked? */
+	jne	lmt_fail		/* yes, we lose */
+	movl	%gs:CPU_ACTIVE_THREAD,%ecx
+	movl	%ecx,M_LOCKED
+
+	pushl	%edx			/* save mutex address */
+	pushl	%edx
+	call	EXT(lck_mtx_lock_acquire)
+	addl	$4,%esp
+	popl	%edx			/* restore mutex address */
+
+	xorl	%eax,%eax
+	movl	%eax,M_ILK
+
+	popf				/* restore interrupt state */
+
+	movl	$1,%eax			/* return success */
+	NONLEAF_RET
+
+lmt_fail:
+	xorl	%eax,%eax
+	movl	%eax,M_ILK
+
+	popf				/* restore interrupt state */
+
+	xorl	%eax,%eax		/* return failure */
+	NONLEAF_RET
+
+NONLEAF_ENTRY(lck_mtx_unlock)
+
+	movl	B_ARG0,%edx		/* fetch lock pointer */
+	cmpl	$(MUTEX_IND),M_ITAG	/* is this indirect? */
+	cmove	M_PTR,%edx		/* yes - take indirection */
+
+	movl	B_PC,%ecx
+
+	pushf				/* save interrupt state */
+	cli				/* disable interrupts */
+
+lmu_get_hw:
+	movl	M_ILK,%eax		/* read interlock */
+	testl	%eax,%eax		/* unlocked? */
+	je	1f			/* yes - attempt to lock it */
+	PAUSE				/* no  - pause */
+	jmp	lmu_get_hw		/* try again */
+1:
+	lock; cmpxchgl	%ecx,M_ILK	/* atomic compare and exchange */
+	jne	lmu_get_hw		/* branch on failure to retry */
+
+	cmpw	$0,M_WAITERS		/* are there any waiters? */
+	jne	lmu_wakeup		/* yes, more work to do */
+
+lmu_doit:
 	xorl	%ecx,%ecx
-	xchgl	%ecx,M_ILK
+	movl	%ecx,M_LOCKED		/* unlock the mutex */
 
-	ENABLE_PREEMPTION(%eax)
+	movl	%ecx,M_ILK
 
-	EMARF
-	ret
+	popf				/* restore interrupt state */
 
+	NONLEAF_RET
+
+lmu_wakeup:
+	pushl	%edx			/* save mutex address */
+	pushl	M_LOCKED
+	pushl	%edx			/* push mutex address */
+	call	EXT(lck_mtx_unlock_wakeup)/* yes, wake a thread */
+	addl	$8,%esp
+	popl	%edx			/* restore mutex pointer */
+	jmp	lmu_doit
+
+LEAF_ENTRY(lck_mtx_ilk_unlock)
+	movl	L_ARG0,%edx		/* no indirection here */
+
+	xorl	%eax,%eax
+	movl	%eax,M_ILK
+
+	LEAF_RET
 	
-ENTRY(_disable_preemption)
+LEAF_ENTRY(_disable_preemption)
 #if	MACH_RT
-	_DISABLE_PREEMPTION(%eax)
+	_DISABLE_PREEMPTION
 #endif	/* MACH_RT */
-	ret
+	LEAF_RET
 
-ENTRY(_enable_preemption)
+LEAF_ENTRY(_enable_preemption)
 #if	MACH_RT
 #if	MACH_ASSERT
-	movl	$ CPD_PREEMPTION_LEVEL,%eax
-	cmpl	$0,%gs:(%eax)
+	cmpl	$0,%gs:CPU_PREEMPTION_LEVEL
 	jg	1f
-	pushl	%gs:(%eax)
+	pushl	%gs:CPU_PREEMPTION_LEVEL
 	pushl	$2f
 	call	EXT(panic)
 	hlt
@@ -837,15 +772,14 @@ ENTRY(_enable_preemption)
 	.text
 1:
 #endif	/* MACH_ASSERT */
-	_ENABLE_PREEMPTION(%eax)
+	_ENABLE_PREEMPTION
 #endif	/* MACH_RT */
-	ret
+	LEAF_RET
 
-ENTRY(_enable_preemption_no_check)
+LEAF_ENTRY(_enable_preemption_no_check)
 #if	MACH_RT
 #if	MACH_ASSERT
-	movl	$ CPD_PREEMPTION_LEVEL,%eax
-	cmpl	$0,%gs:(%eax)
+	cmpl	$0,%gs:CPU_PREEMPTION_LEVEL
 	jg	1f
 	pushl	$2f
 	call	EXT(panic)
@@ -855,24 +789,23 @@ ENTRY(_enable_preemption_no_check)
 	.text
 1:
 #endif	/* MACH_ASSERT */
-	_ENABLE_PREEMPTION_NO_CHECK(%eax)
+	_ENABLE_PREEMPTION_NO_CHECK
 #endif	/* MACH_RT */
-	ret
+	LEAF_RET
 	
 	
-ENTRY(_mp_disable_preemption)
-#if	MACH_RT && NCPUS > 1
-	_DISABLE_PREEMPTION(%eax)
-#endif	/* MACH_RT && NCPUS > 1*/
-	ret
+LEAF_ENTRY(_mp_disable_preemption)
+#if	MACH_RT
+	_DISABLE_PREEMPTION
+#endif	/* MACH_RT */
+	LEAF_RET
 
-ENTRY(_mp_enable_preemption)
-#if	MACH_RT && NCPUS > 1
+LEAF_ENTRY(_mp_enable_preemption)
+#if	MACH_RT
 #if	MACH_ASSERT
-	movl	$ CPD_PREEMPTION_LEVEL,%eax
-	cmpl	$0,%gs:(%eax)
+	cmpl	$0,%gs:CPU_PREEMPTION_LEVEL
 	jg	1f
-	pushl	%gs:(%eax)
+	pushl	%gs:CPU_PREEMPTION_LEVEL
 	pushl	$2f
 	call	EXT(panic)
 	hlt
@@ -881,15 +814,14 @@ ENTRY(_mp_enable_preemption)
 	.text
 1:
 #endif	/* MACH_ASSERT */
-	_ENABLE_PREEMPTION(%eax)
-#endif	/* MACH_RT && NCPUS > 1 */
-	ret
+	_ENABLE_PREEMPTION
+#endif	/* MACH_RT */
+	LEAF_RET
 
-ENTRY(_mp_enable_preemption_no_check)
-#if	MACH_RT && NCPUS > 1
+LEAF_ENTRY(_mp_enable_preemption_no_check)
+#if	MACH_RT
 #if	MACH_ASSERT
-	movl	$ CPD_PREEMPTION_LEVEL,%eax
-	cmpl	$0,%gs:(%eax)
+	cmpl	$0,%gs:CPU_PREEMPTION_LEVEL
 	jg	1f
 	pushl	$2f
 	call	EXT(panic)
@@ -899,48 +831,48 @@ ENTRY(_mp_enable_preemption_no_check)
 	.text
 1:
 #endif	/* MACH_ASSERT */
-	_ENABLE_PREEMPTION_NO_CHECK(%eax)
-#endif	/* MACH_RT && NCPUS > 1 */
-	ret
+	_ENABLE_PREEMPTION_NO_CHECK
+#endif	/* MACH_RT */
+	LEAF_RET
 	
 	
-ENTRY(i_bit_set)
-	movl	S_ARG0,%edx
-	movl	S_ARG1,%eax
+LEAF_ENTRY(i_bit_set)
+	movl	L_ARG0,%edx
+	movl	L_ARG1,%eax
 	lock
 	bts	%dl,(%eax)
-	ret
+	LEAF_RET
 
-ENTRY(i_bit_clear)
-	movl	S_ARG0,%edx
-	movl	S_ARG1,%eax
+LEAF_ENTRY(i_bit_clear)
+	movl	L_ARG0,%edx
+	movl	L_ARG1,%eax
 	lock
 	btr	%dl,(%eax)
-	ret
+	LEAF_RET
 
-ENTRY(bit_lock)
-	movl	S_ARG0,%ecx
-	movl	S_ARG1,%eax
+LEAF_ENTRY(bit_lock)
+	movl	L_ARG0,%ecx
+	movl	L_ARG1,%eax
 1:
 	lock
 	bts	%ecx,(%eax)
 	jb	1b
-	ret
+	LEAF_RET
 
-ENTRY(bit_lock_try)
-	movl	S_ARG0,%ecx
-	movl	S_ARG1,%eax
+LEAF_ENTRY(bit_lock_try)
+	movl	L_ARG0,%ecx
+	movl	L_ARG1,%eax
 	lock
 	bts	%ecx,(%eax)
 	jb	bit_lock_failed
-	ret			/* %eax better not be null ! */
+	LEAF_RET		/* %eax better not be null ! */
 bit_lock_failed:
 	xorl	%eax,%eax
-	ret
+	LEAF_RET
 
-ENTRY(bit_unlock)
-	movl	S_ARG0,%ecx
-	movl	S_ARG1,%eax
+LEAF_ENTRY(bit_unlock)
+	movl	L_ARG0,%ecx
+	movl	L_ARG1,%eax
 	lock
 	btr	%ecx,(%eax)
-	ret
+	LEAF_RET

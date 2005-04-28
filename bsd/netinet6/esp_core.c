@@ -44,6 +44,8 @@
 #include <sys/kernel.h>
 #include <sys/syslog.h>
 
+#include <kern/locks.h>
+
 #include <net/if.h>
 #include <net/route.h>
 
@@ -82,49 +84,51 @@
 #define DBG_LAYER_END		NETDBG_CODE(DBG_NETIPSEC, 3)
 #define DBG_FNC_ESPAUTH		NETDBG_CODE(DBG_NETIPSEC, (8 << 8))
 
-static int esp_null_mature __P((struct secasvar *));
-static int esp_null_decrypt __P((struct mbuf *, size_t,
-	struct secasvar *, const struct esp_algorithm *, int));
-static int esp_null_encrypt __P((struct mbuf *, size_t, size_t,
-	struct secasvar *, const struct esp_algorithm *, int));
-static int esp_descbc_mature __P((struct secasvar *));
-static int esp_descbc_ivlen __P((const struct esp_algorithm *,
-	struct secasvar *));
-static int esp_des_schedule __P((const struct esp_algorithm *,
-	struct secasvar *));
-static int esp_des_schedlen __P((const struct esp_algorithm *));
-static int esp_des_blockdecrypt __P((const struct esp_algorithm *,
-	struct secasvar *, u_int8_t *, u_int8_t *));
-static int esp_des_blockencrypt __P((const struct esp_algorithm *,
-	struct secasvar *, u_int8_t *, u_int8_t *));
-static int esp_cbc_mature __P((struct secasvar *));
-static int esp_blowfish_schedule __P((const struct esp_algorithm *,
-	struct secasvar *));
-static int esp_blowfish_schedlen __P((const struct esp_algorithm *));
-static int esp_blowfish_blockdecrypt __P((const struct esp_algorithm *,
-	struct secasvar *, u_int8_t *, u_int8_t *));
-static int esp_blowfish_blockencrypt __P((const struct esp_algorithm *,
-	struct secasvar *, u_int8_t *, u_int8_t *));
-static int esp_cast128_schedule __P((const struct esp_algorithm *,
-	struct secasvar *));
-static int esp_cast128_schedlen __P((const struct esp_algorithm *));
-static int esp_cast128_blockdecrypt __P((const struct esp_algorithm *,
-	struct secasvar *, u_int8_t *, u_int8_t *));
-static int esp_cast128_blockencrypt __P((const struct esp_algorithm *,
-	struct secasvar *, u_int8_t *, u_int8_t *));
-static int esp_3des_schedule __P((const struct esp_algorithm *,
-	struct secasvar *));
-static int esp_3des_schedlen __P((const struct esp_algorithm *));
-static int esp_3des_blockdecrypt __P((const struct esp_algorithm *,
-	struct secasvar *, u_int8_t *, u_int8_t *));
-static int esp_3des_blockencrypt __P((const struct esp_algorithm *,
-	struct secasvar *, u_int8_t *, u_int8_t *));
-static int esp_common_ivlen __P((const struct esp_algorithm *,
-	struct secasvar *));
-static int esp_cbc_decrypt __P((struct mbuf *, size_t,
-	struct secasvar *, const struct esp_algorithm *, int));
-static int esp_cbc_encrypt __P((struct mbuf *, size_t, size_t,
-	struct secasvar *, const struct esp_algorithm *, int));
+extern lck_mtx_t *sadb_mutex;
+
+static int esp_null_mature(struct secasvar *);
+static int esp_null_decrypt(struct mbuf *, size_t,
+	struct secasvar *, const struct esp_algorithm *, int);
+static int esp_null_encrypt(struct mbuf *, size_t, size_t,
+	struct secasvar *, const struct esp_algorithm *, int);
+static int esp_descbc_mature(struct secasvar *);
+static int esp_descbc_ivlen(const struct esp_algorithm *,
+	struct secasvar *);
+static int esp_des_schedule(const struct esp_algorithm *,
+	struct secasvar *);
+static int esp_des_schedlen(const struct esp_algorithm *);
+static int esp_des_blockdecrypt(const struct esp_algorithm *,
+	struct secasvar *, u_int8_t *, u_int8_t *);
+static int esp_des_blockencrypt(const struct esp_algorithm *,
+	struct secasvar *, u_int8_t *, u_int8_t *);
+static int esp_cbc_mature(struct secasvar *);
+static int esp_blowfish_schedule(const struct esp_algorithm *,
+	struct secasvar *);
+static int esp_blowfish_schedlen(const struct esp_algorithm *);
+static int esp_blowfish_blockdecrypt(const struct esp_algorithm *,
+	struct secasvar *, u_int8_t *, u_int8_t *);
+static int esp_blowfish_blockencrypt(const struct esp_algorithm *,
+	struct secasvar *, u_int8_t *, u_int8_t *);
+static int esp_cast128_schedule(const struct esp_algorithm *,
+	struct secasvar *);
+static int esp_cast128_schedlen(const struct esp_algorithm *);
+static int esp_cast128_blockdecrypt(const struct esp_algorithm *,
+	struct secasvar *, u_int8_t *, u_int8_t *);
+static int esp_cast128_blockencrypt(const struct esp_algorithm *,
+	struct secasvar *, u_int8_t *, u_int8_t *);
+static int esp_3des_schedule(const struct esp_algorithm *,
+	struct secasvar *);
+static int esp_3des_schedlen(const struct esp_algorithm *);
+static int esp_3des_blockdecrypt(const struct esp_algorithm *,
+	struct secasvar *, u_int8_t *, u_int8_t *);
+static int esp_3des_blockencrypt(const struct esp_algorithm *,
+	struct secasvar *, u_int8_t *, u_int8_t *);
+static int esp_common_ivlen(const struct esp_algorithm *,
+	struct secasvar *);
+static int esp_cbc_decrypt(struct mbuf *, size_t,
+	struct secasvar *, const struct esp_algorithm *, int);
+static int esp_cbc_encrypt(struct mbuf *, size_t, size_t,
+	struct secasvar *, const struct esp_algorithm *, int);
 
 #define MAXIVLEN	16
 
@@ -151,11 +155,11 @@ static const struct esp_algorithm esp_algorithms[] = {
 		esp_common_ivlen, esp_cbc_decrypt,
 		esp_cbc_encrypt, esp_cast128_schedule,
 		esp_cast128_blockdecrypt, esp_cast128_blockencrypt, },
-	{ 16, 16, esp_cbc_mature, 128, 256, esp_rijndael_schedlen,
-		"rijndael-cbc",
-		esp_common_ivlen, esp_cbc_decrypt,
-		esp_cbc_encrypt, esp_rijndael_schedule,
-		esp_rijndael_blockdecrypt, esp_rijndael_blockencrypt },
+	{ 16, 16, esp_cbc_mature, 128, 256, esp_aes_schedlen,
+		"aes-cbc",
+		esp_common_ivlen, esp_cbc_decrypt_aes,
+		esp_cbc_encrypt_aes, esp_aes_schedule,
+		0, 0 },
 };
 
 const struct esp_algorithm *
@@ -819,10 +823,6 @@ esp_cbc_decrypt(m, off, sav, algo, ivlen)
 			soff += s->m_len;
 			s = s->m_next;
 		}
-
-		/* skip over empty mbuf */
-		while (s && s->m_len == 0)
-			s = s->m_next;
 	}
 
 	m_freem(scut->m_next);
@@ -1025,10 +1025,6 @@ esp_cbc_encrypt(m, off, plen, sav, algo, ivlen)
 			soff += s->m_len;
 			s = s->m_next;
 		}
-
-		/* skip over empty mbuf */
-		while (s && s->m_len == 0)
-			s = s->m_next;
 	}
 
 	m_freem(scut->m_next);
@@ -1129,7 +1125,7 @@ esp_auth(m0, skip, length, sav, sum)
 		KERNEL_DEBUG(DBG_FNC_ESPAUTH | DBG_FUNC_END, 5,0,0,0,0);
 		return error;
 	}
-
+	lck_mtx_unlock(sadb_mutex);
 	while (0 < length) {
 		if (!m)
 			panic("mbuf chain?");
@@ -1147,7 +1143,7 @@ esp_auth(m0, skip, length, sav, sum)
 	}
 	(*algo->result)(&s, sumbuf);
 	bcopy(sumbuf, sum, siz);	/*XXX*/
-	
+	lck_mtx_lock(sadb_mutex);
 	KERNEL_DEBUG(DBG_FNC_ESPAUTH | DBG_FUNC_END, 6,0,0,0,0);
 	return 0;
 }

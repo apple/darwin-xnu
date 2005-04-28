@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -30,12 +30,35 @@
 #include <mach/mach_types.h>
 #include <mach/vm_types.h>
 #include <mach/kern_return.h>
+#include <mach/host_priv_server.h>
+#include <mach/vm_map.h>
+
+#include <kern/kalloc.h>
 #include <kern/kern_types.h>
-#include <vm/vm_kern.h>
 #include <kern/thread.h>
+
+#include <vm/vm_kern.h>
+
 #include <mach-o/mach_header.h>
 
 #include <mach_host.h>
+
+/*
+ * XXX headers for which prototypes should be in a common include file;
+ * XXX see libsa/kext.cpp for why.
+ */
+kern_return_t	kmod_create_internal(kmod_info_t *info, kmod_t *id);
+kern_return_t	kmod_destroy_internal(kmod_t id);
+kern_return_t	kmod_start_or_stop(kmod_t id, int start, kmod_args_t *data,
+			mach_msg_type_number_t *dataCount);
+kern_return_t	kmod_retain(kmod_t id);
+kern_return_t	kmod_release(kmod_t id);
+kern_return_t	kmod_queue_cmd(vm_address_t data, vm_size_t size);
+kern_return_t	kmod_get_info(host_t host, kmod_info_array_t *kmods,
+			mach_msg_type_number_t *kmodCount);
+extern void	kdb_printf(const char *fmt, ...);
+
+
 
 #define WRITE_PROTECT_MODULE_TEXT   (0)
 
@@ -54,10 +77,10 @@ typedef struct cmd_queue_entry {
 queue_head_t kmod_cmd_queue;
 
 void
-kmod_init()
+kmod_init(void)
 {
-    simple_lock_init(&kmod_lock, ETAP_MISC_Q);
-    simple_lock_init(&kmod_queue_lock, ETAP_MISC_Q);
+    simple_lock_init(&kmod_lock, 0);
+    simple_lock_init(&kmod_queue_lock, 0);
     queue_init(&kmod_cmd_queue);
 }
 
@@ -103,11 +126,11 @@ kmod_lookupbyid_locked(kmod_t id)
     if (k) {
         bcopy((char*)k, (char *)kc, sizeof(kmod_info_t));
     }
-finish:
+
     simple_unlock(&kmod_queue_lock);
 
     if (k == 0) {
-        kfree((vm_offset_t)kc, sizeof(kmod_info_t));
+        kfree(kc, sizeof(kmod_info_t));
 	kc = 0;
     }
     return kc;
@@ -127,11 +150,11 @@ kmod_lookupbyname_locked(const char * name)
     if (k) {
         bcopy((char *)k, (char *)kc, sizeof(kmod_info_t));
     }
-finish:
+
     simple_unlock(&kmod_queue_lock);
 
     if (k == 0) {
-        kfree((vm_offset_t)kc, sizeof(kmod_info_t));
+        kfree(kc, sizeof(kmod_info_t));
 	kc = 0;
     }
     return kc;
@@ -148,7 +171,7 @@ kmod_queue_cmd(vm_address_t data, vm_size_t size)
 
     rc = kmem_alloc(kernel_map, &e->data, size);
     if (rc != KERN_SUCCESS) {
-        kfree((vm_offset_t)e, sizeof(struct cmd_queue_entry));
+        kfree(e, sizeof(struct cmd_queue_entry));
         return rc;
     }
     e->size = size;
@@ -226,6 +249,10 @@ kmod_send_generic(int type, void *generic_data, int size)
 extern vm_offset_t sectPRELINKB;
 extern int sectSizePRELINK;
 
+/*
+ * Operates only on 32 bit mach keaders on behalf of kernel module loader
+ * if WRITE_PROTECT_MODULE_TEXT is defined.
+ */
 kern_return_t
 kmod_create_internal(kmod_info_t *info, kmod_t *id)
 {
@@ -293,15 +320,19 @@ kmod_create_internal(kmod_info_t *info, kmod_t *id)
 
 kern_return_t
 kmod_create(host_priv_t host_priv,
-        kmod_info_t *info,
+        vm_address_t addr,
         kmod_t *id)
 {
+    kmod_info_t *info = (kmod_info_t *)addr;
+ 
     if (host_priv == HOST_PRIV_NULL) return KERN_INVALID_HOST;
     return kmod_create_internal(info, id);
 }
 
 kern_return_t
-kmod_create_fake(const char *name, const char *version)
+kmod_create_fake_with_address(const char *name, const char *version, 
+                                vm_address_t address, vm_size_t size,
+                                int * return_id)
 {
     kmod_info_t *info;
 
@@ -323,7 +354,9 @@ kmod_create_fake(const char *name, const char *version)
     bcopy(version, info->version, 1 + strlen(version));  //NIK fixed this part
     info->reference_count = 1;    // keep it from unloading, starting, stopping
     info->reference_list = 0;
-    info->address = info->size = info->hdr_size = 0;
+    info->address = address;
+    info->size = size;
+    info->hdr_size = 0;
     info->start = info->stop = 0;
 
     simple_lock(&kmod_lock);
@@ -335,6 +368,8 @@ kmod_create_fake(const char *name, const char *version)
     }
 
     info->id = kmod_index++;
+    if (return_id)
+        *return_id = info->id;
 
     info->next = kmod;
     kmod = info;
@@ -345,7 +380,14 @@ kmod_create_fake(const char *name, const char *version)
 }
 
 kern_return_t
-kmod_destroy_internal(kmod_t id)
+kmod_create_fake(const char *name, const char *version)
+{
+    return kmod_create_fake_with_address(name, version, 0, 0, NULL);
+}
+
+
+static kern_return_t
+_kmod_destroy_internal(kmod_t id, boolean_t fake)
 {
     kern_return_t rc;
     kmod_info_t *k;
@@ -358,7 +400,7 @@ kmod_destroy_internal(kmod_t id)
         if (k->id == id) {
             kmod_reference_t *r, *t;
 
-            if (k->reference_count != 0) {
+            if (!fake && (k->reference_count != 0)) {
                 simple_unlock(&kmod_lock);
                 return KERN_INVALID_ARGUMENT;
             }
@@ -375,31 +417,34 @@ kmod_destroy_internal(kmod_t id)
                 r->info->reference_count--;
                 t = r;
                 r = r->next;
-                kfree((vm_offset_t)t, sizeof(struct kmod_reference));
+                kfree(t, sizeof(struct kmod_reference));
             }
 
+            if (!fake)
+            {
 #if DEBUG
-            printf("kmod_destroy: %s (id %d), deallocating %d pages starting at 0x%x\n", 
-                   k->name, k->id, k->size / PAGE_SIZE, k->address);
+                printf("kmod_destroy: %s (id %d), deallocating %d pages starting at 0x%x\n", 
+                    k->name, k->id, k->size / PAGE_SIZE, k->address);
 #endif /* DEBUG */
 
-	    if( (k->address >= sectPRELINKB) && (k->address < (sectPRELINKB + sectSizePRELINK)))
-	    {
-		vm_offset_t
-		virt = ml_static_ptovirt(k->address);
-		if( virt) {
-		    ml_static_mfree( virt, k->size);
-		}
-	    }
-	    else
-	    {
-		rc = vm_map_unwire(kernel_map, k->address + k->hdr_size, 
-			k->address + k->size, FALSE);
-		assert(rc == KERN_SUCCESS);
-    
-		rc = vm_deallocate(kernel_map, k->address, k->size);
-		assert(rc == KERN_SUCCESS);
-	    }
+                if( (k->address >= sectPRELINKB) && (k->address < (sectPRELINKB + sectSizePRELINK)))
+                {
+                    vm_offset_t
+                    virt = ml_static_ptovirt(k->address);
+                    if( virt) {
+                        ml_static_mfree( virt, k->size);
+                    }
+                }
+                else
+                {
+                    rc = vm_map_unwire(kernel_map, k->address + k->hdr_size, 
+                            k->address + k->size, FALSE);
+                    assert(rc == KERN_SUCCESS);
+        
+                    rc = vm_deallocate(kernel_map, k->address, k->size);
+                    assert(rc == KERN_SUCCESS);
+                }
+            }
             return KERN_SUCCESS;
         }
         p = k;
@@ -411,15 +456,25 @@ kmod_destroy_internal(kmod_t id)
     return KERN_INVALID_ARGUMENT;
 }
 
+kern_return_t
+kmod_destroy_internal(kmod_t id)
+{
+    return _kmod_destroy_internal(id, FALSE);
+}
 
 kern_return_t
 kmod_destroy(host_priv_t host_priv,
          kmod_t id)
 {
     if (host_priv == HOST_PRIV_NULL) return KERN_INVALID_HOST;
-    return kmod_destroy_internal(id);
+    return _kmod_destroy_internal(id, FALSE);
 }
 
+kern_return_t
+kmod_destroy_fake(kmod_t id)
+{
+    return _kmod_destroy_internal(id, TRUE);
+}
 
 kern_return_t
 kmod_start_or_stop(
@@ -430,7 +485,7 @@ kmod_start_or_stop(
 {
     kern_return_t rc = KERN_SUCCESS;
     void * user_data = 0;
-    kern_return_t (*func)();
+    kern_return_t (*func)(kmod_info_t *, void *);
     kmod_info_t *k;
 
     simple_lock(&kmod_lock);
@@ -454,7 +509,9 @@ kmod_start_or_stop(
     // call kmod entry point
     //
     if (data && dataCount && *data && *dataCount) {
-        vm_map_copyout(kernel_map, (vm_offset_t *)&user_data, (vm_map_copy_t)*data);
+    	vm_map_offset_t map_addr;
+        vm_map_copyout(kernel_map, &map_addr, (vm_map_copy_t)*data);
+	user_data = CAST_DOWN(void *, map_addr);
     }
 
     rc = (*func)(k, user_data);
@@ -499,7 +556,7 @@ kmod_retain(kmod_t id)
     f = kmod_lookupbyid(KMOD_UNPACK_FROM_ID(id));
     if (!t || !f) {
         simple_unlock(&kmod_lock);
-        if (r) kfree((vm_offset_t)r, sizeof(struct kmod_reference));
+        if (r) kfree(r, sizeof(struct kmod_reference));
         rc = KERN_INVALID_ARGUMENT;
         goto finish;
     }
@@ -547,7 +604,7 @@ kmod_release(kmod_t id)
             r->info->reference_count--;
 
         simple_unlock(&kmod_lock);
-            kfree((vm_offset_t)r, sizeof(struct kmod_reference));
+            kfree(r, sizeof(struct kmod_reference));
         rc = KERN_SUCCESS;
             goto finish;
         }
@@ -632,7 +689,8 @@ kmod_control(host_priv_t host_priv,
 
             simple_unlock(&kmod_queue_lock);
 
-            rc = vm_map_copyin(kernel_map, e->data, e->size, TRUE, (vm_map_copy_t *)data);
+            rc = vm_map_copyin(kernel_map, (vm_map_address_t)e->data,
+			       (vm_map_size_t)e->size, TRUE, (vm_map_copy_t *)data);
             if (rc) {
                 simple_lock(&kmod_queue_lock);
                 enqueue_head(&kmod_cmd_queue, (queue_entry_t)e);
@@ -643,7 +701,7 @@ kmod_control(host_priv_t host_priv,
             }
             *dataCount = e->size;
 
-            kfree((vm_offset_t)e, sizeof(struct cmd_queue_entry));
+            kfree(e, sizeof(struct cmd_queue_entry));
         
             break;
         }
@@ -657,7 +715,7 @@ kmod_control(host_priv_t host_priv,
 
 
 kern_return_t
-kmod_get_info(host_t host,
+kmod_get_info(__unused host_t host,
           kmod_info_array_t *kmods,
           mach_msg_type_number_t *kmodCount)
 {
@@ -743,6 +801,9 @@ retry:
     return KERN_SUCCESS;
 }
 
+/*
+ * Operates only on 32 bit mach keaders on behalf of kernel module loader
+ */
 static kern_return_t
 kmod_call_funcs_in_section(struct mach_header *header, const char *sectName)
 {
@@ -754,7 +815,7 @@ kmod_call_funcs_in_section(struct mach_header *header, const char *sectName)
         return KERN_INVALID_ARGUMENT;
     }
 
-    routines = (Routine *) getsectdatafromheader(header, SEG_TEXT, (char *) sectName, &size);
+    routines = (Routine *) getsectdatafromheader(header, SEG_TEXT, /*(char *)*/ sectName, &size);
     if (!routines) return KERN_SUCCESS;
 
     size /= sizeof(Routine);
@@ -765,12 +826,18 @@ kmod_call_funcs_in_section(struct mach_header *header, const char *sectName)
     return KERN_SUCCESS;
 }
 
+/*
+ * Operates only on 32 bit mach keaders on behalf of kernel module loader
+ */
 kern_return_t
 kmod_initialize_cpp(kmod_info_t *info)
 {
     return kmod_call_funcs_in_section((struct mach_header *)info->address, "__constructor");
 }
 
+/*
+ * Operates only on 32 bit mach keaders on behalf of kernel module loader
+ */
 kern_return_t
 kmod_finalize_cpp(kmod_info_t *info)
 {
@@ -778,74 +845,71 @@ kmod_finalize_cpp(kmod_info_t *info)
 }
 
 kern_return_t
-kmod_default_start(struct kmod_info *ki, void *data)
+kmod_default_start(__unused struct kmod_info *ki, __unused void *data)
 {
     return KMOD_RETURN_SUCCESS;
 }
 
 kern_return_t
-kmod_default_stop(struct kmod_info *ki, void *data)
+kmod_default_stop(__unused struct kmod_info *ki, __unused void *data)
 {
     return KMOD_RETURN_SUCCESS;
 }
 
-void
-kmod_dump(vm_offset_t *addr, unsigned int cnt)
+static void
+kmod_dump_to(vm_offset_t *addr, unsigned int cnt,
+	void (*printf_func)(const char *fmt, ...))
 {
     vm_offset_t * kscan_addr = 0;
-    vm_offset_t * rscan_addr = 0;
     kmod_info_t * k;
     kmod_reference_t * r;
-    int i, j;
+    unsigned int i;
     int found_kmod = 0;
-    int kmod_scan_stopped = 0;
     kmod_info_t * stop_kmod = 0;
-    int ref_scan_stopped = 0;
-    kmod_reference_t * stop_ref = 0;
 
     for (k = kmod; k; k = k->next) {
-        if (!k->address) {
-            continue; // skip fake entries for built-in kernel components
-        }
         if (pmap_find_phys(kernel_pmap, (addr64_t)((uintptr_t)k)) == 0) {
-            kdb_printf("         kmod scan stopped due to missing "
+            (*printf_func)("         kmod scan stopped due to missing "
                 "kmod page: %08x\n", stop_kmod);
             break;
+        }
+        if (!k->address) {
+            continue; // skip fake entries for built-in kernel components
         }
         for (i = 0, kscan_addr = addr; i < cnt; i++, kscan_addr++) {
             if ((*kscan_addr >= k->address) &&
                 (*kscan_addr < (k->address + k->size))) {
 
                 if (!found_kmod) {
-                    kdb_printf("      Kernel loadable modules in backtrace "
+                    (*printf_func)("      Kernel loadable modules in backtrace "
                         "(with dependencies):\n");
                 }
                 found_kmod = 1;
-                kdb_printf("         %s(%s)@0x%x\n",
+                (*printf_func)("         %s(%s)@0x%x\n",
                     k->name, k->version, k->address);
 
                 for (r = k->reference_list; r; r = r->next) {
                     kmod_info_t * rinfo;
 
                     if (pmap_find_phys(kernel_pmap, (addr64_t)((uintptr_t)r)) == 0) {
-                        kdb_printf("            kmod dependency scan stopped "
+                        (*printf_func)("            kmod dependency scan stopped "
                             "due to missing dependency page: %08x\n", r);
                         break;
                     }
 
                     rinfo = r->info;
 
-                    if (!rinfo->address) {
-                        continue; // skip fake entries for built-ins
-                    }
-
                     if (pmap_find_phys(kernel_pmap, (addr64_t)((uintptr_t)rinfo)) == 0) {
-                        kdb_printf("            kmod dependency scan stopped "
+                        (*printf_func)("            kmod dependency scan stopped "
                             "due to missing kmod page: %08x\n", rinfo);
                         break;
                     }
 
-                    kdb_printf("            dependency: %s(%s)@0x%x\n",
+                    if (!rinfo->address) {
+                        continue; // skip fake entries for built-ins
+                    }
+
+                    (*printf_func)("            dependency: %s(%s)@0x%x\n",
                         rinfo->name, rinfo->version, rinfo->address);
                 }
 
@@ -855,4 +919,16 @@ kmod_dump(vm_offset_t *addr, unsigned int cnt)
     }
 
     return;
+}
+
+void
+kmod_dump(vm_offset_t *addr, unsigned int cnt)
+{
+    kmod_dump_to(addr, cnt, &kdb_printf);
+}
+
+void
+kmod_dump_log(vm_offset_t *addr, unsigned int cnt)
+{
+    kmod_dump_to(addr, cnt, &printf);
 }

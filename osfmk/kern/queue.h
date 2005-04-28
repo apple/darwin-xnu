@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -61,7 +61,7 @@
 #ifndef	_KERN_QUEUE_H_
 #define	_KERN_QUEUE_H_
 
-#include <kern/lock.h>
+#include <mach/mach_types.h>
 #include <kern/macro_help.h>
 
 /*
@@ -108,6 +108,9 @@ typedef	struct queue_entry	*queue_entry_t;
 
 #if	!defined(__GNUC__)
 
+#include <sys/cdefs.h>
+__BEGIN_DECLS
+
 /* Enqueue element to head of queue */
 extern void		enqueue_head(
 				queue_t		que,
@@ -140,7 +143,9 @@ extern void		insque(
 extern int		remque(
 				queue_entry_t elt);
 
-#else
+__END_DECLS
+
+#else	/* !__GNUC__ */
 
 static __inline__ void
 enqueue_head(
@@ -196,7 +201,7 @@ dequeue_tail(
 
 static __inline__ void
 remqueue(
-	queue_t		que,
+	__unused queue_t		que,
 	queue_entry_t	elt)
 {
 	elt->next->prev = elt->prev;
@@ -224,7 +229,7 @@ remque(
 	return((integer_t)elt);
 }
 
-#endif	/* defined(__GNUC__) */
+#endif	/* !__GNUC__ */
 
 /*
  *	Macro:		queue_init
@@ -323,16 +328,16 @@ MACRO_END
  */
 #define queue_enter(head, elt, type, field)			\
 MACRO_BEGIN							\
-	register queue_entry_t prev;				\
+	register queue_entry_t __prev;				\
 								\
-	prev = (head)->prev;					\
-	if ((head) == prev) {					\
+	__prev = (head)->prev;					\
+	if ((head) == __prev) {					\
 		(head)->next = (queue_entry_t) (elt);		\
 	}							\
 	else {							\
-		((type)prev)->field.next = (queue_entry_t)(elt);\
+		((type)__prev)->field.next = (queue_entry_t)(elt);\
 	}							\
-	(elt)->field.prev = prev;				\
+	(elt)->field.prev = __prev;				\
 	(elt)->field.next = head;				\
 	(head)->prev = (queue_entry_t) elt;			\
 MACRO_END
@@ -350,16 +355,16 @@ MACRO_END
  */
 #define queue_enter_first(head, elt, type, field)		\
 MACRO_BEGIN							\
-	register queue_entry_t next;				\
+	register queue_entry_t __next;				\
 								\
-	next = (head)->next;					\
-	if ((head) == next) {					\
+	__next = (head)->next;					\
+	if ((head) == __next) {					\
 		(head)->prev = (queue_entry_t) (elt);		\
 	}							\
 	else {							\
-		((type)next)->field.prev = (queue_entry_t)(elt);\
+		((type)__next)->field.prev = (queue_entry_t)(elt);\
 	}							\
-	(elt)->field.next = next;				\
+	(elt)->field.next = __next;				\
 	(elt)->field.prev = head;				\
 	(head)->next = (queue_entry_t) elt;			\
 MACRO_END
@@ -378,7 +383,7 @@ MACRO_END
  */
 #define queue_insert_before(head, elt, cur, type, field)		\
 MACRO_BEGIN								\
-	register queue_entry_t prev;					\
+	register queue_entry_t __prev;					\
 									\
 	if ((head) == (queue_entry_t)(cur)) {				\
 		(elt)->field.next = (head);				\
@@ -386,8 +391,8 @@ MACRO_BEGIN								\
 			(elt)->field.prev = (head);			\
 			(head)->next = (queue_entry_t)(elt);		\
 		} else {			/* last element */	\
-			prev = (elt)->field.prev = (head)->prev;	\
-			((type)prev)->field.next = (queue_entry_t)(elt);\
+			__prev = (elt)->field.prev = (head)->prev;	\
+			((type)__prev)->field.next = (queue_entry_t)(elt);\
 		}							\
 		(head)->prev = (queue_entry_t)(elt);			\
 	} else {							\
@@ -397,8 +402,8 @@ MACRO_BEGIN								\
 			(elt)->field.prev = (head);			\
 			(head)->next = (queue_entry_t)(elt);		\
 		} else {			/* middle element */	\
-			prev = (elt)->field.prev = (cur)->field.prev;	\
-			((type)prev)->field.next = (queue_entry_t)(elt);\
+			__prev = (elt)->field.prev = (cur)->field.prev;	\
+			((type)__prev)->field.next = (queue_entry_t)(elt);\
 		}							\
 		(cur)->field.prev = (queue_entry_t)(elt);		\
 	}								\
@@ -418,7 +423,7 @@ MACRO_END
  */
 #define queue_insert_after(head, elt, cur, type, field)			\
 MACRO_BEGIN								\
-	register queue_entry_t next;					\
+	register queue_entry_t __next;					\
 									\
 	if ((head) == (queue_entry_t)(cur)) {				\
 		(elt)->field.prev = (head);				\
@@ -426,8 +431,8 @@ MACRO_BEGIN								\
 			(elt)->field.next = (head);			\
 			(head)->prev = (queue_entry_t)(elt);		\
 		} else {			/* first element */	\
-			next = (elt)->field.next = (head)->next;	\
-			((type)next)->field.prev = (queue_entry_t)(elt);\
+			__next = (elt)->field.next = (head)->next;	\
+			((type)__next)->field.prev = (queue_entry_t)(elt);\
 		}							\
 		(head)->next = (queue_entry_t)(elt);			\
 	} else {							\
@@ -437,8 +442,8 @@ MACRO_BEGIN								\
 			(elt)->field.next = (head);			\
 			(head)->prev = (queue_entry_t)(elt);		\
 		} else {			/* middle element */	\
-			next = (elt)->field.next = (cur)->field.next;	\
-			((type)next)->field.prev = (queue_entry_t)(elt);\
+			__next = (elt)->field.next = (cur)->field.next;	\
+			((type)__next)->field.prev = (queue_entry_t)(elt);\
 		}							\
 		(cur)->field.next = (queue_entry_t)(elt);		\
 	}								\
@@ -463,20 +468,20 @@ MACRO_END
  */
 #define	queue_remove(head, elt, type, field)			\
 MACRO_BEGIN							\
-	register queue_entry_t	next, prev;			\
+	register queue_entry_t	__next, __prev;			\
 								\
-	next = (elt)->field.next;				\
-	prev = (elt)->field.prev;				\
+	__next = (elt)->field.next;				\
+	__prev = (elt)->field.prev;				\
 								\
-	if ((head) == next)					\
-		(head)->prev = prev;				\
+	if ((head) == __next)					\
+		(head)->prev = __prev;				\
 	else							\
-		((type)next)->field.prev = prev;		\
+		((type)__next)->field.prev = __prev;		\
 								\
-	if ((head) == prev)					\
-		(head)->next = next;				\
+	if ((head) == __prev)					\
+		(head)->next = __next;				\
 	else							\
-		((type)prev)->field.next = next;		\
+		((type)__prev)->field.next = __next;		\
 MACRO_END
 
 /*
@@ -490,16 +495,16 @@ MACRO_END
  */
 #define	queue_remove_first(head, entry, type, field)		\
 MACRO_BEGIN							\
-	register queue_entry_t	next;				\
+	register queue_entry_t	__next;				\
 								\
 	(entry) = (type) ((head)->next);			\
-	next = (entry)->field.next;				\
+	__next = (entry)->field.next;				\
 								\
-	if ((head) == next)					\
+	if ((head) == __next)					\
 		(head)->prev = (head);				\
 	else							\
-		((type)(next))->field.prev = (head);		\
-	(head)->next = next;					\
+		((type)(__next))->field.prev = (head);		\
+	(head)->next = __next;					\
 MACRO_END
 
 /*
@@ -513,16 +518,16 @@ MACRO_END
  */
 #define	queue_remove_last(head, entry, type, field)		\
 MACRO_BEGIN							\
-	register queue_entry_t	prev;				\
+	register queue_entry_t	__prev;				\
 								\
 	(entry) = (type) ((head)->prev);			\
-	prev = (entry)->field.prev;				\
+	__prev = (entry)->field.prev;				\
 								\
-	if ((head) == prev)					\
+	if ((head) == __prev)					\
 		(head)->next = (head);				\
 	else							\
-		((type)(prev))->field.next = (head);		\
-	(head)->prev = prev;					\
+		((type)(__prev))->field.next = (head);		\
+	(head)->prev = __prev;					\
 MACRO_END
 
 /*
@@ -548,7 +553,7 @@ MACRO_END
  */
 #define queue_new_head(old, new, type, field)			\
 MACRO_BEGIN							\
-	if (!queue_empty(new)) {				\
+	if (!queue_empty(old)) {				\
 		*(new) = *(old);				\
 		((type)((new)->next))->field.prev = (new);	\
 		((type)((new)->prev))->field.next = (new);	\
@@ -575,11 +580,9 @@ MACRO_END
 	     !queue_end((head), (queue_entry_t)(elt));		\
 	     (elt) = (type) queue_next(&(elt)->field))
 
-#include <sys/appleapiopts.h>
-
-#ifdef	__APPLE_API_PRIVATE
-
 #ifdef	MACH_KERNEL_PRIVATE
+
+#include <kern/lock.h>
 
 /*----------------------------------------------------------------*/
 /*
@@ -597,7 +600,7 @@ typedef struct mpqueue_head	mpqueue_head_t;
 #define mpqueue_init(q)					\
 MACRO_BEGIN						\
 	queue_init(&(q)->head);				\
-	simple_lock_init(&(q)->lock, ETAP_MISC_Q);	\
+	simple_lock_init(&(q)->lock, 0);	\
 MACRO_END
 
 #define mpenqueue_tail(q, elt)				\
@@ -618,7 +621,5 @@ MACRO_BEGIN						\
 MACRO_END
 
 #endif	/* MACH_KERNEL_PRIVATE */
-
-#endif	/* __APPLE_API_PRIVATE */
 
 #endif	/* _KERN_QUEUE_H_ */

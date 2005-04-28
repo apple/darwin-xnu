@@ -30,11 +30,12 @@
 #define _SYS_VFS_JOURNAL_H_
 
 #include <sys/appleapiopts.h>
+#include <sys/cdefs.h>
 
 #ifdef __APPLE_API_UNSTABLE
 
 #include <sys/types.h>
-#include <sys/lock.h>
+#include <kern/locks.h>
 
 typedef struct block_info {
     off_t       bnum;                // block # on the file system device
@@ -94,7 +95,7 @@ typedef struct journal_header {
  * In memory structure about the journal.
  */
 typedef struct journal {
-	struct lock__bsd__	jlock;
+    lck_mtx_t           jlock;             // protects the struct journal data
 
     struct vnode       *jdev;              // vnode of the device where the journal lives
     off_t               jdev_offset;       // byte offset to the start of the journal
@@ -118,11 +119,11 @@ typedef struct journal {
 
     transaction        *tr_freeme;         // transaction structs that need to be free'd
 
-	volatile off_t      active_start;      // the active start that we only keep in memory
-	simple_lock_data_t  old_start_lock;    // guard access
-	volatile off_t      old_start[16];     // this is how we do lazy start update
+    volatile off_t      active_start;      // the active start that we only keep in memory
+    lck_mtx_t           old_start_lock;    // protects the old_start
+    volatile off_t      old_start[16];     // this is how we do lazy start update
 
-	int                 last_flush_err;    // last error from flushing the cache
+    int                 last_flush_err;    // last error from flushing the cache
 } journal;
 
 /* internal-only journal flags (top 16 bits) */
@@ -134,9 +135,15 @@ typedef struct journal {
 /* journal_open/create options are always in the low-16 bits */
 #define JOURNAL_OPTION_FLAGS_MASK 0x0000ffff
 
+__BEGIN_DECLS
 /*
  * Prototypes.
  */
+
+/*
+ * Call journal_init() to initialize the journaling code (sets up lock attributes)
+ */
+void      journal_init(void);
 
 /*
  * Call journal_create() to create a new journal.  You only
@@ -200,7 +207,7 @@ journal  *journal_open(struct vnode *jvp,
  * It flushes any outstanding transactions and makes sure the
  * journal is in a consistent state.
  */
-void      journal_close(journal *journal);
+void      journal_close(journal *journalp);
 
 /*
  * flags for journal_create/open.  only can use 
@@ -238,6 +245,9 @@ int   journal_end_transaction(journal *jnl);
 
 int   journal_active(journal *jnl);
 int   journal_flush(journal *jnl);
+void *journal_owner(journal *jnl);    // compare against current_thread()
+
+__END_DECLS
 
 #endif /* __APPLE_API_UNSTABLE */
 #endif /* !_SYS_VFS_JOURNAL_H_ */

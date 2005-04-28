@@ -28,12 +28,7 @@
 #include <sys/types.h> /* u_int */
 #include <sys/proc.h> /* struct proc */
 #include <sys/systm.h> /* struct sysent */
-
-struct exit_args {
-    int rval;
-};
-extern void exit(struct proc *p, struct exit_args *uap, int *retval);
-extern struct sysent sysent[];
+#include <sys/sysproto.h>
 
 #pragma mark **** kern debug ****
 typedef void (*chudxnu_kdebug_callback_func_t)(uint32_t debugid, uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3, uint32_t arg4);
@@ -68,24 +63,4 @@ kern_return_t chudxnu_kdebug_callback_cancel(void)
     kdebug_enable &= ~(0x10);
 
     return KERN_SUCCESS;
-}
-
-#pragma mark **** task will exit ****
-
-typedef kern_return_t (*chudxnu_exit_callback_func_t)(int pid);
-
-__private_extern__
-kern_return_t chudxnu_exit_callback_enter(chudxnu_exit_callback_func_t func)
-{
-    
-    return KERN_FAILURE;
-    
-}
-
-__private_extern__
-kern_return_t chudxnu_exit_callback_cancel(void)
-{
-    
-    return KERN_FAILURE;
-    
 }

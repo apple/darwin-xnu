@@ -226,7 +226,7 @@ void nbp_input(m, ifID)
 				/* true if home zone == destination zone */
  		register int	zno, i;
  		register  gbuf_t	*m2;
-		register error_found =0;
+		register int error_found =0;
 		register at_ifaddr_t *ifIDorig;
 
 		if (!ROUTING_MODE)	/* for routers only! */
@@ -1423,7 +1423,7 @@ int nbp_new_nve_entry(nve_entry, ifID)
 		new_entry->zone_hash = nbp_strhash(&new_entry->zone);
 	}
 	new_entry->tag = tag;
-	new_entry->pid =  current_proc()->p_pid;
+	new_entry->pid =  proc_selfpid();
 
 	ATDISABLE(nve_lock_pri,NVE_LOCK);
 	TAILQ_INSERT_TAIL(&name_registry, new_entry, nve_link);

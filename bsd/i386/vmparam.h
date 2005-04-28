@@ -25,7 +25,7 @@
 
 #include <sys/resource.h>
 
-#define	USRSTACK	0xbfff9000
+#define	USRSTACK	(0xC0000000)
 
 /*
  * Virtual memory related constants, all in bytes

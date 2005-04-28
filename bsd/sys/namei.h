@@ -60,34 +60,22 @@
 
 #include <sys/appleapiopts.h>
 
-#ifdef __APPLE_API_UNSTABLE
+#ifdef KERNEL
+#define	LOCKLEAF	0x0004	/* lock inode on return */
+#define	LOCKPARENT	0x0008	/* want parent vnode returned */
+#define	WANTPARENT	0x0010	/* want parent vnode returned */
+#endif
+
+
+#ifdef BSD_KERNEL_PRIVATE
 
 #include <sys/queue.h>
 #include <sys/uio.h>
+#include <sys/vnode.h>
+#include <sys/mount.h>
+#include <sys/filedesc.h>
 
-/*
- * Lookup parameters: this structure describes the subset of
- * information from the nameidata structure that is passed
- * through the VOP interface.
- */
-struct componentname {
-	/*
-	 * Arguments to lookup.
-	 */
-	u_long	cn_nameiop;	/* namei operation */
-	u_long	cn_flags;	/* flags to namei */
-	struct	proc *cn_proc;	/* process requesting lookup */
-	struct	ucred *cn_cred;	/* credentials */
-	/*
-	 * Shared between lookup and commit routines.
-	 */
-	char	*cn_pnbuf;	/* pathname buffer */
-	long	cn_pnlen;	/* length of allocated buffer */
-	char	*cn_nameptr;	/* pointer to looked up name */
-	long	cn_namelen;	/* length of looked up component */
-	u_long	cn_hash;	/* hash value of looked up name */
-	long	cn_consume;	/* chars to consume in lookup() */
-};
+#define PATHBUFLEN	256
 
 /*
  * Encapsulation of namei parameters.
@@ -96,17 +84,14 @@ struct nameidata {
 	/*
 	 * Arguments to namei/lookup.
 	 */
-	caddr_t	ni_dirp;		/* pathname pointer */
+	user_addr_t ni_dirp;		/* pathname pointer */
 	enum	uio_seg ni_segflg;	/* location of pathname */
-     /* u_long	ni_nameiop;		   namei operation */
-     /* u_long	ni_flags;		   flags to namei */
-     /* struct	proc *ni_proc;		   process requesting lookup */
 	/*
 	 * Arguments to lookup.
 	 */
-     /* struct	ucred *ni_cred;		   credentials */
 	struct	vnode *ni_startdir;	/* starting directory */
 	struct	vnode *ni_rootdir;	/* logical root directory */
+        struct  vnode *ni_usedvp;       /* directory passed in via USEDVP */
 	/*
 	 * Results: returned from/manipulated by lookup
 	 */
@@ -117,116 +102,106 @@ struct nameidata {
 	 */
 	u_int	ni_pathlen;		/* remaining chars in path */
 	char	*ni_next;		/* next location in pathname */
+        char	ni_pathbuf[PATHBUFLEN];
 	u_long	ni_loopcnt;		/* count of symlinks encountered */
+
 	struct componentname ni_cnd;
 };
 
 #ifdef KERNEL
 /*
- * namei operations
- */
-#define	LOOKUP		0	/* perform name lookup only */
-#define	CREATE		1	/* setup for file creation */
-#define	DELETE		2	/* setup for file deletion */
-#define	RENAME		3	/* setup for file renaming */
-#define	OPMASK		3	/* mask for operation */
-/*
  * namei operational modifier flags, stored in ni_cnd.flags
  */
-#define	LOCKLEAF	0x0004	/* lock inode on return */
-#define	LOCKPARENT	0x0008	/* want parent vnode returned locked */
-#define	WANTPARENT	0x0010	/* want parent vnode returned unlocked */
 #define	NOCACHE		0x0020	/* name must not be left in cache */
-#define	FOLLOW		0x0040	/* follow symbolic links */
 #define	NOFOLLOW	0x0000	/* do not follow symbolic links (pseudo) */
 #define	SHAREDLEAF	0x0080	/* OK to have shared leaf lock */
 #define	MODMASK		0x00fc	/* mask of operational modifiers */
 /*
  * Namei parameter descriptors.
  *
- * SAVENAME may be set by either the callers of namei or by VOP_LOOKUP.
- * If the caller of namei sets the flag (for example execve wants to
- * know the name of the program that is being executed), then it must
- * free the buffer. If VOP_LOOKUP sets the flag, then the buffer must
- * be freed by either the commit routine or the VOP_ABORT routine.
  * SAVESTART is set only by the callers of namei. It implies SAVENAME
  * plus the addition of saving the parent directory that contains the
  * name in ni_startdir. It allows repeated calls to lookup for the
  * name being sought. The caller is responsible for releasing the
  * buffer and for vrele'ing ni_startdir.
  */
-#define	NOCROSSMOUNT	0x000100 /* do not cross mount points */
-#define	RDONLY		0x000200 /* lookup with read-only semantics */
-#define	HASBUF		0x000400 /* has allocated pathname buffer */
-#define	SAVENAME	0x000800 /* save pathanme buffer */
-#define	SAVESTART	0x001000 /* save starting directory */
-#define	ISDOTDOT	0x002000 /* current component name is .. */
-#define	MAKEENTRY	0x004000 /* entry is to be added to name cache */
-#define	ISLASTCN	0x008000 /* this is last component of pathname */
-#define	ISSYMLINK	0x010000 /* symlink needs interpretation */
-#define	ISWHITEOUT	0x020000 /* found whiteout */
-#define	DOWHITEOUT	0x040000 /* do whiteouts */
-#define	WILLBEDIR	0x080000 /* new files will be dirs; allow trailing / */
-#define	AUDITVNPATH1	0x100000 /* audit the path/vnode info */
-#define	AUDITVNPATH2	0x200000 /* audit the path/vnode info */
-#define	USEDVP		0x400000 /* start the lookup at ndp.ni_dvp */
-#define	NODELETEBUSY	0x800000 /* donot delete busy files (Carbon semantic) */
-#define	PARAMASK	0x3fff00 /* mask of parameter descriptors */
+#define	NOCROSSMOUNT	0x00000100 /* do not cross mount points */
+#define	RDONLY		0x00000200 /* lookup with read-only semantics */
+#define	HASBUF		0x00000400 /* has allocated pathname buffer */
+#define	SAVENAME	0x00000800 /* save pathanme buffer */
+#define	SAVESTART	0x00001000 /* save starting directory */
+#define	ISSYMLINK	0x00010000 /* symlink needs interpretation */
+#define DONOTAUTH	0x00020000 /* do not authorize during lookup */
+#define	WILLBEDIR	0x00080000 /* new files will be dirs; allow trailing / */
+#define	AUDITVNPATH1	0x00100000 /* audit the path/vnode info */
+#define	AUDITVNPATH2	0x00200000 /* audit the path/vnode info */
+#define	USEDVP		0x00400000 /* start the lookup at ndp.ni_dvp */
+#define	PARAMASK	0x003fff00 /* mask of parameter descriptors */
+#define FSNODELOCKHELD	0x01000000
+
 /*
  * Initialization of an nameidata structure.
  */
-#define NDINIT(ndp, op, flags, segflg, namep, p) { \
+#define NDINIT(ndp, op, flags, segflg, namep, ctx) { \
 	(ndp)->ni_cnd.cn_nameiop = op; \
 	(ndp)->ni_cnd.cn_flags = flags; \
-	(ndp)->ni_segflg = segflg; \
+	if ((segflg) == UIO_USERSPACE) { \
+		(ndp)->ni_segflg = ((IS_64BIT_PROCESS(vfs_context_proc(ctx))) ? UIO_USERSPACE64 : UIO_USERSPACE32); \
+	} \
+	else if ((segflg) == UIO_SYSSPACE) { \
+		(ndp)->ni_segflg = UIO_SYSSPACE32; \
+	} \
+	else { \
+		(ndp)->ni_segflg = segflg; \
+	} \
 	(ndp)->ni_dirp = namep; \
-	(ndp)->ni_cnd.cn_proc = p; \
+	(ndp)->ni_cnd.cn_context = ctx; \
 }
 #endif /* KERNEL */
 
 /*
  * This structure describes the elements in the cache of recent
- * names looked up by namei. NCHNAMLEN is sized to make structure
- * size a power of two to optimize malloc's. Minimum reasonable
- * size is 15.
+ * names looked up by namei.
  */
 
 #define	NCHNAMLEN	31	/* maximum name segment length we bother with */
+#define NCHASHMASK	0x7fffffff
 
 struct	namecache {
-	LIST_ENTRY(namecache) nc_hash;	/* hash chain */
-	TAILQ_ENTRY(namecache) nc_lru;	/* LRU chain */
-	struct	vnode *nc_dvp;		/* vnode of parent of name */
-	u_long	nc_dvpid;		/* capability number of nc_dvp */
-	struct	vnode *nc_vp;		/* vnode the name refers to */
-	u_long	nc_vpid;		/* capability number of nc_vp */
-	char	*nc_name;		/* segment name */
+	TAILQ_ENTRY(namecache)	nc_entry;	/* chain of all entries */
+	LIST_ENTRY(namecache)	nc_hash;	/* hash chain */
+        LIST_ENTRY(namecache)	nc_child;	/* chain of ncp's that are children of a vp */
+        union {
+	  LIST_ENTRY(namecache)	 nc_link;	/* chain of ncp's that 'name' a vp */
+	  TAILQ_ENTRY(namecache) nc_negentry;	/* chain of ncp's that 'name' a vp */
+	} nc_un;
+	vnode_t			nc_dvp;		/* vnode of parent of name */
+	vnode_t			nc_vp;		/* vnode the name refers to */
+        unsigned int		nc_whiteout:1,	/* name has whiteout applied */
+	                        nc_hashval:31;	/* hashval of stringname */
+	char		*	nc_name;	/* pointer to segment name in string cache */
 };
 
+
 #ifdef KERNEL
-struct mount;
-extern u_long	nextvnodeid;
-int	namei __P((struct nameidata *ndp));
-int	lookup __P((struct nameidata *ndp));
-int	relookup __P((struct vnode *dvp, struct vnode **vpp,
-		struct componentname *cnp));
 
-/* namecache function prototypes */
-int	cache_lookup __P((struct vnode *dvp, struct vnode **vpp,
-		struct componentname *cnp));
-void	cache_enter __P((struct vnode *dvp, struct vnode *vpp,
-		struct componentname *cnp));
-void	cache_purge __P((struct vnode *vp));
-void    cache_purgevfs __P((struct mount *mp));
+int	namei(struct nameidata *ndp);
+void	nameidone(struct nameidata *);
+int	lookup(struct nameidata *ndp);
+int	relookup(struct vnode *dvp, struct vnode **vpp,
+		struct componentname *cnp);
 
-//
-// Global string-cache routines.  You can pass zero for nc_hash
-// if you don't know it (add_name() will then compute the hash).
-// There are no flags for now but maybe someday.
-// 
-char *add_name(const char *name, size_t len, u_int nc_hash, u_int flags);
-int   remove_name(const char *name);
+/*
+ * namecache function prototypes
+ */
+void    cache_purgevfs(mount_t mp);
+int		cache_lookup_path(struct nameidata *ndp, struct componentname *cnp, vnode_t dp,
+			  vfs_context_t context, int *trailing_slash, int *dp_authorized);
 
+void	vnode_cache_credentials(vnode_t vp, vfs_context_t context);
+void	vnode_uncache_credentials(vnode_t vp);
+int		reverse_lookup(vnode_t start_vp, vnode_t *lookup_vpp, 
+				struct filedesc *fdp, vfs_context_t context, int *dp_authorized);
 
 #endif /* KERNEL */
 
@@ -234,15 +209,18 @@ int   remove_name(const char *name);
  * Stats on usefulness of namei caches.
  */
 struct	nchstats {
+        long	ncs_negtotal;
 	long	ncs_goodhits;		/* hits that we can really use */
 	long	ncs_neghits;		/* negative hits that we can use */
 	long	ncs_badhits;		/* hits we must drop */
-	long	ncs_falsehits;		/* hits with id mismatch */
 	long	ncs_miss;		/* misses */
-	long	ncs_long;		/* long names that ignore cache */
 	long	ncs_pass2;		/* names found with passes == 2 */
 	long	ncs_2passes;		/* number of times we attempt it */
+        long	ncs_stolen;
+        long	ncs_enters;
+        long	ncs_deletes;
+        long	ncs_badvid;
 };
-#endif /* __APPLE_API_UNSTABLE */
+#endif /* BSD_KERNEL_PRIVATE */
 
 #endif /* !_SYS_NAMEI_H_ */

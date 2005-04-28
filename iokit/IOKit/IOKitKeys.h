@@ -124,4 +124,13 @@
 // property of root that describes the machine's serial number as a string
 #define kIOPlatformSerialNumberKey	"IOPlatformSerialNumber"	// (OSString)
 
+// IODTNVRAM property keys
+#define kIONVRAMDeletePropertyKey	"IONVRAM-DELETE-PROPERTY"
+#define kIODTNVRAMPanicInfoKey		"aapl,panic-info"
+
+// keys for complex boot information
+#define kIOBootDeviceKey          "IOBootDevice"		// dict | array of dicts
+#define kIOBootDevicePathKey      "IOBootDevicePath"	// arch-neutral OSString
+#define kIOBootDeviceSizeKey      "IOBootDeviceSize"	// OSNumber of bytes
+
 #endif /* ! _IOKIT_IOKITKEYS_H */

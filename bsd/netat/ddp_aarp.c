@@ -434,6 +434,8 @@ int	aarp_send_data(m, elapp, dest_at_addr, loop)
 	register at_ddp_t	*ddp_hdrp;
 	int			error;
 	int s;
+	struct timeval timenow;
+	getmicrouptime(&timenow);
 
 	if (gbuf_len(m) <= 0)
 		ddp_hdrp = (at_ddp_t *)gbuf_rptr(gbuf_cont(m));
@@ -514,7 +516,8 @@ int	aarp_send_data(m, elapp, dest_at_addr, loop)
 	amt_ptr->dest_at_addr = *dest_at_addr;
 	amt_ptr->dest_at_addr.atalk_unused = 0;
 
-	amt_ptr->last_time = time.tv_sec;
+	getmicrouptime(&timenow);
+	amt_ptr->last_time = timenow.tv_sec;
 	amt_ptr->m = m;
 	amt_ptr->elapp = elapp;
 	amt_ptr->no_of_retries = 0;
@@ -765,9 +768,8 @@ register aarp_amt_t	*amt_ptr;
 
 void  aarp_sched_probe(void *arg)
 {
-	boolean_t 	funnel_state;
 
-	funnel_state = thread_funnel_set(network_flock, TRUE);
+	atalk_lock();
 
 	if (probe_cb.elapp->aa_ifp != 0 &&
             probe_cb.no_of_retries != AARP_MAX_PROBE_RETRIES) {
@@ -778,7 +780,7 @@ void  aarp_sched_probe(void *arg)
 		AARPwakeup(&probe_cb);
 	}
 
-	(void) thread_funnel_set(network_flock, FALSE);
+	atalk_unlock();
 }
 
 
@@ -810,10 +812,9 @@ StaticProc void	aarp_sched_req(arg)
      void *arg;
 {
 	int s, i;
-	boolean_t 	funnel_state;
 	aarp_amt_t *amt_ptr = (aarp_amt_t *)arg;
 
-	funnel_state = thread_funnel_set(network_flock, TRUE);
+	atalk_lock();
 
 	/*
 	 * make sure pointer still valid in case interface removed
@@ -831,13 +832,13 @@ StaticProc void	aarp_sched_req(arg)
 	    ATDISABLE(s, arpinp_lock);
 	    if (amt_ptr->tmo == 0) {
 	        ATENABLE(s, arpinp_lock);
-	        (void) thread_funnel_set(network_flock, FALSE);
+			atalk_unlock();
 	        return;
 	    }
 	    if (amt_ptr->no_of_retries < AARP_MAX_REQ_RETRIES) {
 	        ATENABLE(s, arpinp_lock);
 	        if (aarp_send_req(amt_ptr) == 0) {
-	            (void) thread_funnel_set(network_flock, FALSE);
+				atalk_unlock();
 	            return;
 	        }
 	        ATDISABLE(s, arpinp_lock);
@@ -846,7 +847,7 @@ StaticProc void	aarp_sched_req(arg)
 	    aarp_delete_amt_info(amt_ptr);
 	    break;
 	}	
-	(void) thread_funnel_set(network_flock, FALSE);
+	atalk_unlock();
 
 	return;
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -24,6 +24,11 @@
  *
  *	Definitions for accessing mach-o headers.
  *
+ * NOTE:	The functions prototyped by this header only operate againt
+ *		32 bit mach headers.  Many of these functions imply the
+ *		currently running kernel, and cannot be used against mach
+ *		headers other than that of the currently running kernel.
+ *
  * HISTORY
  * 29-Jan-92  Mike DeMoney (mike@next.com)
  *	Made into machine independent form from machdep/m68k/mach_header.h.
@@ -46,17 +51,17 @@ struct segment_command *nextseg(struct segment_command *sgp);
 struct segment_command *nextsegfromheader(
 	struct mach_header	*header,
 	struct segment_command	*seg);
-struct segment_command *getsegbyname(char *seg_name);
+struct segment_command *getsegbyname(const char *seg_name);
 struct segment_command *getsegbynamefromheader(
 	struct mach_header	*header,
-	char			*seg_name);
-void *getsegdatafromheader(struct mach_header *, char *, int *);
-struct section *getsectbyname(char *seg_name, char *sect_name);
+	const char		*seg_name);
+void *getsegdatafromheader(struct mach_header *, const char *, int *);
+struct section *getsectbyname(const char *seg_name, const char *sect_name);
 struct section *getsectbynamefromheader(
 	struct mach_header	*header,
-	char			*seg_name,
-	char			*sect_name);
-void *getsectdatafromheader(struct mach_header *, char *, char *, int *);
+	const char		*seg_name,
+	const char		*sect_name);
+void *getsectdatafromheader(struct mach_header *, const char *, const char *, int *);
 struct section *firstsect(struct segment_command *sgp);
 struct section *nextsect(struct segment_command *sgp, struct section *sp);
 struct fvmlib_command *fvmlib(void);

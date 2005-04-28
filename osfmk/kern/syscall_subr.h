@@ -53,16 +53,22 @@
 #ifndef	_KERN_SYSCALL_SUBR_H_
 #define _KERN_SYSCALL_SUBR_H_
 
-#include <mach/boolean.h>
-#include <mach/kern_return.h>
-#include <kern/kern_types.h>
-#include <mach/port.h>
+#include <mach/mach_traps.h>
 
-/* Attempt to context switch */
-extern boolean_t	swtch(void);
+extern void		thread_depress_abstime(
+					uint64_t		interval);
 
-/* Attempt to context switch */
-extern boolean_t	swtch_pri(
-					int				pri);
+extern void		thread_depress_ms(
+					mach_msg_timeout_t	interval);
+
+extern kern_return_t	thread_depress_abort_internal(
+							thread_t				thread);
+
+extern void		thread_depress_expire(
+					void			*thread,
+					void			*p1);
+
+extern void		thread_poll_yield(
+					thread_t		self);
 
 #endif	/* _KERN_SYSCALL_SUBR_H_ */

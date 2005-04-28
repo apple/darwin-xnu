@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -78,10 +78,10 @@ routine upl_abort(
 
 routine upl_abort_range(
 		upl_object	: upl_t;
-		offset		: vm_offset_t;
-		size		: vm_size_t;
+		offset		: upl_offset_t;
+		size		: upl_size_t;
 	in	abort_cond	: integer_t;
-	out	empty	: boolean_t);
+	out	empty		: boolean_t);
  
 routine upl_commit(
 		upl_object	: upl_t;
@@ -89,9 +89,9 @@ routine upl_commit(
 
 routine upl_commit_range(
 		upl_object	: upl_t;
-		offset		: vm_offset_t;
-		size		: vm_size_t;
+		offset		: upl_offset_t;
+		size		: upl_size_t;
 	in	cntrl_flags	: integer_t;
 	in	page_list	: upl_page_info_array_t;
-	out	empty	: boolean_t);
+	out	empty		: boolean_t);
 

@@ -2,10 +2,11 @@
 #define _LIBSA_STDLIB_H_
 
 #include <sys/cdefs.h>
+#include <sys/_types.h>
 
-#ifndef _BSD_SIZE_T_DEFINED_
-#define _BSD_SIZE_T_DEFINED_
-typedef __SIZE_TYPE__    size_t;
+#ifndef _SIZE_T
+#define _SIZE_T
+typedef __darwin_size_t	size_t;
 #endif
 
 #ifndef NULL

@@ -48,8 +48,8 @@
 
 #include <net/if.h>
 #include <net/route.h>
-#include <net/netisr.h>
 #include <kern/cpu_number.h>
+#include <kern/locks.h>
 
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
@@ -96,6 +96,7 @@
 #define DBG_FNC_DECRYPT		NETDBG_CODE(DBG_NETIPSEC, (7 << 8))
 #define IPLEN_FLIPPED
 
+extern lck_mtx_t *sadb_mutex;
 #if INET
 extern struct protosw inetsw[];
 
@@ -120,6 +121,8 @@ esp4_input(m, off)
 	size_t hlen;
 	size_t esplen;
 	int s;
+
+	lck_mtx_lock(sadb_mutex);
 
 	KERNEL_DEBUG(DBG_FNC_ESPIN | DBG_FUNC_START, 0,0,0,0,0);
 	/* sanity check for alignment. */
@@ -397,16 +400,9 @@ noreplaycheck:
 		/* Clear the csum flags, they can't be valid for the inner headers */
 		m->m_pkthdr.csum_flags = 0;
 
-		s = splimp();
-		if (IF_QFULL(&ipintrq)) {
-			ipsecstat.in_inval++;
-			splx(s);
-			goto bad;
-		}
-		IF_ENQUEUE(&ipintrq, m);
-		m = NULL;
-		schednetisr(NETISR_IP); /*can be skipped but to make sure*/
-		splx(s);
+		lck_mtx_unlock(sadb_mutex);
+		proto_input(PF_INET, m);
+		lck_mtx_lock(sadb_mutex);
 		nxt = IPPROTO_DONE;
 		KERNEL_DEBUG(DBG_FNC_ESPIN | DBG_FUNC_END, 2,0,0,0,0);
 	} else {
@@ -457,7 +453,9 @@ noreplaycheck:
 				goto bad;
 			}
 			KERNEL_DEBUG(DBG_FNC_ESPIN | DBG_FUNC_END, 3,0,0,0,0);
-			(*ip_protox[nxt]->pr_input)(m, off);
+			lck_mtx_unlock(sadb_mutex);
+			ip_proto_dispatch_in(m, off, nxt, 0);
+			lck_mtx_lock(sadb_mutex);
 		} else
 			m_freem(m);
 		m = NULL;
@@ -469,6 +467,7 @@ noreplaycheck:
 		key_freesav(sav);
 	}
 	ipsecstat.in_success++;
+	lck_mtx_unlock(sadb_mutex);
 	return;
 
 bad:
@@ -477,6 +476,7 @@ bad:
 			printf("DP esp4_input call free SA:%p\n", sav));
 		key_freesav(sav);
 	}
+	lck_mtx_unlock(sadb_mutex);
 	if (m)
 		m_freem(m);
 	KERNEL_DEBUG(DBG_FNC_ESPIN | DBG_FUNC_END, 4,0,0,0,0);
@@ -504,6 +504,8 @@ esp6_input(mp, offp)
 	size_t esplen;
 	int s;
 
+	lck_mtx_lock(sadb_mutex);
+
 	/* sanity check for alignment. */
 	if (off % 4 != 0 || m->m_pkthdr.len % 4 != 0) {
 		ipseclog((LOG_ERR, "IPv6 ESP input: packet alignment problem "
@@ -513,12 +515,13 @@ esp6_input(mp, offp)
 	}
 
 #ifndef PULLDOWN_TEST
-	IP6_EXTHDR_CHECK(m, off, ESPMAXLEN, IPPROTO_DONE);
+	IP6_EXTHDR_CHECK(m, off, ESPMAXLEN, {lck_mtx_unlock(sadb_mutex); return IPPROTO_DONE;});
 	esp = (struct esp *)(mtod(m, caddr_t) + off);
 #else
 	IP6_EXTHDR_GET(esp, struct esp *, m, off, ESPMAXLEN);
 	if (esp == NULL) {
 		ipsec6stat.in_inval++;
+		lck_mtx_unlock(sadb_mutex);
 		return IPPROTO_DONE;
 	}
 #endif
@@ -672,7 +675,7 @@ noreplaycheck:
 	}
 
 #ifndef PULLDOWN_TEST
-	IP6_EXTHDR_CHECK(m, off, esplen + ivlen, IPPROTO_DONE);	/*XXX*/
+	IP6_EXTHDR_CHECK(m, off, esplen + ivlen, return IPPROTO_DONE);	/*XXX*/
 #else
 	IP6_EXTHDR_GET(esp, struct esp *, m, off, esplen + ivlen);
 	if (esp == NULL) {
@@ -776,17 +779,9 @@ noreplaycheck:
 			ipsec6stat.in_nomem++;
 			goto bad;
 		}
-
-		s = splimp();
-		if (IF_QFULL(&ip6intrq)) {
-			ipsec6stat.in_inval++;
-			splx(s);
-			goto bad;
-		}
-		IF_ENQUEUE(&ip6intrq, m);
-		m = NULL;
-		schednetisr(NETISR_IPV6); /*can be skipped but to make sure*/
-		splx(s);
+		lck_mtx_unlock(sadb_mutex);
+		proto_input(PF_INET6, m);
+		lck_mtx_lock(sadb_mutex);
 		nxt = IPPROTO_DONE;
 	} else {
 		/*
@@ -894,6 +889,7 @@ noreplaycheck:
 		key_freesav(sav);
 	}
 	ipsec6stat.in_success++;
+	lck_mtx_unlock(sadb_mutex);
 	return nxt;
 
 bad:
@@ -902,6 +898,7 @@ bad:
 			printf("DP esp6_input call free SA:%p\n", sav));
 		key_freesav(sav);
 	}
+	lck_mtx_unlock(sadb_mutex);
 	if (m)
 		m_freem(m);
 	return IPPROTO_DONE;
@@ -986,6 +983,7 @@ esp6_ctlinput(cmd, sa, d)
 			 */
 			sa6_src = ip6cp->ip6c_src;
 			sa6_dst = (struct sockaddr_in6 *)sa;
+			lck_mtx_lock(sadb_mutex);
 			sav = key_allocsa(AF_INET6,
 					  (caddr_t)&sa6_src->sin6_addr,
 					  (caddr_t)&sa6_dst->sin6_addr,
@@ -996,6 +994,7 @@ esp6_ctlinput(cmd, sa, d)
 					valid++;
 				key_freesav(sav);
 			}
+			lck_mtx_unlock(sadb_mutex);
 
 			/* XXX Further validation? */
 

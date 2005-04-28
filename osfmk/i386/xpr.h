@@ -57,16 +57,7 @@
  */
 
 #include <platforms.h>
-#include <cpus.h>
 #include <time_stamp.h>
 
-#if 	NCPUS == 1
-extern	int	xpr_time(void);
-#define	XPR_TIMESTAMP	xpr_time()
-
-#else	/* NCPUS == 1 */
-
 #define XPR_TIMESTAMP	(0)
-
-#endif	/* NCPUS == 1 */
 

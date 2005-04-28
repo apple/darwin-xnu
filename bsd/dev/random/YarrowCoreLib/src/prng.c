@@ -182,9 +182,10 @@ cleanup_slow_init:
 
 /* In-place modifed bubble sort */
 static void 
-bubbleSort(UINT *data,UINT len) 
+bubbleSort( UINT *data, LONG len ) 
 {
-	UINT i,last,newlast,temp;
+	LONG 	i,last,newlast;
+	UINT	temp;
 
 	last = len-1; 
 	while(last!=-1) 
@@ -476,7 +477,7 @@ prngStretch(BYTE *inbuf,UINT inbuflen,BYTE *outbuf,UINT outbuflen) {
 
 /* Add entropy to the PRNG from a source */
 prng_error_status
-prngInput(PRNG *p, BYTE *inbuf,UINT inbuflen,UINT poolnum,UINT estbits) 
+prngInput(PRNG *p, BYTE *inbuf,UINT inbuflen,UINT poolnum, __unused UINT estbits)
 {
 	#ifndef	YARROW_KERNEL
 	comp_error_status resp;
@@ -513,13 +514,15 @@ prng_error_status
 prngAllowReseed(PRNG *p, LONGLONG ticks) 
 {
 	UINT temp[TOTAL_SOURCES];
-	UINT i,sum;
+	LONG i;
+	UINT sum;
 #ifndef KERNEL_BUILD
 	float ratio;
 #endif
 
+#ifndef KERNEL_BUILD
 	comp_error_status resp;
-
+#endif
 
 	CHECKSTATE(p);
 

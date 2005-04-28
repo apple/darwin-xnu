@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -24,52 +24,85 @@
 #include <mach/boolean.h>
 #include <mach/mach_types.h>
 
-#include <ppc/machine_routines.h>
-#include <ppc/exception.h>
-#include <kern/ast.h>
-#include <kern/timer_call.h>
 #include <kern/kern_types.h>
+#include <kern/processor.h>
+#include <kern/timer_call.h>
+#include <kern/thread_call.h>
+#include <kern/kalloc.h>
+#include <kern/thread.h>
 
-extern kern_return_t chud_copy_savearea_to_threadstate(thread_flavor_t flavor, thread_state_t tstate, mach_msg_type_number_t *count, struct savearea *sv);
-extern kern_return_t chud_copy_threadstate_to_savearea(struct savearea *sv, thread_flavor_t flavor, thread_state_t tstate, mach_msg_type_number_t *count);
+#include <ppc/machine_routines.h>
+#include <ppc/cpu_data.h>
+#include <ppc/cpu_internal.h>
+#include <ppc/exception.h>
+#include <ppc/thread.h>
+#include <ppc/trap.h>
+
+#include <ppc/chud/chud_xnu.h>
+#include <ppc/chud/chud_xnu_private.h>
 
 __private_extern__
 void chudxnu_cancel_all_callbacks(void)
 {
-    extern void chudxnu_exit_callback_cancel(void);
-    extern void chudxnu_thread_timer_callback_cancel(void);
-
     chudxnu_cpu_timer_callback_cancel_all();
     chudxnu_trap_callback_cancel();
     chudxnu_interrupt_callback_cancel();
     chudxnu_perfmon_ast_callback_cancel();
     chudxnu_cpusig_callback_cancel();
     chudxnu_kdebug_callback_cancel();
-    chudxnu_exit_callback_cancel();
     chudxnu_thread_timer_callback_cancel();
+	chudxnu_syscall_callback_cancel();
 }
 
 #pragma mark **** cpu timer ****
-static timer_call_data_t cpu_timer_call[NCPUS] = {{0}, {0}};
-static uint64_t t_deadline[NCPUS] = {0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL};
+typedef struct {
+	timer_call_data_t	cpu_timer_call;
+	uint64_t		t_deadline;
+	chudxnu_cpu_timer_callback_func_t	cpu_timer_callback_fn;
+} chudcpu_data_t;
 
-typedef void (*chudxnu_cpu_timer_callback_func_t)(thread_flavor_t flavor, thread_state_t tstate,  mach_msg_type_number_t count);
-static chudxnu_cpu_timer_callback_func_t cpu_timer_callback_fn[NCPUS] = {NULL, NULL};
+static chudcpu_data_t chudcpu_boot_cpu;
+
+void *chudxnu_per_proc_alloc(boolean_t boot_processor)
+{
+	chudcpu_data_t	*chud_proc_info;
+
+	if (boot_processor) {
+		chud_proc_info = &chudcpu_boot_cpu;
+	} else {
+		chud_proc_info = (chudcpu_data_t *)kalloc(sizeof(chudcpu_data_t));
+		if (chud_proc_info == (chudcpu_data_t *)NULL) {
+			return (void *)NULL;
+		}
+	}
+	bzero((char *)chud_proc_info, sizeof(chudcpu_data_t));
+	chud_proc_info->t_deadline = 0xFFFFFFFFFFFFFFFFULL;
+	return (void *)chud_proc_info;
+}
+
+void chudxnu_per_proc_free(void *per_proc_chud)
+{
+	if (per_proc_chud == (void *)&chudcpu_boot_cpu) {
+		return;
+	} else {
+		kfree(per_proc_chud,sizeof(chudcpu_data_t));
+	}
+}
 
 static void chudxnu_private_cpu_timer_callback(timer_call_param_t param0, timer_call_param_t param1)
 {
-    int cpu;
+    chudcpu_data_t	*chud_proc_info;
     boolean_t oldlevel;
     struct ppc_thread_state64 state;
     mach_msg_type_number_t count;
 
     oldlevel = ml_set_interrupts_enabled(FALSE);
-    cpu = cpu_number();
+    chud_proc_info = (chudcpu_data_t *)(getPerProc()->pp_chud);
 
     count = PPC_THREAD_STATE64_COUNT;
-    if(chudxnu_thread_get_state(current_act(), PPC_THREAD_STATE64, (thread_state_t)&state, &count, FALSE)==KERN_SUCCESS) {
-        if(cpu_timer_callback_fn[cpu]) {
-            (cpu_timer_callback_fn[cpu])(PPC_THREAD_STATE64, (thread_state_t)&state, count);
+    if(chudxnu_thread_get_state(current_thread(), PPC_THREAD_STATE64, (thread_state_t)&state, &count, FALSE)==KERN_SUCCESS) {
+        if(chud_proc_info->cpu_timer_callback_fn) {
+            (chud_proc_info->cpu_timer_callback_fn)(PPC_THREAD_STATE64, (thread_state_t)&state, count);
         }
     }
 
@@ -79,19 +112,19 @@ static void chudxnu_private_cpu_timer_callback(timer_call_param_t param0, timer_
 __private_extern__
 kern_return_t chudxnu_cpu_timer_callback_enter(chudxnu_cpu_timer_callback_func_t func, uint32_t time, uint32_t units)
 {
-    int cpu;
+    chudcpu_data_t	*chud_proc_info;
     boolean_t oldlevel;
 
     oldlevel = ml_set_interrupts_enabled(FALSE);
-    cpu = cpu_number();
+    chud_proc_info = (chudcpu_data_t *)(getPerProc()->pp_chud);
 
-    timer_call_cancel(&(cpu_timer_call[cpu])); // cancel any existing callback for this cpu
+    timer_call_cancel(&(chud_proc_info->cpu_timer_call)); // cancel any existing callback for this cpu
 
-    cpu_timer_callback_fn[cpu] = func;
+    chud_proc_info->cpu_timer_callback_fn = func;
 
-    clock_interval_to_deadline(time, units, &(t_deadline[cpu]));
-    timer_call_setup(&(cpu_timer_call[cpu]), chudxnu_private_cpu_timer_callback, NULL);
-    timer_call_enter(&(cpu_timer_call[cpu]), t_deadline[cpu]);
+    clock_interval_to_deadline(time, units, &(chud_proc_info->t_deadline));
+    timer_call_setup(&(chud_proc_info->cpu_timer_call), chudxnu_private_cpu_timer_callback, NULL);
+    timer_call_enter(&(chud_proc_info->cpu_timer_call), chud_proc_info->t_deadline);
 
     ml_set_interrupts_enabled(oldlevel);
     return KERN_SUCCESS;
@@ -100,15 +133,15 @@ kern_return_t chudxnu_cpu_timer_callback_enter(chudxnu_cpu_timer_callback_func_t
 __private_extern__
 kern_return_t chudxnu_cpu_timer_callback_cancel(void)
 {
-    int cpu;
+    chudcpu_data_t	*chud_proc_info;
     boolean_t oldlevel;
 
     oldlevel = ml_set_interrupts_enabled(FALSE);
-    cpu = cpu_number();
+    chud_proc_info = (chudcpu_data_t *)(getPerProc()->pp_chud);
 
-    timer_call_cancel(&(cpu_timer_call[cpu]));
-    t_deadline[cpu] = t_deadline[cpu] | ~(t_deadline[cpu]); // set to max value
-    cpu_timer_callback_fn[cpu] = NULL;
+    timer_call_cancel(&(chud_proc_info->cpu_timer_call));
+    chud_proc_info->t_deadline = chud_proc_info->t_deadline | ~(chud_proc_info->t_deadline); // set to max value
+    chud_proc_info->cpu_timer_callback_fn = NULL;
 
     ml_set_interrupts_enabled(oldlevel);
     return KERN_SUCCESS;
@@ -117,25 +150,23 @@ kern_return_t chudxnu_cpu_timer_callback_cancel(void)
 __private_extern__
 kern_return_t chudxnu_cpu_timer_callback_cancel_all(void)
 {
-    int cpu;
+    unsigned int cpu;
+    chudcpu_data_t	*chud_proc_info;
 
-    for(cpu=0; cpu<NCPUS; cpu++) {
-        timer_call_cancel(&(cpu_timer_call[cpu]));
-        t_deadline[cpu] = t_deadline[cpu] | ~(t_deadline[cpu]); // set to max value
-        cpu_timer_callback_fn[cpu] = NULL;
+    for(cpu=0; cpu<real_ncpus; cpu++) {
+    	if ((PerProcTable[cpu].ppe_vaddr == 0)
+    	    || (PerProcTable[cpu].ppe_vaddr->pp_chud == 0))
+			continue;
+    	chud_proc_info = (chudcpu_data_t *)PerProcTable[cpu].ppe_vaddr->pp_chud;
+        timer_call_cancel(&(chud_proc_info->cpu_timer_call));
+        chud_proc_info->t_deadline = chud_proc_info->t_deadline | ~(chud_proc_info->t_deadline); // set to max value
+        chud_proc_info->cpu_timer_callback_fn = NULL;
     }
     return KERN_SUCCESS;
 }
 
-#pragma mark **** trap and ast ****
-typedef kern_return_t (*chudxnu_trap_callback_func_t)(uint32_t trapentry, thread_flavor_t flavor, thread_state_t tstate, mach_msg_type_number_t count);
+#pragma mark **** trap ****
 static chudxnu_trap_callback_func_t trap_callback_fn = NULL;
-
-typedef kern_return_t (*perfTrap)(int trapno, struct savearea *ssp, unsigned int dsisr, unsigned int dar);
-extern perfTrap perfTrapHook; /* function hook into trap() */
-
-typedef void (*chudxnu_perfmon_ast_callback_func_t)(thread_flavor_t flavor, thread_state_t tstate,  mach_msg_type_number_t count);
-static chudxnu_perfmon_ast_callback_func_t perfmon_ast_callback_fn = NULL;
 
 #define TRAP_ENTRY_POINT(t) ((t==T_RESET) ? 0x100 : \
                              (t==T_MACHINE_CHECK) ? 0x200 : \
@@ -170,19 +201,8 @@ static chudxnu_perfmon_ast_callback_func_t perfmon_ast_callback_fn = NULL;
 static kern_return_t chudxnu_private_trap_callback(int trapno, struct savearea *ssp, unsigned int dsisr, unsigned int dar)
 {
     boolean_t oldlevel = ml_set_interrupts_enabled(FALSE);
-    int cpu = cpu_number();
-
     kern_return_t retval = KERN_FAILURE;
     uint32_t trapentry = TRAP_ENTRY_POINT(trapno);
-
-    // ASTs from ihandler go through thandler and are made to look like traps
-    if(perfmon_ast_callback_fn && (need_ast[cpu] & AST_PPC_CHUD)) {
-        struct ppc_thread_state64 state;
-        mach_msg_type_number_t count = PPC_THREAD_STATE64_COUNT;
-        chudxnu_copy_savearea_to_threadstate(PPC_THREAD_STATE64, (thread_state_t)&state, &count, ssp);
-        (perfmon_ast_callback_fn)(PPC_THREAD_STATE64, (thread_state_t)&state, count);
-        need_ast[cpu] &= ~(AST_PPC_CHUD);
-    }
 
     if(trapentry!=0x0) {
         if(trap_callback_fn) {
@@ -212,19 +232,69 @@ __private_extern__
 kern_return_t chudxnu_trap_callback_cancel(void)
 {
     trap_callback_fn = NULL;
-    if(!perfmon_ast_callback_fn) {
         perfTrapHook = NULL;
-    }
     __asm__ volatile("eieio");	/* force order */
     __asm__ volatile("sync");	/* force to memory */
     return KERN_SUCCESS;
+}
+
+#pragma mark **** ast ****
+static chudxnu_perfmon_ast_callback_func_t perfmon_ast_callback_fn = NULL;
+
+static kern_return_t chudxnu_private_chud_ast_callback(int trapno, struct savearea *ssp, unsigned int dsisr, unsigned int dar)
+{
+    boolean_t oldlevel = ml_set_interrupts_enabled(FALSE);
+    ast_t *myast = ast_pending();
+    kern_return_t retval = KERN_FAILURE;
+    
+	if(*myast & AST_PPC_CHUD_URGENT) {
+		*myast &= ~(AST_PPC_CHUD_URGENT | AST_PPC_CHUD);
+		if((*myast & AST_PREEMPTION) != AST_PREEMPTION) *myast &= ~(AST_URGENT);
+		retval = KERN_SUCCESS;
+	} else if(*myast & AST_PPC_CHUD) {
+		*myast &= ~(AST_PPC_CHUD);
+		retval = KERN_SUCCESS;
+	}
+
+    if(perfmon_ast_callback_fn) {
+		struct ppc_thread_state64 state;
+		mach_msg_type_number_t count;
+		count = PPC_THREAD_STATE64_COUNT;
+		
+		if(chudxnu_thread_get_state(current_thread(), PPC_THREAD_STATE64, (thread_state_t)&state, &count, FALSE)==KERN_SUCCESS) {
+			(perfmon_ast_callback_fn)(PPC_THREAD_STATE64, (thread_state_t)&state, count);
+		}
+    }
+    
+#if 0
+    // ASTs from ihandler go through thandler and are made to look like traps
+    // always handle AST_PPC_CHUD_URGENT if there's a callback
+    // only handle AST_PPC_CHUD if it's the only AST pending
+    if(perfmon_ast_callback_fn && ((*myast & AST_PPC_CHUD_URGENT) || ((*myast & AST_PPC_CHUD) && !(*myast & AST_URGENT)))) {
+        struct ppc_thread_state64 state;
+        mach_msg_type_number_t count = PPC_THREAD_STATE64_COUNT;
+        chudxnu_copy_savearea_to_threadstate(PPC_THREAD_STATE64, (thread_state_t)&state, &count, ssp);
+        if(*myast & AST_PPC_CHUD_URGENT) {
+            *myast &= ~(AST_PPC_CHUD_URGENT | AST_PPC_CHUD);
+            if((*myast & AST_PREEMPTION) != AST_PREEMPTION) *myast &= ~(AST_URGENT);
+			retval = KERN_SUCCESS;
+        } else if(*myast & AST_PPC_CHUD) {
+            *myast &= ~(AST_PPC_CHUD);
+			retval = KERN_SUCCESS;
+        }
+        (perfmon_ast_callback_fn)(PPC_THREAD_STATE64, (thread_state_t)&state, count);
+    }
+#endif
+
+    ml_set_interrupts_enabled(oldlevel);
+	return retval;
 }
 
 __private_extern__
 kern_return_t chudxnu_perfmon_ast_callback_enter(chudxnu_perfmon_ast_callback_func_t func)
 {
     perfmon_ast_callback_fn = func;
-    perfTrapHook = chudxnu_private_trap_callback;
+    perfASTHook = chudxnu_private_chud_ast_callback;
     __asm__ volatile("eieio");	/* force order */
     __asm__ volatile("sync");	/* force to memory */
     return KERN_SUCCESS;
@@ -234,34 +304,37 @@ __private_extern__
 kern_return_t chudxnu_perfmon_ast_callback_cancel(void)
 {
     perfmon_ast_callback_fn = NULL;
-    if(!trap_callback_fn) {
-        perfTrapHook = NULL;
-    }
+    perfASTHook = NULL;
     __asm__ volatile("eieio");	/* force order */
     __asm__ volatile("sync");	/* force to memory */
     return KERN_SUCCESS;
 }
 
 __private_extern__
-kern_return_t chudxnu_perfmon_ast_send(void)
+kern_return_t chudxnu_perfmon_ast_send_urgent(boolean_t urgent)
 {
-    int cpu;
-    boolean_t oldlevel;
+    boolean_t oldlevel = ml_set_interrupts_enabled(FALSE);
+	ast_t *myast = ast_pending();
 
-    oldlevel = ml_set_interrupts_enabled(FALSE);
-    cpu = cpu_number();
-
-    need_ast[cpu] |= (AST_PPC_CHUD | AST_URGENT);
+    if(urgent) {
+        *myast |= (AST_PPC_CHUD_URGENT | AST_URGENT);
+    } else {
+        *myast |= (AST_PPC_CHUD);
+    }
 
     ml_set_interrupts_enabled(oldlevel);
     return KERN_SUCCESS;
 }
 
-#pragma mark **** interrupt ****
-typedef kern_return_t (*chudxnu_interrupt_callback_func_t)(uint32_t trapentry, thread_flavor_t flavor, thread_state_t tstate,  mach_msg_type_number_t count);
-static chudxnu_interrupt_callback_func_t interrupt_callback_fn = NULL;
+__private_extern__
+kern_return_t chudxnu_perfmon_ast_send(void)
+{
+    return chudxnu_perfmon_ast_send_urgent(TRUE);
+}
 
-extern perfTrap perfIntHook; /* function hook into interrupt() */
+#pragma mark **** interrupt ****
+static chudxnu_interrupt_callback_func_t interrupt_callback_fn = NULL;
+//extern perfCallback perfIntHook; /* function hook into interrupt() */
 
 static kern_return_t chudxnu_private_interrupt_callback(int trapno, struct savearea *ssp, unsigned int dsisr, unsigned int dar)
 {
@@ -296,10 +369,8 @@ kern_return_t chudxnu_interrupt_callback_cancel(void)
 }
 
 #pragma mark **** cpu signal ****
-typedef kern_return_t (*chudxnu_cpusig_callback_func_t)(int request, thread_flavor_t flavor, thread_state_t tstate, mach_msg_type_number_t count);
 static chudxnu_cpusig_callback_func_t cpusig_callback_fn = NULL;
-
-extern perfTrap perfCpuSigHook; /* function hook into cpu_signal_handler() */
+extern perfCallback perfCpuSigHook; /* function hook into cpu_signal_handler() */
 
 static kern_return_t chudxnu_private_cpu_signal_handler(int request, struct savearea *ssp, unsigned int arg0, unsigned int arg1)
 {
@@ -372,11 +443,84 @@ kern_return_t chudxnu_cpusig_send(int otherCPU, uint32_t request)
     return retval;
 }
 
-#pragma mark **** thread timer ****
+#pragma mark **** timer ****
+__private_extern__
+chud_timer_t chudxnu_timer_alloc(chudxnu_timer_callback_func_t func, uint32_t param0)
+{
+    return (chud_timer_t)thread_call_allocate((thread_call_func_t)func, (thread_call_param_t)param0);
+}
+
+__private_extern__
+kern_return_t chudxnu_timer_callback_enter(chud_timer_t timer, uint32_t param1, uint32_t time, uint32_t units)
+{
+    uint64_t t_delay;
+    clock_interval_to_deadline(time, units, &t_delay);
+    thread_call_enter1_delayed((thread_call_t)timer, (thread_call_param_t)param1, t_delay);
+    return KERN_SUCCESS;
+}
+
+__private_extern__
+kern_return_t chudxnu_timer_callback_cancel(chud_timer_t timer)
+{
+    thread_call_cancel((thread_call_t)timer);
+    return KERN_SUCCESS;
+}
+
+__private_extern__
+kern_return_t chudxnu_timer_free(chud_timer_t timer)
+{
+    thread_call_cancel((thread_call_t)timer);
+    thread_call_free((thread_call_t)timer);
+    return KERN_SUCCESS;
+}
+
+#pragma mark **** CHUD syscall (PPC) ****
+
+typedef int (*PPCcallEnt)(struct savearea *save);
+extern PPCcallEnt      PPCcalls[];
+
+static chudxnu_syscall_callback_func_t syscall_callback_fn = NULL;
+
+static int chudxnu_private_syscall_callback(struct savearea *ssp)
+{
+	if(ssp) {
+		if(syscall_callback_fn) {
+			struct ppc_thread_state64 state;
+			kern_return_t retval;
+			mach_msg_type_number_t count = PPC_THREAD_STATE64_COUNT;
+			chudxnu_copy_savearea_to_threadstate(PPC_THREAD_STATE64, (thread_state_t)&state, &count, ssp);
+			ssp->save_r3 = (syscall_callback_fn)(PPC_THREAD_STATE64, (thread_state_t)&state, count);
+		} else {
+			ssp->save_r3 = KERN_FAILURE;
+		}
+	}
+	
+    return 1; // check for ASTs (always)
+}
+
+__private_extern__
+kern_return_t chudxnu_syscall_callback_enter(chudxnu_syscall_callback_func_t func)
+{
+	syscall_callback_fn = func;
+	PPCcalls[9] = chudxnu_private_syscall_callback;
+    __asm__ volatile("eieio");	/* force order */
+    __asm__ volatile("sync");	/* force to memory */
+    return KERN_SUCCESS;
+}
+
+__private_extern__
+kern_return_t chudxnu_syscall_callback_cancel(void)
+{
+	syscall_callback_fn = NULL;
+	PPCcalls[9] = NULL;
+    __asm__ volatile("eieio");	/* force order */
+    __asm__ volatile("sync");	/* force to memory */
+    return KERN_SUCCESS;
+}
+
+#pragma mark **** thread timer - DEPRECATED ****
 
 static thread_call_t thread_timer_call = NULL;
-
-typedef void (*chudxnu_thread_timer_callback_func_t)(uint32_t arg);
 static chudxnu_thread_timer_callback_func_t thread_timer_callback_fn = NULL;
 
 static void chudxnu_private_thread_timer_callback(thread_call_param_t param0, thread_call_param_t param1)
@@ -391,13 +535,14 @@ static void chudxnu_private_thread_timer_callback(thread_call_param_t param0, th
     }
 }
 
+// DEPRECATED
 __private_extern__
-kern_return_t chudxnu_thread_timer_callback_enter(chudxnu_thread_timer_callback_func_t func, uint32_t arg, uint32_t time, uint32_t units)
+kern_return_t chudxnu_thread_timer_callback_enter(chudxnu_thread_timer_callback_func_t func, uint32_t param, uint32_t time, uint32_t units)
 {
     if(!thread_timer_call) {
         uint64_t t_delay;
         thread_timer_callback_fn = func;
-        thread_timer_call = thread_call_allocate((thread_call_func_t)chudxnu_private_thread_timer_callback, (thread_call_param_t)arg);
+        thread_timer_call = thread_call_allocate((thread_call_func_t)chudxnu_private_thread_timer_callback, (thread_call_param_t)param);
         clock_interval_to_deadline(time, units, &t_delay);
         thread_call_enter_delayed(thread_timer_call, t_delay);
         return KERN_SUCCESS;
@@ -406,10 +551,12 @@ kern_return_t chudxnu_thread_timer_callback_enter(chudxnu_thread_timer_callback_
     }
 }
 
+// DEPRECATED
 __private_extern__
 kern_return_t chudxnu_thread_timer_callback_cancel(void)
 {
     if(thread_timer_call) {
+    	thread_call_cancel(thread_timer_call);
         thread_call_free(thread_timer_call);
         thread_timer_call = NULL;
     }

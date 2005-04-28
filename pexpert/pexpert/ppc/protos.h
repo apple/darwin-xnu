@@ -68,7 +68,7 @@ static __inline__ unsigned int byte_reverse_word(unsigned int word) {
 
 //------------------------------------------------------------------------
 // from ppc/serial_io.h
-extern void initialize_serial(void * scc_phys_base);
+extern void initialize_serial(void * scc_phys_base, uint32_t serial_baud);
 
 
 //------------------------------------------------------------------------
@@ -142,10 +142,5 @@ extern unsigned int LLTraceSet(unsigned int tflags);
 extern void GratefulDebInit(void);
 extern void GratefulDebDisp(unsigned int coord, unsigned int data);
 extern void checkNMI(void);
-
-/*
- *	Temporarily stolen from ppc/cpu_number.h
- */
-int cpu_number(void);
 
 #endif /* _PEXPERT_PPC_PROTOS_H_ */

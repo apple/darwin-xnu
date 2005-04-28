@@ -28,6 +28,10 @@
  * Altivec bugs that need to be worked around.  It is not particularly well
  * optimized.
  *
+ * For 64-bit processors with a 128-byte cache line, running in either 
+ * 32- or 64-bit mode.  This is written for 32-bit execution, the kernel
+ * will translate to 64-bit code when it compiles the 64-bit commpage.
+ *
  * Register usage.  Note we use R2, so this code will not run in a PEF/CFM
  * environment.
  *   r0  = "w7" or temp
@@ -64,7 +68,6 @@
 #include <machine/commpage.h>
 
         .text
-        .globl 	EXT(bcopy_64)
 
 #define	kLong		64				// too long for inline loopless code
 
@@ -295,4 +298,4 @@ LRevAligned:
         
         b		LShortReverse64
 
-        COMMPAGE_DESCRIPTOR(bcopy_64,_COMM_PAGE_BCOPY,k64Bit,kHasAltivec,0)
+	COMMPAGE_DESCRIPTOR(bcopy_64,_COMM_PAGE_BCOPY,k64Bit,kHasAltivec,kCommPageBoth+kPort32to64)

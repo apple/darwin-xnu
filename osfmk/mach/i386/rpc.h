@@ -22,7 +22,9 @@
 /*
  * @OSF_COPYRIGHT@
  */
-#ifndef _MACH_I386_RPC_H_
-#define _MACH_I386_RPC_H_
 
-#endif	/* _MACH_I386_RPC_H_ */
+#ifndef	_MACH_I386_RPC_H_
+#define	_MACH_I386_RPC_H_
+
+#endif	_MACH_I386_RPC_H_
+

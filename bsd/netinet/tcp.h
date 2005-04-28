@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -58,9 +58,12 @@
 #ifndef _NETINET_TCP_H_
 #define _NETINET_TCP_H_
 #include <sys/appleapiopts.h>
+#include <sys/_types.h>
+#include <machine/endian.h>
 
-typedef	u_int32_t tcp_seq;
-typedef u_int32_t tcp_cc;		/* connection count per rfc1644 */
+#ifndef _POSIX_C_SOURCE
+typedef	__uint32_t tcp_seq;
+typedef __uint32_t tcp_cc;		/* connection count per rfc1644 */
 
 #define tcp6_seq	tcp_seq	/* for KAME src sync over BSD*'s */
 #define tcp6hdr		tcphdr	/* for KAME src sync over BSD*'s */
@@ -70,19 +73,19 @@ typedef u_int32_t tcp_cc;		/* connection count per rfc1644 */
  * Per RFC 793, September, 1981.
  */
 struct tcphdr {
-	u_short	th_sport;		/* source port */
-	u_short	th_dport;		/* destination port */
+	unsigned short	th_sport;	/* source port */
+	unsigned short	th_dport;	/* destination port */
 	tcp_seq	th_seq;			/* sequence number */
 	tcp_seq	th_ack;			/* acknowledgement number */
-#if BYTE_ORDER == LITTLE_ENDIAN
-	u_int	th_x2:4,		/* (unused) */
-		th_off:4;		/* data offset */
+#if __DARWIN_BYTE_ORDER == __DARWIN_LITTLE_ENDIAN
+	unsigned int	th_x2:4,	/* (unused) */
+			th_off:4;	/* data offset */
 #endif
-#if BYTE_ORDER == BIG_ENDIAN
-	u_int	th_off:4,		/* data offset */
-		th_x2:4;		/* (unused) */
+#if __DARWIN_BYTE_ORDER == __DARWIN_BIG_ENDIAN
+	unsigned int	th_off:4,	/* data offset */
+			th_x2:4;	/* (unused) */
 #endif
-	u_char	th_flags;
+	unsigned char	th_flags;
 #define	TH_FIN	0x01
 #define	TH_SYN	0x02
 #define	TH_RST	0x04
@@ -93,9 +96,9 @@ struct tcphdr {
 #define	TH_CWR	0x80
 #define	TH_FLAGS	(TH_FIN|TH_SYN|TH_RST|TH_ACK|TH_URG|TH_ECE|TH_CWR)
 
-	u_short	th_win;			/* window */
-	u_short	th_sum;			/* checksum */
-	u_short	th_urp;			/* urgent pointer */
+	unsigned short	th_win;		/* window */
+	unsigned short	th_sum;		/* checksum */
+	unsigned short	th_urp;		/* urgent pointer */
 };
 
 #define	TCPOPT_EOL		0
@@ -141,6 +144,15 @@ struct tcphdr {
 #define	TCP_MINMSS 216
 
 /*
+ * TCP_MINMSSOVERLOAD is defined to be 1000 which should cover any type
+ * of interactive TCP session.
+ * See tcp_subr.c tcp_minmssoverload SYSCTL declaration and tcp_input.c
+ * for more comments.
+ * Setting this to "0" disables the minmssoverload check.
+ */
+#define	TCP_MINMSSOVERLOAD 1000
+
+/*
  * Default maximum segment size for TCP6.
  * With an IP6 MSS of 1280, this is 1220,
  * but 1024 is probably more convenient. (xxx kazu in doubt)
@@ -158,14 +170,17 @@ struct tcphdr {
 #define TCP_MAXHLEN	(0xf<<2)	/* max length of header in bytes */
 #define TCP_MAXOLEN	(TCP_MAXHLEN - sizeof(struct tcphdr))
 					/* max space left for options */
+#endif /* _POSIX_C_SOURCE */
 
 /*
  * User-settable options (used with setsockopt).
  */
 #define	TCP_NODELAY	0x01	/* don't delay send to coalesce packets */
+#ifndef _POSIX_C_SOURCE
 #define	TCP_MAXSEG	0x02	/* set maximum segment size */
 #define TCP_NOPUSH	0x04	/* don't push last block of write */
 #define TCP_NOOPT	0x08	/* don't use TCP options */
 #define TCP_KEEPALIVE	0x10	/* idle time used when SO_KEEPALIVE is enabled */
+#endif /* _POSIX_C_SOURCE */
 
 #endif

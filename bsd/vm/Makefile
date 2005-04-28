@@ -21,8 +21,7 @@ EXPINC_SUBDIRS_PPC = \
 EXPINC_SUBDIRS_I386 = \
 
 DATAFILES =  \
-	vnode_pager.h \
-	vm_pageout.h
+	vnode_pager.h
 
 EXPORT_MI_LIST	= ${DATAFILES}
 

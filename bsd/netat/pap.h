@@ -37,6 +37,8 @@
 #define _NETAT_PAP_H_
 #include <sys/appleapiopts.h>
 
+#ifdef __APPLE_API_OBSOLETE
+
 #define  AT_PAP_DATA_SIZE	      512    /* Maximum PAP data size */
 #define  AT_PAP_STATUS_SIZE	      255    /* Maximum PAP status length */
 #define  PAP_TIMEOUT		      120
@@ -125,4 +127,5 @@ struct pap_state {
 	int pap_tickle_id;	/* the transaction ID for tickles */
 };
 
+#endif /* __APPLE_API_OBSOLETE */
 #endif /* _NETAT_PAP_H_ */

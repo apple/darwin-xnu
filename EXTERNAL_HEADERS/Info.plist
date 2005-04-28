@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist SYSTEM "file://localhost/System/Library/DTDs/PropertyList.dtd">
+<plist version="0.9">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>English</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.apple.framework.kernel</string>
+	<key>CFBundleName</key>
+	<string>Kernel</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundlePackageType</key>
+	<string>FMWK</string>
+	<key>CFBundleShortVersionString</key>
+        <string>###KERNEL_VERSION_SHORT###</string>
+	<key>CFBundleVersion</key>
+        <string>###KERNEL_VERSION_LONG###</string>
+	<key>CFBundleSignature</key>
+	<string>????</string>
+</dict>
+</plist>

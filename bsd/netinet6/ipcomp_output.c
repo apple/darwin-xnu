@@ -49,9 +49,9 @@
 
 #include <net/if.h>
 #include <net/route.h>
-#include <net/netisr.h>
 #include <net/zlib.h>
 #include <kern/cpu_number.h>
+#include <kern/locks.h>
 
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
@@ -78,8 +78,10 @@
 
 #include <net/net_osdep.h>
 
-static int ipcomp_output __P((struct mbuf *, u_char *, struct mbuf *,
-	struct ipsecrequest *, int));
+extern lck_mtx_t  *sadb_mutex;
+
+static int ipcomp_output(struct mbuf *, u_char *, struct mbuf *,
+	struct ipsecrequest *, int);
 
 /*
  * Modify the packet so that the payload is compressed.
@@ -204,7 +206,9 @@ ipcomp_output(m, nexthdrp, md, isr, af)
 	mprev->m_next = md;
 
 	/* compress data part */
+	lck_mtx_unlock(sadb_mutex);
 	if ((*algo->compress)(m, md, &plen) || mprev->m_next == NULL) {
+		lck_mtx_lock(sadb_mutex);
 		ipseclog((LOG_ERR, "packet compression failure\n"));
 		m = NULL;
 		m_freem(md0);
@@ -213,6 +217,7 @@ ipcomp_output(m, nexthdrp, md, isr, af)
 		error = EINVAL;
 		goto fail;
 	}
+	lck_mtx_lock(sadb_mutex);
 	stat->out_comphist[sav->alg_enc]++;
 	md = mprev->m_next;
 

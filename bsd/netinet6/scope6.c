@@ -56,8 +56,8 @@ static size_t if_indexlim = 8;
 struct scope6_id *scope6_ids = NULL;
 
 void
-scope6_ifattach(ifp)
-	struct ifnet *ifp;
+scope6_ifattach(
+	struct ifnet *ifp)
 {
 	int s = splnet();
 
@@ -108,9 +108,9 @@ scope6_ifattach(ifp)
 }
 
 int
-scope6_set(ifp, idlist)
-	struct ifnet *ifp;
-	u_int32_t *idlist;
+scope6_set(
+	struct ifnet *ifp,
+	u_int32_t *idlist)
 {
 	int i, s;
 	int error = 0;
@@ -159,9 +159,9 @@ scope6_set(ifp, idlist)
 }
 
 int
-scope6_get(ifp, idlist)
-	struct ifnet *ifp;
-	u_int32_t *idlist;
+scope6_get(
+	struct ifnet *ifp,
+	u_int32_t *idlist)
 {
 	if (scope6_ids == NULL)	/* paranoid? */
 		return(EINVAL);
@@ -233,18 +233,19 @@ struct in6_addr *addr;
 }
 
 int
-in6_addr2scopeid(ifp, addr)
-	struct ifnet *ifp;	/* must not be NULL */
-	struct in6_addr *addr;	/* must not be NULL */
+in6_addr2scopeid(
+	struct ifnet *ifp,	/* must not be NULL */
+	struct in6_addr *addr)	/* must not be NULL */
 {
 	int scope = in6_addrscope(addr);
+	int index = ifp->if_index;
 
 	if (scope6_ids == NULL)	/* paranoid? */
 		return(0);	/* XXX */
-	if (ifp->if_index >= if_indexlim)
+	if (index >= if_indexlim)
 		return(0);	/* XXX */
 
-#define SID scope6_ids[ifp->if_index]
+#define SID scope6_ids[index]
 	switch(scope) {
 	case IPV6_ADDR_SCOPE_NODELOCAL:
 		return(-1);	/* XXX: is this an appropriate value? */
@@ -265,8 +266,8 @@ in6_addr2scopeid(ifp, addr)
 }
 
 void
-scope6_setdefault(ifp)
-	struct ifnet *ifp;	/* note that this might be NULL */
+scope6_setdefault(
+	struct ifnet *ifp)	/* note that this might be NULL */
 {
 	/*
 	 * Currently, this function just set the default "link" according to
@@ -283,8 +284,8 @@ scope6_setdefault(ifp)
 }
 
 int
-scope6_get_default(idlist)
-	u_int32_t *idlist;
+scope6_get_default(
+	u_int32_t *idlist)
 {
 	if (scope6_ids == NULL)	/* paranoid? */
 		return(EINVAL);
@@ -296,8 +297,8 @@ scope6_get_default(idlist)
 }
 
 u_int32_t
-scope6_addr2default(addr)
-	struct in6_addr *addr;
+scope6_addr2default(
+	struct in6_addr *addr)
 {
 	return(scope6_ids[0].s6id_list[in6_addrscope(addr)]);
 }

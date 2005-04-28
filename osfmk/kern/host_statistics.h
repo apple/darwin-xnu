@@ -33,16 +33,13 @@
 #define _KERN_HOST_STATISTICS_H_
 
 #include <mach/vm_statistics.h>
-#include <kern/cpu_number.h>
-#include <kern/sched_prim.h>
+#include <kern/processor.h>
 
-extern vm_statistics_data_t	vm_stat[];
-
-#define	VM_STAT(event)							\
-MACRO_BEGIN 								\
-	mp_disable_preemption();					\
-	vm_stat[cpu_number()].event;					\
-	mp_enable_preemption();						\
+#define	VM_STAT(event)									\
+MACRO_BEGIN 											\
+	disable_preemption();								\
+	PROCESSOR_DATA(current_processor(), vm_stat).event;	\
+	enable_preemption();								\
 MACRO_END
 
 #endif	/* _KERN_HOST_STATISTICS_H_ */

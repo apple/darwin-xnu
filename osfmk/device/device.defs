@@ -479,6 +479,17 @@ routine io_service_add_notification_ool(
 	out notification	: io_object_t
 	);
 
+routine io_object_get_superclass(
+	    master_port		: mach_port_t;
+	in  obj_name			: io_name_t;
+	out class_name          : io_name_t   
+        );
+
+routine io_object_get_bundle_identifier(
+	    master_port		: mach_port_t;
+	in  obj_name			: io_name_t;
+	out class_name          : io_name_t   
+        );
 
 #endif
 

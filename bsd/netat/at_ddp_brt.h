@@ -27,7 +27,8 @@
 #ifndef _NETAT_AT_DDP_BRT_H_
 #define _NETAT_AT_DDP_BRT_H_
 #include <sys/appleapiopts.h>
-#ifdef __APPLE_API_PRIVATE
+#ifdef KERNEL_PRIVATE
+#ifdef __APPLE_API_OBSOLETE
 
 typedef struct {
 	int 				age_flag;
@@ -80,6 +81,7 @@ typedef struct {
 /* Best Router Cache */
 extern	ddp_brt_t	at_ddp_brt[BRTSIZE];
 
-#endif /* __APPLE_API_PRIVATE */
+#endif /* __APPLE_API_OBSOLETE */
+#endif /* KERNEL_PRIVATE */
 #endif /* _NETAT_AT_DDP_BRT_H_ */
 

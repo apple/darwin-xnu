@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -111,31 +111,9 @@ struct nfs_dlmount {
 	char		ndm_host[MNAMELEN]; 	/* Host name for mount pt */
 	char		*ndm_path; 		/* path name for mount pt */
 	u_long		ndm_nfsv3;		/* NFSv3 or NFSv2? */
+	u_long		ndm_sotype;		/* SOCK_STREAM or SOCK_DGRAM? */
 	u_long		ndm_fhlen;		/* length of file handle */
 	u_char		ndm_fh[NFSX_V3FHMAX];	/* The file's file handle */
-};
-
-/*
- * Old arguments to mount NFS
- */
-struct onfs_args {
-	struct sockaddr	*addr;		/* file server address */
-	int		addrlen;	/* length of address */
-	int		sotype;		/* Socket type */
-	int		proto;		/* and Protocol */
-	u_char		*fh;		/* File handle to be mounted */
-	int		fhsize;		/* Size, in bytes, of fh */
-	int		flags;		/* flags */
-	int		wsize;		/* write size in bytes */
-	int		rsize;		/* read size in bytes */
-	int		readdirsize;	/* readdir size in bytes */
-	int		timeo;		/* initial timeout in .1 secs */
-	int		retrans;	/* times to retry send */
-	int		maxgrouplist;	/* Max. size of group list */
-	int		readahead;	/* # of blocks to readahead */
-	int		leaseterm;	/* Term (sec) of lease */
-	int		deadthresh;	/* Retrans threshold */
-	char		*hostname;	/* server's name */
 };
 
 struct nfs_diskless {

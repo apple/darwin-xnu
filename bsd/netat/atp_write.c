@@ -38,6 +38,7 @@
 #include <sys/proc.h>
 #include <sys/filedesc.h>
 #include <sys/fcntl.h>
+#include <kern/locks.h>
 #include <sys/mbuf.h>
 #include <sys/ioctl.h>
 #include <sys/malloc.h>
@@ -67,7 +68,7 @@ static int loop_cnt; /* for debugging loops */
 static void atp_pack_bdsp(struct atp_trans *, struct atpBDS *);
 static int atp_unpack_bdsp(struct atp_state *, gbuf_t *, struct atp_rcb *, 
 			   int, int);
-void atp_trp_clock(), asp_clock(), asp_clock_funnel(), atp_trp_clock_funnel();;
+void atp_trp_clock(), asp_clock(), asp_clock_locked(), atp_trp_clock_locked();;
 
 extern struct atp_rcb_qhead atp_need_rel;
 extern int atp_inited;
@@ -82,6 +83,7 @@ extern gbuf_t *atp_resource_m;
 extern gref_t *atp_inputQ[];
 extern int atp_pidM[];
 extern at_ifaddr_t *ifID_home;
+extern lck_mtx_t * atalk_mutex;
 
 static struct atp_trans *trp_tmo_list;
 struct atp_trans *trp_tmo_rcb;
@@ -104,8 +106,8 @@ void atp_link()
 
 void atp_unlink()
 {
-	untimeout(asp_clock_funnel, (void *)&atp_inited);
-	untimeout(atp_trp_clock_funnel, (void *)&atp_inited);
+	untimeout(asp_clock_locked, (void *)&atp_inited);
+	untimeout(atp_trp_clock_locked, (void *)&atp_inited);
 	atp_untimout(atp_rcb_timer, trp_tmo_rcb); 
 	trp_tmo_list = 0;
 
@@ -464,6 +466,7 @@ void atp_send_replies(atp, rcbp)
 	struct   ddp_atp {
 	         char    ddp_atp_hdr[TOTAL_ATP_HDR_SIZE];
 	};
+	struct timeval timenow;
 
 	ATDISABLE(s, atp->atp_lock);
 	if (rcbp->rc_queue != atp) {
@@ -501,6 +504,8 @@ void atp_send_replies(atp, rcbp)
 	offset = 0;
 	if (m0)
 		space = gbuf_msgsize(m0);
+	else
+	  space = 0;
 	for (i = 0; i < cnt; i++) {
 		if (rcbp->rc_snd[i] == 0) {
 			if ((len = UAS_VALUE(bdsp->bdsBuffSz))) {
@@ -583,9 +588,10 @@ nothing_to_send:
 	 * 	resources.
 	 */
 	if (rcbp->rc_xo && rcbp->rc_state != RCB_RELEASED) {
+		getmicrouptime(&timenow);
 		ATDISABLE(s_gen, atpgen_lock);
 		if (rcbp->rc_timestamp == 0) {
-	        	rcbp->rc_timestamp = time.tv_sec;
+	        	rcbp->rc_timestamp = timenow.tv_sec;
 			if (rcbp->rc_timestamp == 0)
 		  		rcbp->rc_timestamp = 1;
 			ATP_Q_APPEND(atp_need_rel, rcbp, rc_tlist);
@@ -638,7 +644,7 @@ atp_pack_bdsp(trp, bdsp)
 				  	if (len > bufsize)
 						len = bufsize;
 					copyout((caddr_t)gbuf_rptr(m), 
-						(caddr_t)&buf[tmp],
+						CAST_USER_ADDR_T(&buf[tmp]),
 						len);
 					bufsize -= len;
 					tmp += len;
@@ -687,6 +693,7 @@ atp_unpack_bdsp(atp, m, rcbp, cnt, wait)
 	gbuf_t 			*rc_xmt[ATP_TRESP_MAX];
 	unsigned char 	*m0_rptr, *m0_wptr;
 	int				err, offset, space;
+	struct timeval timenow;
 
 	/*
 	 * get the user data structure pointer
@@ -821,9 +828,10 @@ atp_unpack_bdsp(atp, m, rcbp, cnt, wait)
 	 */
 l_send:
 	if (rcbp->rc_xo) {
+		getmicrouptime(&timenow);
 		ATDISABLE(s_gen, atpgen_lock);
 		if (rcbp->rc_timestamp == 0) {
-			if ((rcbp->rc_timestamp = time.tv_sec) == 0)
+			if ((rcbp->rc_timestamp = timenow.tv_sec) == 0)
 				rcbp->rc_timestamp = 1;
 			ATP_Q_APPEND(atp_need_rel, rcbp, rc_tlist);
 		}
@@ -1118,12 +1126,12 @@ atp_untimout(func, trp)
 }
 
 void
-atp_trp_clock_funnel(arg)
+atp_trp_clock_locked(arg)
 	void *arg;
 {
-	thread_funnel_set(network_flock, TRUE);
+	atalk_lock();
 	atp_trp_clock(arg);
-	thread_funnel_set(network_flock, FALSE);
+	atalk_unlock();
 }
 
 void
@@ -1149,7 +1157,7 @@ atp_trp_clock(arg)
 	}
 	ATENABLE(s, atptmo_lock);
 
-	timeout(atp_trp_clock_funnel, (void *)arg, (1<<5));
+	timeout(atp_trp_clock_locked, (void *)arg, (1<<5));
 }
 
 void
@@ -1262,16 +1270,15 @@ void atp_retry_req(arg)
 {
 	gbuf_t *m = (gbuf_t *)arg;
 	gref_t *gref;
-	boolean_t 	funnel_state;
 
-	funnel_state = thread_funnel_set(network_flock, TRUE);
+	atalk_lock();
 
 	gref = (gref_t *)((ioc_t *)gbuf_rptr(m))->ioc_private;
 	if (gref->info) {
 		((asp_scb_t *)gref->info)->stat_msg = 0;
 		atp_send_req(gref, m);
 	}
-	(void) thread_funnel_set(network_flock, FALSE);
+	atalk_unlock();
 }
 
 void atp_send_rsp(gref, m, wait)
@@ -1372,7 +1379,7 @@ int asp_pack_bdsp(trp, xm)
 		gbuf_rinc(m, ATP_HDR_SIZE);
 
 		if (UAL_VALUE(bdsp->bdsBuffAddr)) {
-			short tmp;
+			short tmp = 0;
 
 		        /* user expects data back */
 			m = gbuf_strip(m);
@@ -1442,24 +1449,31 @@ _ATPsndreq(fd, buf, len, nowait, err, proc)
 	gbuf_t *m2, *m, *mioc;
 	char bds[atpBDSsize];
 
-	if ((*err = atalk_getref(0, fd, &gref, proc)) != 0)
+	if ((*err = atalk_getref(0, fd, &gref, proc, 1)) != 0)
 		return -1;
 
 	if ((gref == 0) || ((atp = (struct atp_state *)gref->info) == 0)
 			|| (atp->atp_flags & ATP_CLOSING)) {
 		dPrintf(D_M_ATP, D_L_ERROR, ("ATPsndreq: stale handle=0x%x, pid=%d\n",
 			(u_int) gref, gref->pid));
-
+		file_drop(fd);
 		*err = EINVAL;
 		return -1;
 	}
 
+
 	while ((mioc = gbuf_alloc(sizeof(ioc_t), PRI_MED)) == 0) {
+		struct timespec ts;
+		/* the vaue of 10n terms of hz is 100ms */
+		ts.tv_sec = 0;
+		ts.tv_nsec = 100 *1000 * NSEC_PER_USEC;
+
 		ATDISABLE(s, atp->atp_delay_lock);
-		rc = tsleep(&atp->atp_delay_event, PSOCK | PCATCH, "atpmioc", 10);
+		rc = msleep(&atp->atp_delay_event, atalk_mutex, PSOCK | PCATCH, "atpmioc", &ts);
 		ATENABLE(s, atp->atp_delay_lock);
 		if (rc != 0) {
 			*err = rc;
+			file_drop(fd);
 			return -1;
 		}
 		
@@ -1467,21 +1481,28 @@ _ATPsndreq(fd, buf, len, nowait, err, proc)
 	gbuf_wset(mioc,sizeof(ioc_t));
 	len -= atpBDSsize;
 	while ((m2 = gbuf_alloc(len, PRI_MED)) == 0) {
+        struct timespec ts;
+        /* the vaue of 10n terms of hz is 100ms */
+        ts.tv_sec = 0;
+        ts.tv_nsec = 100 *1000 * NSEC_PER_USEC;
+
 		ATDISABLE(s, atp->atp_delay_lock);
-		rc = tsleep(&atp->atp_delay_event, PSOCK | PCATCH, "atpm2", 10);
+		rc = msleep(&atp->atp_delay_event, atalk_mutex, PSOCK | PCATCH, "atpm2", &ts);
 		ATENABLE(s, atp->atp_delay_lock);
 		if (rc != 0) {
 			gbuf_freeb(mioc);
+			file_drop(fd);
 			*err = rc;
 			return -1;
 		}
 	}
 	gbuf_wset(m2, len);
 	gbuf_cont(mioc) = m2;
-	if (((*err = copyin((caddr_t)buf, (caddr_t)bds, atpBDSsize)) != 0)
-		|| ((*err = copyin((caddr_t)&buf[atpBDSsize],
+	if (((*err = copyin(CAST_USER_ADDR_T(buf), (caddr_t)bds, atpBDSsize)) != 0)
+		|| ((*err = copyin(CAST_USER_ADDR_T(&buf[atpBDSsize]),
 			(caddr_t)gbuf_rptr(m2), len)) != 0)) {
 		gbuf_freem(mioc);
+		file_drop(fd);
 		return -1;
 	}
 	gbuf_set_type(mioc, MSG_IOCTL);
@@ -1503,11 +1524,17 @@ _ATPsndreq(fd, buf, len, nowait, err, proc)
 	 * allocate and set up the transaction record
 	 */
 	while ((trp = atp_trans_alloc(atp)) == 0) {
+        struct timespec ts;
+        /* the vaue of 10n terms of hz is 100ms */
+        ts.tv_sec = 0;
+        ts.tv_nsec = 100 *1000 * NSEC_PER_USEC;
+
 		ATDISABLE(s, atp->atp_delay_lock);
-		rc = tsleep(&atp->atp_delay_event, PSOCK | PCATCH, "atptrp", 10);
+		rc = msleep(&atp->atp_delay_event, atalk_mutex, PSOCK | PCATCH, "atptrp", &ts);
 		ATENABLE(s, atp->atp_delay_lock);
 		if (rc != 0) {
 			gbuf_freem(mioc);
+			file_drop(fd);
 			*err = rc;
 			return -1;
 		}
@@ -1570,8 +1597,10 @@ _ATPsndreq(fd, buf, len, nowait, err, proc)
 	if (m)
 		DDP_OUTPUT(m);
 
-	if (nowait)
+	if (nowait) {
+		file_drop(fd);
 		return (int)tid;
+	}
 
 	/*
 	 * wait for the transaction to complete
@@ -1580,10 +1609,11 @@ _ATPsndreq(fd, buf, len, nowait, err, proc)
 	while ((trp->tr_state != TRANS_DONE) && (trp->tr_state != TRANS_FAILED) &&
 				(trp->tr_state != TRANS_ABORTING)) {
 		trp->tr_rsp_wait = 1;
-		rc = tsleep(&trp->tr_event, PSOCK | PCATCH, "atpsndreq", 0);
+		rc = msleep(&trp->tr_event, atalk_mutex, PSOCK | PCATCH, "atpsndreq", 0);
 		if (rc != 0) {
 			trp->tr_rsp_wait = 0;
 			ATENABLE(s, trp->tr_lock);
+			file_drop(fd);
 			*err = rc;
 			return -1;
 		}
@@ -1597,6 +1627,7 @@ _ATPsndreq(fd, buf, len, nowait, err, proc)
 		 * transaction timed out, return error
 		 */
 		atp_free(trp);
+		file_drop(fd);
 		*err = ETIMEDOUT;
 		return -1;
 	}
@@ -1609,9 +1640,10 @@ _ATPsndreq(fd, buf, len, nowait, err, proc)
 	/*
 	 * copyout the result info
 	 */
-	copyout((caddr_t)bds, (caddr_t)buf, atpBDSsize);
+	copyout((caddr_t)bds, CAST_USER_ADDR_T(buf), atpBDSsize);
 
 	atp_free(trp);
+	file_drop(fd);
 
 	return (int)tid;
 } /* _ATPsndreq */
@@ -1646,7 +1678,7 @@ _ATPsndrsp(fd, respbuff, resplen, datalen, err, proc)
 	int			bds_cnt, count, len;
 	caddr_t		dataptr;
 
-	if ((*err = atalk_getref(0, fd, &gref, proc)) != 0)
+	if ((*err = atalk_getref(0, fd, &gref, proc, 1)) != 0)
 		return -1;
 
 	if ((gref == 0) || ((atp = (struct atp_state *)gref->info) == 0)
@@ -1654,6 +1686,7 @@ _ATPsndrsp(fd, respbuff, resplen, datalen, err, proc)
 		dPrintf(D_M_ATP, D_L_ERROR, ("ATPsndrsp: stale handle=0x%x, pid=%d\n",
 			(u_int) gref, gref->pid));
 
+		file_drop(fd);
 		*err = EINVAL;
 		return -1;
 	}
@@ -1663,10 +1696,12 @@ _ATPsndrsp(fd, respbuff, resplen, datalen, err, proc)
 	 */
 	if ((m = gbuf_alloc_wait(resplen, TRUE)) == 0) {
 	        *err = ENOMEM;
+		file_drop(fd);
 	        return -1;
 	}
-	if ((*err = copyin((caddr_t)respbuff, (caddr_t)gbuf_rptr(m), resplen)) != 0) {
+	if ((*err = copyin(CAST_USER_ADDR_T(respbuff), (caddr_t)gbuf_rptr(m), resplen)) != 0) {
 		gbuf_freeb(m);
+		file_drop(fd);
 		return -1;
 	}
 	gbuf_wset(m,resplen);
@@ -1683,6 +1718,7 @@ _ATPsndrsp(fd, respbuff, resplen, datalen, err, proc)
 	if (bds_cnt > ATP_TRESP_MAX) {
 	    gbuf_freem(m);
 		*err = EINVAL;
+		file_drop(fd);
 		return -1;
 	}
 	
@@ -1692,12 +1728,14 @@ _ATPsndrsp(fd, respbuff, resplen, datalen, err, proc)
 	if (size > datalen) {				
 	    gbuf_freem(m);
 		*err = EINVAL;
+		file_drop(fd);
 		return -1;
 	}
 	
 	/* get the first mbuf */
 	if ((mdata = gbuf_alloc_wait((space = (size > MCLBYTES ? MCLBYTES : size)), TRUE)) == 0) {
 	    gbuf_freem(m);
+		file_drop(fd);
 		*err = ENOMEM;
 		return -1;
 	}
@@ -1711,6 +1749,7 @@ _ATPsndrsp(fd, respbuff, resplen, datalen, err, proc)
 				/* allocate the next mbuf */
 				if ((gbuf_cont(mdata) = m_get((M_WAIT), MSG_DATA)) == 0) {
 					gbuf_freem(m);
+					file_drop(fd);
 					*err = ENOMEM;
 					return -1;
 				}
@@ -1718,14 +1757,16 @@ _ATPsndrsp(fd, respbuff, resplen, datalen, err, proc)
 				MCLGET(mdata, M_WAIT);
 				if (!(mdata->m_flags & M_EXT)) {
 					m_freem(m);
+					file_drop(fd);
 					return(NULL);
 				}
 				dataptr = mtod(mdata, caddr_t);
 				space = MCLBYTES;
 			}
 			/* do the copyin */
-			if ((*err = copyin((caddr_t)bufaddr, dataptr, len)) != 0) {
+			if ((*err = copyin(CAST_USER_ADDR_T(bufaddr), dataptr, len)) != 0) {
 				gbuf_freem(m);
+				file_drop(fd);
 				return -1;
 			}
 			dataptr += len;
@@ -1736,6 +1777,7 @@ _ATPsndrsp(fd, respbuff, resplen, datalen, err, proc)
 	gbuf_cont(m)->m_pkthdr.len = size;						/* set packet hdr len */
 
 	atp_send_rsp(gref, m, TRUE);
+	file_drop(fd);
 	return 0;
 }
 
@@ -1753,13 +1795,14 @@ _ATPgetreq(fd, buf, buflen, err, proc)
 	register gbuf_t *m, *m_head;
 	int s, size, len;
 
-	if ((*err = atalk_getref(0, fd, &gref, proc)) != 0)
+	if ((*err = atalk_getref(0, fd, &gref, proc, 1)) != 0)
 		return -1;
 
 	if ((gref == 0) || ((atp = (struct atp_state *)gref->info) == 0)
 			|| (atp->atp_flags & ATP_CLOSING)) {
 		dPrintf(D_M_ATP, D_L_ERROR, ("ATPgetreq: stale handle=0x%x, pid=%d\n",
 			(u_int) gref, gref->pid));
+		file_drop(fd);
 		*err = EINVAL;
 		return -1;
 	}
@@ -1790,17 +1833,19 @@ _ATPgetreq(fd, buf, buflen, err, proc)
 		for (size=0, m=m_head; m; m = gbuf_cont(m)) {
 			if ((len = gbuf_len(m)) > buflen)
 				len = buflen;
-			copyout((caddr_t)gbuf_rptr(m), (caddr_t)&buf[size], len);
+			copyout((caddr_t)gbuf_rptr(m), CAST_USER_ADDR_T(&buf[size]), len);
 			size += len;
 			if ((buflen -= len) == 0)
 				break;
 		}
 		gbuf_freem(m_head);
 
+		file_drop(fd);
 		return size;
 	}
 	ATENABLE(s, atp->atp_lock);
 
+	file_drop(fd);
 	return -1;
 }
 
@@ -1817,13 +1862,14 @@ _ATPgetrsp(fd, bdsp, err, proc)
 	int s, tid;
 	char bds[atpBDSsize];
 
-	if ((*err = atalk_getref(0, fd, &gref, proc)) != 0)
+	if ((*err = atalk_getref(0, fd, &gref, proc, 1)) != 0)
 		return -1;
 
 	if ((gref == 0) || ((atp = (struct atp_state *)gref->info) == 0)
 			|| (atp->atp_flags & ATP_CLOSING)) {
 		dPrintf(D_M_ATP, D_L_ERROR, ("ATPgetrsp: stale handle=0x%x, pid=%d\n",
 			(u_int) gref, gref->pid));
+		file_drop(fd);
 		*err = EINVAL;
 		return -1;
 	}
@@ -1837,13 +1883,16 @@ _ATPgetrsp(fd, bdsp, err, proc)
 		switch (trp->tr_state) {
 		case TRANS_DONE:
 	    	ATENABLE(s, atp->atp_lock);
-			if ((*err = copyin((caddr_t)bdsp,
-					(caddr_t)bds, sizeof(bds))) != 0)
+			if ((*err = copyin(CAST_USER_ADDR_T(bdsp),
+					(caddr_t)bds, sizeof(bds))) != 0) {
+				file_drop(fd);
 				return -1;
+			}
 			atp_pack_bdsp(trp, (struct atpBDS *)bds);
 			tid = (int)trp->tr_tid;
 			atp_free(trp);
-			copyout((caddr_t)bds, (caddr_t)bdsp, sizeof(bds));
+			copyout((caddr_t)bds, CAST_USER_ADDR_T(bdsp), sizeof(bds));
+			file_drop(fd);
 			return tid;
 
 		case TRANS_FAILED:
@@ -1852,6 +1901,7 @@ _ATPgetrsp(fd, bdsp, err, proc)
 			 */
 	    	ATENABLE(s, atp->atp_lock);
 			atp_free(trp);
+			file_drop(fd);
 			*err = ETIMEDOUT;
 			return -1;
 
@@ -1861,6 +1911,7 @@ _ATPgetrsp(fd, bdsp, err, proc)
 	}
 	ATENABLE(s, atp->atp_lock);
 
+	file_drop(fd);
 	*err = EINVAL;
 	return -1;
 }

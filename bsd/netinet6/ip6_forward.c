@@ -66,6 +66,8 @@
 #endif
 #include <netkey/key.h>
 extern int ipsec_bypass;
+extern lck_mtx_t *sadb_mutex;
+extern lck_mtx_t *ip6_mutex;
 #endif /* IPSEC */
 
 #include <netinet6/ip6_fw.h>
@@ -88,9 +90,10 @@ struct	route_in6 ip6_forward_rt;
  */
 
 void
-ip6_forward(m, srcrt)
+ip6_forward(m, srcrt, locked)
 	struct mbuf *m;
 	int srcrt;
+	int locked;
 {
 	struct ip6_hdr *ip6 = mtod(m, struct ip6_hdr *);
 	struct sockaddr_in6 *dst;
@@ -101,6 +104,10 @@ ip6_forward(m, srcrt)
 #if IPSEC
 	struct secpolicy *sp = NULL;
 #endif
+	struct timeval timenow;
+
+	getmicrotime(&timenow);
+
 
 #if IPSEC
 	/*
@@ -110,10 +117,15 @@ ip6_forward(m, srcrt)
 	 * Don't increment ip6s_cantforward because this is the check
 	 * before forwarding packet actually.
 	 */
-	if (ipsec_bypass == 0 && ipsec6_in_reject(m, NULL)) {
-		ipsec6stat.in_polvio++;
-		m_freem(m);
-		return;
+	if (ipsec_bypass == 0) {
+		lck_mtx_lock(sadb_mutex);
+		if (ipsec6_in_reject(m, NULL)) {
+			ipsec6stat.in_polvio++;
+			lck_mtx_unlock(sadb_mutex);
+			m_freem(m);
+			return;
+		}
+		lck_mtx_unlock(sadb_mutex);
 	}
 #endif /*IPSEC*/
 
@@ -128,8 +140,8 @@ ip6_forward(m, srcrt)
 	    IN6_IS_ADDR_UNSPECIFIED(&ip6->ip6_src)) {
 		ip6stat.ip6s_cantforward++;
 		/* XXX in6_ifstat_inc(rt->rt_ifp, ifs6_in_discard) */
-		if (ip6_log_time + ip6_log_interval < time_second) {
-			ip6_log_time = time_second;
+		if (ip6_log_time + ip6_log_interval < timenow.tv_sec) {
+			ip6_log_time = timenow.tv_sec;
 			log(LOG_DEBUG,
 			    "cannot forward "
 			    "from %s to %s nxt %d received on %s\n",
@@ -144,8 +156,12 @@ ip6_forward(m, srcrt)
 
 	if (ip6->ip6_hlim <= IPV6_HLIMDEC) {
 		/* XXX in6_ifstat_inc(rt->rt_ifp, ifs6_in_discard) */
+		if (locked)
+			lck_mtx_unlock(ip6_mutex);
 		icmp6_error(m, ICMP6_TIME_EXCEEDED,
 				ICMP6_TIME_EXCEED_TRANSIT, 0);
+		if (locked)
+			lck_mtx_lock(ip6_mutex);
 		return;
 	}
 	ip6->ip6_hlim -= IPV6_HLIMDEC;
@@ -164,7 +180,7 @@ ip6_forward(m, srcrt)
 #if IPSEC
 	if (ipsec_bypass != 0)
 		goto skip_ipsec;
-
+	lck_mtx_lock(sadb_mutex);
 	/* get a security policy for this packet */
 	sp = ipsec6_getpolicybyaddr(m, IPSEC_DIR_OUTBOUND, IP_FORWARDING,
 	    &error);
@@ -178,6 +194,7 @@ ip6_forward(m, srcrt)
 			m_freem(mcopy);
 #endif
 		}
+		lck_mtx_unlock(sadb_mutex);
 		m_freem(m);
 		return;
 	}
@@ -200,6 +217,7 @@ ip6_forward(m, srcrt)
 			m_freem(mcopy);
 #endif
 		}
+		lck_mtx_unlock(sadb_mutex);
 		m_freem(m);
 		return;
 
@@ -207,6 +225,7 @@ ip6_forward(m, srcrt)
 	case IPSEC_POLICY_NONE:
 		/* no need to do IPsec. */
 		key_freesp(sp);
+		lck_mtx_unlock(sadb_mutex);
 		goto skip_ipsec;
 
 	case IPSEC_POLICY_IPSEC:
@@ -222,6 +241,7 @@ ip6_forward(m, srcrt)
 				m_freem(mcopy);
 #endif
 			}
+			lck_mtx_unlock(sadb_mutex);
 			m_freem(m);
 			return;
 		}
@@ -233,6 +253,7 @@ ip6_forward(m, srcrt)
 		/* should be panic ?? */
 		printf("ip6_forward: Invalid policy found. %d\n", sp->policy);
 		key_freesp(sp);
+		lck_mtx_unlock(sadb_mutex);
 		goto skip_ipsec;
 	}
 
@@ -281,10 +302,12 @@ ip6_forward(m, srcrt)
 			m_freem(mcopy);
 #endif
 		}
+		lck_mtx_unlock(sadb_mutex);
 		m_freem(m);
 		return;
 	}
     }
+	lck_mtx_unlock(sadb_mutex);
     skip_ipsec:
 #endif /* IPSEC */
 
@@ -308,8 +331,12 @@ ip6_forward(m, srcrt)
 			ip6stat.ip6s_noroute++;
 			in6_ifstat_inc(m->m_pkthdr.rcvif, ifs6_in_noroute);
 			if (mcopy) {
+				if (locked)
+					lck_mtx_unlock(ip6_mutex);
 				icmp6_error(mcopy, ICMP6_DST_UNREACH,
 					    ICMP6_DST_UNREACH_NOROUTE, 0);
+				if (locked)
+					lck_mtx_lock(ip6_mutex);
 			}
 			m_freem(m);
 			return;
@@ -330,8 +357,12 @@ ip6_forward(m, srcrt)
 			ip6stat.ip6s_noroute++;
 			in6_ifstat_inc(m->m_pkthdr.rcvif, ifs6_in_noroute);
 			if (mcopy) {
+				if (locked)
+					lck_mtx_unlock(ip6_mutex);
 				icmp6_error(mcopy, ICMP6_DST_UNREACH,
 					    ICMP6_DST_UNREACH_NOROUTE, 0);
+				if (locked)
+					lck_mtx_lock(ip6_mutex);
 			}
 			m_freem(m);
 			return;
@@ -352,8 +383,8 @@ ip6_forward(m, srcrt)
 		ip6stat.ip6s_badscope++;
 		in6_ifstat_inc(rt->rt_ifp, ifs6_in_discard);
 
-		if (ip6_log_time + ip6_log_interval < time_second) {
-			ip6_log_time = time_second;
+		if (ip6_log_time + ip6_log_interval < timenow.tv_sec) {
+			ip6_log_time = timenow.tv_sec;
 			log(LOG_DEBUG,
 			    "cannot forward "
 			    "src %s, dst %s, nxt %d, rcvif %s, outif %s\n",
@@ -362,9 +393,14 @@ ip6_forward(m, srcrt)
 			    ip6->ip6_nxt,
 			    if_name(m->m_pkthdr.rcvif), if_name(rt->rt_ifp));
 		}
-		if (mcopy)
+		if (mcopy) {
+			if (locked)
+				lck_mtx_unlock(ip6_mutex);
 			icmp6_error(mcopy, ICMP6_DST_UNREACH,
 				    ICMP6_DST_UNREACH_BEYONDSCOPE, 0);
+			if (locked)
+				lck_mtx_lock(ip6_mutex);
+		}
 		m_freem(m);
 		return;
 	}
@@ -388,6 +424,7 @@ ip6_forward(m, srcrt)
 			 * case, as we have the outgoing interface for
 			 * encapsulated packet as "rt->rt_ifp".
 			 */
+			lck_mtx_lock(sadb_mutex);
 			sp = ipsec6_getpolicybyaddr(mcopy, IPSEC_DIR_OUTBOUND,
 				IP_FORWARDING, &ipsecerror);
 			if (sp) {
@@ -396,7 +433,7 @@ ip6_forward(m, srcrt)
 				if (ipsechdrsiz < mtu)
 					mtu -= ipsechdrsiz;
 			}
-
+			lck_mtx_unlock(sadb_mutex);
 			/*
 			 * if mtu becomes less than minimum MTU,
 			 * tell minimum MTU (and I'll need to fragment it).
@@ -404,7 +441,11 @@ ip6_forward(m, srcrt)
 			if (mtu < IPV6_MMTU)
 				mtu = IPV6_MMTU;
 #endif
+			if (locked)
+				lck_mtx_unlock(ip6_mutex);
 			icmp6_error(mcopy, ICMP6_PACKET_TOO_BIG, 0, mtu);
+			if (locked)
+				lck_mtx_lock(ip6_mutex);
 		}
 		m_freem(m);
 		return;
@@ -435,8 +476,12 @@ ip6_forward(m, srcrt)
 			 * type/code is based on suggestion by Rich Draves.
 			 * not sure if it is the best pick.
 			 */
+			if (locked)
+				lck_mtx_unlock(ip6_mutex);
 			icmp6_error(mcopy, ICMP6_DST_UNREACH,
 				    ICMP6_DST_UNREACH_ADDR, 0);
+			if (locked)
+				lck_mtx_lock(ip6_mutex);
 			m_freem(m);
 			return;
 		}
@@ -449,7 +494,7 @@ ip6_forward(m, srcrt)
 	if (ip6_fw_enable && ip6_fw_chk_ptr) {
 		u_short port = 0;
 		/* If ipfw says divert, we have to just drop packet */
-		if ((*ip6_fw_chk_ptr)(&ip6, rt->rt_ifp, &port, &m)) {
+		if (ip6_fw_chk_ptr(&ip6, rt->rt_ifp, &port, &m)) {
 			m_freem(m);
 			goto freecopy;
 		}
@@ -503,7 +548,7 @@ ip6_forward(m, srcrt)
 	in6_clearscope(&ip6->ip6_dst);
 #endif
 
-	error = nd6_output(rt->rt_ifp, origifp, m, dst, rt);
+	error = nd6_output(rt->rt_ifp, origifp, m, dst, rt, locked);
 	if (error) {
 		in6_ifstat_inc(rt->rt_ifp, ifs6_out_discard);
 		ip6stat.ip6s_cantforward++;
@@ -547,7 +592,11 @@ ip6_forward(m, srcrt)
 		code = ICMP6_DST_UNREACH_ADDR;
 		break;
 	}
+	if (locked)
+		lck_mtx_unlock(ip6_mutex);
 	icmp6_error(mcopy, type, code, 0);
+	if (locked)
+		lck_mtx_lock(ip6_mutex);
 	return;
 
  freecopy:

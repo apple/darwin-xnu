@@ -91,11 +91,11 @@ SYSCTL_INT(_net_inet_ip, IPCTL_GIF_TTL, gifttl, CTLFLAG_RW,
 	&ip_gif_ttl,	0, "");
 
 int
-in_gif_output(ifp, family, m, rt)
-	struct ifnet	*ifp;
-	int		family;
-	struct mbuf	*m;
-	struct rtentry *rt;
+in_gif_output(
+	struct ifnet	*ifp,
+	int		family,
+	struct mbuf	*m,
+	struct rtentry *rt)
 {
 	struct gif_softc *sc = (struct gif_softc*)ifp;
 	struct sockaddr_in *dst = (struct sockaddr_in *)&sc->gif_ro.ro_dst;
@@ -342,14 +342,18 @@ gif_encapcheck4(m, off, proto, arg)
 		return 0;
 	}
 	/* reject packets with broadcast on source */
+	lck_mtx_lock(rt_mtx);
 	for (ia4 = TAILQ_FIRST(&in_ifaddrhead); ia4;
 	     ia4 = TAILQ_NEXT(ia4, ia_link))
 	{
 		if ((ia4->ia_ifa.ifa_ifp->if_flags & IFF_BROADCAST) == 0)
 			continue;
-		if (ip.ip_src.s_addr == ia4->ia_broadaddr.sin_addr.s_addr)
+		if (ip.ip_src.s_addr == ia4->ia_broadaddr.sin_addr.s_addr) {
+			lck_mtx_unlock(rt_mtx);
 			return 0;
+		}
 	}
+	lck_mtx_unlock(rt_mtx);
 
 	/* ingress filters on outer source */
 	if ((sc->gif_if.if_flags & IFF_LINK2) == 0 &&

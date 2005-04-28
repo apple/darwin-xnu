@@ -29,10 +29,10 @@
 
 */
 
-#include <cpus.h>
 #include <ppc/asm.h>
 #include <ppc/proc_reg.h>
 #include <ppc/exception.h>
+#include <ppc/cpu_capabilities.h>
 #include <mach/machine/vm_param.h>
 #include <assym.s>
 
@@ -218,9 +218,11 @@ LEXT(AlignAssist)
 			b		EXT(AlignAssist64)				; Jump to the 64-bit code...
 			
 aan64:		lwz		r20,savedsisr(r13)				; Get the DSISR
+			li		r0,0							; Assume we emulate
 			mfsprg	r31,0							; Get the per_proc
 			mtcrf	0x10,r20						; Put instruction ID in CR for later
 			lwz		r21,spcFlags(r31)				; Grab the special flags
+			stw		r0,savemisc3(r13)				; Assume that we emulate ok
 			mtcrf	0x08,r20						; Put instruction ID in CR for later
 			rlwinm.	r0,r21,0,runningVMbit,runningVMbit	; Are we running a VM?
 			mtcrf	0x04,r20						; Put instruction ID in CR for later
@@ -332,15 +334,11 @@ aaComExGo:	b		EXT(EmulExit)					; We are done, no tracing on...
 ;
 ;			This is not a floating point operation
 ;
-;			The emulation routines for these are positioned every 64 bytes (16 instructions)
-;			in a 1024-byte aligned table.  It is indexed by taking the low order 4 bits of
+;			The table of these emulation routines is indexed by taking the low order 4 bits of
 ;			the instruction code in the DSISR and subtracting 7.  If this comes up negative,
 ;			the instruction is not to be emulated.  Then we add bit 0 of the code * 4.  This
 ;			gives us a fairly compact and almost unique index.  Both lwm and stmw map to 0 so
-;			that one needs to be further reduced, and we end up with holes at index 6, 8, and 10.
-;			
-;			If the emulation routine takes more than 16 instructions, it must branch elsewhere
-;			to finish up.
+;			that one needs to be further reduced, and we end up with holes at a few indexes.
 ;
 
 			.align	5
@@ -361,9 +359,7 @@ aaNotFloat:
 
 ;
 ;			This is the table of non-floating point emulation routines.
-;			It is indexed by low 4 bits of DSISR op type - 7 + bit 0 of
-;			op type * 4
-;
+;			It is indexed by the code immediately above.
 		
 			.align	5							
 
@@ -955,9 +951,17 @@ aaSthbrx:
 
 			.align	5
 
-aaDcbz:
-			rlwinm	r23,r23,0,0,26					; Round back to a 32-byte boundary
-			
+aaDcbz:			
+            lwz     r0,savesrr0+4(r13)              ; get instruction address
+            li		r4,_COMM_PAGE_BASE_ADDRESS
+			rlwinm	r23,r23,0,0,26					; Round EA back to a 32-byte boundary
+            sub     r4,r0,r4                        ; compute instruction offset from base of commpage
+            cmplwi  r4,_COMM_PAGE_AREA_USED         ; did fault occur in commpage?
+            bge+    aaDcbz1                         ; skip if not in commpage
+            lwz		r4,savecr(r13)                  ; if we take a dcbz in the commpage...
+            rlwinm	r4,r4,0,0,27                    ; ...clear users cr7 as a flag for commpage code
+            stw		r4,savecr(r13)
+aaDcbz1:
 			crset	cr0_eq							; Set this to see if we failed
 			li		r0,0							; Clear this out
 			mtmsr	r22								; Flip DR, RI, and maybe PR on
@@ -994,6 +998,8 @@ aaDcbzXit:	mr		r4,r0							; Save the DAR if we failed the access
 ;
 
 aaPassAlong:
+			li		r0,1							; Indicate that we failed to emulate
+			stw		r0,savemisc3(r13)				; Assume that we emulate ok
 			b		EXT(EmulExit)					
 
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -37,7 +37,6 @@
 #include <sys/types.h>
 #include <sys/time.h>
 #include <sys/proc.h>
-#include <sys/lock.h>
 
 
 #define TARGET_OS_MAC			0

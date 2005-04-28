@@ -6,8 +6,26 @@
 #
 #  All the convenience variables used by these macros begin with $kgm_
 
+define showversion
+#Display version string, a pointer to which is pinned at 0x501C in the kernel's
+#low memory globals
+       p (char *) *0x501c
+end
+
+document showversion
+Syntax: showversion
+| Read the kernel version string from a fixed address in low
+| memory. Useful if you don't know which kernel is on the other end,
+| and need to find the appropriate symbols. Beware that if you've
+| loaded a symbol file, but aren't connected to a remote target,
+| the version string from the symbol file will be displayed instead.
+| This macro expects to be connected to the remote kernel to function
+| correctly.
+end
+
 set $kgm_dummy = &proc0
 set $kgm_dummy = &kmod
+set $kgm_mtype = ((struct mach_header)_mh_execute_header).cputype
 
 echo Loading Kernel GDB Macros package.  Type "help kgm" for more info.\n
 
@@ -24,6 +42,7 @@ document kgm
 |     (gdb) attach <name-of-remote-host>
 |
 | The following macros are available in this package:
+|     showversion    Displays a string describing the remote kernel version
 |
 |     showalltasks   Display a summary listing of all tasks
 |     showallthreads Display info about all threads in the system
@@ -35,6 +54,7 @@ document kgm
 |     showallipc     Display a summary listing of all the ipc spaces
 |     showallrights  Display a summary listing of all the ipc rights
 |     showallkmods   Display a summary listing of all the kernel modules
+|     showallclasses Display info about all OSObject subclasses in the system
 |
 |     showtask       Display info about the specified task
 |     showtaskthreads      Display info about the threads in the task
@@ -61,15 +81,32 @@ document kgm
 |
 |     dumpcallqueue  Dump out all the entries given a queue head
 |
+|     showallmtx     Display info about mutexes usage
+|     showallrwlck   Display info about reader/writer locks usage
+|
 |     zprint         Display info about the memory zones
+|     showioalloc    Display info about iokit allocations
 |     paniclog       Display the panic log info
 |
 |     switchtoact    Switch to different context specified by activation
 |     switchtoctx    Switch to different context
+|     showuserstack  Display numeric backtrace of the user stack for an 
+|     		     activation
+|
+|     switchtouserthread Switch to the user context of the specified thread
+|     resetstacks    Return to the original kernel context
+|
 |     resetctx       Reset context
 |     resume_on      Resume when detaching from gdb
 |     resume_off     Don't resume when detaching from gdb 
 |
+|     sendcore	     Configure kernel to send a coredump to the specified IP
+|     disablecore    Configure the kernel to disable coredump transmission
+|     switchtocorethread Corefile version of "switchtoact"
+|     resetcorectx   Corefile version of "resetctx"
+|     
+|     kdp-reboot     Restart remote target
+|	
 | Type "help <macro>" for more specific help on a particular macro.
 | Type "show user <macro>" to see what the macro is really doing.
 end
@@ -169,11 +206,9 @@ end
 
 
 define showactint
-   printf "            0x%08x  ", $arg0
-   set $kgm_actp = *(struct thread *)$arg0
-   if $kgm_actp.thread
-	set $kgm_thread = *$kgm_actp.thread
-	printf "0x%08x  ", $kgm_actp.thread
+	printf "            0x%08x  ", $arg0
+	set $kgm_thread = *(struct thread *)$arg0
+	printf "0x%08x  ", $arg0
 	printf "%3d  ", $kgm_thread.sched_pri
 	set $kgm_state = $kgm_thread.state
 	if $kgm_state & 0x80
@@ -200,7 +235,12 @@ define showactint
    	if $kgm_state & 0x01
 	    printf "W\t" 
 	    printf "0x%08x  ", $kgm_thread.wait_queue
-	    output /a $kgm_thread.wait_event
+		
+		if ((unsigned)$kgm_thread.wait_event > (unsigned)sectPRELINKB)
+		    showkmodaddr $kgm_thread.wait_event
+		else
+			output /a (unsigned) $kgm_thread.wait_event
+		end
 	end
 	if $arg1 != 0
 	    if ($kgm_thread.kernel_stack != 0)
@@ -208,44 +248,49 @@ define showactint
 			printf "\n\t\treserved_stack=0x%08x", $kgm_thread.reserved_stack
 		end
 		printf "\n\t\tkernel_stack=0x%08x", $kgm_thread.kernel_stack
-		if (machine_slot[0].cpu_type == 18)
-			set $mysp = $kgm_actp->mact.pcb->save_r1
+		if ($kgm_mtype == 18)
+			set $mysp = $kgm_thread.machine.pcb->save_r1
 		else
-			set $kgm_statep = (struct i386_kernel_state *)($kgm_thread->kernel_stack + 0x4000 - sizeof(stru\
-ct i386_kernel_state))
+			set $kgm_statep = (struct i386_kernel_state *) \
+				($kgm_thread->kernel_stack + 0x4000 \
+				 - sizeof(struct i386_kernel_state))
 			set $mysp = $kgm_statep->k_ebp
 		end
 		set $prevsp = 0
 		printf "\n\t\tstacktop=0x%08x", $mysp
-	    	while ($mysp != 0) && (($mysp & 0xf) == 0) && ($mysp < 0xb0000000) && ($mysp > $prevsp)
-				printf "\n\t\t0x%08x  ", $mysp
-				if (machine_slot[0].cpu_type == 18)
-					set $kgm_return = *($mysp + 8)
-				else
-					set $kgm_return = *($mysp + 4)
-				end
-				if ($kgm_return > sectPRELINKB)
-				    showkmodaddr $kgm_return
-				else
-				if (machine_slot[0].cpu_type == 18)
-				    output /a * ($mysp + 8)
-				else
-				    output /a * ($mysp + 4)
-				end
-				end
-				set $prevsp = $mysp
-				set $mysp = * $mysp
+		if ($kgm_mtype == 18)
+			set $stkmask = 0xf
+			set $stklimit = 0xb0000000
+		else
+			set $stkmask = 0x3
+			set $stklimit = 0xfc000000
+		end
+	    	while ($mysp != 0) && (($mysp & $stkmask) == 0) \
+		       && ($mysp < $stklimit) \
+		       && ((unsigned)$mysp > (unsigned)$prevsp)
+			printf "\n\t\t0x%08x  ", $mysp
+			if ($kgm_mtype == 18)
+				set $kgm_return = *($mysp + 8)
+			else
+				set $kgm_return = *($mysp + 4)
+			end
+			if ((unsigned) $kgm_return > (unsigned) sectPRELINKB)
+			    showkmodaddr $kgm_return
+			else
+			    output /a (unsigned) $kgm_return
+			end
+			set $prevsp = $mysp
+			set $mysp = * $mysp
 		end
 		printf "\n\t\tstackbottom=0x%08x", $prevsp
 	    else
 		printf "\n\t\t\tcontinuation="
-		output /a $kgm_thread.continuation
+		output /a (unsigned) $kgm_thread.continuation
 	    end
 	    printf "\n"
 	else
 	    printf "\n"
 	end
-    end
 end	    
 
 define showact
@@ -294,19 +339,17 @@ document showallthreads
 end
 
 define showcurrentthreads
-set $kgm_ncpus = machine_info.max_cpus
-set $kgm_i = 0
-    while $kgm_i < $kgm_ncpus
-	set $kgm_prp = processor_ptr[$kgm_i]
-	if ($kgm_prp != 0) && (($kgm_prp)->active_thread != 0)
-	    set $kgm_actp = (($kgm_prp)->active_thread)->top_act
+set $kgm_prp = processor_list
+    while $kgm_prp != 0
+	if ($kgm_prp)->active_thread != 0
+	    set $kgm_actp = ($kgm_prp)->active_thread
 	    showtaskheader
 	    showtaskint ($kgm_actp)->task
 	    showactheader
 	    showactint $kgm_actp 0
 	    printf "\n"
 	end
-	set $kgm_i = $kgm_i + 1
+	set $kgm_prp = ($kgm_prp)->processor_list
     end
 end
 document showcurrentthreads
@@ -339,19 +382,17 @@ document showallstacks
 end
 
 define showcurrentstacks
-set $kgm_ncpus = machine_info.max_cpus
-set $kgm_i = 0
-    while $kgm_i < $kgm_ncpus
-	set $kgm_prp = processor_ptr[$kgm_i]
-	if ($kgm_prp != 0) && (($kgm_prp)->active_thread != 0)
-	    set $kgm_actp = (($kgm_prp)->active_thread)->top_act
+set $kgm_prp = processor_list
+    while $kgm_prp != 0
+	if ($kgm_prp)->active_thread != 0
+	    set $kgm_actp = ($kgm_prp)->active_thread
 	    showtaskheader
 	    showtaskint ($kgm_actp)->task
 	    showactheader
 	    showactint $kgm_actp 1
 	    printf "\n"
 	end
-	set $kgm_i = $kgm_i + 1
+	set $kgm_prp = ($kgm_prp)->processor_list
     end
 end
 document showcurrentstacks
@@ -377,7 +418,7 @@ define showwaitqwaiters
 			showwaiterheader
 		end
 		set $kgm_w_shuttle = (struct thread *)$kgm_w_wqe
-		showactint $kgm_w_shuttle->top_act 0
+		showactint $kgm_w_shuttle 0
 	end	
 	set $kgm_w_wqe = (struct wait_queue_element *)$kgm_w_wqe->wqe_links.next
     end
@@ -522,8 +563,8 @@ define showmapheader
 end
 
 define showvmeheader
-    printf "            entry       start       "
-    printf "prot #page  object      offset\n"
+    printf "    entry       start       "
+    printf "        prot #page  object      offset\n"
 end
 
 define showvmint
@@ -533,7 +574,11 @@ define showvmint
     printf "0x%08x  ", $kgm_map.pmap
     printf "0x%08x  ", $kgm_map.size
     printf "%3d  ", $kgm_map.hdr.nentries
-    printf "%5d  ", $kgm_map.pmap->stats.resident_count
+    if $kgm_map.pmap
+	printf "%5d  ", $kgm_map.pmap->stats.resident_count
+    else
+	printf "<n/a>  "
+    end
     printf "0x%08x  ", $kgm_map.hint
     printf "0x%08x\n", $kgm_map.first_free
     if $arg1 != 0
@@ -542,8 +587,8 @@ define showvmint
 	set $kgm_vmep = $kgm_map.hdr.links.next
 	while (($kgm_vmep != 0) && ($kgm_vmep != $kgm_head_vmep))
 	    set $kgm_vme = *$kgm_vmep
-	    printf "            0x%08x  ", $kgm_vmep
-	    printf "0x%08x  ", $kgm_vme.links.start
+	    printf "    0x%08x  ", $kgm_vmep
+	    printf "0x%016llx  ", $kgm_vme.links.start
 	    printf "%1x", $kgm_vme.protection
 	    printf "%1x", $kgm_vme.max_protection
 	    if $kgm_vme.inheritance == 0x0
@@ -569,7 +614,7 @@ define showvmint
 	    end
 	    printf "%5d  ",($kgm_vme.links.end - $kgm_vme.links.start) >> 12
 	    printf "0x%08x  ", $kgm_vme.object.vm_object
-	    printf "0x%08x\n", $kgm_vme.offset
+	    printf "0x%016llx\n", $kgm_vme.offset
   	    set $kgm_vmep = $kgm_vme.links.next
         end
     end
@@ -784,13 +829,13 @@ end
 
 define showallipc
     set $kgm_head_taskp = &default_pset.tasks
-    set $kgm_taskp = (struct task *)($kgm_head_taskp->next)
-    while $kgm_taskp != $kgm_head_taskp
+    set $kgm_cur_taskp = (struct task *)($kgm_head_taskp->next)
+    while $kgm_cur_taskp != $kgm_head_taskp
         showtaskheader
         showipcheader
-	showtaskint $kgm_taskp
-	showipcint $kgm_taskp->itk_space 0
-    	set $kgm_taskp = (struct task *)($kgm_taskp->pset_tasks.next)
+	showtaskint $kgm_cur_taskp
+	showipcint $kgm_cur_taskp->itk_space 0
+    	set $kgm_cur_taskp = (struct task *)($kgm_cur_taskp->pset_tasks.next)
     end
 end
 document showallipc
@@ -802,13 +847,13 @@ end
 
 define showallrights
     set $kgm_head_taskp = &default_pset.tasks
-    set $kgm_taskp = (struct task *)($kgm_head_taskp->next)
-    while $kgm_taskp != $kgm_head_taskp
+    set $kgm_cur_taskp = (struct task *)($kgm_head_taskp->next)
+    while $kgm_cur_taskp != $kgm_head_taskp
         showtaskheader
         showipcheader
-	showtaskint $kgm_taskp
-	showipcint $kgm_taskp->itk_space 1
-    	set $kgm_taskp = (struct task *)($kgm_taskp->pset_tasks.next)
+	showtaskint $kgm_cur_taskp
+	showipcint $kgm_cur_taskp->itk_space 1
+    	set $kgm_cur_taskp = (struct task *)($kgm_cur_taskp->pset_tasks.next)
     end
 end
 document showallrights
@@ -1132,20 +1177,20 @@ define showportdestproc
     if ($kgm_spacep != $kgm_destspacep)
 	set $kgm_destprocp = (struct proc *)0
         set $kgm_head_taskp = &default_pset.tasks
-        set $kgm_taskp = (struct task *)($kgm_head_taskp->next)
-        while (($kgm_destprocp == 0) && ($kgm_taskp != $kgm_head_taskp))
-	    set $kgm_destspacep = $kgm_taskp->itk_space
+        set $kgm_desttaskp = (struct task *)($kgm_head_taskp->next)
+        while (($kgm_destprocp == 0) && ($kgm_desttaskp != $kgm_head_taskp))
+	    set $kgm_destspacep = $kgm_desttaskp->itk_space
 	    if ($kgm_destspacep == $kgm_spacep)
-	       set $kgm_destprocp = (struct proc *)$kgm_taskp->bsd_info
+	       set $kgm_destprocp = (struct proc *)$kgm_desttaskp->bsd_info
 	    else
-    	       set $kgm_taskp = (struct task *)($kgm_taskp->pset_tasks.next)
+    	       set $kgm_desttaskp = (struct task *)($kgm_desttaskp->pset_tasks.next)
             end
         end
     end
     if $kgm_destprocp != 0
        printf "%s(%d)\n", $kgm_destprocp->p_comm, $kgm_destprocp->p_pid
     else
-       printf "task 0x%08x\n", $kgm_taskp
+       printf "task 0x%08x\n", $kgm_desttaskp
     end
 end
 
@@ -1316,25 +1361,88 @@ document zprint
 |     (gdb) zprint
 end
 
+define showmtxgrp
+set $kgm_mtxgrp = (lck_grp_t *)$arg0
+
+if ($kgm_mtxgrp->lck_grp_mtxcnt)
+printf "0x%08x ", $kgm_mtxgrp
+printf "%8d ",$kgm_mtxgrp->lck_grp_mtxcnt
+printf "%12u ",$kgm_mtxgrp->lck_grp_stat.lck_grp_mtx_stat.lck_grp_mtx_util_cnt
+printf "%8u ",$kgm_mtxgrp->lck_grp_stat.lck_grp_mtx_stat.lck_grp_mtx_miss_cnt
+printf "%8u ",$kgm_mtxgrp->lck_grp_stat.lck_grp_mtx_stat.lck_grp_mtx_wait_cnt
+printf "%s ",&$kgm_mtxgrp->lck_grp_name
+printf "\n"
+end
+end
+
+
+define showallmtx
+printf "LCK GROUP       CNT         UTIL     MISS     WAIT NAME\n"
+set $kgm_mtxgrp_ptr = (lck_grp_t *)&lck_grp_queue
+set $kgm_mtxgrp_ptr = (lck_grp_t *)$kgm_mtxgrp_ptr->lck_grp_link.next
+while ($kgm_mtxgrp_ptr != (lck_grp_t *)&lck_grp_queue)
+	showmtxgrp $kgm_mtxgrp_ptr
+	set $kgm_mtxgrp_ptr = (lck_grp_t *)$kgm_mtxgrp_ptr->lck_grp_link.next
+end
+printf "\n"
+end
+document showallmtx
+| Routine to print a summary listing of all mutexes
+| The following is the syntax:
+|     (gdb) showallmtx
+end
+
+define showrwlckgrp
+set $kgm_rwlckgrp = (lck_grp_t *)$arg0
+
+if ($kgm_rwlckgrp->lck_grp_rwcnt)
+printf "0x%08x ", $kgm_rwlckgrp
+printf "%8d ",$kgm_rwlckgrp->lck_grp_rwcnt
+printf "%12u ",$kgm_rwlckgrp->lck_grp_stat.lck_grp_rw_stat.lck_grp_rw_util_cnt
+printf "%8u ",$kgm_rwlckgrp->lck_grp_stat.lck_grp_rw_stat.lck_grp_rw_miss_cnt
+printf "%8u ",$kgm_rwlckgrp->lck_grp_stat.lck_grp_rw_stat.lck_grp_rw_wait_cnt
+printf "%s ",&$kgm_rwlckgrp->lck_grp_name
+printf "\n"
+end
+end
+
+
+define showallrwlck
+printf "LCK GROUP       CNT         UTIL     MISS     WAIT NAME\n"
+set $kgm_rwlckgrp_ptr = (lck_grp_t *)&lck_grp_queue
+set $kgm_rwlckgrp_ptr = (lck_grp_t *)$kgm_rwlckgrp_ptr->lck_grp_link.next
+while ($kgm_rwlckgrp_ptr != (lck_grp_t *)&lck_grp_queue)
+	showrwlckgrp $kgm_rwlckgrp_ptr
+	set $kgm_rwlckgrp_ptr = (lck_grp_t *)$kgm_rwlckgrp_ptr->lck_grp_link.next
+end
+printf "\n"
+end
+document showallrwlck
+| Routine to print a summary listing of all read/writer locks
+| The following is the syntax:
+|     (gdb) showallrwlck
+end
+
 set $kdp_act_counter = 0
 
 define switchtoact
-	if (machine_slot[0].cpu_type == 18)
+	if ($kgm_mtype == 18)
 		if ($kdp_act_counter == 0)
 		set $kdpstate = (struct savearea *) kdp.saved_state
 		end
 		set $kdp_act_counter = $kdp_act_counter + 1
 		set $newact = (struct thread *) $arg0
-		if (($newact.thread)->kernel_stack == 0)
-		echo This activation does not have a stack.\n
-		echo continuation:
-		output/a $newact.thread.continuation
-		echo \n
+		if ($newact->kernel_stack == 0)
+		   echo This activation does not have a stack.\n
+		   echo continuation:
+		   output/a (unsigned) $newact.continuation
+		   echo \n
+		else
+		   set (struct savearea *) kdp.saved_state=$newact->machine->pcb
+		   flush
+		   set $pc=$newact->machine->pcb.save_srr0
+		   update
 		end
-		set (struct savearea *) kdp.saved_state=$newact->mact->pcb
-		flush
-		set $pc=$newact->mact->pcb.save_srr0
-		update
 	else
 		echo switchtoact not implemented for this architecture.\n
 	end
@@ -1350,7 +1458,7 @@ Syntax: switchtoact <address of activation>
 end     
 
 define switchtoctx
-	if (machine_slot[0].cpu_type == 18)
+	if ($kgm_mtype == 18)
 		if ($kdp_act_counter == 0)
 		set $kdpstate = (struct savearea *) kdp.saved_state
 		end
@@ -1373,7 +1481,7 @@ Syntax: switchtoctx <address of pcb>
 end     
 
 define resetctx
-	if (machine_slot[0].cpu_type == 18)
+	if ($kgm_mtype == 18)
 		set (struct savearea *)kdp.saved_state=$kdpstate
 		flush
 		set $pc=((struct savearea *) kdp.saved_state)->save_srr0
@@ -1466,4 +1574,418 @@ showallthreads
 end
 document showallacts
 | See help showallthreads.
+end
+
+
+define resetstacks
+       _kgm_flush_loop
+       set kdp_pmap = 0
+       _kgm_flush_loop
+       resetctx
+       _kgm_flush_loop
+       _kgm_update_loop
+       resetctx
+       _kgm_update_loop
+end
+
+document resetstacks
+| Syntax: resetstacks
+| Internal kgmacro routine used by the "showuserstack" macro 
+| to reset the target pmap to the kernel pmap.
+end
+
+#Barely effective hacks to work around bugs in the "flush" and "update" 
+#gdb commands in Tiger (up to 219); these aren't necessary with Panther
+#gdb, but do no harm.
+define _kgm_flush_loop
+       set $kgm_flush_loop_ctr = 0
+       while ($kgm_flush_loop_ctr < 30)
+       	     flush
+	     set $kgm_flush_loop_ctr = $kgm_flush_loop_ctr + 1
+       end
+end
+
+define _kgm_update_loop
+       set $kgm_update_loop_ctr = 0
+       while ($kgm_update_loop_ctr < 30)
+       	     update
+       	     set $kgm_update_loop_ctr = $kgm_update_loop_ctr + 1
+       end
+end
+
+define showuserstack
+  		if ($kgm_mtype == 18)	
+		   if ($kdp_act_counter == 0)
+		      set $kdpstate = (struct savearea *) kdp.saved_state
+		   end
+		   set $kdp_act_counter = $kdp_act_counter + 1
+		   set $newact = (struct thread *) $arg0
+		   _kgm_flush_loop
+		   set $checkpc = $newact->machine->upcb.save_srr0
+		   if ($checkpc == 0)
+		      echo This activation does not appear to have
+		      echo \20 a valid user context.\n
+		   else	      
+		     set (struct savearea *) kdp.saved_state=$newact->machine->upcb
+		     set $pc = $checkpc
+#flush and update seem to be executed lazily by gdb on Tiger, hence the
+#repeated invocations - see 3743135
+	   	    _kgm_flush_loop
+# This works because the new pmap is used only for reads
+		     set kdp_pmap = $newact->task->map->pmap
+		     _kgm_flush_loop
+		     _kgm_update_loop
+		     bt
+		     resetstacks
+		     _kgm_flush_loop
+		     _kgm_update_loop
+		     resetstacks
+		     _kgm_flush_loop
+		     _kgm_update_loop
+		   end
+		else
+		echo showuserstack not implemented for this architecture.\n
+	end		
+end
+
+document showuserstack
+Syntax: showuserstack <address of thread activation>
+|This command displays a numeric backtrace for the user space stack of
+|the given thread activation. It may, of course, fail to display a
+|complete backtrace if portions of the user stack are not mapped in.
+|Symbolic backtraces can be obtained either by running gdb on the
+|user space binary, or a tool such as "symbolicate".
+|Note that while this command works on Panther's gdb, an issue
+|with Tiger gdb (3743135) appears to hamper the evaluation of this
+|macro in some cases.
+end
+
+#Stopgap until gdb can generate the HOSTREBOOT packet
+define kdp-reboot
+       set flag_kdp_trigger_reboot = 1
+       continue
+end
+
+document kdp-reboot
+Syntax: kdp-reboot
+|Reboot the remote target machine; not guaranteed to succeed. Requires symbols
+|until gdb support for the HOSTREBOOT packet is implemented.
+end
+
+define sendcore
+       set kdp_trigger_core_dump = 1
+       set kdp_flag |= 0x40
+       set panicd_ip_str = "$arg0"
+       set panicd_specified = 1
+       set disableDebugOuput = 0
+       set disableConsoleOutput = 0
+       set logPanicDataToScreen = 1
+       set reattach_wait = 1
+       resume_off
+end
+
+document sendcore
+Syntax: sendcore <IP address>
+|Configure the kernel to transmit a kernel coredump to a server (kdumpd) 
+|at the specified IP address. This is useful when the remote target has
+|not been previously configured to transmit coredumps, and you wish to
+|preserve kernel state for later examination. NOTE: You must issue a "continue"
+|command after using this macro to trigger the kernel coredump. The kernel
+|will resume waiting in the debugger after completion of the coredump. You
+|may disable coredumps by executing the "disablecore" macro.
+end
+
+define disablecore
+       set kdp_trigger_core_dump = 0
+       set kdp_flag |= 0x40
+       set kdp_flag &= ~0x10
+       set panicd_specified = 0
+end
+
+document disablecore
+Syntax: disablecore
+|Reconfigures the kernel so that it no longer transmits kernel coredumps. This
+|complements the "sendcore" macro, but it may be used if the kernel has been
+|configured to transmit coredumps through boot-args as well.
+end
+
+#Use of this macro requires the gdb submission from 3401283
+define switchtocorethread
+	if ($kgm_mtype == 18)
+		if ($kdp_act_counter == 0)
+		set $kdpstate = (struct savearea *) kdp.saved_state
+		end
+		set $kdp_act_counter = $kdp_act_counter + 1
+		set $newact = (struct thread *) $arg0
+		if ($newact->kernel_stack == 0)
+		   echo This thread does not have a stack.\n
+		   echo continuation:
+		   output/a (unsigned) $newact.continuation
+		   echo \n
+		else
+		   loadcontext $newact->machine->pcb
+# flushstack will be introduced in a gdb version > gdb-357
+		   flushstack
+		   set $pc = $newact->machine->pcb.save_srr0
+		end
+	else
+		echo switchtocorethread not implemented for this architecture.\n
+	end
+end
+
+document switchtocorethread
+Syntax: switchtocorethread <address of activation>
+| The corefile equivalent of "switchtoact". When debugging a kernel coredump
+| file, this command can be used to examine the execution context and stack
+| trace for a given thread activation. For example, to view the backtrace
+| for a thread issue "switchtocorethread <address>", followed by "bt".
+| Before resuming execution, issue a "resetcorectx" command, to
+| return to the original execution context. Note that this command
+| requires gdb support, as documented in Radar 3401283.
+end
+
+define loadcontext
+       set $pc = $arg0.save_srr0
+       set $r1 = $arg0.save_r1
+       set $lr = $arg0.save_lr
+       
+       set $r2 = $arg0.save_r2
+       set $r3 = $arg0.save_r3
+       set $r4 = $arg0.save_r4
+       set $r5 = $arg0.save_r5
+       set $r6 = $arg0.save_r6
+       set $r7 = $arg0.save_r7
+       set $r8 = $arg0.save_r8
+       set $r9 = $arg0.save_r9
+       set $r10 = $arg0.save_r10
+       set $r11 = $arg0.save_r11
+       set $r12 = $arg0.save_r12
+       set $r13 = $arg0.save_r13
+       set $r14 = $arg0.save_r14
+       set $r15 = $arg0.save_r15
+       set $r16 = $arg0.save_r16
+       set $r17 = $arg0.save_r17
+       set $r18 = $arg0.save_r18
+       set $r19 = $arg0.save_r19
+       set $r20 = $arg0.save_r20
+       set $r21 = $arg0.save_r21
+       set $r22 = $arg0.save_r22
+       set $r23 = $arg0.save_r23
+       set $r24 = $arg0.save_r24
+       set $r25 = $arg0.save_r25
+       set $r26 = $arg0.save_r26
+       set $r27 = $arg0.save_r27
+       set $r28 = $arg0.save_r28
+       set $r29 = $arg0.save_r29
+       set $r30 = $arg0.save_r30
+       set $r31 = $arg0.save_r31
+       
+       set $cr = $arg0.save_cr
+       set $ctr = $arg0.save_ctr
+end
+
+define resetcorectx
+       set $kgm_corecontext = (struct savearea *) kdp.saved_state
+       loadcontext $kgm_corecontext
+# Maintaining this act counter wouldn't be necessary if we just initialized
+# $kdpstate at the beginning of the macro..
+       set $kdp_act_counter = 0 
+end
+
+document resetcorectx
+Syntax: resetcorectx
+| The corefile equivalent of "resetctx". Returns to the original
+| execution context (that of the active thread at the time of the NMI or
+| panic). This command should be issued if you wish to resume
+| execution after using the "switchtocorethread" command.
+end
+
+#Helper function for "showallgdbstacks"
+
+define showgdbthread
+	printf "            0x%08x  ", $arg0
+	set $kgm_thread = *(struct thread *)$arg0
+	printf "0x%08x  ", $arg0
+	printf "%3d  ", $kgm_thread.sched_pri
+	set $kgm_state = $kgm_thread.state
+	if $kgm_state & 0x80
+	    printf "I" 
+	end
+	if $kgm_state & 0x40
+	    printf "P" 
+	end
+	if $kgm_state & 0x20
+	    printf "A" 
+	end
+	if $kgm_state & 0x10
+	    printf "H" 
+	end
+	if $kgm_state & 0x08
+	    printf "U" 
+	end
+	if $kgm_state & 0x04
+	    printf "R" 
+	end
+	if $kgm_state & 0x02
+	    printf "S" 
+	end
+   	if $kgm_state & 0x01
+	    printf "W\t" 
+	    printf "0x%08x  ", $kgm_thread.wait_queue
+            output /a (unsigned) $kgm_thread.wait_event
+	end
+	if $arg1 != 0
+	    if ($kgm_thread.kernel_stack != 0)
+		if ($kgm_thread.reserved_stack != 0)
+			printf "\n\t\treserved_stack=0x%08x", $kgm_thread.reserved_stack
+		end
+		printf "\n\t\tkernel_stack=0x%08x", $kgm_thread.kernel_stack
+		if ($kgm_mtype == 18)
+			set $mysp = $kgm_thread.machine.pcb->save_r1
+		else
+			set $kgm_statep = (struct i386_kernel_state *) \
+				($kgm_thread->kernel_stack + 0x4000 \
+				 - sizeof(struct i386_kernel_state))
+			set $mysp = $kgm_statep->k_ebp
+		end
+		set $prevsp = 0
+		printf "\n\t\tstacktop=0x%08x", $mysp
+		switchtoact $arg0
+	    	bt
+	    else
+		printf "\n\t\t\tcontinuation="
+		output /a (unsigned) $kgm_thread.continuation
+	    end
+	    printf "\n"
+	else
+	    printf "\n"
+	end
+end	    
+
+#Use of this macro is currently (8/04) blocked by the fact that gdb
+#stops evaluating macros when encountering an error, such as a failure
+#to read memory from a certain location. Until this issue (described in
+#3758949) is addressed, evaluation of this macro may stop upon
+#encountering such an error.
+
+define showallgdbstacks
+    set $kgm_head_taskp = &default_pset.tasks
+    set $kgm_taskp = (struct task *)($kgm_head_taskp->next)
+    while $kgm_taskp != $kgm_head_taskp
+        showtaskheader
+	showtaskint $kgm_taskp
+	set $kgm_head_actp = &($kgm_taskp->threads)
+        set $kgm_actp = (struct thread *)($kgm_taskp->threads.next)
+	while $kgm_actp != $kgm_head_actp
+	    showactheader
+	    showgdbthread $kgm_actp 1
+  	    set $kgm_actp = (struct thread *)($kgm_actp->task_threads.next)
+        end
+	printf "\n"
+    	set $kgm_taskp = (struct task *)($kgm_taskp->pset_tasks.next)
+    end
+    resetctx
+end
+
+document showallgdbstacks
+Syntax: showallgdbstacks
+| An alternative to "showallstacks". Iterates through the task list and
+| displays a gdb generated backtrace for each kernel thread. It is
+| advantageous in that it is much faster than "showallstacks", and
+| decodes function call arguments and displays source level traces, but
+| it has the drawback that it doesn't determine if frames belong to
+| functions from kernel extensions, as with "showallstacks".
+| This command may terminate prematurely because of a gdb bug
+| (Radar 3758949), which stops macro evaluation on memory read
+| errors.
+end
+
+define switchtouserthread
+  		if ($kgm_mtype == 18)	
+		   if ($kdp_act_counter == 0)
+		      set $kdpstate = (struct savearea *) kdp.saved_state
+		   end
+		   set $kdp_act_counter = $kdp_act_counter + 1
+		   set $newact = (struct thread *) $arg0
+		   _kgm_flush_loop
+		   set $checkpc = $newact->machine->upcb.save_srr0
+		   if ($checkpc == 0)
+		      echo This activation does not appear to have
+		      echo \20 a valid user context.\n
+		   else	      
+		     set (struct savearea *) kdp.saved_state=$newact->machine->upcb
+		     set $pc = $checkpc
+#flush and update seem to be executed lazily by gdb on Tiger, hence the
+#repeated invocations - see 3743135
+	   	    _kgm_flush_loop
+# This works because the new pmap is used only for reads
+		     set kdp_pmap = $newact->task->map->pmap
+		     _kgm_flush_loop
+		     _kgm_update_loop
+		   end
+		else
+		   echo switchtouserthread not implemented for this architecture.\n
+	end
+end
+
+document switchtouserthread
+Syntax: switchtouserthread <address of thread>
+| Analogous to switchtoact, but switches to the user context of a
+| specified thread address. Similar to the "showuserstack"
+| command, but this command does not return gdb to the kernel context
+| immediately. This is to assist with the following (rather risky)
+| manoeuvre - upon switching to the user context and virtual address
+| space, the user may choose to call remove-symbol-file on the
+| mach_kernel symbol file, and then add-symbol-file on the user space
+| binary's symfile. gdb can then generate symbolic backtraces 
+| for the user space thread. To return to the
+| kernel context and virtual address space, the process must be
+| reversed, i.e. call remove-symbol-file on the user space symbols, and
+| then add-symbol-file on the appropriate mach_kernel, and issue the
+| "resetstacks" command. Note that gdb may not react kindly to all these
+| symbol file switches. The same restrictions that apply to "showuserstack"
+| apply here - pages that have been paged out cannot be read while in the
+| debugger context, so backtraces may terminate early.
+| If the virtual addresses in the stack trace do not conflict with those
+| of symbols in the kernel's address space, it may be sufficient to
+| just do an add-symbol-file on the user space binary's symbol file.
+| Note that while this command works on Panther's gdb, an issue
+| with Tiger gdb (3743135) appears to hamper the evaluation of this
+| macro in some cases.
+end
+
+define showmetaclass
+    set cp-abi gnu-v2
+    set $kgm_metaclassp = (OSMetaClass *)$arg0
+    printf "%-5d", $kgm_metaclassp->instanceCount
+    printf "x %5d bytes", $kgm_metaclassp->classSize
+    printf " %s\n", $kgm_metaclassp->className->string
+end
+
+define showallclasses
+    set cp-abi gnu-v2
+    set $kgm_classidx = 0
+    while $kgm_classidx < sAllClassesDict->count
+	set $kgm_meta = (OSMetaClass *) sAllClassesDict->dictionary[$kgm_classidx].value
+	showmetaclass $kgm_meta
+	set $kgm_classidx = $kgm_classidx + 1
+    end
+end
+document showallclasses
+| Show the instance counts and ivar size of all OSObject subclasses. See ioclasscount man page for details.
+| The following is the syntax:
+|     (gdb) showallclasses
+end
+
+define showioalloc
+    printf " Instance allocation = 0x%08lx = %4ld K\n", (int) debug_ivars_size, ((int) debug_ivars_size) / 1024
+    printf "Container allocation = 0x%08lx = %4ld K\n", (int) debug_container_malloc_size, ((int) debug_container_malloc_size) / 1024
+    printf " IOMalloc allocation = 0x%08lx = %4ld K\n", (int) debug_iomalloc_size, ((int) debug_iomalloc_size) / 1024
+    printf " Pageable allocation = 0x%08lx = %4ld K\n", (vm_size_t) debug_iomallocpageable_size, ((vm_size_t) debug_iomallocpageable_size) / 1024
+end
+
+document showioalloc
+| Show some accounting of memory allocated by IOKit allocators. See ioalloccount man page for details.
+| The following is the syntax:
+|     (gdb) showioalloc
 end

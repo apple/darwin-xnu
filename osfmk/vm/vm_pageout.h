@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -60,27 +60,34 @@
 #ifndef	_VM_VM_PAGEOUT_H_
 #define _VM_VM_PAGEOUT_H_
 
+#ifdef	KERNEL_PRIVATE
+
+#include <mach/mach_types.h>
 #include <mach/boolean.h>
 #include <mach/machine/vm_types.h>
-#include <vm/vm_object.h>
+#include <mach/memory_object_types.h>
+
+#include <kern/kern_types.h>
+#include <kern/lock.h>
+
+extern kern_return_t vm_map_create_upl(
+	vm_map_t		map,
+	vm_map_address_t	offset,
+	upl_size_t		*upl_size,
+	upl_t			*upl,
+	upl_page_info_array_t	page_list,
+	unsigned int		*count,
+	int			*flags);
+
+#ifdef	MACH_KERNEL_PRIVATE
+
 #include <vm/vm_page.h>
-
-
-
 
 extern unsigned int	vm_pageout_scan_event_counter;
 extern unsigned int	vm_zf_count;
 
 /*
- *	The following ifdef only exists because XMM must (currently)
- *	be given a page at a time.  This should be removed
- *	in the future.
- */
-#define	DATA_WRITE_MAX	16
-#define	POINTER_T(copy)	(pointer_t)(copy)
-
-/*
- *	Exported routines.
+ *	Routines exported to Mach.
  */
 extern void		vm_pageout(void);
 
@@ -117,10 +124,7 @@ extern void		vm_pageclean_copy(
 
 /* UPL exported routines and structures */
 
-#define UPL_COMPOSITE_PAGE_LIST_MAX 16
-
-
-#define upl_lock_init(object)	mutex_init(&(object)->Lock, ETAP_VM_OBJ)
+#define upl_lock_init(object)	mutex_init(&(object)->Lock, 0)
 #define upl_lock(object)	mutex_lock(&(object)->Lock)
 #define upl_unlock(object)	mutex_unlock(&(object)->Lock)
 
@@ -133,18 +137,15 @@ struct upl {
 	int		flags;
 	vm_object_t	src_object; /* object derived from */
 	vm_object_offset_t offset;
-	vm_size_t	size;	    /* size in bytes of the address space */
+	upl_size_t	size;	    /* size in bytes of the address space */
 	vm_offset_t	kaddr;      /* secondary mapping in kernel */
 	vm_object_t	map_object;
-#ifdef	UBC_DEBUG
+#ifdef	UPL_DEBUG
 	unsigned int	ubc_alias1;
 	unsigned int	ubc_alias2;
 	queue_chain_t	uplq;	    /* List of outstanding upls on an obj */
-#endif	/* UBC_DEBUG */
-
+#endif	/* UPL_DEBUG */
 };
-
-
 
 /* upl struct flags */
 #define UPL_PAGE_LIST_MAPPED	0x1
@@ -157,10 +158,8 @@ struct upl {
 #define UPL_PAGEOUT		0x80
 #define UPL_LITE		0x100
 #define UPL_IO_WIRE		0x200
-
-#define	UPL_PAGE_TICKET_MASK	0xF00
-#define UPL_PAGE_TICKET_SHIFT	8
-
+#define UPL_ACCESS_BLOCKED	0x400
+#define UPL_ENCRYPTED		0x800
 
 
 /* flags for upl_create flags parameter */
@@ -168,11 +167,100 @@ struct upl {
 #define UPL_CREATE_INTERNAL	0x1
 #define UPL_CREATE_LITE		0x2
 
+extern kern_return_t vm_object_iopl_request(
+	vm_object_t		object,
+	vm_object_offset_t	offset,
+	upl_size_t		size,
+	upl_t			*upl_ptr,
+	upl_page_info_array_t	user_page_list,
+	unsigned int		*page_list_count,
+	int			cntrl_flags);
 
+extern kern_return_t vm_object_super_upl_request(
+	vm_object_t		object,
+	vm_object_offset_t	offset,
+	upl_size_t		size,
+	upl_size_t		super_cluster,
+	upl_t			*upl,
+	upl_page_info_t		*user_page_list,
+	unsigned int		*page_list_count,
+	int			cntrl_flags);
+
+/* should be just a regular vm_map_enter() */
+extern kern_return_t vm_map_enter_upl(
+	vm_map_t		map, 
+	upl_t			upl, 
+	vm_map_offset_t		*dst_addr);
+
+/* should be just a regular vm_map_remove() */
+extern kern_return_t vm_map_remove_upl(
+	vm_map_t		map, 
+	upl_t			upl);
+
+#ifdef UPL_DEBUG
+extern kern_return_t  upl_ubc_alias_set(
+	upl_t upl,
+	unsigned int alias1,
+	unsigned int alias2);
+extern int  upl_ubc_alias_get(
+	upl_t upl,
+	unsigned int * al,
+	unsigned int * al2);
+#endif /* UPL_DEBUG */
 
 /* wired  page list structure */
 typedef unsigned long *wpl_array_t;
 
+extern void vm_page_free_list(
+	register vm_page_t	mem);
 	 
+extern void vm_page_free_reserve(int pages);
+
+extern void vm_pageout_throttle_down(vm_page_t page);
+extern void vm_pageout_throttle_up(vm_page_t page);
+
+/*
+ * ENCRYPTED SWAP:
+ */
+extern void upl_encrypt(
+	upl_t			upl,
+	upl_offset_t		crypt_offset,
+	upl_size_t		crypt_size);
+extern void vm_page_encrypt(
+	vm_page_t		page,
+	vm_map_offset_t		kernel_map_offset);
+extern boolean_t vm_pages_encrypted; /* are there encrypted pages ? */
+extern void vm_page_decrypt(
+	vm_page_t		page,
+	vm_map_offset_t		kernel_map_offset);
+extern kern_return_t vm_paging_map_object(
+	vm_map_offset_t		*address,
+	vm_page_t		page,
+	vm_object_t		object,
+	vm_object_offset_t	offset,
+	vm_map_size_t		*size);
+extern void vm_paging_unmap_object(
+	vm_object_t		object,
+	vm_map_offset_t		start,
+	vm_map_offset_t		end);
+decl_simple_lock_data(extern, vm_paging_lock)
+
+/*
+ * Backing store throttle when BS is exhausted
+ */
+extern unsigned int    vm_backing_store_low;
+
+#endif  /* MACH_KERNEL_PRIVATE */
+
+extern void vm_countdirtypages(void);
+
+extern void vm_backing_store_disable(
+			boolean_t	suspend);
+
+extern kern_return_t upl_transpose(
+	upl_t	upl1,
+	upl_t	upl2);
+
+#endif	/* KERNEL_PRIVATE */
 
 #endif	/* _VM_VM_PAGEOUT_H_ */

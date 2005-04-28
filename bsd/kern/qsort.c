@@ -60,8 +60,8 @@
 #include <sys/types.h>
 //#include <stdlib.h>
 
-static inline char	*med3 __P((char *, char *, char *, int (*)()));
-static inline void	 swapfunc __P((char *, char *, int, int));
+static inline char	*med3(char *, char *, char *, int (*)());
+static inline void	 swapfunc(char *, char *, int, int);
 
 #define min(a, b)	(a) < (b) ? a : b
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2002-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -27,11 +27,12 @@
 #ifdef KERNEL
 #ifdef __APPLE_API_PRIVATE
 #include <sys/types.h>
-#include <sys/lock.h>
 #include <sys/queue.h>
 #include <sys/stat.h>
 #include <sys/vnode.h>
 #include <sys/quota.h>
+
+#include <kern/locks.h>
 
 #include <hfs/hfs_catalog.h>
 #include <hfs/rangelist.h>
@@ -42,45 +43,35 @@
  * Reading or writing any of these fields requires holding cnode lock.
  */
 struct filefork {
-	struct cnode	*ff_cp;		/* cnode associated with this fork */
-	struct rl_head	ff_invalidranges; /* Areas of disk that should read back as zeroes */
-	long			ff_evtonly_refs;	/* number of vnode references used solely for events (O_EVTONLY) */
+	struct cnode   *ff_cp;               /* cnode associated with this fork */
+	struct rl_head  ff_invalidranges;    /* Areas of disk that should read back as zeroes */
 	union {
-	  struct hfslockf *ffu_lockf;	/* Head of byte-level lock list. */
-	  void *ffu_sysdata;		/* private data for system files */
-	  char *ffu_symlinkptr;		/* symbolic link pathname */
-	} ff_un;
-	struct cat_fork	ff_data;
+	   void        *ffu_sysfileinfo;     /* additional info for system files */
+	   char        *ffu_symlinkptr;      /* symbolic link pathname */
+	} ff_union;
+	struct cat_fork ff_data;             /* fork data (size, extents) */
 };
 typedef struct filefork filefork_t;
 
 /* Aliases for common fields */
-#define ff_size		ff_data.cf_size
-#define ff_clumpsize	ff_data.cf_clump
-#define ff_bytesread	ff_data.cf_bytesread
-#define ff_blocks	ff_data.cf_blocks
-#define ff_extents	ff_data.cf_extents
+#define ff_size          ff_data.cf_size
+#define ff_clumpsize     ff_data.cf_clump
+#define ff_bytesread     ff_data.cf_bytesread
+#define ff_blocks        ff_data.cf_blocks
+#define ff_extents       ff_data.cf_extents
 #define ff_unallocblocks ff_data.cf_vblocks
 
-#define ff_symlinkptr	ff_un.ffu_symlinkptr
-#define	ff_lockf	ff_un.ffu_lockf
+#define ff_symlinkptr    ff_union.ffu_symlinkptr
+#define ff_sysfileinfo   ff_union.ffu_sysfileinfo
 
 
 /* The btree code still needs these... */
-#define fcbEOF		ff_size
-#define fcbExtents	ff_extents
-#define	fcbBTCBPtr	ff_un.ffu_sysdata
+#define fcbEOF           ff_size
+#define fcbExtents       ff_extents
+#define	fcbBTCBPtr       ff_sysfileinfo
 
-
-/*
- * Directory index entry
- */
-struct	hfs_index {
-	SLIST_ENTRY(hfs_index) hi_link;
-	int	hi_index;
-	char	hi_name[1];
-};
-
+typedef u_int8_t atomicflag_t;
+ 
 /*
  * The cnode is used to represent each active (or recently active)
  * file or directory in the HFS filesystem.
@@ -88,22 +79,32 @@ struct	hfs_index {
  * Reading or writing any of these fields requires holding c_lock.
  */
 struct cnode {
-	struct lock__bsd__	c_lock;		/* cnode's lock */
+	lck_rw_t                c_rwlock;       /* cnode's lock */
+	void *                  c_lockowner;    /* cnode's lock owner (exclusive case only) */
+	lck_rw_t                c_truncatelock; /* protects file from truncation during read/write */
 	LIST_ENTRY(cnode)	c_hash;		/* cnode's hash chain */
 	u_int32_t		c_flag;		/* cnode's runtime flags */
+	u_int32_t		c_hflag;	/* cnode's flags for maintaining hash - protected by global hash lock */
 	struct vnode		*c_vp;		/* vnode for data fork or dir */
 	struct vnode		*c_rsrc_vp;	/* vnode for resource fork */
 	struct vnode		*c_devvp;	/* vnode for block I/O */
 	dev_t			c_dev;		/* cnode's device */
         struct dquot		*c_dquot[MAXQUOTAS]; /* cnode's quota info */
 	struct klist		c_knotes;	/* knotes attached to this vnode */
-	cnid_t			c_childhint;	/* catalog hint for children */
+	u_long			c_childhint;	/* catalog hint for children */
 	struct cat_desc		c_desc;		/* cnode's descriptor */
 	struct cat_attr		c_attr;		/* cnode's attributes */
-	SLIST_HEAD(hfs_indexhead, hfs_index) c_indexlist;  /* directory index list */
-	long                c_evtonly_refs;	/* number of vnode references used solely for events (O_EVTONLY) */
+	SLIST_HEAD(hfs_hinthead, directoryhint) c_hintlist;  /* directory hint list */
+  	int16_t			c_dirhinttag;	/* directory hint tag */
+	union {
+	    int16_t     cu_dirhintcnt;          /* directory hint count */
+	    int16_t     cu_syslockcount;        /* system file use only */
+	} c_union;
  	struct filefork		*c_datafork;	/* cnode's data fork */
 	struct filefork		*c_rsrcfork;	/* cnode's rsrc fork */
+	atomicflag_t	c_touch_acctime;
+	atomicflag_t	c_touch_chgtime;
+	atomicflag_t	c_touch_modtime;
 };
 typedef struct cnode cnode_t;
 
@@ -121,40 +122,40 @@ typedef struct cnode cnode_t;
 #define c_rdev		c_attr.ca_rdev
 #define c_atime		c_attr.ca_atime
 #define c_mtime		c_attr.ca_mtime
-#define c_mtime_nsec	c_attr.ca_mtime_nsec
 #define c_ctime		c_attr.ca_ctime
 #define c_itime		c_attr.ca_itime
 #define c_btime		c_attr.ca_btime
 #define c_flags		c_attr.ca_flags
 #define c_finderinfo	c_attr.ca_finderinfo
 #define c_blocks	c_attr.ca_blocks
+#define c_attrblks	c_attr.ca_attrblks
 #define c_entries	c_attr.ca_entries
 #define c_zftimeout	c_childhint
 
+#define c_dirhintcnt    c_union.cu_dirhintcnt
+#define c_syslockcount  c_union.cu_syslockcount
+
+
+/* hash maintenance flags kept in c_hflag and protected by hfs_chash_mutex */
+#define H_ALLOC		0x00001	/* CNode is being allocated */
+#define H_ATTACH	0x00002	/* CNode is being attached to by another vnode */
+#define	H_TRANSIT	0x00004	/* CNode is getting recycled  */
+#define H_WAITING	0x00008	/* CNode is being waited for */
+
 
 /* Runtime cnode flags (kept in c_flag) */
-#define C_ACCESS	0x00001	/* Access time update request */
-#define C_CHANGE	0x00002	/* Change time update request */
-#define C_UPDATE	0x00004	/* Modification time update request */
-#define C_MODIFIED 	0x00008	/* CNode has been modified */
+#define C_NEED_RVNODE_PUT  0x00001  /* Need to do a vnode_put on c_rsrc_vp after the unlock */
+#define C_NEED_DVNODE_PUT  0x00002  /* Need to do a vnode_put on c_vp after the unlock */
+#define C_ZFWANTSYNC	   0x00004  /* fsync requested and file has holes */
+#define C_FROMSYNC         0x00008  /* fsync was called from sync */ 
 
-#define C_RELOCATING	0x00010	/* CNode's fork is being relocated */
-#define C_NOEXISTS	0x00020	/* CNode has been deleted, catalog entry is gone */
-#define C_DELETED	0x00040	/* CNode has been marked to be deleted */
-#define C_HARDLINK	0x00080	/* CNode is a hard link */
+#define C_MODIFIED         0x00010  /* CNode has been modified */
+#define C_NOEXISTS         0x00020  /* CNode has been deleted, catalog entry is gone */
+#define C_DELETED          0x00040  /* CNode has been marked to be deleted */
+#define C_HARDLINK         0x00080  /* CNode is a hard link */
 
-#define C_ALLOC		0x00100	/* CNode is being allocated */
-#define C_WALLOC	0x00200	/* Waiting for allocation to finish */
-#define	C_TRANSIT	0x00400	/* CNode is getting recycled  */
-#define	C_WTRANSIT	0x00800	/* Waiting for cnode getting recycled  */
-#define C_NOBLKMAP	0x01000	/* CNode blocks cannot be mapped */
-#define C_WBLKMAP	0x02000	/* Waiting for block map */
-
-#define C_ZFWANTSYNC	0x04000	/* fsync requested and file has holes */
-#define C_VPREFHELD     0x08000 /* resource fork has done a vget() on c_vp (for its parent ptr) */
-
-#define C_FROMSYNC      0x10000 /* fsync was called from sync */ 
-#define C_FORCEUPDATE   0x20000 /* force the catalog entry update */
+#define C_FORCEUPDATE      0x00100  /* force the catalog entry update */
+#define C_HASXATTRS        0x00200  /* cnode has extended attributes */
 
 
 #define ZFTIMELIMIT	(5 * 60)
@@ -162,7 +163,7 @@ typedef struct cnode cnode_t;
 /*
  * Convert between cnode pointers and vnode pointers
  */
-#define VTOC(vp)	((struct cnode *)(vp)->v_data)
+#define VTOC(vp)	((struct cnode *)vnode_fsnode((vp)))
 
 #define CTOV(cp,rsrc)	(((rsrc) && S_ISREG((cp)->c_mode)) ? \
 			(cp)->c_rsrc_vp : (cp)->c_vp)
@@ -183,7 +184,6 @@ typedef struct cnode cnode_t;
 			 FTOC(fp)->c_rsrc_vp :			\
 			 FTOC(fp)->c_vp)
 
-#define EVTONLYREFS(vp) ((vp->v_type == VREG) ? VTOF(vp)->ff_evtonly_refs : VTOC(vp)->c_evtonly_refs)
 
 /*
  * Test for a resource fork
@@ -193,57 +193,71 @@ typedef struct cnode cnode_t;
 #define VNODE_IS_RSRC(vp)	((vp) == VTOC((vp))->c_rsrc_vp)
 
 
-/*
- * CTIMES should be an inline function...
- */
-#define C_TIMEMASK	(C_ACCESS | C_CHANGE | C_UPDATE)
-
-#define C_CHANGEMASK	(C_ACCESS | C_CHANGE | C_UPDATE | C_MODIFIED)
-
-#define ATIME_ACCURACY	        1
 #define ATIME_ONDISK_ACCURACY	300
 
-#define CTIMES(cp, t1, t2) {							\
-	if ((cp)->c_flag & C_TIMEMASK) {					\
-		/*								\
-		 * Only do the update if it is more than just			\
-		 * the C_ACCESS field being updated.				\
-		 */								\
-		if (((cp)->c_flag & C_CHANGEMASK) != C_ACCESS) {		\
-			if ((cp)->c_flag & C_ACCESS) {				\
-				(cp)->c_atime = (t1)->tv_sec;			\
-			}							\
-			if ((cp)->c_flag & C_UPDATE) {				\
-				(cp)->c_mtime = (t2)->tv_sec;			\
-				(cp)->c_mtime_nsec = (t2)->tv_usec * 1000;	\
-			}							\
-			if ((cp)->c_flag & C_CHANGE) {				\
-				(cp)->c_ctime = time.tv_sec;			\
-			}							\
-			(cp)->c_flag |= C_MODIFIED;				\
-			(cp)->c_flag &= ~C_TIMEMASK;				\
-		}								\
-	}									\
-}
 
-/* This overlays the fid structure (see mount.h). */
+/* This overlays the FileID portion of NFS file handles. */
 struct hfsfid {
-	u_int16_t hfsfid_len;	/* Length of structure. */
-	u_int16_t hfsfid_pad;	/* Force 32-bit alignment. */
-	/* The following data is filesystem-dependent, up to MAXFIDSZ (16) bytes: */
 	u_int32_t hfsfid_cnid;	/* Catalog node ID. */
 	u_int32_t hfsfid_gen;	/* Generation number (create date). */
 };
 
+
+extern void hfs_touchtimes(struct hfsmount *, struct cnode *);
 
 /*
  * HFS cnode hash functions.
  */
 extern void  hfs_chashinit(void);
 extern void  hfs_chashinsert(struct cnode *cp);
-extern void  hfs_chashremove(struct cnode *cp);
-extern struct cnode * hfs_chashget(dev_t dev, ino_t inum, int wantrsrc,
-				struct vnode **vpp, struct vnode **rvpp);
+extern int   hfs_chashremove(struct cnode *cp);
+extern void  hfs_chash_abort(struct cnode *cp);
+extern void  hfs_chash_rehash(struct cnode *cp1, struct cnode *cp2);
+extern void  hfs_chashwakeup(struct cnode *cp, int flags);
+extern void  hfs_chash_mark_in_transit(struct cnode *cp);
+
+extern struct vnode * hfs_chash_getvnode(dev_t dev, ino_t inum, int wantrsrc, int skiplock);
+extern struct cnode * hfs_chash_getcnode(dev_t dev, ino_t inum, struct vnode **vpp, int wantrsrc, int skiplock);
+extern int hfs_chash_snoop(dev_t, ino_t, int (*)(const struct cat_desc *,
+                            const struct cat_attr *, void *), void *);
+				
+/*
+ * HFS directory hint functions.
+ */
+extern directoryhint_t * hfs_getdirhint(struct cnode *, int);
+extern void  hfs_reldirhint(struct cnode *, directoryhint_t *);
+extern void  hfs_reldirhints(struct cnode *, int);
+
+/*
+ * HFS cnode lock functions.
+ *
+ *  HFS Locking Order:
+ *
+ *  1. cnode truncate lock (if needed)
+ *  2. cnode lock (in parent-child order if related, otherwise by address order)
+ *  3. journal (if needed)
+ *  4. system files (as needed)
+ *       A. Catalog B-tree file
+ *       B. Attributes B-tree file
+ *       C. Allocation Bitmap file (always exclusive, supports recursion)
+ *       D. Overflow Extents B-tree file (always exclusive, supports recursion)
+ *  5. hfs mount point (always last)
+ *
+ */
+enum hfslocktype  {HFS_SHARED_LOCK = 1, HFS_EXCLUSIVE_LOCK = 2, HFS_FORCE_LOCK = 3};
+#define HFS_SHARED_OWNER  (void *)0xffffffff
+
+extern int hfs_lock(struct cnode *, enum hfslocktype);
+extern int hfs_lockpair(struct cnode *, struct cnode *, enum hfslocktype);
+extern int hfs_lockfour(struct cnode *, struct cnode *, struct cnode *, struct cnode *,
+                        enum hfslocktype);
+
+extern void hfs_unlock(struct cnode *);
+extern void hfs_unlockpair(struct cnode *, struct cnode *);
+extern void hfs_unlockfour(struct cnode *, struct cnode *, struct cnode *, struct cnode *);
+
+extern void hfs_lock_truncate(struct cnode *, int);
+extern void hfs_unlock_truncate(struct cnode *);
 
 #endif /* __APPLE_API_PRIVATE */
 #endif /* KERNEL */

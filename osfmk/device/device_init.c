@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -55,10 +55,21 @@
  *
  * 	Initialize device service as part of kernel task.
  */
+
+#include <mach/mach_types.h>
+#include <mach/port.h>
+
+#include <ipc/ipc_types.h>
 #include <ipc/ipc_port.h>
 #include <ipc/ipc_space.h>
+
+#include <kern/kern_types.h>
+#include <kern/host.h>
+#include <kern/ipc_kobject.h>
+#include <kern/startup.h>
 #include <kern/task.h>
 #include <kern/misc_protos.h>
+
 #include <device/device_types.h>
 #include <device/device_port.h>
 

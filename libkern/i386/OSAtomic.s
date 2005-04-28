@@ -27,22 +27,11 @@
 	.globl _OSCompareAndSwap
 
 _OSCompareAndSwap:
-	#; this is _lame_, the project will not currently accept asm code that
-	#; requires anything beyond a 386, but that chip:
-	#; - does not support MP
-	#; - does not support the cmpxchgl instruction
-	#; - does not support the lock meta-instruction
-	#; so what is a poor guy to do?  comment it out...
-	pushl		%edi
-	pushl		%esi
-	movl		0+8+4(%esp),%eax	#; oldValue
-	movl		4+8+4(%esp),%edi	#; newValue
-	movl		8+8+4(%esp),%esi	#; ptr
+	movl		 4(%esp), %eax	#; oldValue
+	movl		 8(%esp), %edx	#; newValue
+	movl		12(%esp), %ecx	#; ptr
 	lock
-	cmpxchgl	%edi,0(%esi)		#; CAS (eax is an implicit operand)
-	sete		%al					#; did CAS succeed? (TZ=1)
-	andl		$0x000000ff,%eax	#; clear out the high bytes (has to be an easier way...)
-	popl		%esi
-	popl		%edi
+	cmpxchgl	%edx, 0(%ecx)	#; CAS (eax is an implicit operand)
+	sete		%al				#; did CAS succeed? (TZ=1)
+	movzbl		%al, %eax		#; clear out the high bytes
 	ret
-

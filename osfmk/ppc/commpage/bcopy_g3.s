@@ -62,7 +62,6 @@
 #include <machine/commpage.h>
 
         .text
-        .globl 	EXT(bcopy_g3)
 
 
 #define	kLong	33					// too long for string ops
@@ -268,4 +267,4 @@ LReverseFloat:
         stswx	r5,0,r0				// store them
         blr
 
-        COMMPAGE_DESCRIPTOR(bcopy_g3,_COMM_PAGE_BCOPY,0,k64Bit+kHasAltivec,0)
+	COMMPAGE_DESCRIPTOR(bcopy_g3,_COMM_PAGE_BCOPY,0,k64Bit+kHasAltivec,kCommPage32)

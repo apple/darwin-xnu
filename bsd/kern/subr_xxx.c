@@ -58,8 +58,7 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/conf.h>
-#include <sys/buf.h>
-#include <sys/proc.h>
+#include <sys/proc_internal.h>
 #include <sys/vnode.h>
 #include <sys/uio.h>
 
@@ -114,11 +113,13 @@ enosys()
 /*
  * Return error for operation not supported
  * on a specific object or file type.
+ *
+ * XXX Name of this routine is wrong.
  */
 int
 eopnotsupp()
 {
-	return (EOPNOTSUPP);
+	return (ENOTSUP);
 }
 
 /*

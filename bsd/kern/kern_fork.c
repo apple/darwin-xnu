@@ -66,29 +66,33 @@
 #include <sys/filedesc.h>
 #include <sys/kernel.h>
 #include <sys/malloc.h>
-#include <sys/proc.h>
+#include <sys/proc_internal.h>
+#include <sys/kauth.h>
 #include <sys/user.h>
 #include <sys/resourcevar.h>
-#include <sys/vnode.h>
-#include <sys/file.h>
+#include <sys/vnode_internal.h>
+#include <sys/file_internal.h>
 #include <sys/acct.h>
-#include <sys/wait.h>
+#if KTRACE
+#include <sys/ktrace.h>
+#endif
 
 #include <bsm/audit_kernel.h>
 
-#if KTRACE
-#include <sys/ktrace.h>
-#include <sys/ubc.h>
-#endif
-
 #include <mach/mach_types.h>
+#include <kern/kern_types.h>
+#include <kern/kalloc.h>
 #include <kern/mach_param.h>
+#include <kern/task.h>
+#include <kern/zalloc.h>
 
 #include <machine/spl.h>
 
-thread_act_t cloneproc(struct proc *, int); 
+#include <vm/vm_protos.h>       // for vm_map_commpage64
+
+thread_t cloneproc(struct proc *, int); 
 struct proc * forkproc(struct proc *, int);
-thread_act_t procdup();
+thread_t procdup(struct proc *child, struct proc *parent);
 
 #define	DOFORK	0x1	/* fork() system call */
 #define	DOVFORK	0x2	/* vfork() system call */
@@ -98,10 +102,7 @@ static int fork1(struct proc *, long, register_t *);
  * fork system call.
  */
 int
-fork(p, uap, retval)
-	struct proc *p;
-	void *uap;
-	register_t *retval;
+fork(struct proc *p, __unused void *uap, register_t *retval)
 {
 	return (fork1(p, (long)DOFORK, retval));
 }
@@ -110,18 +111,15 @@ fork(p, uap, retval)
  * vfork system call
  */
 int
-vfork(p, uap, retval)
-	struct proc *p;
-	void *uap;
-	register_t *retval;
+vfork(struct proc *p, void *uap, register_t *retval)
 {
 	register struct proc * newproc;
 	register uid_t uid;
-	thread_act_t cur_act = (thread_act_t)current_act();
+	thread_t cur_act = (thread_t)current_thread();
 	int count;
 	task_t t;
 	uthread_t ut;
-	
+
 	/*
 	 * Although process entries are dynamically created, we still keep
 	 * a global limit on the maximum number we will create.  Don't allow
@@ -129,7 +127,7 @@ vfork(p, uap, retval)
 	 * exceed the limit. The variable nprocs is the current number of
 	 * processes, maxproc is the limit.
 	 */
-	uid = p->p_cred->p_ruid;
+	uid = kauth_cred_get()->cr_ruid;
 	if ((nprocs >= maxproc - 1 && uid != 0) || nprocs >= maxproc) {
 		tablefull("proc");
 		retval[1] = 0;
@@ -147,7 +145,7 @@ vfork(p, uap, retval)
 	}
 
 	ut = (struct uthread *)get_bsdthread_info(cur_act);
-	if (ut->uu_flag & P_VFORK) {
+	if (ut->uu_flag & UT_VFORK) {
 		printf("vfork called recursively by %s\n", p->p_comm);
 		(void)chgproccnt(uid, -1);
 		return (EINVAL);
@@ -172,14 +170,20 @@ vfork(p, uap, retval)
 	newproc->p_flag  |= P_INVFORK;
 	newproc->p_vforkact = cur_act;
 
-	ut->uu_flag |= P_VFORK;
+	ut->uu_flag |= UT_VFORK;
 	ut->uu_proc = newproc;
 	ut->uu_userstate = (void *)act_thread_csave();
 	ut->uu_vforkmask = ut->uu_sigmask;
 
+	/* temporarily drop thread-set-id state */
+	if (ut->uu_flag & UT_SETUID) {
+		ut->uu_flag |= UT_WASSETUID;
+		ut->uu_flag &= ~UT_SETUID;
+	}
+	
 	thread_set_child(cur_act, newproc->p_pid);
 
-	newproc->p_stats->p_start = time;
+	microtime(&newproc->p_stats->p_start);
 	newproc->p_acflag = AFORK;
 
 	/*
@@ -202,38 +206,35 @@ vfork(p, uap, retval)
  * Return to parent vfork ehread()
  */
 void
-vfork_return(th_act, p, p2, retval)
-	thread_act_t th_act;
-	struct proc * p;
-	struct proc *p2;
-	register_t *retval;
+vfork_return(__unused thread_t th_act, struct proc *p, struct proc *p2,
+	register_t *retval)
 {
-	long flags;
-	register uid_t uid;
-	int s, count;
-	task_t t;
+	thread_t cur_act = (thread_t)current_thread();
 	uthread_t ut;
 	
-	ut = (struct uthread *)get_bsdthread_info(th_act);
+	ut = (struct uthread *)get_bsdthread_info(cur_act);
 
 	act_thread_catt(ut->uu_userstate);
 
 	/* Make sure only one at this time */
-	if (p) {
-		p->p_vforkcnt--;
-		if (p->p_vforkcnt <0)
-			panic("vfork cnt is -ve");
-		if (p->p_vforkcnt <=0)
-			p->p_flag  &= ~P_VFORK;
-	}
+	p->p_vforkcnt--;
+	if (p->p_vforkcnt <0)
+		panic("vfork cnt is -ve");
+	if (p->p_vforkcnt <=0)
+		p->p_flag  &= ~P_VFORK;
 	ut->uu_userstate = 0;
-	ut->uu_flag &= ~P_VFORK;
+	ut->uu_flag &= ~UT_VFORK;
+	/* restore thread-set-id state */
+	if (ut->uu_flag & UT_WASSETUID) {
+		ut->uu_flag |= UT_SETUID;
+		ut->uu_flag &= UT_WASSETUID;
+	}
 	ut->uu_proc = 0;
 	ut->uu_sigmask = ut->uu_vforkmask;
 	p2->p_flag  &= ~P_INVFORK;
 	p2->p_vforkact = (void *)0;
 
-	thread_set_parent(th_act, p2->p_pid);
+	thread_set_parent(cur_act, p2->p_pid);
 
 	if (retval) {
 		retval[0] = p2->p_pid;
@@ -243,16 +244,12 @@ vfork_return(th_act, p, p2, retval)
 	return;
 }
 
-thread_act_t
-procdup(
-	struct proc		*child,
-	struct proc		*parent)
+thread_t
+procdup(struct proc *child, struct proc *parent)
 {
-	thread_act_t		thread;
+	thread_t		thread;
 	task_t			task;
  	kern_return_t	result;
- 	pmap_t			pmap;
-	extern task_t kernel_task;
 
 	if (parent->task == kernel_task)
 		result = task_create_internal(TASK_NULL, FALSE, &task);
@@ -263,6 +260,18 @@ procdup(
 	child->task = task;
 	/* task->proc = child; */
 	set_bsdtask_info(task, child);
+	if (parent->p_flag & P_LP64) {
+		task_set_64bit(task, TRUE);
+		child->p_flag |= P_LP64;
+#ifdef __PPC__
+                /* LP64todo - clean up this hacked mapping of commpage */
+		pmap_map_sharedpage(task, get_map_pmap(get_task_map(task)));
+                vm_map_commpage64(get_task_map(task));
+#endif	/* __PPC__ */
+	} else {
+		task_set_64bit(task, FALSE);
+		child->p_flag &= ~P_LP64;
+	}
 	if (child->p_nice != 0)
 		resetpriority(child);
 		
@@ -282,9 +291,9 @@ fork1(p1, flags, retval)
 {
 	register struct proc *p2;
 	register uid_t uid;
-	thread_act_t newth;
-	int s, count;
-        task_t t;
+	thread_t newth;
+	int count;
+	task_t t;
 
 	/*
 	 * Although process entries are dynamically created, we still keep
@@ -293,7 +302,7 @@ fork1(p1, flags, retval)
 	 * exceed the limit. The variable nprocs is the current number of
 	 * processes, maxproc is the limit.
 	 */
-	uid = p1->p_cred->p_ruid;
+	uid = kauth_cred_get()->cr_ruid;
 	if ((nprocs >= maxproc - 1 && uid != 0) || nprocs >= maxproc) {
 		tablefull("proc");
 		retval[1] = 0;
@@ -321,9 +330,7 @@ fork1(p1, flags, retval)
 
 	thread_set_child(newth, p2->p_pid);
 
-	s = splhigh();
-	p2->p_stats->p_start = time;
-	splx(s);
+	microtime(&p2->p_stats->p_start);
 	p2->p_acflag = AFORK;
 
 	/*
@@ -339,10 +346,10 @@ fork1(p1, flags, retval)
 	(void) thread_resume(newth);
 
         /* drop the extra references we got during the creation */
-        if (t = (task_t)get_threadtask(newth)) {
+        if ((t = (task_t)get_threadtask(newth)) != NULL) {
                 task_deallocate(t);
         }
-        act_deallocate(newth);
+        thread_deallocate(newth);
 
 	KNOTE(&p1->p_klist, NOTE_FORK | p2->p_pid);
 
@@ -364,13 +371,13 @@ fork1(p1, flags, retval)
  * lock set. fork() code needs to explicity remove this lock 
  * before signals can be delivered
  */
-thread_act_t
+thread_t
 cloneproc(p1, lock)
 	register struct proc *p1;
 	register int lock;
 {
 	register struct proc *p2;
-	thread_act_t th;
+	thread_t th;
 
 	p2 = (struct proc *)forkproc(p1,lock);
 
@@ -399,17 +406,20 @@ forkproc(p1, lock)
 {
 	register struct proc *p2, *newproc;
 	static int nextpid = 0, pidchecked = 0;
-	thread_t th;
 
 	/* Allocate new proc. */
 	MALLOC_ZONE(newproc, struct proc *,
 			sizeof *newproc, M_PROC, M_WAITOK);
-	MALLOC_ZONE(newproc->p_cred, struct pcred *,
-			sizeof *newproc->p_cred, M_SUBPROC, M_WAITOK);
+	if (newproc == NULL)
+		panic("forkproc: M_PROC zone exhausted");
 	MALLOC_ZONE(newproc->p_stats, struct pstats *,
 			sizeof *newproc->p_stats, M_SUBPROC, M_WAITOK);
+	if (newproc->p_stats == NULL)
+		panic("forkproc: M_SUBPROC zone exhausted (p_stats)");
 	MALLOC_ZONE(newproc->p_sigacts, struct sigacts *,
 			sizeof *newproc->p_sigacts, M_SUBPROC, M_WAITOK);
+	if (newproc->p_sigacts == NULL)
+		panic("forkproc: M_SUBPROC zone exhausted (p_sigacts)");
 
 	/*
 	 * Find an unused process ID.  We remember a range of unused IDs
@@ -464,9 +474,9 @@ again:
 	nprocs++;
 	p2 = newproc;
 	p2->p_stat = SIDL;
+	p2->p_shutdownstate = 0;
 	p2->p_pid = nextpid;
 
-	p2->p_shutdownstate = 0;
 	/*
 	 * Make a proc table entry for the new process.
 	 * Start by zeroing the section of proc that is zero-initialized,
@@ -479,34 +489,35 @@ again:
 	p2->vm_shm = (void *)NULL; /* Make sure it is zero */
 
 	/*
-	 * Copy the audit info.
-	 */
-	audit_proc_fork(p1, p2);
-
-	/*
+	 * Some flags are inherited from the parent.
 	 * Duplicate sub-structures as needed.
 	 * Increase reference counts on shared objects.
 	 * The p_stats and p_sigacts substructs are set in vm_fork.
 	 */
-	p2->p_flag = P_INMEM;
-	p2->p_flag |= (p1->p_flag & P_CLASSIC); // copy from parent
-	p2->p_flag |= (p1->p_flag & P_AFFINITY); // copy from parent
+	p2->p_flag = (p1->p_flag & (P_LP64 | P_CLASSIC | P_AFFINITY));
 	if (p1->p_flag & P_PROFIL)
 		startprofclock(p2);
-	bcopy(p1->p_cred, p2->p_cred, sizeof(*p2->p_cred));
-	p2->p_cred->p_refcnt = 1;
-	crhold(p1->p_ucred);
-	lockinit(&p2->p_cred->pc_lock, PLOCK, "proc cred", 0, 0);
+	/*
+	 * Note that if the current thread has an assumed identity, this
+	 * credential will be granted to the new process.
+	 */
+	p2->p_ucred = kauth_cred_get_with_ref();
+
+	lck_mtx_init(&p2->p_mlock, proc_lck_grp, proc_lck_attr);
+	lck_mtx_init(&p2->p_fdmlock, proc_lck_grp, proc_lck_attr);
 	klist_init(&p2->p_klist);
 
 	/* bump references to the text vnode */
 	p2->p_textvp = p1->p_textvp;
-	if (p2->p_textvp)
-		VREF(p2->p_textvp);
-
+	if (p2->p_textvp) {
+		vnode_rele(p2->p_textvp);
+	}
+	/* XXX may fail to copy descriptors to child */
 	p2->p_fd = fdcopy(p1);
+
 	if (p1->vm_shm) {
-		shmfork(p1,p2);
+		/* XXX may fail to attach shm to child */
+		(void)shmfork(p1,p2);
 	}
 	/*
 	 * If p_limit is still copy-on-write, bump refcnt,
@@ -527,6 +538,8 @@ again:
 	bcopy(&p1->p_stats->pstat_startcopy, &p2->p_stats->pstat_startcopy,
 	    ((caddr_t)&p2->p_stats->pstat_endcopy -
 	     (caddr_t)&p2->p_stats->pstat_startcopy));
+
+	bzero(&p2->p_stats->user_p_prof, sizeof(struct user_uprof));
 
 	if (p1->p_sigacts != NULL)
 		(void)memcpy(p2->p_sigacts,
@@ -553,6 +566,7 @@ again:
 	p2->user_stack = p1->user_stack;
 	p2->p_vforkcnt = 0;
 	p2->p_vforkact = 0;
+	p2->p_lflag  = 0;
 	TAILQ_INIT(&p2->p_uthlist);
 	TAILQ_INIT(&p2->aio_activeq);
 	TAILQ_INIT(&p2->aio_doneq);
@@ -567,14 +581,24 @@ again:
 	if (p1->p_traceflag&KTRFAC_INHERIT) {
 		p2->p_traceflag = p1->p_traceflag;
 		if ((p2->p_tracep = p1->p_tracep) != NULL) {
-			if (UBCINFOEXISTS(p2->p_tracep))
-			        ubc_hold(p2->p_tracep);
-			VREF(p2->p_tracep);
+		        vnode_ref(p2->p_tracep);
 		}
 	}
 #endif
 	return(p2);
 
+}
+
+void
+proc_lock(proc_t p)
+{
+	lck_mtx_lock(&p->p_mlock);
+}
+
+void
+proc_unlock(proc_t p)
+{
+	lck_mtx_unlock(&p->p_mlock);
 }
 
 #include <kern/zalloc.h>
@@ -583,24 +607,23 @@ struct zone	*uthread_zone;
 int uthread_zone_inited = 0;
 
 void
-uthread_zone_init()
+uthread_zone_init(void)
 {
 	if (!uthread_zone_inited) {
 		uthread_zone = zinit(sizeof(struct uthread),
-							THREAD_MAX * sizeof(struct uthread),
-							THREAD_CHUNK * sizeof(struct uthread),
-							"uthreads");
+					THREAD_MAX * sizeof(struct uthread),
+					THREAD_CHUNK * sizeof(struct uthread),
+					"uthreads");
 		uthread_zone_inited = 1;
 	}
 }
 
 void *
-uthread_alloc(task_t task, thread_act_t thr_act )
+uthread_alloc(task_t task, thread_t thr_act )
 {
 	struct proc *p;
 	struct uthread *uth, *uth_parent;
 	void *ut;
-	extern task_t kernel_task;
 	boolean_t funnel_state;
 
 	if (!uthread_zone_inited)
@@ -609,22 +632,44 @@ uthread_alloc(task_t task, thread_act_t thr_act )
 	ut = (void *)zalloc(uthread_zone);
 	bzero(ut, sizeof(struct uthread));
 
-	if (task != kernel_task) {
-		uth = (struct uthread *)ut;
-		p = (struct proc *) get_bsdtask_info(task);
+	p = (struct proc *) get_bsdtask_info(task);
+	uth = (struct uthread *)ut;
 
+	/*
+	 * Thread inherits credential from the creating thread, if both
+	 * are in the same task.
+	 *
+	 * If the creating thread has no credential or is from another
+	 * task we can leave the new thread credential NULL.  If it needs
+	 * one later, it will be lazily assigned from the task's process.
+	 */
+	uth_parent = (struct uthread *)get_bsdthread_info(current_thread());
+	if ((task == current_task()) && 
+	    (uth_parent != NULL) &&
+	    (uth_parent->uu_ucred != NOCRED)) {
+		uth->uu_ucred = uth_parent->uu_ucred;
+		kauth_cred_ref(uth->uu_ucred);
+		/* the credential we just inherited is an assumed credential */
+		if (uth_parent->uu_flag & UT_SETUID)
+			uth->uu_flag |= UT_SETUID;
+	} else {
+		uth->uu_ucred = NOCRED;
+	}
+	
+	if (task != kernel_task) {
+		
 		funnel_state = thread_funnel_set(kernel_flock, TRUE);
-		uth_parent = (struct uthread *)get_bsdthread_info(current_act());
 		if (uth_parent) {
-			if (uth_parent->uu_flag & USAS_OLDMASK)
+			if (uth_parent->uu_flag & UT_SAS_OLDMASK)
 				uth->uu_sigmask = uth_parent->uu_oldmask;
 			else
 				uth->uu_sigmask = uth_parent->uu_sigmask;
 		}
 		uth->uu_act = thr_act;
 		//signal_lock(p);
-		if (p)
+		if (p) {
 			TAILQ_INSERT_TAIL(&p->p_uthlist, uth, uu_list);
+		}
 		//signal_unlock(p);
 		(void)thread_funnel_set(kernel_flock, funnel_state);
 	}
@@ -634,16 +679,12 @@ uthread_alloc(task_t task, thread_act_t thr_act )
 
 
 void
-uthread_free(task_t task, thread_t act, void *uthread, void * bsd_info)
+uthread_free(task_t task, void *uthread, void * bsd_info)
 {
 	struct _select *sel;
 	struct uthread *uth = (struct uthread *)uthread;
 	struct proc * p = (struct proc *)bsd_info;
-	extern task_t kernel_task;
-	int size;
 	boolean_t funnel_state;
-	struct nlminfo *nlmp;
-	struct proc * vproc;
 
 	/*
 	 * Per-thread audit state should never last beyond system
@@ -653,40 +694,31 @@ uthread_free(task_t task, thread_t act, void *uthread, void * bsd_info)
 	 */
 	assert(uth->uu_ar == NULL);
 
-	sel = &uth->uu_state.ss_select;
+	sel = &uth->uu_select;
 	/* cleanup the select bit space */
 	if (sel->nbytes) {
 		FREE(sel->ibits, M_TEMP);
 		FREE(sel->obits, M_TEMP);
 	}
 
-	if (sel->allocsize && uth->uu_wqsub){
-		kfree(uth->uu_wqsub, sel->allocsize);
-		sel->count = sel->nfcount = 0;
+	if (sel->allocsize && sel->wqset){
+		kfree(sel->wqset, sel->allocsize);
+		sel->count = 0;
 		sel->allocsize = 0;
-		uth->uu_wqsub = 0;
+		sel->wqset = 0;
 		sel->wql = 0;
 	}
 
-	if ((nlmp = uth->uu_nlminfo)) {
-		uth->uu_nlminfo = 0;
-		FREE(nlmp, M_LOCKF);
-	}
+	if (uth->uu_ucred != NOCRED)
+		kauth_cred_rele(uth->uu_ucred);
 
-	if ((task != kernel_task) ) {
-		int vfork_exit(struct proc *, int);
-
+	if ((task != kernel_task) && p) {
 		funnel_state = thread_funnel_set(kernel_flock, TRUE);
-		if (p)
-			TAILQ_REMOVE(&p->p_uthlist, uth, uu_list);
-		if ((uth->uu_flag & P_VFORK) && (vproc = uth->uu_proc) 
-					&& (vproc->p_flag & P_INVFORK)) {
-			if (!vfork_exit(vproc, W_EXITCODE(0, SIGKILL)))	
-				vfork_return(act, p, vproc, NULL);
-
-		}
+		//signal_lock(p);
+		TAILQ_REMOVE(&p->p_uthlist, uth, uu_list);
+		//signal_unlock(p);
 		(void)thread_funnel_set(kernel_flock, funnel_state);
 	}
 	/* and free the uthread itself */
-	zfree(uthread_zone, (vm_offset_t)uthread);
+	zfree(uthread_zone, uthread);
 }

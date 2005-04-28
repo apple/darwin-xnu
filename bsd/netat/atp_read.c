@@ -50,7 +50,7 @@
 
 static void atp_trans_complete();
 void atp_x_done();
-void atp_x_done_funnel(void *);
+void atp_x_done_locked(void *);
 extern void atp_req_timeout();
 
 /*
@@ -63,9 +63,8 @@ void atp_treq_event(void *arg)
 	register gref_t *gref = (gref_t *)arg;
 	register gbuf_t *m;
 	register struct atp_state *atp;
-	boolean_t 	funnel_state;
 
-	funnel_state = thread_funnel_set(network_flock, TRUE);
+	atalk_lock();
 	atp = (struct atp_state *)gref->info;	
 	if (atp->dflag)
 		atp = (struct atp_state *)atp->atp_msgq;
@@ -86,7 +85,7 @@ void atp_treq_event(void *arg)
 
 	if (m == 0)
 		timeout(atp_treq_event, gref, 10);
-	(void) thread_funnel_set(network_flock, FALSE);
+	atalk_unlock();
 }
 
 void atp_rput(gref, m)
@@ -97,6 +96,7 @@ gbuf_t   *m;
 	register struct atp_state *atp;
 	register int s, s_gen;
 	gbuf_t *m_asp = NULL;
+	struct timeval timenow;
 
 	atp = (struct atp_state *)gref->info;	
 	if (atp->dflag)
@@ -399,9 +399,10 @@ gbuf_t   *m;
 			 *		update the bitmap and resend
 			 *		the replies
 			 */
+			getmicrouptime(&timenow);
 			ATDISABLE(s_gen, atpgen_lock);
 			if (rcbp->rc_timestamp) {
-			  rcbp->rc_timestamp = time.tv_sec;
+			  rcbp->rc_timestamp = timenow.tv_sec;
 			  if (rcbp->rc_timestamp == 0)
 			    rcbp->rc_timestamp = 1;
 			}
@@ -455,12 +456,12 @@ gbuf_t   *m;
 } /* atp_rput */
 
 void 
-atp_x_done_funnel(trp)
+atp_x_done_locked(trp)
 void *trp;
 {
-	thread_funnel_set(network_flock, TRUE);
+	atalk_lock();
 	atp_x_done((struct atp_trans *)trp);
-	(void) thread_funnel_set(network_flock, FALSE);
+	atalk_unlock();
 
 }
 
@@ -491,7 +492,7 @@ register struct atp_trans *trp;
 
 			atp = trp->tr_queue;
 			trp->tr_state = TRANS_RELEASE;
-			timeout(atp_x_done_funnel, trp, 10);
+			timeout(atp_x_done_locked, trp, 10);
 		}
 	}
 }

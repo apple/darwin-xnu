@@ -89,7 +89,7 @@ extern short	ErrorZIPoverflow;
 static	int	netinfo_reply_pending;
 static	void	zip_netinfo_reply(at_x_zip_t *, at_ifaddr_t *);
 static	void	zip_getnetinfo(at_ifaddr_t *);
-static	void	zip_getnetinfo_funnel(void *);
+static	void	zip_getnetinfo_locked(void *);
 static	void	send_phony_reply(void *);
 
 /*
@@ -742,6 +742,7 @@ void zip_router_input (m, ifID)
 			 */
 			ifID->ifNumRetries = ZIP_NETINFO_RETRIES;
 			netinfo_reply_pending = 1;
+			ifID->ifGNIScheduled = 1;
 			timeout(zip_sched_getnetinfo, (caddr_t) ifID, 
 				 2*ZIP_TIMER_INT);
 	
@@ -881,6 +882,7 @@ static void zip_netinfo_reply (netinfo, ifID)
 		 ifID->ifThisCableStart, ifID->ifThisCableEnd));
 
 	/* The packet is in response to our request */
+	ifID->ifGNIScheduled = 0;
 	untimeout (zip_sched_getnetinfo, (caddr_t) ifID);
 	netinfo_reply_pending = 0;
 	zone_name_len = netinfo->data[0];
@@ -965,13 +967,15 @@ int zip_control (ifID, control)
 	switch (control) {
 	case ZIP_ONLINE :
 	case ZIP_LATE_ROUTER :
-		ifID->ifNumRetries = 0;
-		/* Get the desired zone name from elap and put it in
-		 * ifID for zip_getnetinfo() to use.
-		 */
-		if (ifID->startup_zone.len)
-			ifID->ifZoneName = ifID->startup_zone;
-		zip_getnetinfo(ifID);
+		if (!ifID->ifGNIScheduled) {
+			ifID->ifNumRetries = 0;
+			/* Get the desired zone name from elap and put it in
+		 	* ifID for zip_getnetinfo() to use.
+		 	*/
+			if (ifID->startup_zone.len)
+				ifID->ifZoneName = ifID->startup_zone;
+			zip_getnetinfo(ifID);
+		}
 		break;
 	case ZIP_NO_ROUTER :
 		ifID->ifZoneName.len = 1;
@@ -988,14 +992,19 @@ int zip_control (ifID, control)
 	return (0);
 }
 
-/* funnel version of zip_getnetinfo */
-static void zip_getnetinfo_funnel(arg)
+/* locked version of zip_getnetinfo */
+static void zip_getnetinfo_locked(arg)
      void       *arg;
 {
-	at_ifaddr_t       *ifID = (at_ifaddr_t *)arg;
-        thread_funnel_set(network_flock, TRUE);
-	zip_getnetinfo(ifID);
-        thread_funnel_set(network_flock, FALSE);
+	at_ifaddr_t       *ifID;
+	
+	atalk_lock();
+	if (ifID != NULL) {		// make sure it hasn't been closed
+		ifID = (at_ifaddr_t *)arg;
+		ifID->ifGNIScheduled = 0;
+		zip_getnetinfo(ifID);
+	}
+	atalk_unlock();
 }
 
 
@@ -1012,6 +1021,7 @@ static void zip_getnetinfo (ifID)
 	void			zip_sched_getnetinfo();
 	register struct	atalk_addr	*at_dest;
 	register int		size;
+	
 
 	size =  DDP_X_HDR_SIZE + ZIP_X_HDR_SIZE + ifID->ifZoneName.len + 1
 		+ sizeof(struct atalk_addr) + 1;
@@ -1022,7 +1032,8 @@ static void zip_getnetinfo (ifID)
 		 */
 		dPrintf(D_M_ZIP, D_L_WARNING, ("zip_getnetinfo: no buffer, call later port=%d\n",
 			ifID->ifPort));
-		timeout (zip_getnetinfo_funnel, (caddr_t) ifID, ZIP_TIMER_INT/10);
+		ifID->ifGNIScheduled = 1;
+		timeout (zip_getnetinfo_locked, (caddr_t) ifID, ZIP_TIMER_INT/10);
 		return;
 	}
 
@@ -1075,7 +1086,7 @@ static void zip_getnetinfo (ifID)
 
 	ifID->ifNumRetries++;
 	netinfo_reply_pending = 1;
-
+	ifID->ifGNIScheduled = 1;
 	timeout (zip_sched_getnetinfo, (caddr_t) ifID, ZIP_TIMER_INT);
 } /* zip_getnetinfo */
 
@@ -1088,9 +1099,10 @@ static void zip_getnetinfo (ifID)
 void	zip_sched_getnetinfo (ifID)
      register at_ifaddr_t	     *ifID;
 {
-	boolean_t 	funnel_state;
 
-	funnel_state = thread_funnel_set(network_flock, TRUE);
+	atalk_lock();
+	
+	ifID->ifGNIScheduled = 0;
 
 	if (ifID->ifNumRetries >= ZIP_NETINFO_RETRIES) {
 		/* enough packets sent.... give up! */
@@ -1119,7 +1131,7 @@ void	zip_sched_getnetinfo (ifID)
 	} else
 		zip_getnetinfo(ifID);
 
-	(void) thread_funnel_set(network_flock, FALSE);
+	atalk_unlock();
 }
 
 
@@ -1263,13 +1275,11 @@ send_phony_reply(arg)
 	void	*arg;
 {
 	gbuf_t  *rm = (gbuf_t *)arg;
-	boolean_t 	funnel_state;
 
-	funnel_state = thread_funnel_set(network_flock, TRUE);
-        
+	atalk_lock();
 	ddp_input(rm, ifID_home);
+	atalk_unlock();
         
-	(void) thread_funnel_set(network_flock, FALSE);
 	return;
 }
 

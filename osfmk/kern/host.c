@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -56,74 +56,77 @@
  *	Non-ipc host functions.
  */
 
-#include <cpus.h>
 #include <mach_host.h>
 
+#include <mach/mach_types.h>
 #include <mach/boolean.h>
+#include <mach/host_info.h>
+#include <mach/host_special_ports.h>
+#include <mach/kern_return.h>
+#include <mach/machine.h>
+#include <mach/port.h>
+#include <mach/processor_info.h>
+#include <mach/vm_param.h>
+#include <mach/processor.h>
+#include <mach/mach_host_server.h>
+#include <mach/host_priv_server.h>
+#include <mach/vm_map.h>
+
+#include <kern/kern_types.h>
 #include <kern/assert.h>
 #include <kern/kalloc.h>
 #include <kern/host.h>
 #include <kern/host_statistics.h>
 #include <kern/ipc_host.h>
 #include <kern/misc_protos.h>
-#include <mach/host_info.h>
-#include <mach/host_special_ports.h>
-#include <mach/kern_return.h>
-#include <mach/machine.h>
-#include <mach/port.h>
+#include <kern/sched.h>
 #include <kern/processor.h>
-#include <mach/processor_info.h>
-#include <mach/vm_param.h>
-#include <mach/mach_host_server.h>
+
+#include <vm/vm_map.h>
+
 #if     DIPC
 #include <dipc/dipc_funcs.h>
 #include <dipc/special_ports.h>
 #endif
 
-vm_statistics_data_t	vm_stat[NCPUS];
-
 host_data_t	realhost;
 
 kern_return_t
 host_processors(
-	host_priv_t		host_priv,
-	processor_array_t	*processor_list,
+	host_priv_t				host_priv,
+	processor_array_t		*out_array,
 	mach_msg_type_number_t	*countp)
 {
-	register int		i;
-	register processor_t	*tp;
-	vm_offset_t		addr;
-	unsigned int		count;
+	register processor_t	processor, *tp;
+	void					*addr;
+	unsigned int			count, i;
 
 	if (host_priv == HOST_PRIV_NULL)
-		return(KERN_INVALID_ARGUMENT);
+		return (KERN_INVALID_ARGUMENT);
 
 	assert(host_priv == &realhost);
 
-	/*
-	 *	Determine how many processors we have.
-	 *	(This number shouldn't change.)
-	 */
-
-	count = 0;
-	for (i = 0; i < NCPUS; i++)
-		if (machine_slot[i].is_cpu)
-			count++;
-
-	if (count == 0)
-		panic("host_processors");
+	count = processor_count;
+	assert(count != 0);
 
 	addr = kalloc((vm_size_t) (count * sizeof(mach_port_t)));
 	if (addr == 0)
-		return KERN_RESOURCE_SHORTAGE;
+		return (KERN_RESOURCE_SHORTAGE);
 
 	tp = (processor_t *) addr;
-	for (i = 0; i < NCPUS; i++)
-		if (machine_slot[i].is_cpu)
-			*tp++ = cpu_to_processor(i);
+	*tp++ = processor = processor_list;
+
+	if (count > 1) {
+		simple_lock(&processor_list_lock);
+
+		for (i = 1; i < count; i++)
+			*tp++ = processor = processor->processor_list;
+
+		simple_unlock(&processor_list_lock);
+	}
 
 	*countp = count;
-	*processor_list = (processor_array_t)addr;
+	*out_array = (processor_array_t)addr;
 
 	/* do the conversion that Mig should handle */
 
@@ -132,7 +135,7 @@ host_processors(
 		((mach_port_t *) tp)[i] =
 		      (mach_port_t)convert_processor_to_port(tp[i]);
 
-	return KERN_SUCCESS;
+	return (KERN_SUCCESS);
 }
 
 kern_return_t
@@ -144,54 +147,64 @@ host_info(
 {
 
 	if (host == HOST_NULL)
-		return(KERN_INVALID_ARGUMENT);
+		return (KERN_INVALID_ARGUMENT);
 	
-	switch(flavor) {
+	switch (flavor) {
 
 	case HOST_BASIC_INFO:
 	{
 		register host_basic_info_t	basic_info;
+		register int				master_slot;
 
 		/*
 		 *	Basic information about this host.
 		 */
-		if (*count < HOST_BASIC_INFO_COUNT)
-			return(KERN_FAILURE);
+		if (*count < HOST_BASIC_INFO_OLD_COUNT)
+			return (KERN_FAILURE);
 
 		basic_info = (host_basic_info_t) info;
 
 		basic_info->max_cpus = machine_info.max_cpus;
 		basic_info->avail_cpus = machine_info.avail_cpus;
 		basic_info->memory_size = machine_info.memory_size;
-		basic_info->cpu_type =
-			machine_slot[master_processor->slot_num].cpu_type;
-		basic_info->cpu_subtype =
-			machine_slot[master_processor->slot_num].cpu_subtype;
+		master_slot = PROCESSOR_DATA(master_processor, slot_num);
+		basic_info->cpu_type = slot_type(master_slot);
+		basic_info->cpu_subtype = slot_subtype(master_slot);
 
-		*count = HOST_BASIC_INFO_COUNT;
+		if (*count >= HOST_BASIC_INFO_COUNT) {
+			basic_info->cpu_threadtype = slot_threadtype(master_slot);
+			basic_info->physical_cpu = machine_info.physical_cpu;
+			basic_info->physical_cpu_max = machine_info.physical_cpu_max;
+			basic_info->logical_cpu = machine_info.logical_cpu;
+			basic_info->logical_cpu_max = machine_info.logical_cpu_max;
+			basic_info->max_mem = machine_info.max_mem;
 
-		return(KERN_SUCCESS);
+			*count = HOST_BASIC_INFO_COUNT;
+		} else {
+			*count = HOST_BASIC_INFO_OLD_COUNT;
+		}
+
+		return (KERN_SUCCESS);
 	}
 
 	case HOST_SCHED_INFO:
 	{
 		register host_sched_info_t	sched_info;
-		extern int tick; /* XXX */
 
 		/*
 		 *	Return scheduler information.
 		 */
 		if (*count < HOST_SCHED_INFO_COUNT)
-			return(KERN_FAILURE);
+			return (KERN_FAILURE);
 
 		sched_info = (host_sched_info_t) info;
 
-		sched_info->min_timeout = tick / 1000; /* XXX */
-		sched_info->min_quantum = tick / 1000; /* XXX */
+		sched_info->min_timeout = 
+			sched_info->min_quantum = std_quantum_us / 1000;
 
 		*count = HOST_SCHED_INFO_COUNT;
 
-		return(KERN_SUCCESS);
+		return (KERN_SUCCESS);
 	}
 
 	case HOST_RESOURCE_SIZES:
@@ -200,10 +213,10 @@ host_info(
 		 * Return sizes of kernel data structures
 		 */
 		if (*count < HOST_RESOURCE_SIZES_COUNT)
-			return(KERN_FAILURE);
+			return (KERN_FAILURE);
 
 		/* XXX Fail until ledgers are implemented */
-		return(KERN_INVALID_ARGUMENT);
+		return (KERN_INVALID_ARGUMENT);
 	}
                   
 	case HOST_PRIORITY_INFO:
@@ -211,22 +224,22 @@ host_info(
 		register host_priority_info_t	priority_info;
 
 		if (*count < HOST_PRIORITY_INFO_COUNT)
-			return(KERN_FAILURE);
+			return (KERN_FAILURE);
 
 		priority_info = (host_priority_info_t) info;
 
 		priority_info->kernel_priority	= MINPRI_KERNEL;
 		priority_info->system_priority	= MINPRI_KERNEL;
-		priority_info->server_priority	= MINPRI_SYSTEM;
+		priority_info->server_priority	= MINPRI_RESERVED;
 		priority_info->user_priority	= BASEPRI_DEFAULT;
 		priority_info->depress_priority	= DEPRESSPRI;
 		priority_info->idle_priority	= IDLEPRI;
-		priority_info->minimum_priority	= MINPRI_STANDARD;
-		priority_info->maximum_priority	= MAXPRI_SYSTEM;
+		priority_info->minimum_priority	= MINPRI_USER;
+		priority_info->maximum_priority	= MAXPRI_RESERVED;
 
 		*count = HOST_PRIORITY_INFO_COUNT;
 
-		return(KERN_SUCCESS);
+		return (KERN_SUCCESS);
 	}
 
 	/*
@@ -236,68 +249,66 @@ host_info(
 	case HOST_SEMAPHORE_TRAPS:
 	{
 		*count = 0;
-		return KERN_SUCCESS;
+		return (KERN_SUCCESS);
 	}
 
 	default:
-		return(KERN_INVALID_ARGUMENT);
+		return (KERN_INVALID_ARGUMENT);
 	}
 }
 
 kern_return_t
 host_statistics(
-	host_t			host,
-	host_flavor_t		flavor,
-	host_info_t		info,
+	host_t					host,
+	host_flavor_t			flavor,
+	host_info_t				info,
 	mach_msg_type_number_t	*count)
 {
 
 	if (host == HOST_NULL)
-		return(KERN_INVALID_HOST);
+		return (KERN_INVALID_HOST);
 	
 	switch(flavor) {
 
-	case HOST_LOAD_INFO: {
-		register host_load_info_t load_info;
-		extern uint32_t avenrun[3], mach_factor[3];
+	case HOST_LOAD_INFO:
+	{
+		host_load_info_t	load_info;
 
 		if (*count < HOST_LOAD_INFO_COUNT)
-			return(KERN_FAILURE);
+			return (KERN_FAILURE);
 
 		load_info = (host_load_info_t) info;
 
 		bcopy((char *) avenrun,
-		      (char *) load_info->avenrun,
-		      sizeof avenrun);
+			  (char *) load_info->avenrun, sizeof avenrun);
 		bcopy((char *) mach_factor,
-		      (char *) load_info->mach_factor,
-		      sizeof mach_factor);
+			  (char *) load_info->mach_factor, sizeof mach_factor);
 
 		*count = HOST_LOAD_INFO_COUNT;
-		return(KERN_SUCCESS);
-	    }
+		return (KERN_SUCCESS);
+	}
 
-	case HOST_VM_INFO: {
-		register vm_statistics_t stat;
-		vm_statistics_data_t host_vm_stat;
-		extern int vm_page_free_count, vm_page_active_count,
-			   vm_page_inactive_count, vm_page_wire_count;
+	case HOST_VM_INFO:
+	{
+		register processor_t		processor;
+		register vm_statistics_t	stat;
+		vm_statistics_data_t		host_vm_stat;
                 
-		if (*count < HOST_VM_INFO_COUNT)
-			return(KERN_FAILURE);
+		if (*count < HOST_VM_INFO_REV0_COUNT)
+			return (KERN_FAILURE);
 
-		stat = &vm_stat[0];
+		processor = processor_list;
+		stat = &PROCESSOR_DATA(processor, vm_stat);
 		host_vm_stat = *stat;
-#if NCPUS > 1
-		{
-			register int i;
 
-			for (i = 1; i < NCPUS; i++) {
-				stat++;
-				host_vm_stat.zero_fill_count +=
-						stat->zero_fill_count;
-				host_vm_stat.reactivations +=
-						stat->reactivations;
+		if (processor_count > 1) {
+			simple_lock(&processor_list_lock);
+
+			while ((processor = processor->processor_list) != NULL) {
+				stat = &PROCESSOR_DATA(processor, vm_stat);
+
+				host_vm_stat.zero_fill_count +=	stat->zero_fill_count;
+				host_vm_stat.reactivations += stat->reactivations;
 				host_vm_stat.pageins += stat->pageins;
 				host_vm_stat.pageouts += stat->pageouts;
 				host_vm_stat.faults += stat->faults;
@@ -305,69 +316,90 @@ host_statistics(
 				host_vm_stat.lookups += stat->lookups;
 				host_vm_stat.hits += stat->hits;
 			}
+
+			simple_unlock(&processor_list_lock);
 		}
-#endif
 
 		stat = (vm_statistics_t) info;
 
-                stat->free_count = vm_page_free_count;
-                stat->active_count = vm_page_active_count;
-                stat->inactive_count = vm_page_inactive_count;
-                stat->wire_count = vm_page_wire_count;
-                stat->zero_fill_count = host_vm_stat.zero_fill_count;
-                stat->reactivations = host_vm_stat.reactivations;
-                stat->pageins = host_vm_stat.pageins;
-                stat->pageouts = host_vm_stat.pageouts;
-                stat->faults = host_vm_stat.faults;
-                stat->cow_faults = host_vm_stat.cow_faults;
-                stat->lookups = host_vm_stat.lookups;
-                stat->hits = host_vm_stat.hits;
+		stat->free_count = vm_page_free_count;
+		stat->active_count = vm_page_active_count;
+		stat->inactive_count = vm_page_inactive_count;
+		stat->wire_count = vm_page_wire_count;
+		stat->zero_fill_count = host_vm_stat.zero_fill_count;
+		stat->reactivations = host_vm_stat.reactivations;
+		stat->pageins = host_vm_stat.pageins;
+		stat->pageouts = host_vm_stat.pageouts;
+		stat->faults = host_vm_stat.faults;
+		stat->cow_faults = host_vm_stat.cow_faults;
+		stat->lookups = host_vm_stat.lookups;
+		stat->hits = host_vm_stat.hits;
 
-		*count = HOST_VM_INFO_COUNT;
-		return(KERN_SUCCESS);
-	    }
+		if (*count >= HOST_VM_INFO_COUNT) {
+			/* info that was not in revision 0 of that interface */
+			stat->purgeable_count = vm_page_purgeable_count;
+			stat->purges = vm_page_purged_count;
+			*count = HOST_VM_INFO_COUNT;
+		} else {
+			*count = HOST_VM_INFO_REV0_COUNT;
+		}
+
+		return (KERN_SUCCESS);
+	}
                 
-	case HOST_CPU_LOAD_INFO: {
+	case HOST_CPU_LOAD_INFO:
+	{
+		register processor_t	processor;
 		host_cpu_load_info_t	cpu_load_info;
-		unsigned long		ticks_value1, ticks_value2;
-		int			i;
-
-#define GET_TICKS_VALUE(__cpu,__state) \
-MACRO_BEGIN \
-	do { \
-		ticks_value1 = *(volatile integer_t *) \
-			(&machine_slot[(__cpu)].cpu_ticks[(__state)]); \
-		ticks_value2 = *(volatile integer_t *) \
-			(&machine_slot[(__cpu)].cpu_ticks[(__state)]); \
-	} while (ticks_value1 != ticks_value2); \
-	cpu_load_info->cpu_ticks[(__state)] += ticks_value1; \
-MACRO_END
+		unsigned long			ticks_value1, ticks_value2;
 
 		if (*count < HOST_CPU_LOAD_INFO_COUNT)
-			return KERN_FAILURE;
+			return (KERN_FAILURE);
 
-		cpu_load_info = (host_cpu_load_info_t) info;
+#define GET_TICKS_VALUE(processor, state)	 					\
+MACRO_BEGIN														\
+	do {														\
+		ticks_value1 = *(volatile integer_t *)					\
+			&PROCESSOR_DATA((processor), cpu_ticks[(state)]);	\
+		ticks_value2 = *(volatile integer_t *)					\
+			&PROCESSOR_DATA((processor), cpu_ticks[(state)]);	\
+	} while (ticks_value1 != ticks_value2);						\
+																\
+	cpu_load_info->cpu_ticks[(state)] += ticks_value1;			\
+MACRO_END
 
+		cpu_load_info = (host_cpu_load_info_t)info;
 		cpu_load_info->cpu_ticks[CPU_STATE_USER] = 0;
 		cpu_load_info->cpu_ticks[CPU_STATE_NICE] = 0;
 		cpu_load_info->cpu_ticks[CPU_STATE_SYSTEM] = 0;
 		cpu_load_info->cpu_ticks[CPU_STATE_IDLE] = 0;
-		for (i = 0; i < NCPUS; i++) {
-			if (!machine_slot[i].is_cpu ||
-			    !machine_slot[i].running)
-				continue;
-			GET_TICKS_VALUE(i, CPU_STATE_USER);
-			GET_TICKS_VALUE(i, CPU_STATE_NICE);
-			GET_TICKS_VALUE(i, CPU_STATE_SYSTEM);
-			GET_TICKS_VALUE(i, CPU_STATE_IDLE);
+
+		processor = processor_list;
+		GET_TICKS_VALUE(processor, CPU_STATE_USER);
+		GET_TICKS_VALUE(processor, CPU_STATE_NICE);
+		GET_TICKS_VALUE(processor, CPU_STATE_SYSTEM);
+		GET_TICKS_VALUE(processor, CPU_STATE_IDLE);
+
+		if (processor_count > 1) {
+			simple_lock(&processor_list_lock);
+
+			while ((processor = processor->processor_list) != NULL) {
+				GET_TICKS_VALUE(processor, CPU_STATE_USER);
+				GET_TICKS_VALUE(processor, CPU_STATE_NICE);
+				GET_TICKS_VALUE(processor, CPU_STATE_SYSTEM);
+				GET_TICKS_VALUE(processor, CPU_STATE_IDLE);
+			}
+
+			simple_unlock(&processor_list_lock);
 		}
 
 		*count = HOST_CPU_LOAD_INFO_COUNT;
-		return KERN_SUCCESS;
-	    }
+
+		return (KERN_SUCCESS);
+	}
 
 	default:
-		return(KERN_INVALID_ARGUMENT);
+		return (KERN_INVALID_ARGUMENT);
 	}
 }
 
@@ -403,13 +435,13 @@ host_page_size(
  *	Return kernel version string (more than you ever
  *	wanted to know about what version of the kernel this is).
  */
+extern char	version[];
 
 kern_return_t
 host_kernel_version(
 	host_t			host,
 	kernel_version_t	out_version)
 {
-	extern char	version[];
 
 	if (host == HOST_NULL)
 		return(KERN_INVALID_ARGUMENT);
@@ -430,7 +462,7 @@ host_processor_sets(
 	processor_set_name_array_t	*pset_list,
 	mach_msg_type_number_t		*count)
 {
-	vm_offset_t addr;
+	void *addr;
 
 	if (host_priv == HOST_PRIV_NULL)
 		return KERN_INVALID_ARGUMENT;
@@ -485,76 +517,75 @@ host_processor_set_priv(
  */
 kern_return_t
 host_processor_info(
-	host_t			host,
-	processor_flavor_t	flavor,
-	natural_t		*proc_count,
-	processor_info_array_t	*proc_info,
-	mach_msg_type_number_t	*proc_info_count)
+	host_t					host,
+	processor_flavor_t		flavor,
+	natural_t				*out_pcount,
+	processor_info_array_t	*out_array,
+	mach_msg_type_number_t	*out_array_count)
 {
-	int i;
-	int num;
-	int count;
-	vm_size_t size;
-	vm_offset_t addr;
-	kern_return_t kr;
-	vm_map_copy_t copy;
-	processor_info_t proc_data;
+	kern_return_t			result;
+	processor_t				processor;
+	host_t					thost;
+	processor_info_t		info;
+	unsigned int			icount, tcount;
+	unsigned int			pcount, i;
+	vm_offset_t				addr;
+	vm_size_t				size;
+	vm_map_copy_t			copy;
 
 	if (host == HOST_NULL)
-		return KERN_INVALID_ARGUMENT;
+		return (KERN_INVALID_ARGUMENT);
 
-	kr = processor_info_count(flavor, &count);
-	if (kr != KERN_SUCCESS) {
-		return kr;
-	}
-	    
-	for (num = i = 0; i < NCPUS; i++)
-		if (machine_slot[i].is_cpu)
-			num++;
+	result = processor_info_count(flavor, &icount);
+	if (result != KERN_SUCCESS)
+		return (result);
 
-	size = (vm_size_t)round_page_32(num * count * sizeof(natural_t));
+	pcount = processor_count;
+	assert(pcount != 0);
 
-	kr = vm_allocate(ipc_kernel_map, &addr, size, TRUE);
-	if (kr != KERN_SUCCESS)
-		return KERN_RESOURCE_SHORTAGE;
+	size = round_page(pcount * icount * sizeof(natural_t));
+	result = kmem_alloc(ipc_kernel_map, &addr, size);
+	if (result != KERN_SUCCESS)
+		return (KERN_RESOURCE_SHORTAGE);
 
-	kr = vm_map_wire(ipc_kernel_map, addr, addr + size,
-			 VM_PROT_READ|VM_PROT_WRITE, FALSE);
-	if (kr != KERN_SUCCESS) {
+	info = (processor_info_t) addr;
+	processor = processor_list;
+	tcount = icount;
+
+	result = processor_info(processor, flavor, &thost, info, &tcount);
+	if (result != KERN_SUCCESS) {
 		kmem_free(ipc_kernel_map, addr, size);
-		return KERN_RESOURCE_SHORTAGE;
+		return (result);
 	}
 
-	proc_data = (processor_info_t) addr;
-	for (i = 0; i < NCPUS; i++) {
-		int count2 = count;
-		host_t host2;
+	if (pcount > 1) {
+		for (i = 1; i < pcount; i++) {
+			simple_lock(&processor_list_lock);
+			processor = processor->processor_list;
+			simple_unlock(&processor_list_lock);
 
-		if (machine_slot[i].is_cpu) {
-			kr = processor_info(cpu_to_processor(i),
-					    flavor,
-					    &host2,
-					    proc_data,
-					    &count2);
-			if (kr != KERN_SUCCESS) {
+			info += icount;
+			tcount = icount;
+			result = processor_info(processor, flavor, &thost, info, &tcount);
+			if (result != KERN_SUCCESS) {
 				kmem_free(ipc_kernel_map, addr, size);
-				return kr;
+				return (result);
 			}
-			assert(count == count2);
-			proc_data += count;
 		}
 	}
 
-	kr = vm_map_unwire(ipc_kernel_map, addr, addr + size, FALSE);
-	assert(kr == KERN_SUCCESS);
-	size = (vm_size_t)(num * count * sizeof(natural_t));
-	kr = vm_map_copyin(ipc_kernel_map, addr, size, TRUE, &copy);
-	assert(kr == KERN_SUCCESS);
+	result = vm_map_unwire(ipc_kernel_map, vm_map_trunc_page(addr),
+			       vm_map_round_page(addr + size), FALSE);
+	assert(result == KERN_SUCCESS);
+	result = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)addr,
+			       (vm_map_size_t)size, TRUE, &copy);
+	assert(result == KERN_SUCCESS);
 
-	*proc_count = num;
-	*proc_info = (processor_info_array_t) copy;
-	*proc_info_count = num * count;
-	return(KERN_SUCCESS);
+	*out_pcount = pcount;
+	*out_array = (processor_info_array_t) copy;
+	*out_array_count = pcount * icount;
+
+	return (KERN_SUCCESS);
 }
 
 /*
@@ -615,14 +646,14 @@ host_set_special_port(
 kern_return_t
 host_get_special_port(
         host_priv_t     host_priv,
-        int             node,
+        __unused int    node,
         int             id,
         ipc_port_t      *portp)
 {
 	ipc_port_t	port;
 
 	if (host_priv == HOST_PRIV_NULL ||
-	    id == HOST_SECURITY_PORT )
+	    id == HOST_SECURITY_PORT || id > HOST_MAX_SPECIAL_PORT )
 		return KERN_INVALID_ARGUMENT;
 
 #if     DIPC

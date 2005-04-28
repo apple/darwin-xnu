@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -55,45 +55,49 @@
  *	@(#)ufs_readwrite.c	8.11 (Berkeley) 5/8/95
  */
 
+#include <sys/buf_internal.h>
+#include <sys/uio_internal.h>
+
+
 #define	BLKSIZE(a, b, c)	blksize(a, b, c)
 #define	FS			struct fs
 #define	I_FS			i_fs
-#define	PGRD			ffs_pgrd
-#define	PGRD_S			"ffs_pgrd"
-#define	PGWR			ffs_pgwr
-#define	PGWR_S			"ffs_pgwr"
+
+
 
 /*
  * Vnode op for reading.
  */
 /* ARGSUSED */
 ffs_read(ap)
-	struct vop_read_args /* {
+	struct vnop_read_args /* {
 		struct vnode *a_vp;
 		struct uio *a_uio;
 		int a_ioflag;
-		struct ucred *a_cred;
+		vfs_context_t a_context;
 	} */ *ap;
 {
-	register struct vnode *vp;
-	register struct inode *ip;
-	register struct uio *uio;
-	register FS *fs;
-	struct buf *bp = (struct buf *)0;
+        return(ffs_read_internal(ap->a_vp, ap->a_uio, ap->a_ioflag));
+}
+
+
+int
+ffs_read_internal(vnode_t vp, struct uio *uio, int ioflag)
+{
+	struct	inode *ip;
+	FS	*fs;
+	buf_t	bp = (struct buf *)0;
 	ufs_daddr_t lbn, nextlbn;
 	off_t bytesinfile;
 	long size, xfersize, blkoffset;
-	int devBlockSize=0;
 	int error;
 	u_short mode;
 #if REV_ENDIAN_FS
 	int rev_endian=0;
 #endif /* REV_ENDIAN_FS */
 
-	vp = ap->a_vp;
 	ip = VTOI(vp);
 	mode = ip->i_mode;
-	uio = ap->a_uio;
 
 #if REV_ENDIAN_FS
 	rev_endian=(vp->v_mount->mnt_flag & MNT_REVEND);
@@ -115,14 +119,13 @@ ffs_read(ap)
 	if (uio->uio_offset > fs->fs_maxfilesize)
 		return (EFBIG);
 
-	VOP_DEVBLOCKSIZE(ip->i_devvp, &devBlockSize);
-	
-	if (UBCISVALID(vp)) {
-		error = cluster_read(vp, uio, (off_t)ip->i_size, 
-			devBlockSize, 0);
+	if (UBCINFOEXISTS(vp)) {
+		error = cluster_read(vp, uio, (off_t)ip->i_size, 0);
 	} else {
-	for (error = 0, bp = NULL; uio->uio_resid > 0; 
+	for (error = 0, bp = NULL; uio_resid(uio) > 0; 
 	    bp = NULL) {
+	        char *buf_data;
+
 		if ((bytesinfile = ip->i_size - uio->uio_offset) <= 0)
 			break;
 		lbn = lblkno(fs, uio->uio_offset);
@@ -130,46 +133,48 @@ ffs_read(ap)
 		size = BLKSIZE(fs, ip, lbn);
 		blkoffset = blkoff(fs, uio->uio_offset);
 		xfersize = fs->fs_bsize - blkoffset;
-		if (uio->uio_resid < xfersize)
-			xfersize = uio->uio_resid;
+		// LP64todo - fix this
+		if (uio_resid(uio) < xfersize)
+			xfersize = uio_resid(uio);
 		if (bytesinfile < xfersize)
 			xfersize = bytesinfile;
 
 		if (lblktosize(fs, nextlbn) >= ip->i_size)
-			error = bread(vp, lbn, size, NOCRED, &bp);
-		else if (lbn - 1 == vp->v_lastr && !(vp->v_flag & VRAOFF)) {
+			error = (int)buf_bread(vp, (daddr64_t)((unsigned)lbn), size, NOCRED, &bp);
+		else if (lbn - 1 == ip->i_lastr && !(vp->v_flag & VRAOFF)) {
 			int nextsize = BLKSIZE(fs, ip, nextlbn);
-			error = breadn(vp, lbn,
-			    size, &nextlbn, &nextsize, 1, NOCRED, &bp);
+			error = (int)buf_breadn(vp, (daddr64_t)((unsigned)lbn),
+						size, &nextlbn, &nextsize, 1, NOCRED, &bp);
 		} else
-			error = bread(vp, lbn, size, NOCRED, &bp);
+			error = (int)buf_bread(vp, lbn, size, NOCRED, &bp);
 		if (error)
 			break;
-		vp->v_lastr = lbn;
+		ip->i_lastr = lbn;
 
 		/*
-		 * We should only get non-zero b_resid when an I/O error
+		 * We should only get non-zero buffer resid when an I/O error
 		 * has occurred, which should cause us to break above.
 		 * However, if the short read did not cause an error,
 		 * then we want to ensure that we do not uiomove bad
 		 * or uninitialized data.
 		 */
-		size -= bp->b_resid;
+		size -= buf_resid(bp);
 		if (size < xfersize) {
 			if (size == 0)
 				break;
 			xfersize = size;
 		}
+		buf_data = (char *)buf_dataptr(bp);
 #if REV_ENDIAN_FS
 		if (rev_endian && S_ISDIR(mode)) {
-			byte_swap_dir_block_in((char *)bp->b_data + blkoffset, xfersize);
+			byte_swap_dir_block_in(buf_data + blkoffset, xfersize);
 		}
 #endif /* REV_ENDIAN_FS */
 		if (error =
-		    uiomove((char *)bp->b_data + blkoffset, (int)xfersize, uio)) {
+		    uiomove(buf_data + blkoffset, (int)xfersize, uio)) {
 #if REV_ENDIAN_FS
 			if (rev_endian && S_ISDIR(mode)) {
-			byte_swap_dir_block_in((char *)bp->b_data + blkoffset, xfersize);
+			byte_swap_dir_block_in(buf_data + blkoffset, xfersize);
 			}
 #endif /* REV_ENDIAN_FS */
 			break;
@@ -177,17 +182,17 @@ ffs_read(ap)
 
 #if REV_ENDIAN_FS
 		if (rev_endian && S_ISDIR(mode)) {
-			byte_swap_dir_out((char *)bp->b_data + blkoffset, xfersize);
+			byte_swap_dir_out(buf_data + blkoffset, xfersize);
 		}
 #endif /* REV_ENDIAN_FS */
 		if (S_ISREG(mode) && (xfersize + blkoffset == fs->fs_bsize ||
 		    uio->uio_offset == ip->i_size))
-			bp->b_flags |= B_AGE;
-		brelse(bp);
+			buf_markaged(bp);
+		buf_brelse(bp);
 	}
 	}
 	if (bp != NULL)
-		brelse(bp);
+		buf_brelse(bp);
 	ip->i_flag |= IN_ACCESS;
 	return (error);
 }
@@ -196,23 +201,26 @@ ffs_read(ap)
  * Vnode op for writing.
  */
 ffs_write(ap)
-	struct vop_write_args /* {
+	struct vnop_write_args /* {
 		struct vnode *a_vp;
 		struct uio *a_uio;
 		int a_ioflag;
-		struct ucred *a_cred;
+		vfs_context_t a_context;
 	} */ *ap;
 {
-	register struct vnode *vp;
-	register struct uio *uio;
-	register struct inode *ip;
-	register FS *fs;
-	struct buf *bp;
-	struct proc *p;
+        return(ffs_write_internal(ap->a_vp, ap->a_uio, ap->a_ioflag, vfs_context_ucred(ap->a_context)));
+}
+
+
+ffs_write_internal(vnode_t vp, struct uio *uio, int ioflag, ucred_t cred)
+{
+	buf_t	bp;
+	proc_t	p;
+	struct	inode *ip;
+	FS	*fs;
 	ufs_daddr_t lbn;
 	off_t osize;
-	int blkoffset, flags, ioflag, resid, rsd,  size, xfersize;
-	int devBlockSize=0;
+	int blkoffset, flags, resid, rsd,  size, xfersize;
 	int save_error=0, save_size=0;
 	int blkalloc = 0;
 	int error = 0;
@@ -223,9 +231,6 @@ ffs_write(ap)
 	int rev_endian=0;
 #endif /* REV_ENDIAN_FS */
 
-	ioflag = ap->a_ioflag;
-	uio = ap->a_uio;
-	vp = ap->a_vp;
 	ip = VTOI(vp);
 #if REV_ENDIAN_FS
 	rev_endian=(vp->v_mount->mnt_flag & MNT_REVEND);
@@ -256,32 +261,19 @@ ffs_write(ap)
 
 	fs = ip->I_FS;
 	if (uio->uio_offset < 0 ||
-	    (u_int64_t)uio->uio_offset + uio->uio_resid > fs->fs_maxfilesize)
+	    (u_int64_t)uio->uio_offset + uio_resid(uio) > fs->fs_maxfilesize)
 		return (EFBIG);
-	if (uio->uio_resid == 0)
+	if (uio_resid(uio) == 0)
 	        return (0);
 
-	VOP_DEVBLOCKSIZE(ip->i_devvp, &devBlockSize);
-
-	/*
-	 * Maybe this should be above the vnode op call, but so long as
-	 * file servers have no limits, I don't think it matters.
-	 */
-	p = uio->uio_procp;
-	if (vp->v_type == VREG && p &&
-	    uio->uio_offset + uio->uio_resid >
-	    p->p_rlimit[RLIMIT_FSIZE].rlim_cur) {
-		psignal(p, SIGXFSZ);
-		return (EFBIG);
-	}
-
-	resid = uio->uio_resid;
+	// LP64todo - fix this
+	resid = uio_resid(uio);
 	osize = ip->i_size;
 	flags = 0;
 	if ((ioflag & IO_SYNC) && !((vp)->v_mount->mnt_flag & MNT_ASYNC))
 		flags = B_SYNC;
 
-    if (UBCISVALID(vp)) {
+    if (UBCINFOEXISTS(vp)) {
 	off_t filesize;
 	off_t endofwrite;
 	off_t local_offset;
@@ -292,7 +284,8 @@ ffs_write(ap)
 	int fblk;
 	int loopcount;
 
-	endofwrite = uio->uio_offset + uio->uio_resid;
+	// LP64todo - fix this
+	endofwrite = uio->uio_offset + uio_resid(uio);
 
 	if (endofwrite > ip->i_size) {
 		filesize = endofwrite;
@@ -303,7 +296,8 @@ ffs_write(ap)
 	head_offset = ip->i_size;
 
 	/* Go ahead and allocate the block that are going to be written */
-	rsd = uio->uio_resid;
+	// LP64todo - fix this
+	rsd = uio_resid(uio);
 	local_offset = uio->uio_offset;
 	local_flags = 0;
 	if ((ioflag & IO_SYNC) && !((vp)->v_mount->mnt_flag & MNT_ASYNC))
@@ -331,7 +325,7 @@ ffs_write(ap)
 
 		/* Allocate block without reading into a buf */
 		error = ffs_balloc(ip,
-			lbn, blkoffset + xfersize, ap->a_cred, 
+			lbn, blkoffset + xfersize, cred, 
 			&bp, local_flags, &blkalloc);
 		if (error)
 			break;
@@ -350,9 +344,9 @@ ffs_write(ap)
 	if(error) {
 		save_error = error;
 		save_size = rsd;
-		uio->uio_resid -= rsd;
-                if (file_extended)
-                    filesize -= rsd;
+		uio_setresid(uio, (uio_resid(uio) - rsd));
+		if (file_extended)
+			filesize -= rsd;
 	}
 
 	flags = ioflag & IO_SYNC ? IO_SYNC : 0;
@@ -387,17 +381,16 @@ ffs_write(ap)
 	   * we we'll zero fill from the current EOF to where the write begins
 	   */
 
-          error = cluster_write(vp, uio, osize, filesize, head_offset, local_offset,  devBlockSize, flags);
+          error = cluster_write(vp, uio, osize, filesize, head_offset, local_offset, flags);
 	
 	if (uio->uio_offset > osize) {
 		if (error && ((ioflag & IO_UNIT)==0))
-			(void)VOP_TRUNCATE(vp, uio->uio_offset,
-			    ioflag & IO_SYNC, ap->a_cred, uio->uio_procp);
+			(void)ffs_truncate_internal(vp, uio->uio_offset, ioflag & IO_SYNC, cred);
 		ip->i_size = uio->uio_offset; 
 		ubc_setsize(vp, (off_t)ip->i_size);
 	}
 	 if(save_error) {
-		uio->uio_resid += save_size;
+		uio_setresid(uio, (uio_resid(uio) + save_size));
 		if(!error)
 			error = save_error;	
 	}
@@ -407,48 +400,49 @@ ffs_write(ap)
 	if ((ioflag & IO_SYNC) && !((vp)->v_mount->mnt_flag & MNT_ASYNC))
 		flags = B_SYNC;
 
-	for (error = 0; uio->uio_resid > 0;) {
+	for (error = 0; uio_resid(uio) > 0;) {
+	        char *buf_data;
+
 		lbn = lblkno(fs, uio->uio_offset);
 		blkoffset = blkoff(fs, uio->uio_offset);
 		xfersize = fs->fs_bsize - blkoffset;
-		if (uio->uio_resid < xfersize)
-			xfersize = uio->uio_resid;
+		if (uio_resid(uio) < xfersize)
+			// LP64todo - fix this
+			xfersize = uio_resid(uio);
 
 		if (fs->fs_bsize > xfersize)
 			flags |= B_CLRBUF;
 		else
 			flags &= ~B_CLRBUF;
 
-		error = ffs_balloc(ip,
-		    lbn, blkoffset + xfersize, ap->a_cred, &bp, flags, 0);
+		error = ffs_balloc(ip, lbn, blkoffset + xfersize, cred, &bp, flags, 0);
 		if (error)
 			break;
 		if (uio->uio_offset + xfersize > ip->i_size) {
 			ip->i_size = uio->uio_offset + xfersize;
-
-			if (UBCISVALID(vp))
-				ubc_setsize(vp, (u_long)ip->i_size); /* XXX check errors */
+			ubc_setsize(vp, (u_long)ip->i_size);
 		}
 
-		size = BLKSIZE(fs, ip, lbn) - bp->b_resid;
+		size = BLKSIZE(fs, ip, lbn) - buf_resid(bp);
 		if (size < xfersize)
 			xfersize = size;
 
-		error =
-		    uiomove((char *)bp->b_data + blkoffset, (int)xfersize, uio);
+		buf_data = (char *)buf_dataptr(bp);
+
+		error = uiomove(buf_data + blkoffset, (int)xfersize, uio);
 #if REV_ENDIAN_FS
 		if (rev_endian && S_ISDIR(ip->i_mode)) {
-			byte_swap_dir_out((char *)bp->b_data + blkoffset, xfersize);
+			byte_swap_dir_out(buf_data + blkoffset, xfersize);
 		}
 #endif /* REV_ENDIAN_FS */
 		if (doingdirectory == 0 && (ioflag & IO_SYNC))
-			(void)bwrite(bp);
+			(void)buf_bwrite(bp);
 		else if (xfersize + blkoffset == fs->fs_bsize) {
-		        bp->b_flags |= B_AGE;
-			bdwrite(bp);
+		        buf_markaged(bp);
+			buf_bdwrite(bp);
 		}
 		else
-			bdwrite(bp);
+			buf_bdwrite(bp);
 		if (error || xfersize == 0)
 			break;
 		ip->i_flag |= IN_CHANGE | IN_UPDATE;
@@ -459,20 +453,23 @@ ffs_write(ap)
 	 * we clear the setuid and setgid bits as a precaution against
 	 * tampering.
 	 */
-	if (resid > uio->uio_resid && ap->a_cred && ap->a_cred->cr_uid != 0)
+	if (resid > uio_resid(uio) && cred && suser(cred, NULL))
 		ip->i_mode &= ~(ISUID | ISGID);
-	if (resid > uio->uio_resid)
+	if (resid > uio_resid(uio))
 		VN_KNOTE(vp, NOTE_WRITE | (file_extended ? NOTE_EXTEND : 0));
 	if (error) {
 		if (ioflag & IO_UNIT) {
-			(void)VOP_TRUNCATE(vp, osize,
-			    ioflag & IO_SYNC, ap->a_cred, uio->uio_procp);
-			uio->uio_offset -= resid - uio->uio_resid;
-			uio->uio_resid = resid;
+			(void)ffs_truncate_internal(vp, osize, ioflag & IO_SYNC, cred);
+			// LP64todo - fix this
+			uio->uio_offset -= resid - uio_resid(uio);
+			uio_setresid(uio, resid);
 		}
-	} else if (resid > uio->uio_resid && (ioflag & IO_SYNC))
-		error = VOP_UPDATE(vp, (struct timeval *)&time,
-					(struct timeval *)&time, 1);
+	} else if (resid > uio_resid(uio) && (ioflag & IO_SYNC)) {
+		struct timeval tv;
+
+		microtime(&tv);		
+		error = ffs_update(vp, &tv, &tv, 1);
+	}
 	return (error);
 }
 
@@ -482,14 +479,14 @@ ffs_write(ap)
  */
 /* ARGSUSED */
 ffs_pagein(ap)
-	struct vop_pagein_args /* {
+	struct vnop_pagein_args /* {
 	   	struct vnode *a_vp,
 	   	upl_t 	a_pl,
 		vm_offset_t   a_pl_offset,
 		off_t         a_f_offset,
 		size_t        a_size,
-		struct ucred *a_cred,
 		int           a_flags
+		vfs_context_t a_context;
 	} */ *ap;
 {
 	register struct vnode *vp = ap->a_vp;
@@ -499,7 +496,6 @@ ffs_pagein(ap)
 	vm_offset_t pl_offset = ap->a_pl_offset;
 	int flags  = ap->a_flags;
 	register struct inode *ip;
-	int devBlockSize=0;
 	int error;
 
 	ip = VTOI(vp);
@@ -518,10 +514,8 @@ ffs_pagein(ap)
 		panic("%s: type %d", "ffs_pagein", vp->v_type);
 #endif
 
-	VOP_DEVBLOCKSIZE(ip->i_devvp, &devBlockSize);
+  	error = cluster_pagein(vp, pl, pl_offset, f_offset, size, (off_t)ip->i_size, flags);
 
-  	error = cluster_pagein(vp, pl, pl_offset, f_offset, size,
-			    (off_t)ip->i_size, devBlockSize, flags);
 	/* ip->i_flag |= IN_ACCESS; */
 	return (error);
 }
@@ -532,14 +526,14 @@ ffs_pagein(ap)
  * make sure the buf is not in hash queue when you return
  */
 ffs_pageout(ap)
-	struct vop_pageout_args /* {
+	struct vnop_pageout_args /* {
 	   struct vnode *a_vp,
 	   upl_t        a_pl,
 	   vm_offset_t   a_pl_offset,
 	   off_t         a_f_offset,
 	   size_t        a_size,
-	   struct ucred *a_cred,
 	   int           a_flags
+	   vfs_context_t a_context;
 	} */ *ap;
 {
 	register struct vnode *vp = ap->a_vp;
@@ -551,7 +545,6 @@ ffs_pageout(ap)
 	register struct inode *ip;
 	register FS *fs;
 	int error ;
-	int devBlockSize=0;
 	size_t xfer_size = 0;
 	int local_flags=0;
 	off_t local_offset;
@@ -561,6 +554,7 @@ ffs_pageout(ap)
 	int save_error =0, save_size=0;
 	vm_offset_t lupl_offset;
 	int nocommit = flags & UPL_NOCOMMIT;
+	int devBlockSize = 0;
 	struct buf *bp;
 
 	ip = VTOI(vp);
@@ -596,7 +590,7 @@ ffs_pageout(ap)
 	else
 	        xfer_size = size;
 
-	VOP_DEVBLOCKSIZE(ip->i_devvp, &devBlockSize);
+	devBlockSize = vfs_devblocksize(vnode_mount(vp));
 
 	if (xfer_size & (PAGE_SIZE - 1)) {
 	        /* if not a multiple of page size
@@ -607,7 +601,7 @@ ffs_pageout(ap)
 	}
 
 	/*
-	 * once the block allocation is moved to ufs_cmap
+	 * once the block allocation is moved to ufs_blockmap
 	 * we can remove all the size and offset checks above
 	 * cluster_pageout does all of this now
 	 * we need to continue to do it here so as not to
@@ -625,7 +619,7 @@ ffs_pageout(ap)
 			xsize = resid;
 		/* Allocate block without reading into a buf */
 		error = ffs_blkalloc(ip,
-			lbn, blkoffset + xsize, ap->a_cred, 
+			lbn, blkoffset + xsize, vfs_context_ucred(ap->a_context), 
 			local_flags);
 		if (error)
 			break;
@@ -640,7 +634,7 @@ ffs_pageout(ap)
 	}
         
 
-	error = cluster_pageout(vp, pl, pl_offset, f_offset, round_page_32(xfer_size), ip->i_size, devBlockSize, flags);
+	error = cluster_pageout(vp, pl, pl_offset, f_offset, round_page_32(xfer_size), ip->i_size, flags);
 
 	if(save_error) {
 		lupl_offset = size - save_size;

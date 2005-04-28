@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1999, 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -24,9 +24,12 @@
 #define __SYS_RANDOM_H__
 
 #include <sys/appleapiopts.h>
+#include <sys/cdefs.h>
 
 #ifdef __APPLE_API_UNSTABLE
+__BEGIN_DECLS
 void read_random(void* buffer, u_int numBytes);
+__END_DECLS
 #endif /* __APPLE_API_UNSTABLE */
 
 #endif /* __SYS_RANDOM_H__ */

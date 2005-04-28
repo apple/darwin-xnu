@@ -19,6 +19,8 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
+#ifdef	KERNEL_PRIVATE
+
 #ifndef _MACHINE_LOCK_H_
 #define _MACHINE_LOCK_H_
 
@@ -33,3 +35,5 @@
 
 
 #endif /* _MACHINE_LOCK_H_ */
+
+#endif

@@ -250,10 +250,10 @@
 #ifndef __NET_NET_OSDEP_H_DEFINED_
 #define __NET_NET_OSDEP_H_DEFINED_
 #include <sys/appleapiopts.h>
-#ifdef KERNEL
+#ifdef KERNEL_PRIVATE
 
 struct ifnet;
-extern const char *if_name __P((struct ifnet *));
+extern const char *if_name(struct ifnet *);
 
 #define HAVE_OLD_BPF
 
@@ -272,5 +272,5 @@ extern const char *if_name __P((struct ifnet *));
 #define WITH_CONVERT_IP_OFF
 #endif
 
-#endif /*_KERNEL*/
+#endif /* KERNEL_PRIVATE */
 #endif /*__NET_NET_OSDEP_H_DEFINED_ */

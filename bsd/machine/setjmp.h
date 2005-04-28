@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -20,17 +20,12 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
-/*
- * The NEXTSTEP Software License Agreement specifies the terms
- * and conditions for redistribution.
- *
- */
 
 #ifndef	_MACHINE_SETJMP_H_
 #define	_MACHINE_SETJMP_H_
 
 
-#if defined (__ppc__)
+#if defined (__ppc__) || defined (__ppc64__)
 #include "ppc/setjmp.h"
 #elif defined (__i386__)
 #include "i386/setjmp.h"

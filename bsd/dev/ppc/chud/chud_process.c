@@ -21,7 +21,8 @@
  */
 
 #include <sys/systm.h>
-#include <sys/proc.h>
+#include <sys/proc_internal.h>
+#include <sys/vnode_internal.h> // vn_getpath()
 
 __private_extern__
 int chudxnu_pid_for_task(task_t task)

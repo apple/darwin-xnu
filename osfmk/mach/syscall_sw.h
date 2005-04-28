@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -48,6 +48,8 @@
  * the rights to redistribute these changes.
  */
 
+#ifdef	PRIVATE
+
 #ifndef	_MACH_SYSCALL_SW_H_
 #define _MACH_SYSCALL_SW_H_
 
@@ -72,6 +74,7 @@ kernel_trap(mach_reply_port,-26,0)
 kernel_trap(thread_self_trap,-27,0)
 kernel_trap(task_self_trap,-28,0)
 kernel_trap(host_self_trap,-29,0)
+
 kernel_trap(mach_msg_trap,-31,7)
 kernel_trap(mach_msg_overwrite_trap,-32,9)
 kernel_trap(semaphore_signal_trap, -33, 1)
@@ -82,29 +85,55 @@ kernel_trap(semaphore_wait_signal_trap,-37,2)
 kernel_trap(semaphore_timedwait_trap,-38,3)
 kernel_trap(semaphore_timedwait_signal_trap,-39,4)
 
+#if		!defined(__LP64__)
 kernel_trap(init_process,-41,0)
 kernel_trap(map_fd,-43,5)
+#endif	/* __LP64__ */
+
 kernel_trap(task_for_pid,-45,3)
 kernel_trap(pid_for_task,-46,2)
+
+#if		!defined(__LP64__)
 kernel_trap(macx_swapon,-48, 4)
 kernel_trap(macx_swapoff,-49, 2)
 kernel_trap(macx_triggers,-51, 4)
 kernel_trap(macx_backing_store_suspend,-52, 1)
 kernel_trap(macx_backing_store_recovery,-53, 1)
+#endif	/* __LP64__ */
 
+/* These are currently used by pthreads even on LP64 */
+/* But as soon as that is fixed - they will go away there */
 kernel_trap(swtch_pri,-59,1)
 kernel_trap(swtch,-60,0)
+
 kernel_trap(syscall_thread_switch,-61,3)
 kernel_trap(clock_sleep_trap,-62,5)
 
 kernel_trap(mach_timebase_info,-89,1)
+
+#if		defined(__LP64__)
+/* unit64_t arguments passed in one register in LP64 */
+kernel_trap(mach_wait_until,-90,1)
+#else	/* __LP64__ */
 kernel_trap(mach_wait_until,-90,2)
-kernel_trap(mk_wait_until,-90,2)
+#endif	/* __LP64__ */
+
 kernel_trap(mk_timer_create,-91,0)
 kernel_trap(mk_timer_destroy,-92,1)
+
+#if		defined(__LP64__)
+/* unit64_t arguments passed in one register in LP64 */
+kernel_trap(mk_timer_arm,-93,2)
+#else	/* __LP64__ */
 kernel_trap(mk_timer_arm,-93,3)
+#endif	/* __LP64__ */
+
 kernel_trap(mk_timer_cancel,-94,2)
 
+#if		!defined(__LP64__)
 kernel_trap(MKGetTimeBaseInfo,-95,5)
+#endif	/* __LP64__ */
 
 #endif	/* _MACH_SYSCALL_SW_H_ */
+
+#endif	/* PRIVATE */

@@ -34,11 +34,11 @@
 #include <IOKit/IOWorkLoop.h>
 #include <IOKit/pwr_mgt/RootDomain.h>
 #include <IOKit/IOKitKeys.h>
+#include <IOKit/IOTimeStamp.h>
 
 #include <IOKit/system.h>
 
 #include <libkern/c++/OSContainers.h>
-
 
 extern "C" {
 #include <machine/machine_routines.h>
@@ -368,11 +368,44 @@ bool IOPlatformExpert::platformAdjustService(IOService */*service*/)
 //
 //*********************************************************************************
 
-void IOPlatformExpert::PMLog(const char * who,unsigned long event,unsigned long param1, unsigned long param2)
+void IOPlatformExpert::
+PMLog(const char *who, unsigned long event,
+      unsigned long param1, unsigned long param2)
 {
-    if( gIOKitDebug & kIOLogPower) {
-        kprintf("%s %02d %08x %08x\n",who,event,param1,param2);
-//        IOLog("%s %02d %08x %08x\n",who,event,param1,param2);
+    UInt32 debugFlags = gIOKitDebug;
+
+    if (debugFlags & kIOLogPower) {
+
+	uint32_t nows, nowus;
+	clock_get_system_microtime(&nows, &nowus);
+	nowus += (nows % 1000) * 1000000;
+
+        kprintf("pm%u %x %.30s %d %x %x\n",
+		nowus, (unsigned) current_thread(), who,	// Identity
+		(int) event, param1, param2);			// Args
+
+	if (debugFlags & kIOLogTracePower) {
+	    static const UInt32 sStartStopBitField[] = 
+		{ 0x00000000, 0x00000040 }; // Only Program Hardware so far
+
+	    // Arcane formula from Hacker's Delight by Warren
+	    // abs(x)  = ((int) x >> 31) ^ (x + ((int) x >> 31))
+	    UInt32 sgnevent = ((long) event >> 31);
+	    UInt32 absevent = sgnevent ^ (event + sgnevent);
+	    UInt32 code = IODBG_POWER(absevent);
+
+	    UInt32 bit = 1 << (absevent & 0x1f);
+	    if (absevent < sizeof(sStartStopBitField) * 8
+	    && (sStartStopBitField[absevent >> 5] & bit) ) {
+		// Or in the START or END bits, Start = 1 & END = 2
+		//      If sgnevent ==  0 then START -  0 => START
+		// else if sgnevent == -1 then START - -1 => END
+		code |= DBG_FUNC_START - sgnevent;
+	    }
+
+	    // Record the timestamp, wish I had a this pointer
+	    IOTimeStampConstant(code, (UInt32) who, event, param1, param2);
+	}
     }
 }
 
@@ -908,7 +941,7 @@ bool IODTPlatformExpert::createNubs( IOService * parent, OSIterator * iter )
     return( ok );
 }
 
-void IODTPlatformExpert::processTopLevel( IORegistryEntry * root )
+void IODTPlatformExpert::processTopLevel( IORegistryEntry * rootEntry )
 {
     OSIterator * 	kids;
     IORegistryEntry *	next;
@@ -916,7 +949,7 @@ void IODTPlatformExpert::processTopLevel( IORegistryEntry * root )
     IORegistryEntry *	options;
 
     // infanticide
-    kids = IODTFindMatchingEntries( root, 0, deleteList() );
+    kids = IODTFindMatchingEntries( rootEntry, 0, deleteList() );
     if( kids) {
 	while( (next = (IORegistryEntry *)kids->getNextObject())) {
 	    next->detachAll( gIODTPlane);
@@ -925,7 +958,7 @@ void IODTPlatformExpert::processTopLevel( IORegistryEntry * root )
     }
 
     // Publish an IODTNVRAM class on /options.
-    options = root->childFromPath("options", gIODTPlane);
+    options = rootEntry->childFromPath("options", gIODTPlane);
     if (options) {
       dtNVRAM = new IODTNVRAM;
       if (dtNVRAM) {
@@ -940,12 +973,12 @@ void IODTPlatformExpert::processTopLevel( IORegistryEntry * root )
     }
 
     // Publish the cpus.
-    cpus = root->childFromPath( "cpus", gIODTPlane);
+    cpus = rootEntry->childFromPath( "cpus", gIODTPlane);
     if ( cpus)
       createNubs( this, IODTFindMatchingEntries( cpus, kIODTExclusive, 0));
 
     // publish top level, minus excludeList
-    createNubs( this, IODTFindMatchingEntries( root, kIODTExclusive, excludeList()));
+    createNubs( this, IODTFindMatchingEntries( rootEntry, kIODTExclusive, excludeList()));
 }
 
 IOReturn IODTPlatformExpert::getNubResources( IOService * nub )
@@ -1097,14 +1130,14 @@ IOByteCount IODTPlatformExpert::savePanicInfo(UInt8 *buffer, IOByteCount length)
 OSString* IODTPlatformExpert::createSystemSerialNumberString(OSData* myProperty) {
     UInt8* serialNumber;
     unsigned int serialNumberSize;
-    short pos = 0;
+    unsigned short pos = 0;
     char* temp;
     char SerialNo[30];
     
     if (myProperty != NULL) {
         serialNumberSize = myProperty->getLength();
         serialNumber = (UInt8*)(myProperty->getBytesNoCopy());
-        temp = serialNumber;
+        temp = (char*)serialNumber;
         if (serialNumberSize > 0) {
             // check to see if this is a CTO serial number...
             while (pos < serialNumberSize && temp[pos] != '-') pos++;

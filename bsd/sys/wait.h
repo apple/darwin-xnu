@@ -58,37 +58,57 @@
 #ifndef _SYS_WAIT_H_
 #define	_SYS_WAIT_H_
 
+#include <sys/cdefs.h>
+#include <sys/_types.h>
+
 /*
  * This file holds definitions relevent to the wait4 system call
  * and the alternate interfaces that use it (wait, wait3, waitpid).
  */
 
 /*
- * Macros to test the exit status returned by wait
- * and extract the relevant values.
+ * [XSI] The type idtype_t shall be defined as an enumeration type whose
+ * possible values shall include at least P_ALL, P_PID, and P_PGID.
  */
-#ifdef _POSIX_SOURCE
-#define	_W_INT(i)	(i)
-#else
-#define	_W_INT(w)	(*(int *)&(w))	/* convert union wait to int */
-#define	WCOREFLAG	0200
+typedef enum {
+	P_ALL,
+	P_PID,
+	P_PGID
+} idtype_t;
 
-#endif /* _POSIX_SOURCE */
+/*
+ * [XSI] The id_t and pid_t types shall be defined as described
+ * in <sys/types.h>
+ */
+#ifndef _PID_T
+typedef __darwin_pid_t	pid_t;
+#define _PID_T
+#endif
 
-#define	_WSTATUS(x)	(_W_INT(x) & 0177)
-#define	_WSTOPPED	0177		/* _WSTATUS if process is stopped */
-#define WIFSTOPPED(x)	(_WSTATUS(x) == _WSTOPPED)
-#define WSTOPSIG(x)	(_W_INT(x) >> 8)
-#define WIFSIGNALED(x)	(_WSTATUS(x) != _WSTOPPED && _WSTATUS(x) != 0)
-#define WTERMSIG(x)	(_WSTATUS(x))
-#define WIFEXITED(x)	(_WSTATUS(x) == 0)
-#define WEXITSTATUS(x)	(_W_INT(x) >> 8)
-#if !defined(_POSIX_SOURCE)
-#define WCOREDUMP(x)	(_W_INT(x) & WCOREFLAG)
+#ifndef _ID_T
+typedef __darwin_id_t	id_t;
+#define _ID_T
+#endif
 
-#define	W_EXITCODE(ret, sig)	((ret) << 8 | (sig))
-#define	W_STOPCODE(sig)		((sig) << 8 | _WSTOPPED)
-#endif /* !defined(_POSIX_SOURCE) */
+/*
+ * [XSI] The siginfo_t type shall be defined as described in <signal.h>
+ * [XSI] The rusage structure shall be defined as described in <sys/resource.h>
+ * [XSI] Inclusion of the <sys/wait.h> header may also make visible all
+ * symbols from <signal.h> and <sys/resource.h>
+ *
+ * NOTE:	This requirement is currently being satisfied by the direct
+ *		inclusion of <sys/signal.h> and <sys/resource.h>, below.
+ *
+ *		Software should not depend on the exposure of anything other
+ *		than the types siginfo_t and struct rusage as a result of
+ *		this inclusion.  If you depend on any types or manifest
+ *		values othe than siginfo_t and struct rusage from either of
+ *		those files, you should explicitly include them yourself, as
+ *		well, or in future releases your stware may not compile
+ *		without modification.
+ */
+#include <sys/signal.h>		/* [XSI] for siginfo_t */
+#include <sys/resource.h>	/* [XSI] for struct rusage */
 
 /*
  * Option bits for the third argument of wait4.  WNOHANG causes the
@@ -99,10 +119,58 @@
  * this option is done, it is as though they were still running... nothing
  * about them is returned.
  */
-#define WNOHANG		1	/* don't hang in wait */
-#define WUNTRACED	2	/* tell about stopped, untraced children */
+#define WNOHANG		0x01	/* [XSI] don't hang in wait/no child to reap */
+#define WUNTRACED	0x02	/* [XSI] notify on stopped, untraced children */
 
-#if !defined(_POSIX_SOURCE)
+/*
+ * Macros to test the exit status returned by wait
+ * and extract the relevant values.
+ */
+#ifdef _POSIX_C_SOURCE
+#define	_W_INT(i)	(i)
+#else
+#define	_W_INT(w)	(*(int *)&(w))	/* convert union wait to int */
+#define	WCOREFLAG	0200
+#endif /* _POSIX_C_SOURCE */
+
+/* These macros are permited, as they are in the implementation namespace */
+#define	_WSTATUS(x)	(_W_INT(x) & 0177)
+#define	_WSTOPPED	0177		/* _WSTATUS if process is stopped */
+
+/*
+ * [XSI] The <sys/wait.h> header shall define the following macros for
+ * analysis of process status values
+ */
+#define WEXITSTATUS(x)	(_W_INT(x) >> 8)
+#define WIFCONTINUED(x) (x == 0x13)	/* 0x13 == SIGCONT */
+#define WIFEXITED(x)	(_WSTATUS(x) == 0)
+#define WIFSIGNALED(x)	(_WSTATUS(x) != _WSTOPPED && _WSTATUS(x) != 0)
+#define WIFSTOPPED(x)	(_WSTATUS(x) == _WSTOPPED)
+#define WSTOPSIG(x)	(_W_INT(x) >> 8)
+#define WTERMSIG(x)	(_WSTATUS(x))
+#if !defined(_POSIX_C_SOURCE)
+#define WCOREDUMP(x)	(_W_INT(x) & WCOREFLAG)
+
+#define	W_EXITCODE(ret, sig)	((ret) << 8 | (sig))
+#define	W_STOPCODE(sig)		((sig) << 8 | _WSTOPPED)
+#endif /* !defined(_POSIX_C_SOURCE) */
+
+/*
+ * [XSI] The following symbolic constants shall be defined as possible
+ * values for the fourth argument to waitid().
+ */
+/* WNOHANG already defined for wait4() */
+/* WUNTRACED defined for wait4() but not for waitid() */
+#define	WEXITED		0x04	/* [XSI] Processes which have exitted */
+#ifdef _POSIX_C_SOURCE
+/* waitid() parameter */
+#define	WSTOPPED	0x08	/* [XSI] Any child stopped by signal receipt */
+#endif
+#define	WCONTINUED	0x10	/* [XSI] Any child stopped then continued */
+#define	WNOWAIT		0x20	/* [XSI] Leave process returned waitable */
+
+
+#if !defined(_POSIX_C_SOURCE)
 /* POSIX extensions and 4.2/4.3 compatability: */
 
 /*
@@ -125,13 +193,13 @@ union wait {
 	 * Terminated process status.
 	 */
 	struct {
-#if BYTE_ORDER == LITTLE_ENDIAN 
+#if __DARWIN_BYTE_ORDER == __DARWIN_LITTLE_ENDIAN 
 		unsigned int	w_Termsig:7,	/* termination signal */
 				w_Coredump:1,	/* core dump indicator */
 				w_Retcode:8,	/* exit code if w_termsig==0 */
 				w_Filler:16;	/* upper bits filler */
 #endif
-#if BYTE_ORDER == BIG_ENDIAN 
+#if __DARWIN_BYTE_ORDER == __DARWIN_BIG_ENDIAN 
 		unsigned int	w_Filler:16,	/* upper bits filler */
 				w_Retcode:8,	/* exit code if w_termsig==0 */
 				w_Coredump:1,	/* core dump indicator */
@@ -144,12 +212,12 @@ union wait {
 	 * with the WUNTRACED option bit.
 	 */
 	struct {
-#if BYTE_ORDER == LITTLE_ENDIAN 
+#if __DARWIN_BYTE_ORDER == __DARWIN_LITTLE_ENDIAN 
 		unsigned int	w_Stopval:8,	/* == W_STOPPED if stopped */
 				w_Stopsig:8,	/* signal that stopped us */
 				w_Filler:16;	/* upper bits filler */
 #endif
-#if BYTE_ORDER == BIG_ENDIAN 
+#if __DARWIN_BYTE_ORDER == __DARWIN_BIG_ENDIAN 
 		unsigned int	w_Filler:16,	/* upper bits filler */
 				w_Stopsig:8,	/* signal that stopped us */
 				w_Stopval:8;	/* == W_STOPPED if stopped */
@@ -162,22 +230,24 @@ union wait {
 #define w_stopval	w_S.w_Stopval
 #define w_stopsig	w_S.w_Stopsig
 
+/*
+ * Stopped state value; cannot use waitid() parameter of the same name
+ * in the same scope
+ */
 #define	WSTOPPED	_WSTOPPED
-#endif /* !defined(_POSIX_SOURCE) */
+#endif /* !defined(_POSIX_C_SOURCE) */
 
 #ifndef KERNEL
-#include <sys/types.h>
-#include <sys/cdefs.h>
-
 __BEGIN_DECLS
-struct rusage;	/* forward declaration */
-
-pid_t	wait __P((int *));
-pid_t	waitpid __P((pid_t, int *, int));
-#if  !defined(_POSIX_SOURCE)
-pid_t	wait3 __P((int *, int, struct rusage *));
-pid_t	wait4 __P((pid_t, int *, int, struct rusage *));
-#endif /* !defined(_POSIX_SOURCE) */
+pid_t	wait(int *);
+pid_t	waitpid(pid_t, int *, int);
+#ifndef _ANSI_SOURCE
+int	waitid(idtype_t, id_t, siginfo_t *, int);
+#endif /* !_ANSI_SOURCE */
+#if  !defined(_POSIX_C_SOURCE)
+pid_t	wait3(int *, int, struct rusage *);
+pid_t	wait4(pid_t, int *, int, struct rusage *);
+#endif /* !defined(_POSIX_C_SOURCE) */
 __END_DECLS
 #endif
 #endif /* !_SYS_WAIT_H_ */

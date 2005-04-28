@@ -1,0 +1,190 @@
+.\" Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+.\" 
+.\" The contents of this file constitute Original Code as defined in and
+.\" are subject to the Apple Public Source License Version 1.1 (the
+.\" "License").  You may not use this file except in compliance with the
+.\" License.  Please obtain a copy of the License at
+.\" http://www.apple.com/publicsource and read it before using this file.
+.\" 
+.\" This Original Code and all software distributed under the License are
+.\" distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+.\" EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+.\" INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+.\" FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+.\" License for the specific language governing rights and limitations
+.\" under the License.
+.\" 
+.\"     @(#)exchangedata.2
+.
+.Dd December 15, 2003
+.Dt EXCHANGEDATA 2
+.Os Darwin
+.Sh NAME
+.Nm exchangedata
+.Nd atomically exchange data between two files
+.Sh SYNOPSIS
+.Fd #include <unistd.h>
+.Ft int
+.Fn exchangedata "const char * path1" "const char * path2" "unsigned long options"
+.
+.Sh DESCRIPTION
+The
+.Fn exchangedata
+function swaps the contents of the files referenced by 
+.Fa path1 
+and 
+.Fa path2 
+in an atomic fashion. 
+That is, all concurrent processes will either see the pre-exchanged state or the 
+post-exchanged state; they can never see the files in an inconsistent state.
+The data in all forks is swapped in this way. 
+The 
+.Fa options 
+parameter lets you control specific aspects of the function's behaviour.
+.Pp
+.
+Open file descriptors follow the swapped data.
+Thus, a descriptor that previously referenced 
+.Fa path1 
+will now reference the data that's accessible via 
+.Fa path2 ,
+and vice versa.
+.Pp
+.
+In general, the file attributes (metadata) are not exchanged.
+Specifically, the object identifier attributes (that is, the 
+.Dv ATTR_CMN_OBJID 
+and
+.Dv ATTR_CMN_OBJPERMANENTID 
+attributes as defined by the 
+.Xr getattrlist 2 
+function) are not swapped.
+An exception to this general rule is that the modification time attribute (
+.Dv ATTR_CMN_MODTIME
+) is swapped.
+.Pp
+.
+When combined, these features allow you to implement a 'safe save' function that 
+does not break references to the file (for example, aliases).
+You first save the new contents to a temporary file and then 
+exchange the data of the original file and the temporary.
+Programs that reference the file via an object identifier will continue to 
+reference the original file, but now it has the new data.
+.Pp
+.
+.\" path1 and path2 parameters
+.
+The
+.Fa path1 
+and 
+.Fa path2 
+parameters must both reference valid files.
+All directories listed in the path names leading to these files must be 
+searchable.
+You must have write access to the files.
+.Pp
+.
+.\" options parameter
+.
+The
+.Fa options
+parameter is a bit set that controls the behaviour of
+.Fn exchangedata .
+The following option bits are defined.
+.
+.Bl -tag -width FSOPT_NOFOLLOW
+.
+.It FSOPT_NOFOLLOW
+If this bit is set, 
+.Fn exchangedata 
+will not follow a symlink if it occurs as 
+the last component of
+.Fa path1 
+or 
+.Fa path2 .
+.
+.El
+.
+.Sh RETURN VALUES
+Upon successful completion a value of 0 is returned.
+Otherwise, a value of -1 is returned and
+.Va errno
+is set to indicate the error.
+.
+.Sh COMPATIBILITY
+Not all volumes support 
+.Fn exchangedata .
+You can test whether a volume supports 
+.Fn exchangedata 
+by using 
+.Xr getattrlist 2 
+to get the volume capabilities attribute 
+.Dv ATTR_VOL_CAPABILITIES ,
+and then testing the 
+.Dv VOL_CAP_INT_EXCHANGEDATA 
+flag.
+.Pp
+.
+.Sh ERRORS
+.Fn exchangedata
+will fail if:
+.Bl -tag -width Er
+.
+.It Bq Er ENOTSUP
+The volume does not support
+.Fn exchangedata .
+.
+.It Bq Er ENOTDIR
+A component of the path prefix is not a directory.
+.
+.It Bq Er ENAMETOOLONG
+A component of a path name exceeded 
+.Dv NAME_MAX
+characters, or an entire path name exceeded 
+.Dv PATH_MAX
+characters.
+.
+.It Bq Er ENOENT
+Either file does not exist.
+.
+.It Bq Er EACCES
+Search permission is denied for a component of the path prefix.
+.
+.It Bq Er ELOOP
+Too many symbolic links were encountered in translating the pathname.
+.
+.It Bq Er EFAULT
+.Fa path1
+or
+.Em path2
+points to an invalid address.
+.
+.It Bq Er EXDEV
+.Fa path1
+and
+.Em path2
+are on different volumes (mounted file systems).
+.
+.It Bq Er EINVAL
+.Fa path1
+or
+.Em path2
+reference the same file.
+.
+.It Bq Er EINVAL
+You try to exchange something other than a regular file (for example, a directory).
+.
+.It Bq Er EIO
+An I/O error occurred while reading from or writing to the file system.
+.El
+.Pp
+.
+.Sh SEE ALSO
+.
+.Xr getattrlist 2
+.
+.Sh HISTORY
+A
+.Fn exchangedata
+function call appeared in Darwin 1.3.1 (Mac OS X version 10.0).
+.

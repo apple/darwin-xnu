@@ -66,8 +66,7 @@ typedef	unsigned int	u_int;
 typedef	unsigned long	u_long;
 typedef	unsigned short	ushort;		/* Sys V compatibility */
 
-#include <machine/ansi.h>
-#if !defined(_ANSI_SOURCE) && !defined(_POSIX_SOURCE)
+#if !defined(_ANSI_SOURCE) && !defined(_POSIX_C_SOURCE)
 #include <machine/types.h>
 #endif
 
@@ -132,6 +131,7 @@ typedef	struct fd_set {
 #define	FD_SET(n, p)	((p)->fds_bits[(n)/NFDBITS] |= (1 << ((n) % NFDBITS)))
 #define	FD_CLR(n, p)	((p)->fds_bits[(n)/NFDBITS] &= ~(1 << ((n) % NFDBITS)))
 #define	FD_ISSET(n, p)	((p)->fds_bits[(n)/NFDBITS] & (1 << ((n) % NFDBITS)))
+#define	FD_COPY(f, t)	bcopy(f, t, sizeof(*(f)))
 #define	FD_ZERO(p)	bzero((char *)(p), sizeof(*(p)))
 
 #endif /* !_POSIX_SOURCE */

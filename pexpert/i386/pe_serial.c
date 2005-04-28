@@ -28,6 +28,10 @@
 #include <pexpert/protos.h>
 #include <pexpert/pexpert.h>
 
+void	serial_putc(char);
+int	serial_getc(void);
+int	serial_init(void);
+
 /* standard port addresses */
 enum {
     COM1_PORT_ADDR = 0x3f8,
@@ -118,7 +122,7 @@ uart_putc( char c )
 
 int serial_init( void )
 {
-    if ( uart_initted || uart_probe() == 0 ) return 0;
+    if ( /*uart_initted ||*/ uart_probe() == 0 ) return 0;
 
     /* Disable hardware interrupts */
 

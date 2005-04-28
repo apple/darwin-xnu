@@ -58,10 +58,8 @@
 #ifndef	_SYS_CLIST_H_
 #define _SYS_CLIST_H_
 
-#include <sys/appleapiopts.h>
 
-#ifdef __APPLE_API_PRIVATE
-#ifdef KERNEL
+#ifdef KERNEL_PRIVATE
 
 struct cblock {
 	struct cblock *c_next;		/* next cblock in queue */
@@ -71,8 +69,7 @@ struct cblock {
 
 extern	struct cblock *cfree, *cfreelist;
 extern	int cfreecount, nclist;
-#endif /* KERNEL */
-#endif /* __APPLE_API_PRIVATE */
+#endif /* KERNEL_PRIVATE */
 
 #endif	/* _SYS_CLIST_H_ */
 

@@ -10,10 +10,14 @@ include $(MakeInc_def)
 DATAFILES =
 
 EXPORT_ONLY_FILES = \
-	vm_map.h \
+	pmap.h \
+	task_working_set.h \
+	vm_fault.h \
 	vm_kern.h \
-	vm_shared_memory_server.h \
-	pmap.h
+	vm_map.h \
+	vm_pageout.h \
+	vm_protos.h \
+	vm_shared_memory_server.h
 
 INSTALL_MI_LIST = ${DATAFILES}
 

@@ -21,12 +21,15 @@ EXPINC_SUBDIRS_I386 = \
 
 DATAFILES = \
 	audit.h audit_record.h audit_kevents.h
+KERNFILES = \
+	audit.h
+
 
 INSTALL_MI_LIST	= ${DATAFILES}
 
 INSTALL_MI_DIR = bsm
 
-EXPORT_MI_LIST	= ${DATAFILES}
+EXPORT_MI_LIST	= ${KERNFILES}
 
 EXPORT_MI_DIR = bsm
 

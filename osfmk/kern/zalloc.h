@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -56,15 +56,14 @@
  *
  */
 
+#ifdef	KERNEL_PRIVATE
+
 #ifndef	_KERN_ZALLOC_H_
 #define _KERN_ZALLOC_H_
 
 #include <mach/machine/vm_types.h>
 #include <kern/kern_types.h>
-
-#include <sys/appleapiopts.h>
-
-#ifdef	__APPLE_API_PRIVATE
+#include <sys/cdefs.h>
 
 #ifdef	MACH_KERNEL_PRIVATE
 
@@ -85,11 +84,11 @@
 struct zone {
 	int		count;		/* Number of elements used now */
 	vm_offset_t	free_elements;
+	decl_mutex_data(,lock)		/* generic lock */
 	vm_size_t	cur_size;	/* current memory utilization */
 	vm_size_t	max_size;	/* how large can this zone grow */
 	vm_size_t	elem_size;	/* size of an element */
 	vm_size_t	alloc_size;	/* size used for more memory */
-	char		*zone_name;	/* a name for the zone */
 	unsigned int
 	/* boolean_t */ exhaustible :1,	/* (F) merely return if empty? */
 	/* boolean_t */	collectable :1,	/* (F) garbage collect empty pages */
@@ -101,10 +100,10 @@ struct zone {
 	/* boolean_t */	doing_gc :1;	/* garbage collect in progress? */
 	struct zone *	next_zone;	/* Link for all-zones list */
 	call_entry_data_t	call_async_alloc;	/* callout for asynchronous alloc */
+	const char	*zone_name;	/* a name for the zone */
 #if	ZONE_DEBUG
 	queue_head_t	active_zones;	/* active elements */
 #endif	/* ZONE_DEBUG */
-	decl_simple_lock_data(,lock)		/* generic lock */
 };
 
 extern void		zone_gc(void);
@@ -117,88 +116,28 @@ extern void		zone_steal_memory(void);
 extern void		zone_bootstrap(void);
 
 /* Init zone module */
-extern void		zone_init(vm_size_t);
+extern void		zone_init(
+					vm_size_t	map_size);
 
-#endif	/* MACH_KERNEL_PRIVATE */
+/* Stack use statistics */
+extern void		stack_fake_zone_info(
+					int			*count, 
+					vm_size_t	*cur_size, 
+					vm_size_t	*max_size,
+					vm_size_t	*elem_size,
+					vm_size_t	*alloc_size, 
+					int			*collectable, 
+					int			*exhaustable);
 
-#endif	/* __APPLE_API_PRIVATE */
+#if		ZONE_DEBUG
 
-/* Allocate from zone */
-extern vm_offset_t	zalloc(
-				zone_t		zone);
+#if		MACH_KDB
 
-/* Non-blocking version of zalloc */
-extern vm_offset_t      zalloc_noblock(
-				       zone_t          zone);
-
-/* Get from zone free list */
-extern vm_offset_t	zget(
-				zone_t		zone);
-
-/* Create zone */
-extern zone_t		zinit(
-				vm_size_t	size,		/* the size of an element */
-				vm_size_t	max,		/* maximum memory to use */
-				vm_size_t	alloc,		/* allocation size */
-				char		*name);		/* a name for the zone */
-
-/* Free zone element */
-extern void		zfree(
-				zone_t		zone,
-				vm_offset_t	elem);
-
-/* Fill zone with memory */
-extern void		zcram(
-				zone_t		zone,
-				vm_offset_t	newmem,
-				vm_size_t	size);
-
-/* Initially fill zone with specified number of elements */
-extern int		zfill(
-				zone_t		zone,
-				int		nelem);
-/* Change zone parameters */
-extern void		zone_change(
-				zone_t		zone,
-				unsigned int	item,
-				boolean_t	value);
-
-/* Preallocate space for zone from zone map */
-extern void		zprealloc(
-				zone_t		zone,
-				vm_size_t	size);
-
-/*
- * zone_free_count returns a hint as to the current number of free elements
- * in the zone.  By the time it returns, it may no longer be true (a new
- * element might have been added, or an element removed).
- * This routine may be used in conjunction with zcram and a lock to regulate
- * adding memory to a non-expandable zone.
- */
-extern integer_t              zone_free_count(zone_t zone);
-
-/*
- * Item definitions for zone_change:
- */
-#define Z_EXHAUST	1	/* Make zone exhaustible	*/
-#define Z_COLLECT	2	/* Make zone collectable	*/
-#define Z_EXPAND	3	/* Make zone expandable		*/
-#define	Z_FOREIGN	4	/* Allow collectable zone to contain foreign */
-				/* (not allocated via zalloc) elements. */
-
-#ifdef	__APPLE_API_PRIVATE
-
-#ifdef	MACH_KERNEL_PRIVATE
-
-#if	ZONE_DEBUG
-
-#if	MACH_KDB
-
-extern vm_offset_t	next_element(
+extern void *	next_element(
 				zone_t		z,
-				vm_offset_t	elt);
+				void 		*elt);
 
-extern vm_offset_t	first_element(
+extern void *	first_element(
 				zone_t		z);
 
 #endif	/* MACH_KDB */
@@ -213,6 +152,75 @@ extern void		zone_debug_disable(
 
 #endif	/* MACH_KERNEL_PRIVATE */
 
-#endif	/* __APPLE_API_PRIVATE */
+__BEGIN_DECLS
+
+#ifdef	XNU_KERNEL_PRIVATE
+
+/* Allocate from zone */
+extern void *	zalloc(
+					zone_t		zone);
+
+/* Free zone element */
+extern void		zfree(
+					zone_t		zone,
+					void 		*elem);
+
+/* Create zone */
+extern zone_t	zinit(
+					vm_size_t	size,		/* the size of an element */
+					vm_size_t	maxmem,		/* maximum memory to use */
+					vm_size_t	alloc,		/* allocation size */
+					const char	*name);		/* a name for the zone */
+
+
+/* Non-blocking version of zalloc */
+extern void *	zalloc_noblock(
+					zone_t		zone);
+
+/* direct (non-wrappered) interface */
+extern void *	zalloc_canblock(
+					zone_t		zone,
+					boolean_t	canblock);
+
+/* Get from zone free list */
+extern void *	zget(
+					zone_t		zone);
+
+/* Fill zone with memory */
+extern void		zcram(
+					zone_t		zone,
+					void		*newmem,
+					vm_size_t	size);
+
+/* Initially fill zone with specified number of elements */
+extern int		zfill(
+					zone_t		zone,
+					int			nelem);
+
+/* Change zone parameters */
+extern void		zone_change(
+					zone_t			zone,
+					unsigned int	item,
+					boolean_t		value);
+
+/* Item definitions */
+#define Z_EXHAUST	1	/* Make zone exhaustible	*/
+#define Z_COLLECT	2	/* Make zone collectable	*/
+#define Z_EXPAND	3	/* Make zone expandable		*/
+#define	Z_FOREIGN	4	/* Allow collectable zone to contain foreign elements */
+
+/* Preallocate space for zone from zone map */
+extern void		zprealloc(
+					zone_t		zone,
+					vm_size_t	size);
+
+extern integer_t	zone_free_count(
+						zone_t		zone);
+
+#endif	/* XNU_KERNEL_PRIVATE */
+
+__END_DECLS
 
 #endif	/* _KERN_ZALLOC_H_ */
+
+#endif	/* KERNEL_PRIVATE */

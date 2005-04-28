@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -99,16 +99,12 @@
 #include <vm/vm_external.h>
 #endif	/* MACH_PAGEMAP */
 
+#include <vm/vm_protos.h>
+
+
 memory_object_default_t	memory_manager_default = MEMORY_OBJECT_DEFAULT_NULL;
 vm_size_t		memory_manager_default_cluster = 0;
 decl_mutex_data(,	memory_manager_default_lock)
-
-/*
- *	Forward ref to file-local function:
- */
-boolean_t
-vm_object_update(vm_object_t, vm_object_offset_t, 
-		vm_size_t, memory_object_return_t, int, vm_prot_t);
 
 
 /*
@@ -299,7 +295,7 @@ memory_object_lock_page(
 		vm_page_unlock_queues();
 
 		if (!should_flush)
-			pmap_page_protect(m->phys_page, VM_PROT_NONE);
+			pmap_disconnect(m->phys_page);
 
 		if (m->dirty)
 			return(MEMORY_OBJECT_LOCK_RESULT_MUST_CLEAN);
@@ -314,8 +310,6 @@ memory_object_lock_page(
 	if (should_flush) {
 		VM_PAGE_FREE(m);
 	} else {
-		extern boolean_t vm_page_deactivate_hint;
-
 		/*
 		 *	XXX Make clean but not flush a paging hint,
 		 *	and deactivate the pages.  This is a hack
@@ -335,19 +329,26 @@ memory_object_lock_page(
 	return(MEMORY_OBJECT_LOCK_RESULT_DONE);
 }
 
-#define LIST_REQ_PAGEOUT_PAGES(object, data_cnt, action, po) \
+#define LIST_REQ_PAGEOUT_PAGES(object, data_cnt, action, po, ro, ioerr, iosync)    \
 MACRO_BEGIN								\
 									\
-	register int		i;                                      \
-	register vm_page_t	hp;					\
-									\
+        register int            upl_flags;                              \
+				                   			\
 	vm_object_unlock(object);					\
 									\
+                if (iosync)                                             \
+                        upl_flags = UPL_MSYNC | UPL_IOSYNC;             \
+                else                                                    \
+                        upl_flags = UPL_MSYNC;                          \
+				                   			\
 	   	(void) memory_object_data_return(object->pager,		\
 		po,							\
 		data_cnt,						\
+                ro,                                                     \
+                ioerr,                                                  \
 		(action == MEMORY_OBJECT_LOCK_RESULT_MUST_CLEAN),	\
-		!should_flush);                                 	\
+		!should_flush,                                          \
+		upl_flags);                                 	        \
 									\
 	vm_object_lock(object);						\
 MACRO_END
@@ -382,13 +383,16 @@ memory_object_lock_request(
 	memory_object_control_t		control,
 	memory_object_offset_t		offset,
 	memory_object_size_t		size,
+	memory_object_offset_t	*	resid_offset,
+	int			*	io_errno,
 	memory_object_return_t		should_return,
 	int				flags,
 	vm_prot_t			prot)
 {
 	vm_object_t	object;
-	vm_object_offset_t	original_offset = offset;
-	boolean_t		should_flush=flags & MEMORY_OBJECT_DATA_FLUSH;
+	__unused boolean_t should_flush;
+
+	should_flush = flags & MEMORY_OBJECT_DATA_FLUSH;
 
         XPR(XPR_MEMORY_OBJECT,
 	    "m_o_lock_request, control 0x%X off 0x%X size 0x%X flags %X prot %X\n",
@@ -416,7 +420,7 @@ memory_object_lock_request(
 	offset -= object->paging_offset;
 
 	(void)vm_object_update(object,
-		offset, size, should_return, flags, prot);
+		offset, size, resid_offset, io_errno, should_return, flags, prot);
 
 	vm_object_paging_end(object);
 	vm_object_unlock(object);
@@ -506,11 +510,13 @@ boolean_t
 vm_object_sync(
 	vm_object_t		object,
 	vm_object_offset_t	offset,
-	vm_size_t		size,
+	vm_object_size_t	size,
 	boolean_t		should_flush,
-	boolean_t		should_return)
+	boolean_t		should_return,
+	boolean_t		should_iosync)
 {
 	boolean_t	rv;
+	int             flags;
 
         XPR(XPR_VM_OBJECT,
             "vm_o_sync, object 0x%X, offset 0x%X size 0x%x flush %d rtn %d\n",
@@ -524,12 +530,19 @@ vm_object_sync(
 	vm_object_lock(object);
 	vm_object_paging_begin(object);
 
-	rv = vm_object_update(object, offset, size,
+	if (should_flush)
+	        flags = MEMORY_OBJECT_DATA_FLUSH;
+	else
+	        flags = 0;
+
+	if (should_iosync)
+	        flags |= MEMORY_OBJECT_IO_SYNC;
+
+	rv = vm_object_update(object, offset, (vm_object_size_t)size, NULL, NULL,
 		(should_return) ?
 			MEMORY_OBJECT_RETURN_ALL :
 			MEMORY_OBJECT_RETURN_NONE,
-		(should_flush) ?
-			MEMORY_OBJECT_DATA_FLUSH : 0,
+		flags,
 		VM_PROT_NO_CHANGE);
 
 
@@ -537,6 +550,150 @@ vm_object_sync(
 	vm_object_unlock(object);
 	return rv;
 }
+
+
+
+
+static int
+vm_object_update_extent(
+        vm_object_t		object,
+        vm_object_offset_t	offset,
+	vm_object_offset_t	offset_end,
+	vm_object_offset_t	*offset_resid,
+	int			*io_errno,
+        boolean_t		should_flush,
+	memory_object_return_t	should_return,
+        boolean_t		should_iosync, 
+        vm_prot_t		prot)
+{
+        vm_page_t	m;
+        int		retval = 0;
+	vm_size_t	data_cnt = 0;
+	vm_object_offset_t	paging_offset = 0;
+	vm_object_offset_t	last_offset = offset;
+        memory_object_lock_result_t	page_lock_result;
+	memory_object_lock_result_t	pageout_action;
+	
+	pageout_action = MEMORY_OBJECT_LOCK_RESULT_DONE;
+
+	for (;
+	     offset < offset_end && object->resident_page_count;
+	     offset += PAGE_SIZE_64) {
+
+	        /*
+		 * Limit the number of pages to be cleaned at once.
+		 */
+	        if (data_cnt >= PAGE_SIZE * MAX_UPL_TRANSFER) {
+		        LIST_REQ_PAGEOUT_PAGES(object, data_cnt, 
+					       pageout_action, paging_offset, offset_resid, io_errno, should_iosync);
+			data_cnt = 0;
+		}
+
+		while ((m = vm_page_lookup(object, offset)) != VM_PAGE_NULL) {
+		        page_lock_result = memory_object_lock_page(m, should_return, should_flush, prot);
+
+			XPR(XPR_MEMORY_OBJECT,
+			    "m_o_update: lock_page, obj 0x%X offset 0x%X result %d\n",
+			    (integer_t)object, offset, page_lock_result, 0, 0);
+
+			switch (page_lock_result)
+			{
+			  case MEMORY_OBJECT_LOCK_RESULT_DONE:
+			    /*
+			     *	End of a cluster of dirty pages.
+			     */
+			    if (data_cnt) {
+			            LIST_REQ_PAGEOUT_PAGES(object, 
+							   data_cnt, pageout_action, 
+							   paging_offset, offset_resid, io_errno, should_iosync);
+				    data_cnt = 0;
+				    continue;
+			    }
+			    break;
+
+			  case MEMORY_OBJECT_LOCK_RESULT_MUST_BLOCK:
+			    /*
+			     *	Since it is necessary to block,
+			     *	clean any dirty pages now.
+			     */
+			    if (data_cnt) {
+			            LIST_REQ_PAGEOUT_PAGES(object,
+							   data_cnt, pageout_action, 
+							   paging_offset, offset_resid, io_errno, should_iosync);
+				    data_cnt = 0;
+				    continue;
+			    }
+			    PAGE_SLEEP(object, m, THREAD_UNINT);
+			    continue;
+
+			  case MEMORY_OBJECT_LOCK_RESULT_MUST_CLEAN:
+			  case MEMORY_OBJECT_LOCK_RESULT_MUST_RETURN:
+			    /*
+			     * The clean and return cases are similar.
+			     *
+			     * if this would form a discontiguous block,
+			     * clean the old pages and start anew.
+			     *
+			     * Mark the page busy since we will unlock the
+			     * object if we issue the LIST_REQ_PAGEOUT
+			     */
+			    m->busy = TRUE;
+			    if (data_cnt && 
+				((last_offset != offset) || (pageout_action != page_lock_result))) {
+			            LIST_REQ_PAGEOUT_PAGES(object, 
+							   data_cnt, pageout_action, 
+							   paging_offset, offset_resid, io_errno, should_iosync);
+				    data_cnt = 0;
+			    }
+			    m->busy = FALSE;
+
+			    if (m->cleaning) {
+			            PAGE_SLEEP(object, m, THREAD_UNINT);
+				    continue;
+			    }
+			    if (data_cnt == 0) {
+			            pageout_action = page_lock_result;
+				    paging_offset = offset;
+			    }
+			    data_cnt += PAGE_SIZE;
+			    last_offset = offset + PAGE_SIZE_64;
+
+			    vm_page_lock_queues();
+			    /*
+			     * Clean
+			     */
+			    m->list_req_pending = TRUE;
+			    m->cleaning = TRUE;
+
+			    if (should_flush) {
+			            /*
+				     * and add additional state
+				     * for the flush
+				     */
+				    m->busy = TRUE;
+				    m->pageout = TRUE;
+				    vm_page_wire(m);
+			    }
+			    vm_page_unlock_queues();
+
+			    retval = 1;
+			    break;
+			}
+			break;
+		}
+	}
+	/*
+	 *	We have completed the scan for applicable pages.
+	 *	Clean any pages that have been saved.
+	 */
+	if (data_cnt) {
+	        LIST_REQ_PAGEOUT_PAGES(object,
+				       data_cnt, pageout_action, paging_offset, offset_resid, io_errno, should_iosync);
+	}
+	return (retval);
+}
+
+
 
 /*
  *	Routine:	vm_object_update
@@ -549,24 +706,28 @@ kern_return_t
 vm_object_update(
 	register vm_object_t		object,
 	register vm_object_offset_t	offset,
-	register vm_size_t		size,
+	register vm_object_size_t	size,
+	register vm_object_offset_t	*resid_offset,
+	int				*io_errno,
 	memory_object_return_t		should_return,
 	int				flags,
-	vm_prot_t			prot)
+	vm_prot_t			protection)
 {
-	register vm_page_t	m;
-	vm_page_t		holding_page;
-	vm_size_t		original_size = size;
-	vm_object_offset_t	paging_offset = 0;
 	vm_object_t		copy_object;
-	vm_size_t		data_cnt = 0;
-	vm_object_offset_t	last_offset = offset;
-	memory_object_lock_result_t	page_lock_result;
-	memory_object_lock_result_t	pageout_action;
 	boolean_t		data_returned = FALSE;
 	boolean_t		update_cow;
-	boolean_t		should_flush = flags & MEMORY_OBJECT_DATA_FLUSH;
-	boolean_t		pending_pageout = FALSE;
+	boolean_t		should_flush = (flags & MEMORY_OBJECT_DATA_FLUSH) ? TRUE : FALSE;
+	boolean_t		should_iosync = (flags & MEMORY_OBJECT_IO_SYNC) ? TRUE : FALSE;
+	int			num_of_extents;
+	int			n;
+#define MAX_EXTENTS	8
+#define EXTENT_SIZE	(1024 * 1024 * 256)
+#define RESIDENT_LIMIT	(1024 * 32)
+	struct extent {
+	        vm_object_offset_t e_base;
+	        vm_object_offset_t e_min;
+	        vm_object_offset_t e_max;
+	} extents[MAX_EXTENTS];
 
 	/*
 	 *	To avoid blocking while scanning for pages, save
@@ -593,9 +754,9 @@ vm_object_update(
 
 	if((((copy_object = object->copy) != NULL) && update_cow) ||
 					(flags & MEMORY_OBJECT_DATA_SYNC)) {
-		vm_size_t		i;
-		vm_size_t		copy_size;
-		vm_object_offset_t	copy_offset;
+		vm_map_size_t		i;
+		vm_map_size_t		copy_size;
+		vm_map_offset_t		copy_offset;
 		vm_prot_t		prot;
 		vm_page_t		page;
 		vm_page_t		top_page;
@@ -604,26 +765,28 @@ vm_object_update(
 		if(copy_object != NULL) {
 		   /* translate offset with respect to shadow's offset */
 		   copy_offset = (offset >= copy_object->shadow_offset)?
-			offset - copy_object->shadow_offset :
-			(vm_object_offset_t) 0;
+		   	(vm_map_offset_t)(offset - copy_object->shadow_offset) :
+			(vm_map_offset_t) 0;
 		   if(copy_offset > copy_object->size)
 			copy_offset = copy_object->size;
 
 		   /* clip size with respect to shadow offset */
-		   copy_size = (offset >= copy_object->shadow_offset) ?
-			size : size - (copy_object->shadow_offset - offset);
-
-		   if(copy_size <= 0) {
-			copy_size = 0;
+		   if (offset >= copy_object->shadow_offset) {
+			   copy_size = size;
+		   } else if (size >= copy_object->shadow_offset - offset) {
+			   copy_size = size -
+				   (copy_object->shadow_offset - offset);
 		   } else {
-			copy_size = ((copy_offset + copy_size) 
-				<= copy_object->size) ?
-				copy_size : copy_object->size - copy_offset;
+			   copy_size = 0;
 		   }
-		   /* check for a copy_offset which is beyond the end of */
-		   /* the copy_object */
-		   if(copy_size < 0)
-			copy_size = 0;
+
+		   if (copy_offset + copy_size > copy_object->size) {
+			   if (copy_object->size >= copy_offset) {
+				   copy_size = copy_object->size - copy_offset;
+			   } else {
+				   copy_size = 0;
+			   }
+		   }
 
 		   copy_size+=copy_offset;
 
@@ -721,143 +884,132 @@ vm_object_update(
 	}
 BYPASS_COW_COPYIN:
 
-	for (;
-	     size != 0;
-	     size -= PAGE_SIZE, offset += PAGE_SIZE_64)
-	{
-	    /*
-	     *	Limit the number of pages to be cleaned at once.
-	     */
-	    if (pending_pageout &&
-		    data_cnt >= PAGE_SIZE * DATA_WRITE_MAX)
-	    {
- 		LIST_REQ_PAGEOUT_PAGES(object, data_cnt, 
-				pageout_action, paging_offset);
-		data_cnt = 0;
-		pending_pageout = FALSE;
-	    }
-
-	    while ((m = vm_page_lookup(object, offset)) != VM_PAGE_NULL) {
-		page_lock_result = memory_object_lock_page(m, should_return,
-					should_flush, prot);
-
-		XPR(XPR_MEMORY_OBJECT,
-                    "m_o_update: lock_page, obj 0x%X offset 0x%X result %d\n",
-                    (integer_t)object, offset, page_lock_result, 0, 0);
-
-		switch (page_lock_result)
-		{
-		    case MEMORY_OBJECT_LOCK_RESULT_DONE:
-			/*
-			 *	End of a cluster of dirty pages.
-			 */
-			if(pending_pageout) {
- 	    		    	LIST_REQ_PAGEOUT_PAGES(object, 
-					data_cnt, pageout_action, 
-					paging_offset);
-				data_cnt = 0;
-				pending_pageout = FALSE;
-				continue;
-			}
-			break;
-
-		    case MEMORY_OBJECT_LOCK_RESULT_MUST_BLOCK:
-			/*
-			 *	Since it is necessary to block,
-			 *	clean any dirty pages now.
-			 */
-			if(pending_pageout) {
- 	    		    	LIST_REQ_PAGEOUT_PAGES(object,
-					data_cnt, pageout_action, 
-					paging_offset);
-				pending_pageout = FALSE;
-				data_cnt = 0;
-				continue;
-			}
-
-			PAGE_SLEEP(object, m, THREAD_UNINT);
-			continue;
-
-		    case MEMORY_OBJECT_LOCK_RESULT_MUST_CLEAN:
-		    case MEMORY_OBJECT_LOCK_RESULT_MUST_RETURN:
-			/*
-			 * The clean and return cases are similar.
-			 *
-			 */
-
-			/*
-			 * if this would form a discontiguous block,
-			 * clean the old pages and start anew.
-			 *
-			 */
-
-			/*
-			 * Mark the page busy since we unlock the
-			 * object below.
-			 */
-			m->busy = TRUE;
-			if (pending_pageout &&
-			    (last_offset != offset ||
-			     pageout_action != page_lock_result)) {
- 	    			LIST_REQ_PAGEOUT_PAGES(object, 
-						data_cnt, pageout_action, 
-						paging_offset);
-				pending_pageout = FALSE;
-				data_cnt = 0;
-			}
-			m->busy = FALSE;
-			holding_page = VM_PAGE_NULL;
-			if(m->cleaning) {
-				PAGE_SLEEP(object, m, THREAD_UNINT);
-				continue;
-			}
-			if(!pending_pageout) {
-				pending_pageout = TRUE;
-				pageout_action = page_lock_result;
-				paging_offset = offset;
-			}
-			if (should_flush) {
-				vm_page_lock_queues();
-				m->list_req_pending = TRUE;
-				m->cleaning = TRUE;
-				m->busy = TRUE;
-				m->pageout = TRUE;
-				vm_page_wire(m);
-				vm_page_unlock_queues();
-			} else {
-				/*
-				 * Clean but do not flush
-				 */
-				vm_page_lock_queues();
-				m->list_req_pending = TRUE;
-				m->cleaning = TRUE;
-				vm_page_unlock_queues();
-
-			}
-			vm_object_unlock(object);
-
-
-			data_cnt += PAGE_SIZE;
-			last_offset = offset + PAGE_SIZE_64;
-			data_returned = TRUE;
-
-			vm_object_lock(object);
-			break;
-		}
-		break;
-	    }
-	}
-
 	/*
-	 *	We have completed the scan for applicable pages.
-	 *	Clean any pages that have been saved.
+	 * when we have a really large range to check relative
+	 * to the number of actual resident pages, we'd like
+	 * to use the resident page list to drive our checks
+	 * however, the object lock will get dropped while processing
+	 * the page which means the resident queue can change which
+	 * means we can't walk the queue as we process the pages
+	 * we also want to do the processing in offset order to allow
+	 * 'runs' of pages to be collected if we're being told to 
+	 * flush to disk... the resident page queue is NOT ordered.
+	 * 
+	 * a temporary solution (until we figure out how to deal with
+	 * large address spaces more generically) is to pre-flight
+	 * the resident page queue (if it's small enough) and develop
+	 * a collection of extents (that encompass actual resident pages)
+	 * to visit.  This will at least allow us to deal with some of the
+	 * more pathological cases in a more efficient manner.  The current
+	 * worst case (a single resident page at the end of an extremely large
+	 * range) can take minutes to complete for ranges in the terrabyte
+	 * category... since this routine is called when truncating a file,
+	 * and we currently support files up to 16 Tbytes in size, this
+	 * is not a theoretical problem
 	 */
-	if (pending_pageout) {
- 	    LIST_REQ_PAGEOUT_PAGES(object,
-				data_cnt, pageout_action, paging_offset);
+
+	if ((object->resident_page_count < RESIDENT_LIMIT) && 
+	    (atop_64(size) > (unsigned)(object->resident_page_count/(8 * MAX_EXTENTS)))) {
+		vm_page_t		next;
+		vm_object_offset_t	start;
+		vm_object_offset_t	end;
+		vm_object_size_t	e_mask;
+		vm_page_t               m;
+
+		start = offset;
+		end   = offset + size;
+		num_of_extents = 0;
+		e_mask = ~((vm_object_size_t)(EXTENT_SIZE - 1));
+
+		m = (vm_page_t) queue_first(&object->memq);
+
+		while (!queue_end(&object->memq, (queue_entry_t) m)) {
+			next = (vm_page_t) queue_next(&m->listq);
+
+			if ((m->offset >= start) && (m->offset < end)) {
+			        /*
+				 * this is a page we're interested in
+				 * try to fit it into a current extent
+				 */
+			        for (n = 0; n < num_of_extents; n++) {
+				        if ((m->offset & e_mask) == extents[n].e_base) {
+					        /*
+						 * use (PAGE_SIZE - 1) to determine the
+						 * max offset so that we don't wrap if
+						 * we're at the last page of the space
+						 */
+					        if (m->offset < extents[n].e_min)
+						        extents[n].e_min = m->offset;
+						else if ((m->offset + (PAGE_SIZE - 1)) > extents[n].e_max)
+						        extents[n].e_max = m->offset + (PAGE_SIZE - 1);
+					        break;
+					}
+				}
+				if (n == num_of_extents) {
+				        /*
+					 * didn't find a current extent that can encompass
+					 * this page
+					 */
+				        if (n < MAX_EXTENTS) {
+					        /*
+						 * if we still have room, 
+						 * create a new extent
+						 */
+					        extents[n].e_base = m->offset & e_mask;
+						extents[n].e_min  = m->offset;
+						extents[n].e_max  = m->offset + (PAGE_SIZE - 1);
+
+						num_of_extents++;
+					} else {
+						/*
+						 * no room to create a new extent...
+						 * fall back to a single extent based
+						 * on the min and max page offsets 
+						 * we find in the range we're interested in...
+						 * first, look through the extent list and
+						 * develop the overall min and max for the
+						 * pages we've looked at up to this point
+						 */						
+					        for (n = 1; n < num_of_extents; n++) {
+						        if (extents[n].e_min < extents[0].e_min)
+						                extents[0].e_min = extents[n].e_min;
+							if (extents[n].e_max > extents[0].e_max)
+						                extents[0].e_max = extents[n].e_max;
+						}
+						/*
+						 * now setup to run through the remaining pages
+						 * to determine the overall min and max
+						 * offset for the specified range
+						 */
+						extents[0].e_base = 0;
+						e_mask = 0;
+						num_of_extents = 1;
+
+						/*
+						 * by continuing, we'll reprocess the
+						 * page that forced us to abandon trying
+						 * to develop multiple extents
+						 */
+						continue;
+					}
+				}
+			}
+			m = next;
+		}
+	} else {
+	        extents[0].e_min = offset;
+		extents[0].e_max = offset + (size - 1);
+
+		num_of_extents = 1;
+	}
+	for (n = 0; n < num_of_extents; n++) {
+	        if (vm_object_update_extent(object, extents[n].e_min, extents[n].e_max, resid_offset, io_errno,
+					    should_flush, should_return, should_iosync, protection))
+		        data_returned = TRUE;
 	}
 	return (data_returned);
 }
+
 
 /*
  *	Routine:	memory_object_synchronize_completed [user interface]
@@ -879,6 +1031,8 @@ memory_object_synchronize_completed(
 	vm_object_t			object;
 	msync_req_t			msr;
 
+	object = memory_object_control_to_vm_object(control);
+
         XPR(XPR_MEMORY_OBJECT,
 	    "m_o_sync_completed, object 0x%X, offset 0x%X length 0x%X\n",
 	    (integer_t)object, offset, length, 0, 0);
@@ -887,7 +1041,6 @@ memory_object_synchronize_completed(
 	 *      Look for bogus arguments
 	 */
 
-	object = memory_object_control_to_vm_object(control);
 	if (object == VM_OBJECT_NULL)
 		return (KERN_INVALID_ARGUMENT);
 
@@ -923,7 +1076,7 @@ vm_object_set_attributes_common(
 	boolean_t	may_cache,
 	memory_object_copy_strategy_t copy_strategy,
 	boolean_t	temporary,
-	vm_size_t	cluster_size,
+	memory_object_cluster_size_t	cluster_size,
         boolean_t	silent_overwrite,
 	boolean_t	advisory_pageout)
 {
@@ -1023,7 +1176,7 @@ memory_object_change_attributes(
 	boolean_t       		temporary;
 	boolean_t       		may_cache;
 	boolean_t       		invalidate;
-	vm_size_t			cluster_size;
+	memory_object_cluster_size_t	cluster_size;
 	memory_object_copy_strategy_t	copy_strategy;
 	boolean_t       		silent_overwrite;
 	boolean_t			advisory_pageout;
@@ -1295,7 +1448,7 @@ kern_return_t
 memory_object_iopl_request(
 	ipc_port_t		port,
 	memory_object_offset_t	offset,
-	vm_size_t		*upl_size,
+	upl_size_t		*upl_size,
 	upl_t			*upl_ptr,
 	upl_page_info_array_t	user_page_list,
 	unsigned int		*page_list_count,
@@ -1306,6 +1459,14 @@ memory_object_iopl_request(
 	int			caller_flags;
 
 	caller_flags = *flags;
+
+	if (caller_flags & ~UPL_VALID_FLAGS) {
+		/*
+		 * For forward compatibility's sake,
+		 * reject any unknown flag.
+		 */
+		return KERN_INVALID_VALUE;
+	}
 
 	if (ip_kotype(port) == IKOT_NAMED_ENTRY) {
 		vm_named_entry_t	named_entry;
@@ -1341,17 +1502,7 @@ memory_object_iopl_request(
 		
 		named_entry_lock(named_entry);
 
-		if(named_entry->object) {
-			/* This is the case where we are going to map */
-			/* an already mapped object.  If the object is */
-			/* not ready it is internal.  An external     */
-			/* object cannot be mapped until it is ready  */
-			/* we can therefore avoid the ready check     */
-			/* in this case.  */
-			vm_object_reference(named_entry->object);
-			object = named_entry->object;
-			named_entry_unlock(named_entry);
-		} else {
+		if (named_entry->is_pager) {
 			object = vm_object_enter(named_entry->backing.pager, 
 					named_entry->offset + named_entry->size, 
 					named_entry->internal, 
@@ -1361,11 +1512,14 @@ memory_object_iopl_request(
 				named_entry_unlock(named_entry);
 				return(KERN_INVALID_OBJECT);
 			}
-			vm_object_lock(object);
+
+			/* JMM - drop reference on pager here? */
 
 			/* create an extra reference for the named entry */
+			vm_object_lock(object);
 			vm_object_reference_locked(object);
-			named_entry->object = object;
+			named_entry->backing.object = object;
+			named_entry->is_pager = FALSE;
 			named_entry_unlock(named_entry);
 
 			/* wait for object to be ready */
@@ -1376,6 +1530,16 @@ memory_object_iopl_request(
 				vm_object_lock(object);
 			}
 			vm_object_unlock(object);
+		} else {
+			/* This is the case where we are going to map */
+			/* an already mapped object.  If the object is */
+			/* not ready it is internal.  An external     */
+			/* object cannot be mapped until it is ready  */
+			/* we can therefore avoid the ready check     */
+			/* in this case.  */
+			object = named_entry->backing.object;
+			vm_object_reference(object);
+			named_entry_unlock(named_entry);
 		}
 	} else  {
 		memory_object_control_t	control;
@@ -1426,7 +1590,7 @@ kern_return_t
 memory_object_upl_request(
 	memory_object_control_t	control,
 	memory_object_offset_t	offset,
-	vm_size_t		size,
+	upl_size_t		size,
 	upl_t			*upl_ptr,
 	upl_page_info_array_t	user_page_list,
 	unsigned int		*page_list_count,
@@ -1462,8 +1626,8 @@ kern_return_t
 memory_object_super_upl_request(
 	memory_object_control_t control,
 	memory_object_offset_t	offset,
-	vm_size_t		size,
-	vm_size_t		super_cluster,
+	upl_size_t		size,
+	upl_size_t		super_cluster,
 	upl_t			*upl,
 	upl_page_info_t		*user_page_list,
 	unsigned int		*page_list_count,
@@ -1503,7 +1667,7 @@ kern_return_t
 host_default_memory_manager(
 	host_priv_t		host_priv,
 	memory_object_default_t	*default_manager,
-	vm_size_t		cluster_size)
+	memory_object_cluster_size_t cluster_size)
 {
 	memory_object_default_t current_manager;
 	memory_object_default_t new_manager;
@@ -1571,7 +1735,7 @@ host_default_memory_manager(
 
 __private_extern__ memory_object_default_t
 memory_manager_default_reference(
-	vm_size_t	*cluster_size)
+	memory_object_cluster_size_t *cluster_size)
 {
 	memory_object_default_t current_manager;
 
@@ -1630,95 +1794,10 @@ __private_extern__ void
 memory_manager_default_init(void)
 {
 	memory_manager_default = MEMORY_OBJECT_DEFAULT_NULL;
-	mutex_init(&memory_manager_default_lock, ETAP_VM_MEMMAN);
+	mutex_init(&memory_manager_default_lock, 0);
 }
 
 
-void
-memory_object_deactivate_pages(
-	vm_object_t		object,
-	vm_object_offset_t	offset,
-	vm_object_size_t	size,
-	boolean_t               kill_page)
-{
-	vm_object_t		orig_object;
-	int pages_moved = 0;
-	int pages_found = 0;
-
-	/*
-	 * entered with object lock held, acquire a paging reference to
-	 * prevent the memory_object and control ports from
-	 * being destroyed.
-	 */
-	orig_object = object;
-
-	for (;;) {
-	        register vm_page_t	m;
-	        vm_object_offset_t	toffset;
-		vm_object_size_t	tsize;
-
-	        vm_object_paging_begin(object);
-		vm_page_lock_queues();
-
-		for (tsize = size, toffset = offset; tsize; tsize -= PAGE_SIZE, toffset += PAGE_SIZE) {
-
-		        if ((m = vm_page_lookup(object, toffset)) != VM_PAGE_NULL) {
-
-			        pages_found++;
-
-				if ((m->wire_count == 0) && (!m->private) && (!m->gobbled) && (!m->busy)) {
-
-					m->reference = FALSE;
-					pmap_clear_reference(m->phys_page);
-
-					if ((kill_page) && (object->internal)) {
-				        	m->precious = FALSE;
-					        m->dirty = FALSE;
-						pmap_clear_modify(m->phys_page);
-						vm_external_state_clr(object->existence_map, offset);
-					}
-					VM_PAGE_QUEUES_REMOVE(m);
-
-					if(m->zero_fill) {
-						queue_enter_first(
-							&vm_page_queue_zf, 
-							m, vm_page_t, pageq);
-					} else {
-						queue_enter_first(
-							&vm_page_queue_inactive, 
-							m, vm_page_t, pageq);
-					}
-
-					m->inactive = TRUE;
-					if (!m->fictitious)  
-					        vm_page_inactive_count++;
-
-					pages_moved++;
-				}
-			}
-		}
-		vm_page_unlock_queues();
-		vm_object_paging_end(object);
-
-		if (object->shadow) {
-		        vm_object_t	tmp_object;
-
-			kill_page = 0;
-
-		        offset += object->shadow_offset;
-
-		        tmp_object = object->shadow;
-		        vm_object_lock(tmp_object);
-
-			if (object != orig_object)
-			        vm_object_unlock(object);
-			object = tmp_object;
-		} else
-		        break;
-	}
-	if (object != orig_object)
-	        vm_object_unlock(object);
-}
 
 /* Allow manipulation of individual page state.  This is actually part of */
 /* the UPL regimen but takes place on the object rather than on a UPL */
@@ -1779,7 +1858,7 @@ memory_object_page_op(
 		        vm_page_lock_queues();
 
 			if (dst_page->no_isync == FALSE)
-			        pmap_page_protect(dst_page->phys_page, VM_PROT_NONE);
+			        pmap_disconnect(dst_page->phys_page);
 			vm_page_free(dst_page);
 
 			vm_page_unlock_queues();
@@ -1798,9 +1877,7 @@ memory_object_page_op(
 			if(dst_page->absent) *flags |= UPL_POP_ABSENT;
 			if(dst_page->busy) *flags |= UPL_POP_BUSY;
 		}
-		if (phys_entry)
-			*phys_entry = dst_page->phys_page;
-	
+
 		/* The caller should have made a call either contingent with */
 		/* or prior to this call to set UPL_POP_BUSY */
 		if(ops & UPL_POP_SET) {
@@ -1830,6 +1907,50 @@ memory_object_page_op(
 				PAGE_WAKEUP(dst_page);
 			}
 		}
+
+		if (dst_page->encrypted) {
+			/*
+			 * ENCRYPTED SWAP:
+			 * We need to decrypt this encrypted page before the
+			 * caller can access its contents.
+			 * But if the caller really wants to access the page's
+			 * contents, they have to keep the page "busy".
+			 * Otherwise, the page could get recycled or re-encrypted
+			 * at any time.
+			 */
+			if ((ops & UPL_POP_SET) && (ops & UPL_POP_BUSY) &&
+			    dst_page->busy) {
+				/*
+				 * The page is stable enough to be accessed by
+				 * the caller, so make sure its contents are
+				 * not encrypted.
+				 */
+				vm_page_decrypt(dst_page, 0);
+			} else {
+				/*
+				 * The page is not busy, so don't bother
+				 * decrypting it, since anything could
+				 * happen to it between now and when the
+				 * caller wants to access it.
+				 * We should not give the caller access
+				 * to this page.
+				 */
+				assert(!phys_entry);
+			}
+		}
+
+		if (phys_entry) {
+			/*
+			 * The physical page number will remain valid
+			 * only if the page is kept busy.
+			 * ENCRYPTED SWAP: make sure we don't let the
+			 * caller access an encrypted page.
+			 */
+			assert(dst_page->busy);
+			assert(!dst_page->encrypted);
+			*phys_entry = dst_page->phys_page;
+		}
+
 		break;
 	}
 
@@ -1875,15 +1996,18 @@ memory_object_range_op(
 	}
 	vm_object_lock(object);
 
-	if (object->phys_contiguous)
+	if (object->phys_contiguous) {
+		vm_object_unlock(object);
 	        return KERN_INVALID_OBJECT;
+	}
 	
 	offset = offset_beg;
 
 	while (offset < offset_end) {
-	        if (dst_page = vm_page_lookup(object, offset)) {
-		        if (ops & UPL_ROP_DUMP) {
-			        if (dst_page->busy || dst_page->cleaning) {
+		dst_page = vm_page_lookup(object, offset);
+		if (dst_page != VM_PAGE_NULL) {
+			if (ops & UPL_ROP_DUMP) {
+				if (dst_page->busy || dst_page->cleaning) {
 				        /*
 					 * someone else is playing with the 
 					 * page, we will have to wait
@@ -1901,7 +2025,7 @@ memory_object_range_op(
 				vm_page_lock_queues();
 
 				if (dst_page->no_isync == FALSE)
-				        pmap_page_protect(dst_page->phys_page, VM_PROT_NONE);
+				        pmap_disconnect(dst_page->phys_page);
 				vm_page_free(dst_page);
 
 				vm_page_unlock_queues();
@@ -1919,6 +2043,27 @@ memory_object_range_op(
 
 	return KERN_SUCCESS;
 }
+
+
+kern_return_t
+memory_object_pages_resident(
+	memory_object_control_t	control,
+	boolean_t			*	has_pages_resident)
+{
+	vm_object_t		object;
+
+	*has_pages_resident = FALSE;
+
+	object = memory_object_control_to_vm_object(control);
+	if (object == VM_OBJECT_NULL)
+		return (KERN_INVALID_ARGUMENT);
+
+	if (object->resident_page_count)
+		*has_pages_resident = TRUE;
+	
+	return (KERN_SUCCESS);
+}
+
 
 static zone_t mem_obj_control_zone;
 
@@ -1966,7 +2111,7 @@ memory_object_control_to_vm_object(
 
 memory_object_control_t
 convert_port_to_mo_control(
-	mach_port_t	port)
+	__unused mach_port_t	port)
 {
 	return MEMORY_OBJECT_CONTROL_NULL;
 }
@@ -1974,14 +2119,14 @@ convert_port_to_mo_control(
 
 mach_port_t
 convert_mo_control_to_port(
-	memory_object_control_t	control)
+	__unused memory_object_control_t	control)
 {
 	return MACH_PORT_NULL;
 }
 
 void
 memory_object_control_reference(
-	memory_object_control_t	control)
+	__unused memory_object_control_t	control)
 {
 	return;
 }
@@ -1995,7 +2140,7 @@ void
 memory_object_control_deallocate(
 	memory_object_control_t	control)
 {
-	zfree(mem_obj_control_zone, (vm_offset_t)control);
+	zfree(mem_obj_control_zone, control);
 }
 
 void
@@ -2022,7 +2167,7 @@ memory_object_default_deallocate(
 
 memory_object_t
 convert_port_to_memory_object(
-	mach_port_t	port)
+	__unused mach_port_t	port)
 {
 	return (MEMORY_OBJECT_NULL);
 }
@@ -2030,54 +2175,40 @@ convert_port_to_memory_object(
 
 mach_port_t
 convert_memory_object_to_port(
-	memory_object_t	object)
+	__unused memory_object_t	object)
 {
 	return (MACH_PORT_NULL);
 }
-
-#ifdef MACH_BSD
-/* remove after component interface available */
-extern int	vnode_pager_workaround;
-extern int	device_pager_workaround;
-#endif
 
 
 /* Routine memory_object_reference */
 void memory_object_reference(
 	memory_object_t memory_object)
 {
-extern void   dp_memory_object_reference(memory_object_t);
 
 #ifdef	MACH_BSD
- extern void   vnode_pager_reference(memory_object_t);
- extern void   device_pager_reference(memory_object_t);
-
-		if(memory_object->pager == &vnode_pager_workaround) {
-			vnode_pager_reference(memory_object);
-		} else if(memory_object->pager == &device_pager_workaround) {
-			device_pager_reference(memory_object);
-		} else
+	if (memory_object->pager == &vnode_pager_workaround) {
+		vnode_pager_reference(memory_object);
+	} else if (memory_object->pager == &device_pager_workaround) {
+		device_pager_reference(memory_object);
+	} else
 #endif
-			dp_memory_object_reference(memory_object);
+		dp_memory_object_reference(memory_object);
 }
 
 /* Routine memory_object_deallocate */
 void memory_object_deallocate(
 	memory_object_t memory_object)
 {
-extern void   dp_memory_object_deallocate(memory_object_t);
 
 #ifdef	MACH_BSD
- extern void   vnode_pager_deallocate(memory_object_t);
- extern void   device_pager_deallocate(memory_object_t);
-
-		if(memory_object->pager == &vnode_pager_workaround) {
-			vnode_pager_deallocate(memory_object);
-		} else if(memory_object->pager == &device_pager_workaround) {
-			device_pager_deallocate(memory_object);
-		} else
+	if (memory_object->pager == &vnode_pager_workaround) {
+		vnode_pager_deallocate(memory_object);
+	} else if (memory_object->pager == &device_pager_workaround) {
+		device_pager_deallocate(memory_object);
+	} else
 #endif
-			dp_memory_object_deallocate(memory_object);
+		dp_memory_object_deallocate(memory_object);
 }
 
 
@@ -2086,33 +2217,23 @@ kern_return_t memory_object_init
 (
 	memory_object_t memory_object,
 	memory_object_control_t memory_control,
-	vm_size_t memory_object_page_size
+	memory_object_cluster_size_t memory_object_page_size
 )
 {
-extern kern_return_t   dp_memory_object_init(memory_object_t,
-					     memory_object_control_t,
-					     vm_size_t);
 #ifdef	MACH_BSD
-extern kern_return_t   vnode_pager_init(memory_object_t,
-					memory_object_control_t,
-					vm_size_t);
-extern kern_return_t   device_pager_init(memory_object_t,
-					memory_object_control_t,
-					vm_size_t);
-
-		if(memory_object->pager == &vnode_pager_workaround) {
-			return vnode_pager_init(memory_object,
-				memory_control,
-				memory_object_page_size);
-		} else if(memory_object->pager == &device_pager_workaround) {
-			return device_pager_init(memory_object,
-				memory_control,
-				memory_object_page_size);
-		} else
+	if (memory_object->pager == &vnode_pager_workaround) {
+		return vnode_pager_init(memory_object,
+					memory_control,
+					memory_object_page_size);
+	} else if (memory_object->pager == &device_pager_workaround) {
+		return device_pager_init(memory_object,
+					 memory_control,
+					 memory_object_page_size);
+	} else
 #endif
-			return dp_memory_object_init(memory_object,
-				memory_control,
-				memory_object_page_size);
+		return dp_memory_object_init(memory_object,
+					     memory_control,
+					     memory_object_page_size);
 }
 
 /* Routine memory_object_terminate */
@@ -2121,15 +2242,10 @@ kern_return_t memory_object_terminate
 	memory_object_t memory_object
 )
 {
-extern	kern_return_t dp_memory_object_terminate(memory_object_t);
-
 #ifdef	MACH_BSD
-extern	kern_return_t vnode_pager_terminate(memory_object_t);
-extern	kern_return_t device_pager_terminate(memory_object_t);
-
-	if(memory_object->pager == &vnode_pager_workaround) {
+	if (memory_object->pager == &vnode_pager_workaround) {
 		return vnode_pager_terminate(memory_object);
-	} else if(memory_object->pager == &device_pager_workaround) {
+	} else if (memory_object->pager == &device_pager_workaround) {
 		return device_pager_terminate(memory_object);
 	} else
 #endif
@@ -2141,35 +2257,27 @@ kern_return_t memory_object_data_request
 (
 	memory_object_t memory_object,
 	memory_object_offset_t offset,
-	vm_size_t length,
+	memory_object_cluster_size_t length,
 	vm_prot_t desired_access
 )
 {
-extern	kern_return_t   dp_memory_object_data_request(memory_object_t, 
-			memory_object_offset_t, vm_size_t, vm_prot_t);
-
 #ifdef	MACH_BSD
-extern	kern_return_t   vnode_pager_data_request(memory_object_t, 
-			memory_object_offset_t, vm_size_t, vm_prot_t);
-extern	kern_return_t   device_pager_data_request(memory_object_t, 
-			memory_object_offset_t, vm_size_t, vm_prot_t);
-
-		if (memory_object->pager == &vnode_pager_workaround) {
-	        	return vnode_pager_data_request(memory_object, 
-				      offset, 
-				      length,
-				      desired_access);
-		} else if (memory_object->pager == &device_pager_workaround) {
-	        	return device_pager_data_request(memory_object, 
-				      offset, 
-				      length,
-				      desired_access);
-		} else
+	if (memory_object->pager == &vnode_pager_workaround) {
+		return vnode_pager_data_request(memory_object, 
+						offset, 
+						length,
+						desired_access);
+	} else if (memory_object->pager == &device_pager_workaround) {
+		return device_pager_data_request(memory_object, 
+						 offset, 
+						 length,
+						 desired_access);
+	} else
 #endif
-	       		return dp_memory_object_data_request(memory_object, 
-					offset, 
-					length,
-					desired_access);
+		return dp_memory_object_data_request(memory_object, 
+						     offset, 
+						     length,
+						     desired_access);
 }
 
 /* Routine memory_object_data_return */
@@ -2178,46 +2286,44 @@ kern_return_t memory_object_data_return
 	memory_object_t memory_object,
 	memory_object_offset_t offset,
 	vm_size_t size,
+	memory_object_offset_t *resid_offset,
+	int	*io_error,
 	boolean_t dirty,
-	boolean_t kernel_copy
+	boolean_t kernel_copy,
+	int	upl_flags
 )
 {
-  extern kern_return_t dp_memory_object_data_return(memory_object_t,
-						    memory_object_offset_t,
-						    vm_size_t,
-						    boolean_t,
-						    boolean_t);
 #ifdef MACH_BSD
-  extern kern_return_t vnode_pager_data_return(memory_object_t,
-						    memory_object_offset_t,
-						    vm_size_t,
-						    boolean_t,
-						    boolean_t);
-  extern kern_return_t device_pager_data_return(memory_object_t,
-						    memory_object_offset_t,
-						    vm_size_t,
-						    boolean_t,
-						    boolean_t);
-
 	if (memory_object->pager == &vnode_pager_workaround) {
 		return vnode_pager_data_return(memory_object,
-				       offset,
-				       size,
-				       dirty,
-				       kernel_copy);
+					       offset,
+					       size,
+					       resid_offset,
+					       io_error,
+					       dirty,
+					       kernel_copy,
+					       upl_flags);
 	} else if (memory_object->pager == &device_pager_workaround) {
+
 		return device_pager_data_return(memory_object,
-				       offset,
-				       size,
-				       dirty,
-				       kernel_copy);
-	} else
+						offset,
+						size,
+						dirty,
+						kernel_copy,
+						upl_flags);
+	}
+	else 
 #endif
+	{
 		return dp_memory_object_data_return(memory_object,
-				       offset,
-				       size,
-				       dirty,
-				       kernel_copy);
+						    offset,
+						    size,
+						    NULL,
+						    NULL,
+						    dirty,
+						    kernel_copy,
+						    upl_flags);
+	}
 }
 
 /* Routine memory_object_data_initialize */
@@ -2228,31 +2334,20 @@ kern_return_t memory_object_data_initialize
 	vm_size_t size
 )
 {
-
-  extern kern_return_t dp_memory_object_data_initialize(memory_object_t,
-						    memory_object_offset_t,
-						    vm_size_t);
 #ifdef MACH_BSD
-  extern kern_return_t vnode_pager_data_initialize(memory_object_t,
-						    memory_object_offset_t,
-						    vm_size_t);
-  extern kern_return_t device_pager_data_initialize(memory_object_t,
-						    memory_object_offset_t,
-						    vm_size_t);
-
 	if (memory_object->pager == &vnode_pager_workaround) {
 		return vnode_pager_data_initialize(memory_object,
-				       offset,
-				       size);
+						   offset,
+						   size);
 	} else if (memory_object->pager == &device_pager_workaround) {
 		return device_pager_data_initialize(memory_object,
-				       offset,
-				       size);
+						    offset,
+						    size);
 	} else
 #endif
 		return dp_memory_object_data_initialize(memory_object,
-				       offset,
-				       size);
+							offset,
+							size);
 }
 
 /* Routine memory_object_data_unlock */
@@ -2264,37 +2359,23 @@ kern_return_t memory_object_data_unlock
 	vm_prot_t desired_access
 )
 {
-  extern kern_return_t dp_memory_object_data_unlock(memory_object_t,
-						    memory_object_offset_t,
-						    vm_size_t,
-						    vm_prot_t);
 #ifdef MACH_BSD
-  extern kern_return_t vnode_pager_data_unlock(memory_object_t,
-						    memory_object_offset_t,
-						    vm_size_t,
-						    vm_prot_t);
-  extern kern_return_t device_pager_data_unlock(memory_object_t,
-						    memory_object_offset_t,
-						    vm_size_t,
-						    vm_prot_t);
-
 	if (memory_object->pager == &vnode_pager_workaround) {
 		return vnode_pager_data_unlock(memory_object,
-				       offset,
-				       size,
-				       desired_access);
+					       offset,
+					       size,
+					       desired_access);
 	} else if (memory_object->pager == &device_pager_workaround) {
 		return device_pager_data_unlock(memory_object,
-				       offset,
-				       size,
-				       desired_access);
+						offset,
+						size,
+						desired_access);
 	} else
 #endif
 		return dp_memory_object_data_unlock(memory_object,
-				       offset,
-				       size,
-				       desired_access);
-
+						    offset,
+						    size,
+						    desired_access);
 }
 
 /* Routine memory_object_synchronize */
@@ -2306,39 +2387,23 @@ kern_return_t memory_object_synchronize
 	vm_sync_t sync_flags
 )
 {
-  extern kern_return_t dp_memory_object_data_synchronize(memory_object_t,
-						    memory_object_offset_t,
-						    vm_size_t,
-						    vm_sync_t);
 #ifdef MACH_BSD
-  extern kern_return_t vnode_pager_data_synchronize(memory_object_t,
-						    memory_object_offset_t,
-						    vm_size_t,
-						    vm_sync_t);
-  extern kern_return_t device_pager_data_synchronize(memory_object_t,
-						    memory_object_offset_t,
-						    vm_size_t,
-						    vm_sync_t);
-
 	if (memory_object->pager == &vnode_pager_workaround) {
-                	return vnode_pager_synchronize(
-				memory_object,
-				offset,
-				size,
-				sync_flags);
+		return vnode_pager_synchronize(memory_object,
+					       offset,
+					       size,
+					       sync_flags);
 	} else if (memory_object->pager == &device_pager_workaround) {
-                	return device_pager_synchronize(
-				memory_object,
-				offset,
-				size,
-				sync_flags);
+		return device_pager_synchronize(memory_object,
+						offset,
+						size,
+						sync_flags);
 	} else
 #endif
-			return dp_memory_object_synchronize(
-				memory_object,
-				offset,
-				size,
-				sync_flags);
+		return dp_memory_object_synchronize(memory_object,
+						    offset,
+						    size,
+						    sync_flags);
 }
 
 /* Routine memory_object_unmap */
@@ -2347,18 +2412,14 @@ kern_return_t memory_object_unmap
 	memory_object_t memory_object
 )
 {
-	extern kern_return_t dp_memory_object_unmap(memory_object_t);
 #ifdef MACH_BSD
-	extern kern_return_t vnode_pager_unmap(memory_object_t);
-	extern kern_return_t device_pager_unmap(memory_object_t);
-
 	if (memory_object->pager == &vnode_pager_workaround) {
-                	return vnode_pager_unmap(memory_object);
+		return vnode_pager_unmap(memory_object);
 	} else if (memory_object->pager == &device_pager_workaround) {
-                	return device_pager_unmap(memory_object);
+		return device_pager_unmap(memory_object);
 	} else
 #endif
-			return dp_memory_object_unmap(memory_object);
+		return dp_memory_object_unmap(memory_object);
 }
 
 /* Routine memory_object_create */
@@ -2369,12 +2430,41 @@ kern_return_t memory_object_create
 	memory_object_t *new_memory_object
 )
 {
-extern kern_return_t default_pager_memory_object_create(memory_object_default_t,
-							vm_size_t,
-							memory_object_t *);
-
 	return default_pager_memory_object_create(default_memory_manager,
 						  new_memory_object_size,
 						  new_memory_object);
 }
 
+upl_t
+convert_port_to_upl(
+	ipc_port_t	port)
+{
+	upl_t upl;
+
+	ip_lock(port);
+	if (!ip_active(port) || (ip_kotype(port) != IKOT_UPL)) {
+			ip_unlock(port);
+			return (upl_t)NULL;
+	}
+	upl = (upl_t) port->ip_kobject;
+	ip_unlock(port);
+	upl_lock(upl);
+	upl->ref_count+=1;
+	upl_unlock(upl);
+	return upl;
+}
+
+mach_port_t
+convert_upl_to_port(
+	__unused upl_t		upl)
+{
+	return MACH_PORT_NULL;
+}
+
+__private_extern__ void
+upl_no_senders(
+	__unused ipc_port_t				port,
+	__unused mach_port_mscount_t	mscount)
+{
+	return;
+}

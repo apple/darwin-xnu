@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -20,22 +20,17 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1993,1995 NeXT Computer, Inc. All Rights Reserved */
-/*
- * The NEXTSTEP Software License Agreement specifies the terms
- * and conditions for redistribution.
- *
- */
 
 #ifndef	_PPC_PARAM_H_
 #define	_PPC_PARAM_H_
 
 /*
  * Round p (pointer or byte index) up to a correctly-aligned value for all
- * data types (int, long, ...).   The result is u_int and must be cast to
- * any desired pointer type.
+ * data types (int, long, ...).   The result is unsigned int and must be
+ * cast to any desired pointer type.
  */
 #define	ALIGNBYTES	3
-#define	ALIGN(p)	(((u_int)(p) + ALIGNBYTES) &~ ALIGNBYTES)
+#define	ALIGN(p)	(((unsigned int)(p) + ALIGNBYTES) &~ ALIGNBYTES)
 
 #define	NBPG		4096		/* bytes/page */
 #define	PGOFSET		(NBPG-1)	/* byte offset into page */

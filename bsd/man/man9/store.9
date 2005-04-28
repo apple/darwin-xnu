@@ -34,15 +34,17 @@
 .\"
 .\" $FreeBSD: src/share/man/man9/store.9,v 1.7.2.4 2001/12/17 11:30:19 ru Exp $
 .\"
-.Dd January 7, 1996
+.Dd December 16, 2004
 .Dt STORE 9
 .Os
 .Sh NAME
 .Nm store ,
 .Nm subyte ,
-.Nm susword ,
-.Nm suswintr ,
-.Nm suword
+.Nm suibyte ,
+.Nm suword ,
+.Nm suiword ,
+.Nm sulong ,
+.Nm suulong
 .Nd store data to user-space
 .Sh SYNOPSIS
 .In sys/types.h
@@ -50,13 +52,17 @@
 .In sys/systm.h
 .In sys/resourcevar.h
 .Ft int
-.Fn subyte "void *base" "int byte"
+.Fn subyte "user_addr_t addr" "int byte"
 .Ft int
-.Fn susword "void *base" "int word"
+.Fn suibyte "user_addr_t addr" "int byte"
 .Ft int
-.Fn suswintr "void *base" "int word"
+.Fn suword "user_addr_t addr" "int word"
 .Ft int
-.Fn suword "void *base" "long word"
+.Fn suiword "user_addr_t addr" "int word"
+.Ft int
+.Fn sulong "user_addr_t addr" "int64_t longword"
+.Ft int
+.Fn suulong "user_addr_t addr" "uint64_t longword"
 .Sh DESCRIPTION
 The
 .Nm
@@ -65,20 +71,27 @@ functions are designed to copy small amounts of data to user-space.
 The
 .Nm
 routines provide the following functionality:
-.Bl -tag -width "suswintr()"
+.Bl -tag -width "suibyte()"
 .It Fn subyte
 Stores a byte of data to the user-space address
-.Pa base .
-.It Fn susword
-Stores a short word of data to the user-space address
-.Pa base .
-.It Fn suswintr
-Stores a short word of data to the user-space address
-.Pa base .
+.Pa addr .
+.It Fn suibyte
+Stores a byte of data to the user-space address
+.Pa addr .
 This function is safe to call during an interrupt context.
 .It Fn suword
 Stores a word of data to the user-space address
-.Pa base .
+.Pa addr .
+.It Fn suiword
+Stores a word of data to the user-space address
+.Pa addr .
+This function is safe to call during an interrupt context.
+.It Fn sulong
+Stores a long word of data to the user-space address
+.Pa addr .
+.It Fn suulong
+Stores a unsigned long word of data to the user-space address
+.Pa addr .
 .El
 .Sh RETURN VALUES
 The

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -57,7 +57,6 @@
 /*
  * Command dispatcher.
  */
-#include <cpus.h>
 #include <norma_vm.h>
 #ifdef	AT386
 #include <norma_scsi.h>
@@ -405,9 +404,6 @@ db_command_list(
 extern void	db_system_stats(void);
 
 struct db_command db_show_all_cmds[] = {
-#if	USLOCK_DEBUG
-	{ "slocks",	(db_func) db_show_all_slocks,		0,	0 },
-#endif	/* USLOCK_DEBUG */
 	{ "acts",	db_show_all_acts,			0,	0 },
 	{ "spaces",	db_show_all_spaces,			0,	0 },
 	{ "tasks",	db_show_all_acts,			0,	0 },
@@ -448,7 +444,6 @@ struct db_command db_show_cmds[] = {
 	{ "kmsg",	(db_func) ipc_kmsg_print,	0,	0 },
 	{ "msg",	(db_func) ipc_msg_print,	0,	0 },
 	{ "ipc_port",	db_show_port_id,		0,	0 },
-	{ "lock",	(db_func)db_show_one_lock,	0,	0 },
 #if	NORMA_VM
 	{ "xmm_obj",	(db_func) xmm_obj_print,	0,	0 },
 	{ "xmm_reply",	(db_func) xmm_reply_print,	0,	0 },
@@ -459,16 +454,16 @@ struct db_command db_show_cmds[] = {
 	{ "space",	db_show_one_space,		0,	0 },
 	{ "system",	(db_func) db_system_stats,	0,	0 },
 	{ "zone",	db_show_one_zone,		0,	0 },
-	{ "simple_lock", db_show_one_simple_lock,	0,	0 },
+	{ "lock",	(db_func)db_show_one_lock,	0,	0 },
+	{ "mutex_lock",	(db_func)db_show_one_mutex,	0,	0 },
+	{ "simple_lock", (db_func)db_show_one_simple_lock,	0,	0 },
 	{ "thread_log", (db_func)db_show_thread_log,	0,	0 },
 	{ "shuttle",	db_show_shuttle,		0,	0 },
 	{ (char *)0, }
 };
 
-#if	NCPUS > 1
 #define	db_switch_cpu kdb_on
 extern void	db_switch_cpu(int);
-#endif	/* NCPUS > 1 */
 
 struct db_command db_command_table[] = {
 #if DB_MACHINE_COMMANDS
@@ -508,9 +503,7 @@ struct db_command db_command_table[] = {
 	{ "macro",	(db_func) db_def_macro_cmd,	CS_OWN,			0 },
 	{ "dmacro",	(db_func) db_del_macro_cmd,	CS_OWN,			0 },
 	{ "show",	0,				0,			db_show_cmds },
-#if	NCPUS > 1
 	{ "cpu",	(db_func) db_switch_cpu,	0,			0 },
-#endif	/* NCPUS > 1 */
 	{ "reboot",	(db_func) db_reboot,		0,			0 },
 #if defined(__ppc__)
 	{ "lt",		db_low_trace,			CS_MORE|CS_SET_DOT,	0 },
@@ -598,8 +591,8 @@ db_command_loop(void)
 
 boolean_t
 db_exec_cmd_nest(
-	char	*cmd,
-	int	size)
+	const char	*cmd,
+	int		size)
 {
 	struct db_lex_context lex_context;
 
@@ -616,7 +609,7 @@ db_exec_cmd_nest(
 }
 
 void
-db_error(char *s)
+db_error(const char *s)
 {
 	extern int db_macro_level;
 
@@ -697,8 +690,8 @@ db_fncall(void)
 
 boolean_t
 db_option(
-	char	*modif,
-	int	option)
+	const char	*modif,
+	int		option)
 {
 	register char *p;
 

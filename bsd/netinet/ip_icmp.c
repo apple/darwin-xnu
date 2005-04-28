@@ -148,9 +148,9 @@ SYSCTL_INT(_net_inet_icmp, OID_AUTO, bmcastecho, CTLFLAG_RW,
 int	icmpprintfs = 0;
 #endif
 
-static void	icmp_reflect __P((struct mbuf *));
-static void	icmp_send __P((struct mbuf *, struct mbuf *));
-static int	ip_next_mtu __P((int, int));
+static void	icmp_reflect(struct mbuf *);
+static void	icmp_send(struct mbuf *, struct mbuf *);
+static int	ip_next_mtu(int, int);
 
 extern	struct protosw inetsw[];
 
@@ -159,11 +159,12 @@ extern	struct protosw inetsw[];
  * in response to bad packet ip.
  */
 void
-icmp_error(n, type, code, dest, destifp)
-	struct mbuf *n;
-	int type, code;
-	n_long dest;
-	struct ifnet *destifp;
+icmp_error(
+	struct mbuf *n,
+	int type,
+	int code,
+	n_long dest,
+	struct ifnet *destifp)
 {
 	register struct ip *oip = mtod(n, struct ip *), *nip;
 	register unsigned oiplen = IP_VHL_HL(oip->ip_vhl) << 2;
@@ -279,8 +280,9 @@ icmp_input(m, hlen)
 	int icmplen = ip->ip_len;
 	register int i;
 	struct in_ifaddr *ia;
-	void (*ctlfunc) __P((int, struct sockaddr *, void *));
+	void (*ctlfunc)(int, struct sockaddr *, void *);
 	int code;
+	char ipv4str[MAX_IPv4_STR_LEN];
 
 	/*
 	 * Locate icmp structure in mbuf, and check
@@ -288,10 +290,12 @@ icmp_input(m, hlen)
 	 */
 #if ICMPPRINTFS
 	if (icmpprintfs) {
-		char buf[4 * sizeof "123"];
-		strcpy(buf, inet_ntoa(ip->ip_src));
+		char buf[MAX_IPv4_STR_LEN];
+
 		printf("icmp_input from %s to %s, len %d\n",
-		       buf, inet_ntoa(ip->ip_dst), icmplen);
+		       inet_ntop(AF_INET, &ip->ip_src, buf, sizeof(buf)),
+		       inet_ntop(AF_INET, &ip->ip_dst, ipv4str, sizeof(ipv4str)),
+		       icmplen);
 	}
 #endif
 	if (icmplen < ICMP_MINLEN) {
@@ -446,7 +450,9 @@ icmp_input(m, hlen)
 							  1);
 #if DEBUG_MTUDISC
 				printf("MTU for %s reduced to %d\n",
-					inet_ntoa(icmpsrc.sin_addr), mtu);
+					   inet_ntop(AF_INET, &icmpsrc.sin_addr, ipv4str,
+					   			 sizeof(ipv4str)),
+					   mtu);
 #endif
 				if (mtu < max(296, (tcp_minmss + sizeof(struct tcpiphdr)))) {
 					/* rt->rt_rmx.rmx_mtu =
@@ -537,8 +543,11 @@ icmp_input(m, hlen)
 			    (struct sockaddr *)&icmpdst, m->m_pkthdr.rcvif);
 		if (ia == 0)
 			break;
-		if (ia->ia_ifp == 0)
+		if (ia->ia_ifp == 0) {
+			ifafree(&ia->ia_ifa);
+			ia = 0;
 			break;
+		}
 		icp->icmp_type = ICMP_MASKREPLY;
 		icp->icmp_mask = ia->ia_sockmask.sin_addr.s_addr;
 		if (ip->ip_src.s_addr == 0) {
@@ -547,6 +556,7 @@ icmp_input(m, hlen)
 			else if (ia->ia_ifp->if_flags & IFF_POINTOPOINT)
 			    ip->ip_src = satosin(&ia->ia_dstaddr)->sin_addr;
 		}
+		ifafree(&ia->ia_ifa);
 reflect:
 		ip->ip_len += hlen;	/* since ip_input deducts this */
 		icmpstat.icps_reflect++;
@@ -590,11 +600,12 @@ reflect:
 		icmpdst.sin_addr = icp->icmp_gwaddr;
 #if	ICMPPRINTFS
 		if (icmpprintfs) {
-			char buf[4 * sizeof "123"];
-			strcpy(buf, inet_ntoa(icp->icmp_ip.ip_dst));
+			char buf[MAX_IPv4_STR_LEN];
 
 			printf("redirect dst %s to %s\n",
-			       buf, inet_ntoa(icp->icmp_gwaddr));
+			       inet_ntop(AF_INET, &icp->icmp_ip.ip_dst, buf, sizeof(buf)),
+			       inet_ntop(AF_INET, &icp->icmp_gwaddr, ipv4str,
+			       			 sizeof(ipv4str)));
 		}
 #endif
 		icmpsrc.sin_addr = icp->icmp_ip.ip_dst;
@@ -657,6 +668,7 @@ icmp_reflect(m)
 	 * or anonymous), use the address which corresponds
 	 * to the incoming interface.
 	 */
+	lck_mtx_lock(rt_mtx);
 	for (ia = in_ifaddrhead.tqh_first; ia; ia = ia->ia_link.tqe_next) {
 		if (t.s_addr == IA_SIN(ia)->sin_addr.s_addr)
 			break;
@@ -664,6 +676,8 @@ icmp_reflect(m)
 		    t.s_addr == satosin(&ia->ia_broadaddr)->sin_addr.s_addr)
 			break;
 	}
+	if (ia)
+		ifaref(&ia->ia_ifa);
 	icmpdst.sin_addr = t;
 	if ((ia == (struct in_ifaddr *)0) && m->m_pkthdr.rcvif)
 		ia = (struct in_ifaddr *)ifaof_ifpforaddr(
@@ -672,11 +686,16 @@ icmp_reflect(m)
 	 * The following happens if the packet was not addressed to us,
 	 * and was received on an interface with no IP address.
 	 */
-	if (ia == (struct in_ifaddr *)0)
+	if (ia == (struct in_ifaddr *)0) {
 		ia = in_ifaddrhead.tqh_first;
+		ifaref(&ia->ia_ifa);
+	}
+	lck_mtx_unlock(rt_mtx);
 	t = IA_SIN(ia)->sin_addr;
 	ip->ip_src = t;
 	ip->ip_ttl = ip_defttl;
+	ifafree(&ia->ia_ifa);
+	ia = NULL;
 
 	if (optlen > 0) {
 		register u_char *cp;
@@ -770,6 +789,7 @@ icmp_send(m, opts)
 	register int hlen;
 	register struct icmp *icp;
 	struct route ro;
+	char ipv4str[MAX_IPv4_STR_LEN];
 
 	hlen = IP_VHL_HL(ip->ip_vhl) << 2;
 	m->m_data += hlen;
@@ -779,16 +799,17 @@ icmp_send(m, opts)
 	icp->icmp_cksum = in_cksum(m, ip->ip_len - hlen);
 	m->m_data -= hlen;
 	m->m_len += hlen;
-	m->m_pkthdr.rcvif = (struct ifnet *)0;
+	m->m_pkthdr.rcvif = 0;
 	m->m_pkthdr.aux = NULL;
 	m->m_pkthdr.csum_data = 0;
 	m->m_pkthdr.csum_flags = 0;
 #if ICMPPRINTFS
 	if (icmpprintfs) {
-		char buf[4 * sizeof "123"];
-		strcpy(buf, inet_ntoa(ip->ip_dst));
+		char buf[MAX_IPv4_STR_LEN];
+
 		printf("icmp_send dst %s src %s\n",
-		       buf, inet_ntoa(ip->ip_src));
+		       inet_ntop(AF_INET, &ip->ip_dst, buf, sizeof(buf)),
+		       inet_ntop(AF_INET, &ip->ip_src, ipv4str, sizeof(ipv4str)));
 	}
 #endif
 	bzero(&ro, sizeof ro);
@@ -893,7 +914,7 @@ badport_bandlim(int which)
 	if (icmplim <= 0 || which > BANDLIM_MAX || which < 0)
 		return(0);
 
-	getmicrotime(&time);
+	getmicrouptime(&time);
 
  	secs = time.tv_sec - lticks[which].tv_sec ;
 			
@@ -959,7 +980,7 @@ __private_extern__ struct pr_usrreqs icmp_dgram_usrreqs = {
         pru_connect2_notsupp, in_control, rip_detach, rip_disconnect,
         pru_listen_notsupp, in_setpeeraddr, pru_rcvd_notsupp,
         pru_rcvoob_notsupp, icmp_dgram_send, pru_sense_null, rip_shutdown,
-        in_setsockaddr, sosend, soreceive, sopoll
+        in_setsockaddr, sosend, soreceive, pru_sopoll_notsupp
 };
 
 /* Like rip_attach but without root privilege enforcement */
@@ -1059,8 +1080,7 @@ icmp_dgram_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *n
 		/* Only IPv4 */
 		if (IP_VHL_V(ip->ip_vhl) != 4)
 			goto bad;
-		if (hlen < 20 || hlen > 40 || ip->ip_len != m->m_pkthdr.len ||
-			ip->ip_len > 65535)
+		if (hlen < 20 || hlen > 40 || ip->ip_len != m->m_pkthdr.len)
 			goto bad;
 		/* Bogus fragments can tie up peer resources */ 
 		if (ip->ip_off != 0)
@@ -1070,12 +1090,22 @@ icmp_dgram_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *n
 			goto bad;
 		/* To prevent spoofing, specified source address must be one of ours */
 		if (ip->ip_src.s_addr != INADDR_ANY) {
-			if (TAILQ_EMPTY(&in_ifaddrhead))
+			socket_unlock(so, 0);
+			lck_mtx_lock(rt_mtx);
+			if (TAILQ_EMPTY(&in_ifaddrhead)) {
+				lck_mtx_unlock(rt_mtx);
+				socket_lock(so, 0);
 				goto bad;
-			TAILQ_FOREACH(ia, &in_ifaddrhead, ia_link) {
-				if (IA_SIN(ia)->sin_addr.s_addr == ip->ip_src.s_addr)
-					goto ours;
 			}
+			TAILQ_FOREACH(ia, &in_ifaddrhead, ia_link) {
+				if (IA_SIN(ia)->sin_addr.s_addr == ip->ip_src.s_addr) {
+					lck_mtx_unlock(rt_mtx);
+					socket_lock(so, 0);
+					goto ours;
+				}
+			}
+			lck_mtx_unlock(rt_mtx);
+			socket_lock(so, 0);
 			goto bad;
 		}
 ours:

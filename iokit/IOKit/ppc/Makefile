@@ -11,7 +11,7 @@ include $(MakeInc_cmd)
 include $(MakeInc_def)
 
 MD_DIR = ppc
-NOT_EXPORT_HEADERS = 
+NOT_EXPORT_HEADERS = IOSharedLockImp.h
 
 INSTINC_SUBDIRS =
 INSTINC_SUBDIRS_PPC =

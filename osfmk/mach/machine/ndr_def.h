@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -19,17 +19,16 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
+
 #ifndef _MACH_MACHINE_NDR_DEF_H
 #define _MACH_MACHINE_NDR_DEF_H
 
-
-#if defined (__ppc__)
+#if defined (__ppc__) || defined (__ppc64__)
 #include "mach/ppc/ndr_def.h"
 #elif defined (__i386__)
 #include "mach/i386/ndr_def.h"
 #else
 #error architecture not supported
 #endif
-
 
 #endif /* _MACH_MACHINE_NDR_DEF_H */

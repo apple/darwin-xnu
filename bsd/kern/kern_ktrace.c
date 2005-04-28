@@ -60,27 +60,28 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/types.h>
-#include <sys/proc.h>
-#include <sys/file.h>
+#include <sys/proc_internal.h>
+#include <sys/kauth.h>
+#include <sys/file_internal.h>
 #include <sys/namei.h>
-#include <sys/vnode.h>
+#include <sys/vnode_internal.h>
 #if KTRACE
 #include <sys/ktrace.h>
 #endif
 #include <sys/malloc.h>
 #include <sys/syslog.h>
-#include <sys/ubc.h>
+#include <sys/sysproto.h>
+#include <sys/uio_internal.h>
 
 #include <bsm/audit_kernel.h>
 
 #if KTRACE
-static struct ktr_header *ktrgetheader __P((int type));
-static void ktrwrite __P((struct vnode *, struct ktr_header *,
-	struct uio *, int));
-static int ktrcanset __P((struct proc *,struct proc *));
-static int ktrsetchildren __P((struct proc *,struct proc *,
-	int, int, struct vnode *));
-static int ktrops __P((struct proc *,struct proc *,int,int,struct vnode *));
+static struct ktr_header *ktrgetheader(int type);
+static void ktrwrite(struct vnode *, struct ktr_header *, struct uio *);
+static int ktrcanset(struct proc *,struct proc *);
+static int ktrsetchildren(struct proc *,struct proc *,
+	int, int, struct vnode *);
+static int ktrops(struct proc *,struct proc *,int,int,struct vnode *);
 
 
 static struct ktr_header *
@@ -92,27 +93,28 @@ ktrgetheader(type)
 
 	MALLOC(kth, struct ktr_header *, sizeof (struct ktr_header),
 		M_KTRACE, M_WAITOK);
-	kth->ktr_type = type;
-	microtime(&kth->ktr_time);
-	kth->ktr_pid = p->p_pid;
-	bcopy(p->p_comm, kth->ktr_comm, MAXCOMLEN);
+	if (kth != NULL) {
+		kth->ktr_type = type;
+		microtime(&kth->ktr_time);
+		kth->ktr_pid = p->p_pid;
+		bcopy(p->p_comm, kth->ktr_comm, MAXCOMLEN);
+	}
 	return (kth);
 }
 #endif
 
 void
-ktrsyscall(p, code, narg, args, funnel_type)
+ktrsyscall(p, code, narg, args)
 	struct proc *p;
 	int code, narg;
-	register_t args[];
-	int funnel_type;
+	u_int64_t args[];
 {
 #if KTRACE
 	struct vnode *vp;
 	struct	ktr_header *kth;
 	struct	ktr_syscall *ktp;
 	register int len;
-	register_t *argp;
+	u_int64_t *argp;
 	int i;
 
 	if (!KTRPOINT(p, KTR_SYSCALL))
@@ -120,10 +122,18 @@ ktrsyscall(p, code, narg, args, funnel_type)
 
 	vp = p->p_tracep;
 	len = __offsetof(struct ktr_syscall, ktr_args) +
-	    (narg * sizeof(register_t));
+	    (narg * sizeof(u_int64_t));
 	p->p_traceflag |= KTRFAC_ACTIVE;
 	kth = ktrgetheader(KTR_SYSCALL);
+	if (kth == NULL) {
+		p->p_traceflag &= ~KTRFAC_ACTIVE;
+		return;
+	}
 	MALLOC(ktp, struct ktr_syscall *, len, M_KTRACE, M_WAITOK);
+	if (ktp == NULL) {
+		FREE(kth, M_KTRACE);
+		return;
+	}
 	ktp->ktr_code = code;
 	ktp->ktr_narg = narg;
 	argp = &ktp->ktr_args[0];
@@ -131,7 +141,7 @@ ktrsyscall(p, code, narg, args, funnel_type)
 		*argp++ = args[i];
 	kth->ktr_buf = (caddr_t)ktp;
 	kth->ktr_len = len;
-	ktrwrite(vp, kth, NULL, funnel_type);
+	ktrwrite(vp, kth, NULL);
 	FREE(ktp, M_KTRACE);
 	FREE(kth, M_KTRACE);
 	p->p_traceflag &= ~KTRFAC_ACTIVE;
@@ -141,11 +151,10 @@ ktrsyscall(p, code, narg, args, funnel_type)
 }
  
 void
-ktrsysret(p, code, error, retval, funnel_type)
+ktrsysret(p, code, error, retval)
 	struct proc *p;
 	int code, error;
 	register_t retval;
-	int funnel_type;
 {
 #if KTRACE
 	struct vnode *vp;
@@ -158,6 +167,10 @@ ktrsysret(p, code, error, retval, funnel_type)
 	vp = p->p_tracep;
 	p->p_traceflag |= KTRFAC_ACTIVE;
 	kth = ktrgetheader(KTR_SYSRET);
+	if (kth == NULL) {
+		p->p_traceflag &= ~KTRFAC_ACTIVE;
+		return;
+	}
 	ktp.ktr_code = code;
 	ktp.ktr_error = error;
 	ktp.ktr_retval = retval;		/* what about val2 ? */
@@ -165,7 +178,7 @@ ktrsysret(p, code, error, retval, funnel_type)
 	kth->ktr_buf = (caddr_t)&ktp;
 	kth->ktr_len = sizeof(struct ktr_sysret);
 
-	ktrwrite(vp, kth, NULL, funnel_type);
+	ktrwrite(vp, kth, NULL);
 	FREE(kth, M_KTRACE);
 	p->p_traceflag &= ~KTRFAC_ACTIVE;
 #else
@@ -184,22 +197,25 @@ ktrnamei(vp, path)
 
 	p->p_traceflag |= KTRFAC_ACTIVE;
 	kth = ktrgetheader(KTR_NAMEI);
+	if (kth == NULL) {
+		p->p_traceflag &= ~KTRFAC_ACTIVE;
+		return;
+	}
 	kth->ktr_len = strlen(path);
 	kth->ktr_buf = path;
 
-	ktrwrite(vp, kth, NULL, KERNEL_FUNNEL);
+	ktrwrite(vp, kth, NULL);
 	FREE(kth, M_KTRACE);
 	p->p_traceflag &= ~KTRFAC_ACTIVE;
 }
 
 void
-ktrgenio(vp, fd, rw, uio, error, funnel_type)
+ktrgenio(vp, fd, rw, uio, error)
 	struct vnode *vp;
 	int fd;
 	enum uio_rw rw;
 	struct uio *uio;
 	int error;
-	int funnel_type;
 {
 	struct ktr_header *kth;
 	struct ktr_genio ktg;
@@ -210,6 +226,10 @@ ktrgenio(vp, fd, rw, uio, error, funnel_type)
 
 	p->p_traceflag |= KTRFAC_ACTIVE;
 	kth = ktrgetheader(KTR_GENIO);
+	if (kth == NULL) {
+		p->p_traceflag &= ~KTRFAC_ACTIVE;
+		return;
+	}
 	ktg.ktr_fd = fd;
 	ktg.ktr_rw = rw;
 	kth->ktr_buf = (caddr_t)&ktg;
@@ -217,19 +237,18 @@ ktrgenio(vp, fd, rw, uio, error, funnel_type)
 	uio->uio_offset = 0;
 	uio->uio_rw = UIO_WRITE;
 
-	ktrwrite(vp, kth, uio, funnel_type);
+	ktrwrite(vp, kth, uio);
 	FREE(kth, M_KTRACE);
 	p->p_traceflag &= ~KTRFAC_ACTIVE;
 }
 
 void
-ktrpsig(vp, sig, action, mask, code, funnel_type)
+ktrpsig(vp, sig, action, mask, code)
 	struct vnode *vp;
 	int sig;
 	sig_t action;
 	sigset_t *mask;
 	int code;
-	int funnel_type;
 {
 	struct ktr_header *kth;
 	struct ktr_psig	kp;
@@ -237,6 +256,10 @@ ktrpsig(vp, sig, action, mask, code, funnel_type)
 
 	p->p_traceflag |= KTRFAC_ACTIVE;
 	kth = ktrgetheader(KTR_PSIG);
+	if (kth == NULL) {
+		p->p_traceflag &= ~KTRFAC_ACTIVE;
+		return;
+	}
 	kp.signo = (char)sig;
 	kp.action = action;
 	kp.mask = *mask;
@@ -244,16 +267,15 @@ ktrpsig(vp, sig, action, mask, code, funnel_type)
 	kth->ktr_buf = (caddr_t)&kp;
 	kth->ktr_len = sizeof (struct ktr_psig);
 
-	ktrwrite(vp, kth, NULL, funnel_type);
+	ktrwrite(vp, kth, NULL);
 	FREE(kth, M_KTRACE);
 	p->p_traceflag &= ~KTRFAC_ACTIVE;
 }
 
 void
-ktrcsw(vp, out, user, funnel_type)
+ktrcsw(vp, out, user)
 	struct vnode *vp;
 	int out, user;
-	int funnel_type;
 {
 	struct ktr_header *kth;
 	struct	ktr_csw kc;
@@ -261,12 +283,16 @@ ktrcsw(vp, out, user, funnel_type)
 
 	p->p_traceflag |= KTRFAC_ACTIVE;
 	kth = ktrgetheader(KTR_CSW);
+	if (kth == NULL) {
+		p->p_traceflag &= ~KTRFAC_ACTIVE;
+		return;
+	}
 	kc.out = out;
 	kc.user = user;
 	kth->ktr_buf = (caddr_t)&kc;
 	kth->ktr_len = sizeof (struct ktr_csw);
 
-	ktrwrite(vp, kth, NULL, funnel_type);
+	ktrwrite(vp, kth, NULL);
 	FREE(kth, M_KTRACE);
 	p->p_traceflag &= ~KTRFAC_ACTIVE;
 }
@@ -277,18 +303,9 @@ ktrcsw(vp, out, user, funnel_type)
 /*
  * ktrace system call
  */
-struct ktrace_args {
-	char	*fname;
-	int	ops;
-	int	facs;
-	int	pid;
-};
 /* ARGSUSED */
 int
-ktrace(curp, uap, retval)
-	struct proc *curp;
-	register struct ktrace_args *uap;
-	register_t *retval;
+ktrace(struct proc *curp, register struct ktrace_args *uap, __unused register_t *retval)
 {
 #if KTRACE
 	register struct vnode *vp = NULL;
@@ -300,25 +317,33 @@ ktrace(curp, uap, retval)
 	int ret = 0;
 	int error = 0;
 	struct nameidata nd;
+	struct vfs_context context;
 
 	AUDIT_ARG(cmd, uap->ops);
 	AUDIT_ARG(pid, uap->pid);
 	AUDIT_ARG(value, uap->facs);
+
+	context.vc_proc = curp;
+	context.vc_ucred = kauth_cred_get();
+
 	curp->p_traceflag |= KTRFAC_ACTIVE;
 	if (ops != KTROP_CLEAR) {
 		/*
 		 * an operation which requires a file argument.
 		 */
-		NDINIT(&nd, LOOKUP, (NOFOLLOW|LOCKLEAF), UIO_USERSPACE, uap->fname, curp);
+		NDINIT(&nd, LOOKUP, (NOFOLLOW|LOCKLEAF), UIO_USERSPACE, 
+			   uap->fname, &context);
 		error = vn_open(&nd, FREAD|FWRITE|O_NOFOLLOW, 0);
 		if (error) {
 			curp->p_traceflag &= ~KTRFAC_ACTIVE;
 			return (error);
 		}
 		vp = nd.ni_vp;
-		VOP_UNLOCK(vp, 0, curp);
+
 		if (vp->v_type != VREG) {
-			(void) vn_close(vp, FREAD|FWRITE, curp->p_ucred, curp);
+			(void) vn_close(vp, FREAD|FWRITE, kauth_cred_get(), curp);
+			(void) vnode_put(vp);
+
 			curp->p_traceflag &= ~KTRFAC_ACTIVE;
 			return (EACCES);
 		}
@@ -335,10 +360,7 @@ ktrace(curp, uap, retval)
 					p->p_traceflag = 0;
 					if (tvp != NULL) {
 						p->p_tracep = NULL;
-
-						VOP_CLOSE(vp, FREAD|FWRITE, curp->p_ucred, curp);
-						ubc_rele(tvp);
-						vrele(tvp);
+						vnode_rele(tvp);
 					}
 				} else
 					error = EPERM;
@@ -390,8 +412,10 @@ ktrace(curp, uap, retval)
 	if (!ret)
 		error = EPERM;
 done:
-	if (vp != NULL)
-		(void) vn_close(vp, FWRITE, curp->p_ucred, curp);
+	if (vp != NULL) {
+		(void) vn_close(vp, FWRITE, kauth_cred_get(), curp);
+		(void) vnode_put(vp);
+	}
 	curp->p_traceflag &= ~KTRFAC_ACTIVE;
 	return (error);
 #else
@@ -402,17 +426,10 @@ done:
 /*
  * utrace system call
  */
-struct  utrace_args {
-	const void *    addr;
-	size_t  len;
-};
 
 /* ARGSUSED */
 int
-utrace(curp, uap, retval)
-	struct proc *curp;
-	register struct utrace_args *uap;
-	register_t *retval;
+utrace(__unused struct proc *curp, register struct utrace_args *uap, __unused register_t *retval)
 {
 #if KTRACE
 	struct ktr_header *kth;
@@ -425,11 +442,19 @@ utrace(curp, uap, retval)
 		return (EINVAL);
 	p->p_traceflag |= KTRFAC_ACTIVE;
 	kth = ktrgetheader(KTR_USER);
+	if (kth == NULL) {
+		p->p_traceflag &= ~KTRFAC_ACTIVE;
+		return(ENOMEM);
+	}
 	MALLOC(cp, caddr_t, uap->len, M_KTRACE, M_WAITOK);
-	if (!copyin((caddr_t)uap->addr, cp, uap->len)) {
+	if (cp == NULL) {
+		FREE(kth, M_KTRACE);
+		return(ENOMEM);
+	}
+	if (copyin(uap->addr, cp, uap->len) == 0) {
 		kth->ktr_buf = cp;
 		kth->ktr_len = uap->len;
-		ktrwrite(p->p_tracep, kth, NULL, KERNEL_FUNNEL);
+		ktrwrite(p->p_tracep, kth, NULL);
 	}
 	FREE(kth, M_KTRACE);
 	FREE(cp, M_KTRACE);
@@ -454,24 +479,19 @@ ktrops(curp, p, ops, facs, vp)
 		return (0);
 	if (ops == KTROP_SET) {
 		if (p->p_tracep != vp) {
-			/*
-			 * if trace file already in use, relinquish
-			 */
 			tvp = p->p_tracep;
-			
-			if (UBCINFOEXISTS(vp))
-			        ubc_hold(vp);
-			VREF(vp);
-
+			vnode_ref(vp);
 			p->p_tracep = vp;
+
 			if (tvp != NULL) {
-				VOP_CLOSE(tvp, FREAD|FWRITE, p->p_ucred, p);
-			        ubc_rele(tvp);
-				vrele(tvp);
+			        /*
+				 * if trace file already in use, relinquish
+				 */
+				vnode_rele(tvp);
 			}
 		}
 		p->p_traceflag |= facs;
-		if (curp->p_ucred->cr_uid == 0)
+		if (!suser(kauth_cred_get(), NULL))
 			p->p_traceflag |= KTRFAC_ROOT;
 	} else {
 		/* KTROP_CLEAR */
@@ -481,10 +501,7 @@ ktrops(curp, p, ops, facs, vp)
 			p->p_traceflag = 0;
 			if (tvp != NULL) {
 				p->p_tracep = NULL;
-
-				VOP_CLOSE(tvp, FREAD|FWRITE, p->p_ucred, p);
-				ubc_rele(tvp);
-				vrele(tvp);
+				vnode_rele(tvp);
 			}
 		}
 	}
@@ -525,117 +542,48 @@ ktrsetchildren(curp, top, ops, facs, vp)
 }
 
 static void
-ktrwrite(vp, kth, uio, funnel_type)
-	struct vnode *vp;
-	register struct ktr_header *kth;
-	struct uio *uio;
+ktrwrite(struct vnode *vp, struct ktr_header *kth, struct uio *uio)
 {
-	struct uio auio;
-	struct iovec aiov[2];
+	uio_t auio;
 	register struct proc *p = current_proc();	/* XXX */
+	struct vfs_context context;
 	int error;
+	char uio_buf[ UIO_SIZEOF(2) ];
 
 	if (vp == NULL)
 		return;
 
-	if (funnel_type == -1) {
-		funnel_t *f = thread_funnel_get();
-		if(f == THR_FUNNEL_NULL)
-			funnel_type = NO_FUNNEL;
-		else if (f == (funnel_t *)network_flock)
-			funnel_type = NETWORK_FUNNEL;
-		else if (f == (funnel_t *)kernel_flock)
-			funnel_type = KERNEL_FUNNEL;
-	}
-
-	switch (funnel_type) {
-	case KERNEL_FUNNEL:
-		/* Nothing more to do */
-		break;
-	case NETWORK_FUNNEL:
-		thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
-		break;
-	case NO_FUNNEL:
-		(void) thread_funnel_set(kernel_flock, TRUE);
-		break;
-	default:
-		panic("Invalid funnel (%)", funnel_type);
-	}
-	auio.uio_iov = &aiov[0];
-	auio.uio_offset = 0;
-	auio.uio_segflg = UIO_SYSSPACE;
-	auio.uio_rw = UIO_WRITE;
-	aiov[0].iov_base = (caddr_t)kth;
-	aiov[0].iov_len = sizeof(struct ktr_header);
-	auio.uio_resid = sizeof(struct ktr_header);
-	auio.uio_iovcnt = 1;
-	auio.uio_procp = current_proc();
+	auio = uio_createwithbuffer(2, 0, UIO_SYSSPACE, UIO_WRITE, 
+								  &uio_buf[0], sizeof(uio_buf));
+	uio_addiov(auio, CAST_USER_ADDR_T(kth), sizeof(struct ktr_header));
+	context.vc_proc = p;
+	context.vc_ucred = kauth_cred_get();
+	
 	if (kth->ktr_len > 0) {
-		auio.uio_iovcnt++;
-		aiov[1].iov_base = kth->ktr_buf;
-		aiov[1].iov_len = kth->ktr_len;
-		auio.uio_resid += kth->ktr_len;
+		uio_addiov(auio, CAST_USER_ADDR_T(kth->ktr_buf), kth->ktr_len);
 		if (uio != NULL)
-			kth->ktr_len += uio->uio_resid;
+			kth->ktr_len += uio_resid(uio);
 	}
-	error = vn_lock(vp, LK_EXCLUSIVE | LK_RETRY, p);
-	if (error)
-		goto bad;
-	(void)VOP_LEASE(vp, p, p->p_ucred, LEASE_WRITE);
-	error = VOP_WRITE(vp, &auio, IO_UNIT | IO_APPEND, p->p_ucred);
-	if (error == 0 && uio != NULL) {
-		(void)VOP_LEASE(vp, p, p->p_ucred, LEASE_WRITE);
-		error = VOP_WRITE(vp, uio, IO_UNIT | IO_APPEND, p->p_ucred);
-	}
-	VOP_UNLOCK(vp, 0, p);
-	if (!error) {
-		switch (funnel_type) {
-		case KERNEL_FUNNEL:
-			/* Nothing more to do */
-			break;
-		case NETWORK_FUNNEL:
-			thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
-			/* switch funnel to NETWORK_FUNNEL */
-			break;
-		case NO_FUNNEL:
-			 (void) thread_funnel_set(kernel_flock, FALSE);
-			break;
-		default:
-			panic("Invalid funnel (%)", funnel_type);
+	if ((error = vnode_getwithref(vp)) == 0) {
+	        error = VNOP_WRITE(vp, auio, IO_UNIT | IO_APPEND, &context);
+		if (error == 0 && uio != NULL) {
+		        error = VNOP_WRITE(vp, uio, IO_UNIT | IO_APPEND, &context);
 		}
-		return;
+		vnode_put(vp);
 	}
-
-bad:
-	/*
-	 * If error encountered, give up tracing on this vnode.
-	 */
-	log(LOG_NOTICE, "ktrace write failed, errno %d, tracing stopped\n",
-	    error);
-	LIST_FOREACH(p, &allproc, p_list) {
-		if (p->p_tracep == vp) {
-			p->p_tracep = NULL;
-			p->p_traceflag = 0;
-
-			VOP_CLOSE(vp, FREAD|FWRITE, p->p_ucred, p);
-			ubc_rele(vp);
-			vrele(vp);
+	if (error) {
+	        /*
+		 * If error encountered, give up tracing on this vnode.
+		 */
+	        log(LOG_NOTICE, "ktrace write failed, errno %d, tracing stopped\n",
+		    error);
+		LIST_FOREACH(p, &allproc, p_list) {
+		        if (p->p_tracep == vp) {
+			        p->p_tracep = NULL;
+				p->p_traceflag = 0;
+				vnode_rele(vp);
+			}
 		}
-	}
-
-	switch (funnel_type) {
-	case KERNEL_FUNNEL:
-		/* Nothing more to do */
-		break;
-	case NETWORK_FUNNEL:
-		thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
-		/* switch funnel to NETWORK_FUNNEL */
-		break;
-	case NO_FUNNEL:
-		 (void) thread_funnel_set(kernel_flock, FALSE);
-		break;
-	default:
-		panic("Invalid funnel (%)", funnel_type);
 	}
 }
 
@@ -649,21 +597,23 @@ bad:
  * TODO: check groups.  use caller effective gid.
  */
 static int
-ktrcanset(callp, targetp)
-	struct proc *callp, *targetp;
+ktrcanset(__unused struct proc *callp, struct proc *targetp)
 {
-	register struct pcred *caller = callp->p_cred;
-	register struct pcred *target = targetp->p_cred;
+	kauth_cred_t caller = kauth_cred_get();
+	kauth_cred_t target = targetp->p_ucred;		/* XXX */
 
+#if 0
+	/* PRISON_CHECK was defined to 1 always .... */
 	if (!PRISON_CHECK(callp, targetp))
 		return (0);
-	if ((caller->pc_ucred->cr_uid == target->p_ruid &&
-	     target->p_ruid == target->p_svuid &&
-	     caller->p_rgid == target->p_rgid &&	/* XXX */
-	     target->p_rgid == target->p_svgid &&
+#endif
+	if ((kauth_cred_getuid(caller) == target->cr_ruid &&
+	     target->cr_ruid == target->cr_svuid &&
+	     caller->cr_rgid == target->cr_rgid &&	/* XXX */
+	     target->cr_rgid == target->cr_svgid &&
 	     (targetp->p_traceflag & KTRFAC_ROOT) == 0 &&
 	     (targetp->p_flag & P_SUGID) == 0) ||
-	     caller->pc_ucred->cr_uid == 0)
+	     !suser(caller, NULL))
 		return (1);
 
 	return (0);

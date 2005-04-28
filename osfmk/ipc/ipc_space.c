@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -268,7 +268,6 @@ ipc_space_clean(
 	for (tentry = ipc_splay_traverse_start(&space->is_tree);
 	     tentry != ITE_NULL;
 	     tentry = ipc_splay_traverse_next(&space->is_tree, TRUE)) {
-		int i;
 		mach_port_type_t type;
 		mach_port_name_t name = tentry->ite_name;
 
@@ -380,3 +379,5 @@ ipc_space_destroy(
 	 */
 	is_release(space);
 }
+
+

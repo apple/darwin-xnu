@@ -461,7 +461,7 @@ pmap_novmx_icache_flush:
 // Stack frame format used by copyin, copyout, copyinstr and copyoutstr.
 // These routines all run both on 32 and 64-bit machines, though because they are called
 // by the BSD kernel they are always in 32-bit mode when entered.  The mapped ptr returned
-// by MapUserAddressSpace will be 64 bits however on 64-bit machines.  Beware to avoid
+// by MapUserMemoryWindow will be 64 bits however on 64-bit machines.  Beware to avoid
 // using compare instructions on this ptr.  This mapped ptr is kept globally in r31, so there
 // is no need to store or load it, which are mode-dependent operations since it could be
 // 32 or 64 bits.
@@ -469,11 +469,12 @@ pmap_novmx_icache_flush:
 #define	kkFrameSize	(FM_SIZE+32)
 
 #define	kkBufSize	(FM_SIZE+0)
-#define	kkCR		(FM_SIZE+4)
+#define	kkCR3		(FM_SIZE+4)
 #define	kkSource	(FM_SIZE+8)
 #define	kkDest		(FM_SIZE+12)
 #define	kkCountPtr	(FM_SIZE+16)
 #define	kkR31Save	(FM_SIZE+20)
+#define	kkThrErrJmp	(FM_SIZE+24)
  
  
 // nonvolatile CR bits we use as flags in cr3
@@ -489,20 +490,21 @@ pmap_novmx_icache_flush:
 /*
  * int
  * copyoutstr(src, dst, maxcount, count)
- *	vm_offset_t	src;
- *	vm_offset_t	dst;
- *	vm_size_t	maxcount; 
- *	vm_size_t*	count;
+ *	vm_offset_t	src;        // r3
+ *	addr64_t	dst;        // r4 and r5
+ *	vm_size_t	maxcount;   // r6
+ *	vm_size_t*	count;      // r7
  *
  * Set *count to the number of bytes copied.
  */
 
 ENTRY(copyoutstr, TAG_NO_FRAME_USED)
-        mfcr	r2								// we use nonvolatile cr3
+        mfcr	r2,0x10                         // save caller's cr3, which we use for flags
+        mr      r10,r4                          // move high word of 64-bit user address to r10
         li		r0,0
         crset	kkString						// flag as a string op
-        mr		r10,r4							// for copyout, dest ptr (r4) is in user space
-        stw		r0,0(r6)						// initialize #bytes moved
+        mr      r11,r5                          // move low word of 64-bit user address to r11
+        stw		r0,0(r7)						// initialize #bytes moved
         crclr	kkIn							// flag as copyout
         b		copyJoin
 
@@ -511,10 +513,10 @@ ENTRY(copyoutstr, TAG_NO_FRAME_USED)
 /*
  * int
  * copyinstr(src, dst, maxcount, count)
- *	vm_offset_t	src;
- *	vm_offset_t	dst;
- *	vm_size_t	maxcount; 
- *	vm_size_t*	count;
+ *	addr64_t	src;        // r3 and r4
+ *	vm_offset_t	dst;        // r5
+ *	vm_size_t	maxcount;   // r6
+ *	vm_size_t*	count;      // r7
  *
  * Set *count to the number of bytes copied
  * If dst == NULL, don't copy, just count bytes.
@@ -522,13 +524,14 @@ ENTRY(copyoutstr, TAG_NO_FRAME_USED)
  */
 
 ENTRY(copyinstr, TAG_NO_FRAME_USED)
-        mfcr	r2								// we use nonvolatile cr3
-        cmplwi	r4,0							// dst==NULL?
+        mfcr	r2,0x10                         // save caller's cr3, which we use for flags
+        cmplwi	r5,0							// dst==NULL?
+        mr      r10,r3                          // move high word of 64-bit user address to r10
         li		r0,0
         crset	kkString						// flag as a string op
-        mr		r10,r3							// for copyin, source ptr (r3) is in user space
+        mr      r11,r4                          // move low word of 64-bit user address to r11
         crmove	kkNull,cr0_eq					// remember if (dst==NULL)
-        stw		r0,0(r6)						// initialize #bytes moved
+        stw		r0,0(r7)						// initialize #bytes moved
         crset	kkIn							// flag as copyin (rather than copyout)
         b		copyJoin1						// skip over the "crclr kkNull"
 
@@ -537,9 +540,9 @@ ENTRY(copyinstr, TAG_NO_FRAME_USED)
 /*
  * int
  * copyout(src, dst, count)
- *	vm_offset_t	src;
- *	vm_offset_t	dst;
- *	size_t		count;
+ *	vm_offset_t	src;        // r3
+ *	addr64_t	dst;        // r4 and r5
+ *	size_t		count;      // r6
  */
 
 			.align	5
@@ -550,18 +553,19 @@ LEXT(copyout)
 LEXT(copyoutmsg)
 
 #if INSTRUMENT
-			mfspr	r12,pmc1						; INSTRUMENT - saveinstr[12] - Take stamp at copyout
-			stw		r12,0x6100+(12*16)+0x0(0)		; INSTRUMENT - Save it
-			mfspr	r12,pmc2						; INSTRUMENT - Get stamp
-			stw		r12,0x6100+(12*16)+0x4(0)		; INSTRUMENT - Save it
-			mfspr	r12,pmc3						; INSTRUMENT - Get stamp
-			stw		r12,0x6100+(12*16)+0x8(0)		; INSTRUMENT - Save it
-			mfspr	r12,pmc4						; INSTRUMENT - Get stamp
-			stw		r12,0x6100+(12*16)+0xC(0)		; INSTRUMENT - Save it
+        mfspr	r12,pmc1						; INSTRUMENT - saveinstr[12] - Take stamp at copyout
+        stw		r12,0x6100+(12*16)+0x0(0)		; INSTRUMENT - Save it
+        mfspr	r12,pmc2						; INSTRUMENT - Get stamp
+        stw		r12,0x6100+(12*16)+0x4(0)		; INSTRUMENT - Save it
+        mfspr	r12,pmc3						; INSTRUMENT - Get stamp
+        stw		r12,0x6100+(12*16)+0x8(0)		; INSTRUMENT - Save it
+        mfspr	r12,pmc4						; INSTRUMENT - Get stamp
+        stw		r12,0x6100+(12*16)+0xC(0)		; INSTRUMENT - Save it
 #endif			
-        mfcr	r2								// save caller's CR
+        mfcr	r2,0x10                         // save caller's cr3, which we use for flags
+        mr      r10,r4                          // move high word of 64-bit user address to r10
         crclr	kkString						// not a string version
-        mr		r10,r4							// dest (r4) is user-space ptr
+        mr      r11,r5                          // move low word of 64-bit user address to r11
         crclr	kkIn							// flag as copyout
         b		copyJoin
         
@@ -570,9 +574,9 @@ LEXT(copyoutmsg)
 /*
  * int
  * copyin(src, dst, count)
- *	vm_offset_t	src;
- *	vm_offset_t	dst;
- *	size_t		count;
+ *	addr64_t	src;        // r3 and r4
+ *	vm_offset_t	dst;        // r5
+ *	size_t		count;      // r6
  */
 
 
@@ -583,36 +587,41 @@ LEXT(copyoutmsg)
 LEXT(copyin)
 LEXT(copyinmsg)
 
-        mfcr	r2								// save caller's CR
+        mfcr	r2,0x10                         // save caller's cr3, which we use for flags
+        mr      r10,r3                          // move high word of 64-bit user address to r10
         crclr	kkString						// not a string version
-        mr		r10,r3							// source (r3) is user-space ptr in copyin
+        mr      r11,r4                          // move low word of 64-bit user address to r11
         crset	kkIn							// flag as copyin
         
         
 // Common code to handle setup for all the copy variants:
-//		r2 = caller's CR, since we use cr3
-//   r3-r6 = parameters
-//	   r10 = user-space ptr (r3 if copyin, r4 if copyout)
+//		r2 = caller's cr3
+//      r3 = source if copyout
+//      r5 = dest if copyin
+//      r6 = buffer length or count
+//      r7 = count output ptr (if kkString set)
+//	   r10 = high word of 64-bit user-space address (source if copyin, dest if copyout)
+//	   r11 = low word of 64-bit user-space address
 //     cr3 = kkIn, kkString, kkNull flags
 
 copyJoin:
         crclr	kkNull							// (dst==NULL) convention not used with this call
 copyJoin1:										// enter from copyinstr with kkNull set
 		mflr	r0								// get return address
-        cmplwi	r5,0							// buffer length 0?
+        cmplwi	r6,0							// buffer length 0?
         lis		r9,0x1000						// r9 <- 0x10000000 (256MB)
 		stw		r0,FM_LR_SAVE(r1)				// save return
-        cmplw	cr1,r5,r9						// buffer length > 256MB ?
+        cmplw	cr1,r6,r9						// buffer length > 256MB ?
         mfsprg	r8,2							// get the features
         beq--	copyinout_0						// 0 length is degenerate case
 		stwu	r1,-kkFrameSize(r1)				// set up stack frame
-        stw		r2,kkCR(r1)						// save caller's CR since we use cr3
+        stw		r2,kkCR3(r1)                    // save caller's cr3, which we use for flags
         mtcrf	0x02,r8							// move pf64Bit to cr6
-        stw		r3,kkSource(r1)					// save args across MapUserAddressSpace
-        stw		r4,kkDest(r1)
-        stw		r5,kkBufSize(r1)
+        stw		r3,kkSource(r1)					// save args across MapUserMemoryWindow
+        stw		r5,kkDest(r1)
+        stw		r6,kkBufSize(r1)
         crmove	kk64bit,pf64Bitb				// remember if this is a 64-bit processor
-        stw		r6,kkCountPtr(r1)
+        stw		r7,kkCountPtr(r1)
         stw		r31,kkR31Save(r1)				// we use r31 globally for mapped user ptr
         li		r31,0							// no mapped ptr yet
         
@@ -621,58 +630,60 @@ copyJoin1:										// enter from copyinstr with kkNull set
 // The string ops are passed -1 lengths by some BSD callers, so for them we silently clamp
 // the buffer length to 256MB.  This isn't an issue if the string is less than 256MB
 // (as most are!), but if they are >256MB we eventually return ENAMETOOLONG.  This restriction
-// is due to MapUserAddressSpace; we don't want to consume more than two segments for
+// is due to MapUserMemoryWindow; we don't want to consume more than two segments for
 // the mapping. 
 
         ble++	cr1,copyin0						// skip if buffer length <= 256MB
         bf		kkString,copyinout_too_big		// error if not string op
-        mr		r5,r9							// silently clamp buffer length to 256MB
+        mr		r6,r9							// silently clamp buffer length to 256MB
         stw		r9,kkBufSize(r1)				// update saved copy too
 
 
 // Set up thread_recover in case we hit an illegal address.
 
 copyin0:
-		mfsprg  r8,1							/* Get the current act */ 
+		mfsprg  r8,1							// Get the current thread 
 		lis		r2,hi16(copyinout_error)
-		lwz		r7,ACT_THREAD(r8)
 		ori		r2,r2,lo16(copyinout_error)
+		lwz		r4,THREAD_RECOVER(r8)
 		lwz		r3,ACT_VMMAP(r8)				// r3 <- vm_map virtual address
-		stw		r2,THREAD_RECOVER(r7)
+		stw		r2,THREAD_RECOVER(r8)
+		stw		r4,kkThrErrJmp(r1)
 
 
-// Map user segment into kernel map, turn on 64-bit mode.
+// Map user segment into kernel map, turn on 64-bit mode.  At this point:
 //		r3 = vm map
-//		r5 = buffer length
-//	   r10 = user space ptr (r3 if copyin, r4 if copyout)
+//		r6 = buffer length
+// r10/r11 = 64-bit user-space ptr (source if copyin, dest if copyout)
+//
+// When we call MapUserMemoryWindow, we pass:
+//      r3 = vm map ptr
+//   r4/r5 = 64-bit user space address as an addr64_t
         
-		mr		r6,r5							// Set length to map
-		li		r4,0							// Note: we only do this 32-bit for now
-        mr		r5,r10							// arg2 <- user space ptr
+        mr      r4,r10                          // copy user ptr into r4/r5
+        mr      r5,r11
 #if INSTRUMENT
-			mfspr	r12,pmc1						; INSTRUMENT - saveinstr[13] - Take stamp before mapuseraddressspace
-			stw		r12,0x6100+(13*16)+0x0(0)		; INSTRUMENT - Save it
-			mfspr	r12,pmc2						; INSTRUMENT - Get stamp
-			stw		r12,0x6100+(13*16)+0x4(0)		; INSTRUMENT - Save it
-			mfspr	r12,pmc3						; INSTRUMENT - Get stamp
-			stw		r12,0x6100+(13*16)+0x8(0)		; INSTRUMENT - Save it
-			mfspr	r12,pmc4						; INSTRUMENT - Get stamp
-			stw		r12,0x6100+(13*16)+0xC(0)		; INSTRUMENT - Save it
+        mfspr	r12,pmc1						; INSTRUMENT - saveinstr[13] - Take stamp before mapuseraddressspace
+        stw		r12,0x6100+(13*16)+0x0(0)		; INSTRUMENT - Save it
+        mfspr	r12,pmc2						; INSTRUMENT - Get stamp
+        stw		r12,0x6100+(13*16)+0x4(0)		; INSTRUMENT - Save it
+        mfspr	r12,pmc3						; INSTRUMENT - Get stamp
+        stw		r12,0x6100+(13*16)+0x8(0)		; INSTRUMENT - Save it
+        mfspr	r12,pmc4						; INSTRUMENT - Get stamp
+        stw		r12,0x6100+(13*16)+0xC(0)		; INSTRUMENT - Save it
 #endif			
-        bl		EXT(MapUserAddressSpace)		// set r3 <- address in kernel map of user operand
+        bl		EXT(MapUserMemoryWindow)		// get r3/r4 <- 64-bit address in kernel map of user operand
 #if INSTRUMENT
-			mfspr	r12,pmc1						; INSTRUMENT - saveinstr[14] - Take stamp after mapuseraddressspace
-			stw		r12,0x6100+(14*16)+0x0(0)		; INSTRUMENT - Save it
-			mfspr	r12,pmc2						; INSTRUMENT - Get stamp
-			stw		r12,0x6100+(14*16)+0x4(0)		; INSTRUMENT - Save it
-			mfspr	r12,pmc3						; INSTRUMENT - Get stamp
-			stw		r12,0x6100+(14*16)+0x8(0)		; INSTRUMENT - Save it
-			mfspr	r12,pmc4						; INSTRUMENT - Get stamp
-			stw		r12,0x6100+(14*16)+0xC(0)		; INSTRUMENT - Save it
+        mfspr	r12,pmc1						; INSTRUMENT - saveinstr[14] - Take stamp after mapuseraddressspace
+        stw		r12,0x6100+(14*16)+0x0(0)		; INSTRUMENT - Save it
+        mfspr	r12,pmc2						; INSTRUMENT - Get stamp
+        stw		r12,0x6100+(14*16)+0x4(0)		; INSTRUMENT - Save it
+        mfspr	r12,pmc3						; INSTRUMENT - Get stamp
+        stw		r12,0x6100+(14*16)+0x8(0)		; INSTRUMENT - Save it
+        mfspr	r12,pmc4						; INSTRUMENT - Get stamp
+        stw		r12,0x6100+(14*16)+0xC(0)		; INSTRUMENT - Save it
 #endif			
-		or.		r0,r3,r4						// Did we fail the mapping?
         mr		r31,r4							// r31 <- mapped ptr into user space (may be 64-bit)
-        beq--	copyinout_error					// was 0, so there was an error making the mapping
         bf--	kk64bit,copyin1					// skip if a 32-bit processor
  
  		rldimi	r31,r3,32,0						// slam high-order bits into mapped ptr
@@ -688,7 +699,7 @@ copyin0:
 copyin1:
         lwz		r5,kkBufSize(r1)				// restore length to copy
         bf		kkIn,copyin2					// skip if copyout
-        lwz		r4,kkDest(r1)					// copyin: source is mapped, dest is r4 at entry
+        lwz		r4,kkDest(r1)					// copyin: dest is kernel ptr
         mr		r3,r31							// source is mapped ptr
         b		copyin3
 copyin2:										// handle copyout
@@ -700,7 +711,7 @@ copyin2:										// handle copyout
 //		r3 = source ptr (mapped if copyin)
 //		r4 = dest ptr (mapped if copyout)
 //		r5 = length
-//	   r31 = mapped ptr returned by MapUserAddressSpace
+//	   r31 = mapped ptr returned by MapUserMemoryWindow
 //	   cr3 = kkIn, kkString, kk64bit, and kkNull flags
 
 copyin3:
@@ -711,29 +722,24 @@ copyin3:
         
 // Main exit point for copyin, copyout, copyinstr, and copyoutstr.  Also reached
 // from error recovery if we get a DSI accessing user space.  Clear recovery ptr, 
-// and pop off frame.  Note that we have kept
-// the mapped ptr into user space in r31, as a reg64_t type (ie, a 64-bit ptr on
-// 64-bit machines.)  We must unpack r31 into an addr64_t in (r3,r4) before passing
-// it to ReleaseUserAddressSpace.
+// and pop off frame.
 //		r3 = 0, EFAULT, or ENAMETOOLONG
 
 copyinx: 
-        lwz		r2,kkCR(r1)						// get callers cr3
-		mfsprg  r6,1							// Get the current act 
-		lwz		r10,ACT_THREAD(r6)
-		
+        lwz		r2,kkCR3(r1)                    // get callers cr3
+		mfsprg  r6,1							// Get the current thread 
         bf--	kk64bit,copyinx1				// skip if 32-bit processor
         mfmsr	r12
         rldicl	r12,r12,0,MSR_SF_BIT+1			// if 64-bit processor, turn 64-bit mode off
-        mtmsrd	r12								// turn SF off and EE back on
+        mtmsrd	r12								// turn SF off
         isync									// wait for the mode to change
 copyinx1:
+		lwz		r0,FM_LR_SAVE+kkFrameSize(r1)   // get return address
         lwz		r31,kkR31Save(r1)				// restore callers r31
+        lwz		r4,kkThrErrJmp(r1)				// load saved thread recover
         addi	r1,r1,kkFrameSize				// pop off our stack frame
-		lwz		r0,FM_LR_SAVE(r1)
-		li		r4,0
-		stw		r4,THREAD_RECOVER(r10)			// Clear recovery
 		mtlr	r0
+		stw		r4,THREAD_RECOVER(r6)			// restore thread recover
         mtcrf	0x10,r2							// restore cr3
 		blr
 
@@ -767,55 +773,85 @@ copyinout_too_big:								// degenerate case
 //		r3 = source ptr, mapped if copyinstr
 //		r4 = dest ptr, mapped if copyoutstr
 //		r5 = buffer length
-//	   r31 = mapped ptr returned by MapUserAddressSpace
+//	   r31 = mapped ptr returned by MapUserMemoryWindow
 //     cr3 = kkIn, kkString, kkNull, and kk64bit flags
 // We do word copies unless the buffer is very short, then use a byte copy loop
-// for the leftovers if necessary.
+// for the leftovers if necessary.  The crossover at which the word loop becomes
+// faster is about seven bytes, counting the zero.
+//
+// We first must word-align the source ptr, in order to avoid taking a spurious
+// page fault.
 
 copyString:
-        li		r12,0							// Set header bytes count to zero
-        cmplwi	cr1,r5,20						// is buffer very short?
+        cmplwi	cr1,r5,15						// is buffer very short?
+        mr      r12,r3                          // remember ptr to 1st source byte
         mtctr	r5								// assuming short, set up loop count for bytes
-        blt		cr1,copyinstr8					// too short for word loop
-        andi.	r12,r3,0x3						// is source ptr word aligned?
-        bne		copyinstr11						//  bytes loop
-copyinstr1:
-        srwi	r6,r5,2							// get #words in buffer
-        mtctr	r6								// set up word loop count
+        blt--   cr1,copyinstr8					// too short for word loop
+        rlwinm  r2,r3,0,0x3                     // get byte offset of 1st byte within word
+        rlwinm  r9,r3,3,0x18                    // get bit offset of 1st byte within word
+        li      r7,-1
+        sub     r3,r3,r2                        // word-align source address
+        add     r6,r5,r2                        // get length starting at byte 0 in word
+        srw     r7,r7,r9                        // get mask for bytes in first word
+        srwi	r0,r6,2							// get #words in buffer
+        lwz     r5,0(r3)                        // get aligned word with first source byte
         lis		r10,hi16(0xFEFEFEFF)			// load magic constants into r10 and r11
         lis		r11,hi16(0x80808080)
+        mtctr	r0								// set up word loop count
+        addi    r3,r3,4                         // advance past the source word
         ori		r10,r10,lo16(0xFEFEFEFF)
         ori		r11,r11,lo16(0x80808080)
-        bf		kkNull,copyinstr6				// enter loop that copies
-        b		copyinstr5						// use loop that just counts
+        orc     r8,r5,r7                        // map bytes preceeding first source byte into 0xFF
+        bt--	kkNull,copyinstr5enter          // enter loop that just counts
+        
+// Special case 1st word, which has been 0xFF filled on left.  Note that we use
+// "and.", even though we execute both in 32 and 64-bit mode.  This is OK.
+
+        slw     r5,r5,r9                        // left justify payload bytes
+        add		r9,r10,r8						// r9 =  data + 0xFEFEFEFF
+        andc	r7,r11,r8						// r7 = ~data & 0x80808080
+		subfic  r0,r2,4							// get r0 <- #payload bytes in 1st word
+        and.    r7,r9,r7						// if r7==0, then all bytes in r8 are nonzero
+        stw     r5,0(r4)                        // copy payload bytes to dest buffer
+        add		r4,r4,r0						// then point to next byte in dest buffer
+        bdnzt   cr0_eq,copyinstr6               // use loop that copies if 0 not found
+        
+        b		copyinstr7                      // 0 found (buffer can't be full)
         
         
 // Word loop(s).  They do a word-parallel search for 0s, using the following
 // inobvious but very efficient test:
 //		y =  data + 0xFEFEFEFF
 //		z = ~data & 0x80808080
-// If (y & z)==0, then all bytes in dataword are nonzero.  We need two copies of
-// this loop, since if we test kkNull in the loop then it becomes 9 words long.
+// If (y & z)==0, then all bytes in dataword are nonzero.  There are two copies
+// of this loop, one that just counts and another that copies.
+//		r3 = ptr to next word of source (word aligned)
+//		r4 = ptr to next byte in buffer
+//      r6 = original buffer length (adjusted to be word origin)
+//     r10 = 0xFEFEFEFE
+//     r11 = 0x80808080
+//     r12 = ptr to 1st source byte (used to determine string length)
 
         .align	5								// align inner loops for speed
 copyinstr5:										// version that counts but does not copy
-        lwz		r8,0(r3)						// get next word of source
-        addi	r3,r3,4							// increment source ptr
+        lwz     r8,0(r3)						// get next word of source
+        addi    r3,r3,4                         // advance past it
+copyinstr5enter:
         add		r9,r10,r8						// r9 =  data + 0xFEFEFEFF
         andc	r7,r11,r8						// r7 = ~data & 0x80808080
-        and.	r7,r9,r7						// r7 = r9 & r7
-        bdnzt	cr0_eq,copyinstr5				// if r7==0, then all bytes are nonzero
+        and.    r7,r9,r7                        // r7 = r9 & r7 ("." ok even in 64-bit mode)
+        bdnzt   cr0_eq,copyinstr5				// if r7==0, then all bytes in r8 are nonzero
 
         b		copyinstr7
 
         .align	5								// align inner loops for speed
 copyinstr6:										// version that counts and copies
-        lwz		r8,0(r3)						// get next word of source
-        addi	r3,r3,4							// increment source ptr
+        lwz     r8,0(r3)						// get next word of source
+        addi    r3,r3,4                         // advance past it
         addi	r4,r4,4							// increment dest ptr while we wait for data
         add		r9,r10,r8						// r9 =  data + 0xFEFEFEFF
         andc	r7,r11,r8						// r7 = ~data & 0x80808080
-        and.	r7,r9,r7						// r7 = r9 & r7
+        and.    r7,r9,r7                        // r7 = r9 & r7 ("." ok even in 64-bit mode)
         stw		r8,-4(r4)						// pack all 4 bytes into buffer
         bdnzt	cr0_eq,copyinstr6				// if r7==0, then all bytes are nonzero
 
@@ -823,19 +859,24 @@ copyinstr6:										// version that counts and copies
 // Either 0 found or buffer filled.  The above algorithm has mapped nonzero bytes to 0
 // and 0 bytes to 0x80 with one exception: 0x01 bytes preceeding the first 0 are also
 // mapped to 0x80.  We must mask out these false hits before searching for an 0x80 byte.
+//		r3 = word aligned ptr to next word of source (ie, r8==mem(r3-4))
+//      r6 = original buffer length (adjusted to be word origin)
+//      r7 = computed vector of 0x00 and 0x80 bytes
+//      r8 = original source word, coming from -4(r3), possibly padded with 0xFFs on left if 1st word
+//     r12 = ptr to 1st source byte (used to determine string length)
+//     cr0 = beq set iff 0 not found
 
 copyinstr7:
-        crnot	kkZero,cr0_eq					// 0 found iff cr0_eq is off
-        mfctr	r6								// get #words remaining in buffer
         rlwinm	r2,r8,7,0,31					// move 0x01 bits to 0x80 position
-        slwi	r6,r6,2							// convert to #bytes remaining
+		rlwinm  r6,r6,0,0x3						// mask down to partial byte count in last word
         andc	r7,r7,r2						// turn off false hits from 0x0100 worst case
-        rlwimi	r6,r5,0,30,31					// add in odd bytes leftover in buffer
-        srwi	r7,r7,8							// we want to count the 0 as a byte xferred
-        addi	r6,r6,4							// don't count last word xferred (yet)
+        crnot	kkZero,cr0_eq					// 0 found iff cr0_eq is off
+        srwi    r7,r7,8                         // we want to count the 0 as a byte xferred
+		cmpwi   r6,0							// any bytes left over in last word?
         cntlzw	r7,r7							// now we can find the 0 byte (ie, the 0x80)
+        subi    r3,r3,4                         // back up r3 to point to 1st byte in r8
         srwi	r7,r7,3							// convert 8,16,24,32 to 1,2,3,4
-        sub.	r6,r6,r7						// account for nonzero bytes in last word
+        add     r3,r3,r7                        // now r3 points one past 0 byte, or at 1st byte not xferred
         bt++	kkZero,copyinstr10				// 0 found, so done
         
         beq		copyinstr10						// r6==0, so buffer truly full
@@ -845,6 +886,10 @@ copyinstr7:
 
 // Byte loop.  This is used for very small buffers and for the odd bytes left over
 // after searching and copying words at a time.
+//      r3 = ptr to next byte of source
+//      r4 = ptr to next dest byte
+//     r12 = ptr to first byte of source
+//     ctr = count of bytes to check
     
         .align	5								// align inner loops for speed
 copyinstr8:										// loop over bytes of source
@@ -852,53 +897,400 @@ copyinstr8:										// loop over bytes of source
         addi	r3,r3,1
         addi	r4,r4,1							// increment dest addr whether we store or not
         cmpwi	r0,0							// the 0?
-        bt--	kkNull,copyinstr9				// don't store (was copyinstr with NULL ptr)
+        bt--	kkNull,copyinstr9				// don't store if copyinstr with NULL ptr
         stb		r0,-1(r4)
 copyinstr9:
         bdnzf	cr0_eq,copyinstr8				// loop if byte not 0 and more room in buffer
         
-        mfctr	r6								// get #bytes left in buffer
         crmove	kkZero,cr0_eq					// remember if 0 found or buffer filled
 
         
 // Buffer filled or 0 found.  Unwind and return.
-//	r5 = kkBufSize, ie buffer length
-//  r6 = untransferred bytes remaining in buffer
-// r31 = mapped ptr returned by MapUserAddressSpace
-// cr3 = kkZero set iff 0 found
+//      r3 = ptr to 1st source byte not transferred
+//     r12 = ptr to 1st source byte
+//     r31 = mapped ptr returned by MapUserMemoryWindow
+//     cr3 = kkZero set iff 0 found
 
 copyinstr10:
         lwz		r9,kkCountPtr(r1)				// get ptr to place to store count of bytes moved
-        sub		r2,r5,r6						// get #bytes we moved, counting the 0 iff any
-        add		r2,r2,r12						// add the header bytes count
-        li		r3,0							// assume 0 return status
+        sub     r2,r3,r12                       // compute #bytes copied (including the 0)
+        li		r3,0							// assume success return status
         stw		r2,0(r9)						// store #bytes moved
         bt++	kkZero,copyinx					// we did find the 0 so return 0
         li		r3,ENAMETOOLONG					// buffer filled
         b		copyinx							// join main exit routine
 
-// Byte loop.  This is used on the header bytes for unaligned source 
-    
-        .align	5								// align inner loops for speed
-copyinstr11:
-        li		r10,4							// load word size
-        sub		r12,r10,r12						// set the header bytes count
-        mtctr	r12								// set up bytes loop count
-copyinstr12:									// loop over bytes of source
-        lbz		r0,0(r3)						// get next byte of source
-        addi	r3,r3,1
-        addi	r4,r4,1							// increment dest addr whether we store or not
-        cmpwi	r0,0							// the 0?
-        bt--	kkNull,copyinstr13				// don't store (was copyinstr with NULL ptr)
-        stb		r0,-1(r4)
-copyinstr13:
-        bdnzf	cr0_eq,copyinstr12				// loop if byte not 0 and more room in buffer
-        sub		r5,r5,r12						// substract the bytes copied
-        bne		cr0_eq,copyinstr1				// branch to word loop
+//<><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><>
+/*
+ * int
+ * copypv(source, sink, size, which)
+ *	addr64_t	src;        // r3 and r4
+ *	addr64_t	dst;        // r5 and r6
+ *	size_t		size;		// r7
+ *	int			which;		// r8
+ *
+ * Operand size bytes are copied from operand src into operand dst. The source and
+ * destination operand addresses are given as addr64_t, and may designate starting
+ * locations in physical or virtual memory in any combination except where both are
+ * virtual. Virtual memory locations may be in either the kernel or the current thread's
+ * address space. Operand size may be up to 256MB.
+ *
+ * Operation is controlled by operand which, which offers these options:
+ *		cppvPsrc : source operand is (1) physical or (0) virtual
+ *		cppvPsnk : destination operand is (1) physical or (0) virtual
+ *		cppvKmap : virtual operand is in (1) kernel or (0) current thread
+ *		cppvFsnk : (1) flush destination before and after transfer
+ *		cppvFsrc : (1) flush source before and after transfer
+ *		cppvNoModSnk : (1) don't set source operand's changed bit(s)
+ *		cppvNoRefSrc : (1) don't set destination operand's referenced bit(s)
+ *
+ * Implementation is now split into this new 64-bit path and the old path, hw_copypv_32().
+ * This section describes the operation of the new 64-bit path.
+ *
+ * The 64-bit path utilizes the more capacious 64-bit kernel address space to create a
+ * window in the kernel address space into all of physical RAM plus the I/O hole. Since
+ * the window's mappings specify the proper access policies for the underlying memory,
+ * the new path does not have to flush caches to avoid a cache paradox, so cppvFsnk
+ * and cppvFsrc are ignored. Physical operand adresses are relocated into the physical
+ * memory window, and are accessed with data relocation on. Virtual addresses are either
+ * within the kernel, or are mapped into the kernel address space through the user memory
+ * window. Because accesses to a virtual operand are performed with data relocation on,
+ * the new path does not have to translate the address, disable/enable interrupts, lock
+ * the mapping, or update referenced and changed bits.
+ *
+ * The IBM 970 (a.k.a. G5) processor treats real-mode accesses as guarded, so there is
+ * a substantial performance penalty for copypv operating in real mode. Utilizing the
+ * new 64-bit path, transfer performance increases >100% on the G5.
+ *
+ * The attentive reader may notice that mtmsrd ops are not followed by isync ops as 
+ * might be expected. The 970 follows PowerPC architecture version 2.01, which defines
+ * mtmsrd with L=0 as a context synchronizing op, so a following isync is no longer
+ * required.
+ *
+ * To keep things exciting, we develop 64-bit values in non-volatiles, but we also need
+ * to call 32-bit functions, which would lead to the high-order 32 bits of our values
+ * getting clobbered unless we do something special. So, we preserve our 64-bit non-volatiles
+ * in our own stack frame across calls to 32-bit functions.
+ *		
+ */
 
-        mr		r5,r12							// Get the header bytes count
-        li		r12,0							// Clear the header bytes count
-        mfctr	r6								// get #bytes left in buffer
-        crmove	kkZero,cr0_eq					// remember if 0 found or buffer filled
-        b		copyinstr10
+// Map operand which bits into non-volatile CR2 and CR3 bits.
+#define whichAlign	((3+1)*4)
+#define whichMask	0x007F0000
+#define pvPsnk		(cppvPsnkb - whichAlign)
+#define pvPsrc		(cppvPsrcb - whichAlign)
+#define pvFsnk		(cppvFsnkb - whichAlign)
+#define pvFsrc		(cppvFsrcb - whichAlign)
+#define pvNoModSnk	(cppvNoModSnkb - whichAlign)
+#define pvNoRefSrc	(cppvNoRefSrcb - whichAlign)
+#define pvKmap		(cppvKmapb - whichAlign)
+#define pvNoCache	cr2_lt
 
+		.align	5
+		.globl	EXT(copypv)
+
+LEXT(copypv)
+        mfsprg	r10,2							// get feature flags
+        mtcrf	0x02,r10						// we need to test pf64Bit
+        bt++	pf64Bitb,copypv_64				// skip if 64-bit processor (only they take hint)
+        
+        b		EXT(hw_copypv_32)				// carry on with 32-bit copypv
+
+// Push a 32-bit ABI-compliant stack frame and preserve all non-volatiles that we'll clobber.        
+copypv_64:
+		mfsprg	r9,1							// get current thread
+		stwu	r1,-(FM_ALIGN((31-26+11)*4)+FM_SIZE)(r1)
+												// allocate stack frame and link it
+		mflr	r0								// get return address
+		mfcr	r10								// get cr2 and cr3
+		lwz		r12,THREAD_RECOVER(r9)			// get error callback
+		stw		r26,FM_ARG0+0x00(r1)			// save non-volatile r26
+		stw		r27,FM_ARG0+0x04(r1)			// save non-volatile r27
+		stw		r28,FM_ARG0+0x08(r1)			// save non-volatile r28
+		stw		r29,FM_ARG0+0x0C(r1)			// save non-volatile r29
+		stw		r30,FM_ARG0+0x10(r1)			// save non-volatile r30
+		stw		r31,FM_ARG0+0x14(r1)			// save non-volatile r31
+		stw		r12,FM_ARG0+0x20(r1)			// save error callback
+		stw		r0,(FM_ALIGN((31-26+11)*4)+FM_SIZE+FM_LR_SAVE)(r1)
+												// save return address
+		stw		r10,(FM_ALIGN((31-26+11)*4)+FM_SIZE+FM_CR_SAVE)(r1)
+												// save non-volatile cr2 and cr3
+
+// Non-volatile register usage in this routine is:
+//	r26: saved msr image
+//	r27: current pmap_t / virtual source address
+//	r28: destination virtual address
+//	r29: source address
+//	r30: destination address
+//	r31: byte count to copy
+//	cr2/3: parameter 'which' bits
+
+		rlwinm	r8,r8,whichAlign,whichMask		// align and mask which bits
+		mr		r31,r7							// copy size to somewhere non-volatile
+		mtcrf	0x20,r8							// insert which bits into cr2 and cr3
+		mtcrf	0x10,r8							// insert which bits into cr2 and cr3
+		rlwinm	r29,r3,0,1,0					// form source address high-order bits
+		rlwinm	r30,r5,0,1,0					// form destination address high-order bits
+		rlwimi	r29,r4,0,0,31					// form source address low-order bits
+		rlwimi	r30,r6,0,0,31					// form destination address low-order bits
+		crand	cr7_lt,pvPsnk,pvPsrc			// are both operand addresses physical?
+		cntlzw	r0,r31							// count leading zeroes in byte count
+		cror	cr7_eq,pvPsnk,pvPsrc			// cr7_eq <- source or destination is physical
+		bf--	cr7_eq,copypv_einval			// both operands may not be virtual
+		cmplwi	r0,4							// byte count greater than or equal 256M (2**28)?
+		blt--	copypv_einval					// byte count too big, give EINVAL
+		cmplwi	r31,0							// byte count zero?
+		beq--	copypv_zero						// early out
+		bt		cr7_lt,copypv_phys				// both operand addresses are physical
+		mr		r28,r30							// assume destination is virtual
+		bf		pvPsnk,copypv_dv				// is destination virtual?
+		mr		r28,r29							// no, so source must be virtual
+copypv_dv:
+		lis		r27,ha16(EXT(kernel_pmap))		// get kernel's pmap_t *, high-order
+		lwz		r27,lo16(EXT(kernel_pmap))(r27) // get kernel's pmap_t
+		bt		pvKmap,copypv_kern				// virtual address in kernel map?
+		lwz		r3,ACT_VMMAP(r9)				// get user's vm_map *
+		rldicl	r4,r28,32,32					// r4, r5 <- addr64_t virtual address 
+		rldicl	r5,r28,0,32
+		std		r29,FM_ARG0+0x30(r1)			// preserve 64-bit r29 across 32-bit call
+		std		r30,FM_ARG0+0x38(r1)			// preserve 64-bit r30 across 32-bit call
+		bl		EXT(MapUserMemoryWindow)		// map slice of user space into kernel space
+		ld		r29,FM_ARG0+0x30(r1)			// restore 64-bit r29
+		ld		r30,FM_ARG0+0x38(r1)			// restore 64-bit r30
+		rlwinm	r28,r3,0,1,0					// convert relocated addr64_t virtual address 
+		rlwimi	r28,r4,0,0,31					//  into a single 64-bit scalar
+copypv_kern:
+
+// Since we'll be accessing the virtual operand with data-relocation on, we won't need to 
+// update the referenced and changed bits manually after the copy. So, force the appropriate
+// flag bit on for the virtual operand.
+		crorc	pvNoModSnk,pvNoModSnk,pvPsnk	// for virtual dest, let hardware do ref/chg bits
+		crorc	pvNoRefSrc,pvNoRefSrc,pvPsrc	// for virtual source, let hardware do ref bit
+		
+// We'll be finding a mapping and looking at, so we need to disable 'rupts.
+		lis		r0,hi16(MASK(MSR_VEC))			// get vector mask
+		ori		r0,r0,lo16(MASK(MSR_FP))		// insert fp mask
+		mfmsr	r26								// save current msr
+		andc	r26,r26,r0						// turn off VEC and FP in saved copy
+		ori		r0,r0,lo16(MASK(MSR_EE))		// add EE to our mask
+		andc	r0,r26,r0						// disable EE in our new msr image
+		mtmsrd	r0								// introduce new msr image
+
+// We're now holding the virtual operand's pmap_t in r27 and its virtual address in r28. We now
+// try to find a mapping corresponding to this address in order to determine whether the address
+// is cacheable. If we don't find a mapping, we can safely assume that the operand is cacheable
+// (a non-cacheable operand must be a block mapping, which will always exist); otherwise, we
+// examine the mapping's caching-inhibited bit.
+		mr		r3,r27							// r3 <- pmap_t pmap
+		rldicl	r4,r28,32,32					// r4, r5 <- addr64_t va
+		rldicl	r5,r28,0,32
+		la		r6,FM_ARG0+0x18(r1)				// r6 <- addr64_t *nextva
+		li		r7,1							// r7 <- int full, search nested mappings
+		std		r26,FM_ARG0+0x28(r1)			// preserve 64-bit r26 across 32-bit calls
+		std		r28,FM_ARG0+0x30(r1)			// preserve 64-bit r28 across 32-bit calls
+		std		r29,FM_ARG0+0x38(r1)			// preserve 64-bit r29 across 32-bit calls
+		std		r30,FM_ARG0+0x40(r1)			// preserve 64-bit r30 across 32-bit calls
+		bl		EXT(mapping_find)				// find mapping for virtual operand
+		mr.		r3,r3							// did we find it?
+		beq		copypv_nomapping				// nope, so we'll assume it's cacheable
+		lwz		r4,mpVAddr+4(r3)				// get low half of virtual addr for hw flags
+		rlwinm.	r4,r4,0,mpIb-32,mpIb-32			// caching-inhibited bit set?
+		crnot	pvNoCache,cr0_eq				// if it is, use bcopy_nc
+		bl		EXT(mapping_drop_busy)			// drop busy on the mapping
+copypv_nomapping:
+		ld		r26,FM_ARG0+0x28(r1)			// restore 64-bit r26
+		ld		r28,FM_ARG0+0x30(r1)			// restore 64-bit r28
+		ld		r29,FM_ARG0+0x38(r1)			// restore 64-bit r29
+		ld		r30,FM_ARG0+0x40(r1)			// restore 64-bit r30
+		mtmsrd	r26								// restore msr to it's previous state
+
+// Set both the source and destination virtual addresses to the virtual operand's address --
+// we'll overlay one of them with the physical operand's address.
+		mr		r27,r28							// make virtual operand BOTH source AND destination
+
+// Now we're ready to relocate the physical operand address(es) into the physical memory window.
+// Recall that we've mapped physical memory (including the I/O hole) into the kernel's address
+// space somewhere at or over the 2**32 line. If one or both of the operands are in the I/O hole,
+// we'll set the pvNoCache flag, forcing use of non-caching bcopy_nc() to do the copy.
+copypv_phys:
+		ld		r6,lgPMWvaddr(0)				// get physical memory window virtual address
+		bf		pvPsnk,copypv_dstvirt			// is destination address virtual?
+		cntlzd	r4,r30							// count leading zeros in destination address
+		cmplwi	r4,32							// if it's 32, then it's in the I/O hole (2**30 to 2**31-1)
+		cror	pvNoCache,cr0_eq,pvNoCache		// use bcopy_nc for I/O hole locations		
+		add		r28,r30,r6						// relocate physical destination into physical window
+copypv_dstvirt:
+		bf		pvPsrc,copypv_srcvirt			// is source address virtual?
+		cntlzd	r4,r29							// count leading zeros in source address
+		cmplwi	r4,32							// if it's 32, then it's in the I/O hole (2**30 to 2**31-1)
+		cror	pvNoCache,cr0_eq,pvNoCache		// use bcopy_nc for I/O hole locations		
+		add		r27,r29,r6						// relocate physical source into physical window
+copypv_srcvirt:
+
+// Once the copy is under way (bcopy or bcopy_nc), we will want to get control if anything
+// funny happens during the copy. So, we set a pointer to our error handler in the per-thread
+// control block.
+		mfsprg	r8,1							// get current threads stuff
+		lis		r3,hi16(copypv_error)			// get our error callback's address, high
+		ori		r3,r3,lo16(copypv_error)		// get our error callback's address, low
+		stw		r3,THREAD_RECOVER(r8)			// set our error callback
+		
+// Since our physical operand(s) are relocated at or above the 2**32 line, we must enter
+// 64-bit mode.
+		li		r0,1							// get a handy one bit
+		mfmsr	r3								// get current msr
+		rldimi	r3,r0,63,MSR_SF_BIT				// set SF bit on in our msr copy
+		mtmsrd	r3								// enter 64-bit mode
+
+// If requested, flush data cache
+// Note that we don't flush, the code is being saved "just in case".
+#if 0
+		bf		pvFsrc,copypv_nfs				// do we flush the source?
+		rldicl	r3,r27,32,32					// r3, r4 <- addr64_t source virtual address
+		rldicl	r4,r27,0,32
+		mr		r5,r31							// r5 <- count (in bytes)
+		li		r6,0							// r6 <- boolean phys (false, not physical)
+		bl		EXT(flush_dcache)				// flush the source operand
+copypv_nfs:
+		bf		pvFsnk,copypv_nfdx				// do we flush the destination?
+		rldicl	r3,r28,32,32					// r3, r4 <- addr64_t destination virtual address
+		rldicl	r4,r28,0,32
+		mr		r5,r31							// r5 <- count (in bytes)
+		li		r6,0							// r6 <- boolean phys (false, not physical)
+		bl		EXT(flush_dcache)				// flush the destination operand
+copypv_nfdx:
+#endif
+
+// Call bcopy or bcopy_nc to perform the copy.
+		mr		r3,r27							// r3 <- source virtual address
+		mr		r4,r28							// r4 <- destination virtual address
+		mr		r5,r31							// r5 <- bytes to copy
+		bt		pvNoCache,copypv_nc				// take non-caching route
+		bl		EXT(bcopy)						// call bcopy to do the copying
+		b		copypv_copydone
+copypv_nc:
+		bl		EXT(bcopy_nc)					// call bcopy_nc to do the copying
+copypv_copydone:
+
+// If requested, flush data cache
+// Note that we don't flush, the code is being saved "just in case".
+#if 0
+		bf		pvFsrc,copypv_nfsx				// do we flush the source?
+		rldicl	r3,r27,32,32					// r3, r4 <- addr64_t source virtual address
+		rldicl	r4,r27,0,32
+		mr		r5,r31							// r5 <- count (in bytes)
+		li		r6,0							// r6 <- boolean phys (false, not physical)
+		bl		EXT(flush_dcache)				// flush the source operand
+copypv_nfsx:
+		bf		pvFsnk,copypv_nfd				// do we flush the destination?
+		rldicl	r3,r28,32,32					// r3, r4 <- addr64_t destination virtual address
+		rldicl	r4,r28,0,32
+		mr		r5,r31							// r5 <- count (in bytes)
+		li		r6,0							// r6 <- boolean phys (false, not physical)
+		bl		EXT(flush_dcache)				// flush the destination operand
+copypv_nfd:
+#endif
+
+// Leave 64-bit mode.
+		mfmsr	r3								// get current msr
+		rldicl	r3,r3,0,MSR_SF_BIT+1			// clear SF bit in our copy
+		mtmsrd	r3								// leave 64-bit mode
+
+// If requested, set ref/chg on source/dest physical operand(s). It is possible that copy is
+// from/to a RAM disk situated outside of mapped physical RAM, so we check each page by calling
+// mapping_phys_lookup() before we try to set its ref/chg bits; otherwise, we might panic.
+// Note that this code is page-size sensitive, so it should probably be a part of our low-level
+// code in hw_vm.s.
+		bt		pvNoModSnk,copypv_nomod			// skip destination update if not requested
+		std		r29,FM_ARG0+0x30(r1)			// preserve 64-bit r29 across 32-bit calls
+		li		r26,1							// r26 <- 4K-page count						
+		mr		r27,r31							// r27 <- byte count
+		rlwinm	r3,r30,0,20,31					// does destination cross a page boundary?
+		subfic	r3,r3,4096						//
+		cmplw	r3,r27							// 
+		blt		copypv_modnox					// skip if not crossing case
+		subf	r27,r3,r27						// r27 <- byte count less initial fragment
+		addi	r26,r26,1						// increment page count
+copypv_modnox:
+		srdi	r3,r27,12						// pages to update (not including crosser)
+		add		r26,r26,r3						// add in crosser
+		srdi	r27,r30,12						// r27 <- destination page number
+copypv_modloop:
+		mr		r3,r27							// r3 <- destination page number				
+		la		r4,FM_ARG0+0x18(r1)				// r4 <- unsigned int *pindex
+		bl		EXT(mapping_phys_lookup)		// see if page is really there
+		mr.		r3,r3							// is it?
+		beq--	copypv_modend					// nope, break out of modify loop
+		mr		r3,r27							// r3 <- destination page number
+		bl		EXT(mapping_set_mod)			// set page changed status
+		subi	r26,r26,1						// decrement page count
+		cmpwi	r26,0							// done yet?
+		bgt		copypv_modloop					// nope, iterate
+copypv_modend:
+		ld		r29,FM_ARG0+0x30(r1)			// restore 64-bit r29
+copypv_nomod:
+		bt		pvNoRefSrc,copypv_done			// skip source update if not requested
+copypv_debugref:
+		li		r26,1							// r26 <- 4K-page count						
+		mr		r27,r31							// r27 <- byte count
+		rlwinm	r3,r29,0,20,31					// does source cross a page boundary?
+		subfic	r3,r3,4096						//
+		cmplw	r3,r27							// 
+		blt		copypv_refnox					// skip if not crossing case
+		subf	r27,r3,r27						// r27 <- byte count less initial fragment
+		addi	r26,r26,1						// increment page count
+copypv_refnox:
+		srdi	r3,r27,12						// pages to update (not including crosser)
+		add		r26,r26,r3						// add in crosser
+		srdi	r27,r29,12						// r27 <- source page number
+copypv_refloop:
+		mr		r3,r27							// r3 <- source page number
+		la		r4,FM_ARG0+0x18(r1)				// r4 <- unsigned int *pindex
+		bl		EXT(mapping_phys_lookup)		// see if page is really there
+		mr.		r3,r3							// is it?
+		beq--	copypv_done						// nope, break out of modify loop
+		mr		r3,r27							// r3 <- source  page number
+		bl		EXT(mapping_set_ref)			// set page referenced status
+		subi	r26,r26,1						// decrement page count
+		cmpwi	r26,0							// done yet?
+		bgt		copypv_refloop					// nope, iterate
+		
+// Return, indicating success.
+copypv_done:
+copypv_zero:
+		li		r3,0							// our efforts were crowned with success
+
+// Pop frame, restore caller's non-volatiles, clear recovery routine pointer.
+copypv_return:
+		mfsprg	r9,1							// get current threads stuff
+		lwz		r0,(FM_ALIGN((31-26+11)*4)+FM_SIZE+FM_LR_SAVE)(r1)
+												// get return address
+		lwz		r4,(FM_ALIGN((31-26+11)*4)+FM_SIZE+FM_CR_SAVE)(r1)
+												// get non-volatile cr2 and cr3
+		lwz		r26,FM_ARG0+0x00(r1)			// restore non-volatile r26
+		lwz		r27,FM_ARG0+0x04(r1)			// restore non-volatile r27
+		mtlr	r0								// restore return address
+		lwz		r28,FM_ARG0+0x08(r1)			// restore non-volatile r28
+		mtcrf	0x20,r4							// restore non-volatile cr2
+		mtcrf	0x10,r4							// restore non-volatile cr3
+		lwz		r11,FM_ARG0+0x20(r1)			// save error callback
+		lwz		r29,FM_ARG0+0x0C(r1)			// restore non-volatile r29
+		lwz		r30,FM_ARG0+0x10(r1)			// restore non-volatile r30
+		lwz		r31,FM_ARG0+0x14(r1)			// restore non-volatile r31
+		stw		r11,THREAD_RECOVER(r9)			// restore our error callback
+		lwz		r1,0(r1)						// release stack frame
+												
+		blr										// y'all come back now
+
+// Invalid argument handler.
+copypv_einval:
+		li		r3,EINVAL						// invalid argument
+		b		copypv_return					// return
+
+// Error encountered during bcopy or bcopy_nc.		
+copypv_error:
+		mfmsr	r3								// get current msr
+		rldicl	r3,r3,0,MSR_SF_BIT+1			// clear SF bit in our copy
+		mtmsrd	r3								// leave 64-bit mode
+		li		r3,EFAULT						// it was all his fault
+		b		copypv_return					// return

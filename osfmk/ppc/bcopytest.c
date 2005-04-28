@@ -1,11 +1,9 @@
-#include <cpus.h>
 #include <debug.h>
 #include <mach_kgdb.h>
 #include <mach_vm_debug.h>
 #include <db_machine_commands.h>
 
 #include <kern/thread.h>
-#include <kern/thread_act.h>
 #include <mach/vm_attributes.h>
 #include <mach/vm_param.h>
 #include <vm/vm_kern.h>

@@ -94,7 +94,7 @@ int	ddp_pru_attach(struct socket *so, int proto,
 	if (error)
 		return error;
 	pcb = (struct atpcb *)((so)->so_pcb);
-	pcb->pid = current_proc()->p_pid;
+	pcb->pid = proc_selfpid();
 	pcb->ddptype = (u_char) proto;    /* set in socreate() */
 	pcb->proto = ATPROTO_DDP;
 

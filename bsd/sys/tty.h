@@ -68,22 +68,8 @@
 #include <sys/termios.h>
 #include <sys/select.h>		/* For struct selinfo. */
 
-#ifdef __APPLE_API_UNSTABLE
 
-#ifndef __APPLE__
-/*
- * Clists are character lists, which is a variable length linked list
- * of cblocks, with a count of the number of characters in the list.
- */
-struct clist {
-	int	c_cc;		/* Number of characters in the clist. */
-	int	c_cbcount;	/* Number of cblocks. */
-	int	c_cbmax;	/* Max # cblocks allowed for this clist. */
-	int	c_cbreserved;	/* # cblocks reserved for this clist. */
-	char	*c_cf;		/* Pointer to the first cblock. */
-	char	*c_cl;		/* Pointer to the last cblock. */
-};
-#else /* __APPLE__ */
+#ifdef KERNEL
 /*
  * NetBSD Clists are actually ring buffers. The c_cc, c_cf, c_cl fields have
  * exactly the same behaviour as in true clists.
@@ -106,7 +92,6 @@ struct clist {
 #define TTYCLSIZE 1024
 #endif
 
-#endif /* __APPLE__ */
 
 /*
  * Per-tty structure.
@@ -134,11 +119,11 @@ struct tty {
 	struct	termios t_termios;	/* Termios state. */
 	struct	winsize t_winsize;	/* Window size. */
 					/* Start output. */
-	void	(*t_oproc) __P((struct tty *));
+	void	(*t_oproc)(struct tty *);
 					/* Stop output. */
-	void	(*t_stop) __P((struct tty *, int));
+	void	(*t_stop)(struct tty *, int);
 					/* Set hardware state. */
-	int	(*t_param) __P((struct tty *, struct termios *));
+	int	(*t_param)(struct tty *, struct termios *);
 	void	*t_sc;			/* XXX: net/if_sl.c:sl_softc. */
 	int	t_column;		/* Tty output column. */
 	int	t_rocount, t_rocol;	/* Tty. */
@@ -173,11 +158,13 @@ struct tty {
 #define	TTYHOG	1024
 #endif
 
-#ifdef KERNEL
 #define	TTMAXHIWAT	roundup(2048, CBSIZE)
 #define	TTMINHIWAT	roundup(100, CBSIZE)
 #define	TTMAXLOWAT	256
 #define	TTMINLOWAT	32
+#else
+struct tty;
+struct clist;
 #endif /* KERNEL */
 
 /* These flags are kept in t_state. */
@@ -247,6 +234,7 @@ struct speedtab {
 #define	TTY_OE		0x04000000	/* Overrun error */
 #define	TTY_BI		0x08000000	/* Break condition */
 
+#ifdef KERNEL
 /* Is tp controlling terminal for p? */
 #define	isctty(p, tp)							\
 	((p)->p_session == (tp)->t_session && (p)->p_flag & P_CONTROLT)
@@ -265,87 +253,63 @@ struct speedtab {
 #define	TSA_PTS_READ(tp)	((void *)&(tp)->t_canq)
 
 
-#ifdef KERNEL
 __BEGIN_DECLS
 
-#ifndef __APPLE__
-extern	struct tty *constty;	/* Temporary virtual console. */
-
-int	 b_to_q __P((char *cp, int cc, struct clist *q));
-void	 catq __P((struct clist *from, struct clist *to));
-void	 clist_alloc_cblocks __P((struct clist *q, int ccmax, int ccres));
-void	 clist_free_cblocks __P((struct clist *q));
-/* void	 clist_init __P((void)); */ /* defined in systm.h for main() */
-int	 getc __P((struct clist *q));
-void	 ndflush __P((struct clist *q, int cc));
-int	 ndqb __P((struct clist *q, int flag));
-char	*nextc __P((struct clist *q, char *cp, int *c));
-int	 putc __P((int c, struct clist *q));
-int	 q_to_b __P((struct clist *q, char *cp, int cc));
-int	 unputc __P((struct clist *q));
-
-int	ttcompat __P((struct tty *tp, int com, caddr_t data, int flag));
-int     ttsetcompat __P((struct tty *tp, int *com, caddr_t data, struct termios *term));
-#else /* __APPLE__ */
-int	 b_to_q __P((u_char *cp, int cc, struct clist *q));
-void	 catq __P((struct clist *from, struct clist *to));
-void	 clist_init __P((void));
-int	 getc __P((struct clist *q));
-void	 ndflush __P((struct clist *q, int cc));
-int	 ndqb __P((struct clist *q, int flag));
-u_char	*firstc           __P((struct clist *clp, int *c));
-u_char	*nextc __P((struct clist *q, u_char *cp, int *c));
-int	 putc __P((int c, struct clist *q));
-int	 q_to_b __P((struct clist *q, u_char *cp, int cc));
-int	 unputc __P((struct clist *q));
-int	 clalloc __P((struct clist *clp, int size, int quot));
-void	 clfree __P((struct clist *clp));
+int	 b_to_q(const u_char *cp, int cc, struct clist *q);
+void	 catq(struct clist *from, struct clist *to);
+void	 clist_init(void);
+int	 getc(struct clist *q);
+void	 ndflush(struct clist *q, int cc);
+int	 ndqb(struct clist *q, int flag);
+u_char	*firstc          (struct clist *clp, int *c);
+u_char	*nextc(struct clist *q, u_char *cp, int *c);
+int	 putc(int c, struct clist *q);
+int	 q_to_b(struct clist *q, u_char *cp, int cc);
+int	 unputc(struct clist *q);
+int	 clalloc(struct clist *clp, int size, int quot);
+void	 clfree(struct clist *clp);
+void	cinit(void);
+void	clrbits(u_char *cp, int off, int len);
 
 #ifdef KERNEL_PRIVATE
-int	ttcompat __P((struct tty *tp, u_long com, caddr_t data, int flag,
-	    struct proc *p));
-int	ttsetcompat __P((struct tty *tp, u_long *com, caddr_t data, struct termios *term));
+int	ttcompat(struct tty *tp, u_long com, caddr_t data, int flag,
+	    struct proc *p);
+int	ttsetcompat(struct tty *tp, u_long *com, caddr_t data, struct termios *term);
 #endif /* KERNEL_PRIVATE */
-#endif /* __APPLE__ */
 
-void	 termioschars __P((struct termios *t));
-int	 tputchar __P((int c, struct tty *tp));
-#ifndef __APPLE__
-int	 ttioctl __P((struct tty *tp, int com, void *data, int flag));
-#else
-int	 ttioctl __P((struct tty *tp, u_long com, caddr_t data, int flag,
-	    struct proc *p));
-#endif
-int	 ttread __P((struct tty *tp, struct uio *uio, int flag));
-void	 ttrstrt __P((void *tp));
-int	 ttyselect __P((struct tty *tp, int rw, void * wql, struct proc *p));
-int	 ttselect __P((dev_t dev, int rw, void * wql, struct proc *p));
-void	 ttsetwater __P((struct tty *tp));
-int	 ttspeedtab __P((int speed, struct speedtab *table));
-int	 ttstart __P((struct tty *tp));
-void	 ttwakeup __P((struct tty *tp));
-int	 ttwrite __P((struct tty *tp, struct uio *uio, int flag));
-void	 ttwwakeup __P((struct tty *tp));
-void	 ttyblock __P((struct tty *tp));
-void	 ttychars __P((struct tty *tp));
-int	 ttycheckoutq __P((struct tty *tp, int wait));
-int	 ttyclose __P((struct tty *tp));
-void	 ttyflush __P((struct tty *tp, int rw));
-void	 ttyinfo __P((struct tty *tp));
-int	 ttyinput __P((int c, struct tty *tp));
-int	 ttylclose __P((struct tty *tp, int flag));
-int	 ttymodem __P((struct tty *tp, int flag));
-int	 ttyopen __P((dev_t device, struct tty *tp));
-int	 ttysleep __P((struct tty *tp,
-	    void *chan, int pri, char *wmesg, int timeout));
-int	 ttywait __P((struct tty *tp));
-struct tty *ttymalloc __P((void));
-void     ttyfree __P((struct tty *));
+void	 termioschars(struct termios *t);
+int	 tputchar(int c, struct tty *tp);
+int	 ttioctl(struct tty *tp, u_long com, caddr_t data, int flag,
+	    struct proc *p);
+int	 ttread(struct tty *tp, struct uio *uio, int flag);
+void	 ttrstrt(void *tp);
+int	 ttyselect(struct tty *tp, int rw, void * wql, struct proc *p);
+int	 ttselect(dev_t dev, int rw, void * wql, struct proc *p);
+void	 ttsetwater(struct tty *tp);
+int	 ttspeedtab(int speed, struct speedtab *table);
+int	 ttstart(struct tty *tp);
+void	 ttwakeup(struct tty *tp);
+int	 ttwrite(struct tty *tp, struct uio *uio, int flag);
+void	 ttwwakeup(struct tty *tp);
+void	 ttyblock(struct tty *tp);
+void	 ttychars(struct tty *tp);
+int	 ttycheckoutq(struct tty *tp, int wait);
+int	 ttyclose(struct tty *tp);
+void	 ttyflush(struct tty *tp, int rw);
+void	 ttyinfo(struct tty *tp);
+int	 ttyinput(int c, struct tty *tp);
+int	 ttylclose(struct tty *tp, int flag);
+int	 ttymodem(struct tty *tp, int flag);
+int	 ttyopen(dev_t device, struct tty *tp);
+int	 ttysleep(struct tty *tp,
+	    void *chan, int pri, const char *wmesg, int timeout);
+int	 ttywait(struct tty *tp);
+struct tty *ttymalloc(void);
+void     ttyfree(struct tty *);
 
 __END_DECLS
 
 #endif /* KERNEL */
 
-#endif /* __APPLE_API_UNSTABLE */
 
 #endif /* !_SYS_TTY_H_ */

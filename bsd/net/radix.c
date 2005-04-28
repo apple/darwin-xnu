@@ -70,17 +70,20 @@
 #endif
 #include <sys/syslog.h>
 #include <net/radix.h>
+#include <sys/socket.h>
+#include <sys/socketvar.h>
+#include <kern/locks.h>
 #endif
 
-static int	rn_walktree_from __P((struct radix_node_head *h, void *a,
-				      void *m, walktree_f_t *f, void *w));
-static int rn_walktree __P((struct radix_node_head *, walktree_f_t *, void *));
+static int	rn_walktree_from(struct radix_node_head *h, void *a,
+				      void *m, walktree_f_t *f, void *w);
+static int rn_walktree(struct radix_node_head *, walktree_f_t *, void *);
 static struct radix_node
-	 *rn_insert __P((void *, struct radix_node_head *, int *,
-			struct radix_node [2])),
-	 *rn_newpair __P((void *, int, struct radix_node[2])),
-	 *rn_search __P((void *, struct radix_node *)),
-	 *rn_search_m __P((void *, struct radix_node *, void *));
+	 *rn_insert(void *, struct radix_node_head *, int *,
+			struct radix_node [2]),
+	 *rn_newpair(void *, int, struct radix_node[2]),
+	 *rn_search(void *, struct radix_node *),
+	 *rn_search_m(void *, struct radix_node *, void *);
 
 static int	max_keylen;
 static struct radix_mask *rn_mkfreelist;
@@ -89,17 +92,22 @@ static char *addmask_key;
 static char normal_chars[] = {0, 0x80, 0xc0, 0xe0, 0xf0, 0xf8, 0xfc, 0xfe, -1};
 static char *rn_zeros, *rn_ones;
 
+
+extern lck_grp_t	*domain_proto_mtx_grp;
+extern lck_attr_t	*domain_proto_mtx_attr;
+lck_mtx_t *rn_mutex;
+
 #define rn_masktop (mask_rnhead->rnh_treetop)
 #undef Bcmp
 #define Bcmp(a, b, l) \
 	(l == 0 ? 0 : bcmp((caddr_t)(a), (caddr_t)(b), (u_long)l))
 
-static int	rn_lexobetter __P((void *m_arg, void *n_arg));
+static int	rn_lexobetter(void *m_arg, void *n_arg);
 static struct radix_mask *
-		rn_new_radix_mask __P((struct radix_node *tt,
-				       struct radix_mask *next));
-static int	rn_satsifies_leaf __P((char *trial, struct radix_node *leaf,
-				       int skip));
+		rn_new_radix_mask(struct radix_node *tt,
+				       struct radix_mask *next);
+static int	rn_satsifies_leaf(char *trial, struct radix_node *leaf,
+				       int skip);
 
 /*
  * The data structure for the keys is a radix tree with one way
@@ -496,7 +504,7 @@ rn_addmask(n_arg, search, skip)
 	x = rn_insert(cp, mask_rnhead, &maskduplicated, x);
 	if (maskduplicated) {
 		log(LOG_ERR, "rn_addmask: mask impossibly already in tree");
-		Free(saved_x);
+		R_Free(saved_x);
 		return (x);
 	}
 	/*
@@ -1084,6 +1092,7 @@ rn_init()
 #ifdef KERNEL
 	struct domain *dom;
 
+	/* lock already held when rn_init is called */
 	for (dom = domains; dom; dom = dom->dom_next)
 		if (dom->dom_maxrtkey > max_keylen)
 			max_keylen = dom->dom_maxrtkey;
@@ -1103,4 +1112,41 @@ rn_init()
 		*cp++ = -1;
 	if (rn_inithead((void **)&mask_rnhead, 0) == 0)
 		panic("rn_init 2");
+
+	rn_mutex = lck_mtx_alloc_init(domain_proto_mtx_grp, domain_proto_mtx_attr);
+}
+int
+rn_lock(so, refcount, lr)
+	struct socket *so;
+	int refcount;
+	int lr;
+{
+//	printf("rn_lock: (global) so=%x ref=%d lr=%x\n", so, so->so_usecount, lr);
+	lck_mtx_assert(rn_mutex, LCK_MTX_ASSERT_NOTOWNED);
+	lck_mtx_lock(rn_mutex);
+	if (refcount)
+		so->so_usecount++;
+	return (0);
+}
+
+int
+rn_unlock(so, refcount, lr)
+	struct socket *so;
+	int refcount;
+	int lr;
+{
+//	printf("rn_unlock: (global) so=%x ref=%d lr=%x\n", so, so->so_usecount, lr);
+	if (refcount)
+		so->so_usecount--;
+	lck_mtx_assert(rn_mutex, LCK_MTX_ASSERT_OWNED);
+	lck_mtx_unlock(rn_mutex);
+	return (0);
+}
+lck_mtx_t *
+rn_getlock(so, locktype)
+	struct socket *so;
+	int locktype;
+{
+//	printf("rn_getlock: (global) so=%x\n", so);
+	return (rn_mutex);
 }

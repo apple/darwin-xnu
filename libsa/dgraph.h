@@ -91,6 +91,8 @@ typedef enum {
 } dgraph_error_t;
 
 
+enum { kOpaqueLink = 0x01, kRawKernelLink = 0x02 };
+
 dgraph_error_t dgraph_init(dgraph_t * dgraph);
 
 #ifndef KERNEL

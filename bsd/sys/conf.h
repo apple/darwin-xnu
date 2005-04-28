@@ -76,28 +76,36 @@ struct tty;
 struct uio;
 struct vnode;
 
-#ifdef __APPLE_API_UNSTABLE
+/*
+ * Types for d_type.
+ * These are returned by ioctl FIODTYPE
+ */
+#define	D_TAPE	1
+#define	D_DISK	2
+#define	D_TTY	3
+
+#ifdef KERNEL
 /* 
  * Device switch function types.
  */
-typedef int  open_close_fcn_t	__P((dev_t dev, int flags, int devtype,
-				     struct proc *p));
+typedef int  open_close_fcn_t(dev_t dev, int flags, int devtype,
+				     struct proc *p);
 
-typedef struct tty *d_devtotty_t __P((dev_t dev));
+typedef struct tty *d_devtotty_t(dev_t dev);
 
-typedef	void strategy_fcn_t	__P((struct buf *bp));
-typedef int  ioctl_fcn_t	__P((dev_t dev, u_long cmd, caddr_t data,
-				     int fflag, struct proc *p));
-typedef int  dump_fcn_t	();     /* parameters vary by architecture */
-typedef	int  psize_fcn_t	__P((dev_t dev));
-typedef int  read_write_fcn_t 	__P((dev_t dev, struct uio *uio, int ioflag));
-typedef	int  stop_fcn_t 	__P((struct tty *tp, int rw));
-typedef	int  reset_fcn_t 	__P((int uban));
-typedef	int  select_fcn_t 	__P((dev_t dev, int which, void * wql, struct proc *p));
-typedef	int  mmap_fcn_t 	__P(());
-typedef	int  getc_fcn_t 	__P((dev_t dev));
-typedef	int  putc_fcn_t 	__P((dev_t dev, char c));
-typedef int  d_poll_t		__P((dev_t dev, int events, struct proc *p));
+typedef	void strategy_fcn_t(struct buf *bp);
+typedef int  ioctl_fcn_t(dev_t dev, u_long cmd, caddr_t data,
+				     int fflag, struct proc *p);
+typedef int  dump_fcn_t(void);     /* parameters vary by architecture */
+typedef	int  psize_fcn_t(dev_t dev);
+typedef int  read_write_fcn_t(dev_t dev, struct uio *uio, int ioflag);
+typedef	int  stop_fcn_t(struct tty *tp, int rw);
+typedef	int  reset_fcn_t(int uban);
+typedef	int  select_fcn_t(dev_t dev, int which, void * wql, struct proc *p);
+typedef	int  mmap_fcn_t(void);
+typedef	int  getc_fcn_t(dev_t dev);
+typedef	int  putc_fcn_t(dev_t dev, char c);
+typedef int  d_poll_t(dev_t dev, int events, struct proc *p);
 
 #define	d_open_t	open_close_fcn_t
 #define	d_close_t	open_close_fcn_t
@@ -113,8 +121,8 @@ typedef int  d_poll_t		__P((dev_t dev, int events, struct proc *p));
 #define	d_putc_t	putc_fcn_t
 
 __BEGIN_DECLS
-int	enodev ();		/* avoid actual prototype for multiple use */
-void	enodev_strat();
+int		enodev(void);		
+void	enodev_strat(void);
 __END_DECLS
 
 /*
@@ -134,12 +142,6 @@ __END_DECLS
 #define eno_putc		((putc_fcn_t *)&enodev)
 #define eno_select		((select_fcn_t *)&enodev)
 
-/*
- * Types for d_type.
- */
-#define	D_TAPE	1
-#define	D_DISK	2
-#define	D_TTY	3
 
 /*
  * Block device switch table
@@ -154,14 +156,13 @@ struct bdevsw {
 	int			d_type;
 };
 
-#ifdef KERNEL
 
 d_devtotty_t    nodevtotty;
 d_write_t	nowrite;
 
-#ifdef __APPLE_API_PRIVATE
+#ifdef KERNEL_PRIVATE
 extern struct bdevsw bdevsw[];
-#endif /* __APPLE_API_PRIVATE */
+#endif /* KERNEL_PRIVATE */
 
 /*
  * Contents of empty bdevsw slot.
@@ -170,7 +171,6 @@ extern struct bdevsw bdevsw[];
 	{ eno_opcl,	eno_opcl,	eno_strat, eno_ioctl,	\
 	  eno_dump,	eno_psize,	0 	}
 	  
-#endif /* KERNEL */
 
 /*
  * Character device switch table
@@ -180,23 +180,22 @@ struct cdevsw {
 	open_close_fcn_t	*d_close;
 	read_write_fcn_t	*d_read;
 	read_write_fcn_t	*d_write;
-	ioctl_fcn_t		*d_ioctl;
-	stop_fcn_t		*d_stop;
-	reset_fcn_t		*d_reset;
+	ioctl_fcn_t			*d_ioctl;
+	stop_fcn_t			*d_stop;
+	reset_fcn_t			*d_reset;
 	struct	tty 		**d_ttys;
 	select_fcn_t		*d_select;
-	mmap_fcn_t		*d_mmap;
+	mmap_fcn_t			*d_mmap;
 	strategy_fcn_t		*d_strategy;
-	getc_fcn_t		*d_getc;
-	putc_fcn_t		*d_putc;
-	int			d_type;
+	getc_fcn_t			*d_getc;
+	putc_fcn_t			*d_putc;
+	int					d_type;
 };
 
-#ifdef KERNEL
 
-#ifdef __APPLE_API_PRIVATE
+#ifdef KERNEL_PRIVATE
 extern struct cdevsw cdevsw[];
-#endif /* __APPLE_API_PRIVATE */
+#endif /* KERNEL_PRIVATE */
 
 /*
  * Contents of empty cdevsw slot.
@@ -209,39 +208,45 @@ extern struct cdevsw cdevsw[];
 	(select_fcn_t *)seltrue,	eno_mmap,	eno_strat,	eno_getc,	\
 	eno_putc,	0 					  	\
     }
+	
 #endif /* KERNEL */
-    
+  
+#ifdef  KERNEL_PRIVATE
+typedef int  l_open_t (dev_t dev, struct tty *tp);
+typedef int  l_close_t(struct tty *tp, int flags);
+typedef int  l_read_t (struct tty *tp, struct uio *uio, int flag);
+typedef int  l_write_t(struct tty *tp, struct uio *uio, int flag);
+typedef int  l_ioctl_t(struct tty *tp, u_long cmd, caddr_t data, int flag,
+		       struct proc *p);
+typedef int  l_rint_t (int c, struct tty *tp);
+typedef void l_start_t(struct tty *tp);
+typedef int  l_modem_t(struct tty *tp, int flag);
+
 /*
  * Line discipline switch table
  */
 struct linesw {
-	int	(*l_open)	__P((dev_t dev, struct tty *tp));
-	int	(*l_close)	__P((struct tty *tp, int flags));
-	int	(*l_read)	__P((struct tty *tp, struct uio *uio,
-				     int flag));
-	int	(*l_write)	__P((struct tty *tp, struct uio *uio,
-				     int flag));
-	int	(*l_ioctl)	__P((struct tty *tp, u_long cmd, caddr_t data,
-				     int flag, struct proc *p));
-	int	(*l_rint)	__P((int c, struct tty *tp));
-	int	(*l_start)	__P((struct tty *tp));
-	int	(*l_modem)	__P((struct tty *tp, int flag));
+	l_open_t	*l_open;
+	l_close_t	*l_close;
+	l_read_t	*l_read;
+	l_write_t	*l_write;
+	l_ioctl_t	*l_ioctl;
+	l_rint_t	*l_rint;
+	l_start_t	*l_start;
+	l_modem_t	*l_modem;
 };
 
-#ifdef KERNEL
 
-#ifdef __APPLE_API_PRIVATE
 extern struct linesw linesw[];
 extern int nlinesw;
-#endif /* __APPLE_API_PRIVATE */
  
-int ldisc_register __P((int , struct linesw *));
-void ldisc_deregister __P((int));
+int ldisc_register(int , struct linesw *);
+void ldisc_deregister(int);
 #define LDISC_LOAD      -1              /* Loadable line discipline */
 
-#endif /* KERNEL */
+#endif /* KERNEL_PRIVATE */
 
-#ifdef __APPLE_API_OBSOLETE
+#ifdef BSD_KERNEL_PRIVATE
 /*
  * Swap device table
  */
@@ -255,11 +260,9 @@ struct swdevt {
 #define	SW_SEQUENTIAL	0x02
 #define	sw_freed	sw_flags	/* XXX compat */
 
-#ifdef KERNEL
 extern struct swdevt swdevt[];
-#endif /* KERNEL */
 
-#endif /* __APPLE_API_OBSOLETE */
+#endif /* BSD_KERNEL_PRIVATE */
 
 
 #ifdef KERNEL
@@ -271,15 +274,14 @@ extern struct swdevt swdevt[];
  *  else -1
  */
 __BEGIN_DECLS
-int  bdevsw_isfree __P((int));
-int  bdevsw_add __P((int, struct bdevsw *));
-int  bdevsw_remove __P((int, struct bdevsw *));
-int  cdevsw_isfree __P((int));
-int  cdevsw_add __P((int, struct cdevsw *));
-int  cdevsw_remove __P((int, struct cdevsw *));
+int  bdevsw_isfree(int);
+int  bdevsw_add(int, struct bdevsw *);
+int  bdevsw_remove(int, struct bdevsw *);
+int  cdevsw_isfree(int);
+int  cdevsw_add(int, struct cdevsw *);
+int  cdevsw_add_with_bdev(int index, struct cdevsw * csw, int bdev);
+int  cdevsw_remove(int, struct cdevsw *);
 __END_DECLS
 #endif /* KERNEL */
-
-#endif /* __APPLE_API_UNSTABLE */
 
 #endif /* _SYS_CONF_H_ */

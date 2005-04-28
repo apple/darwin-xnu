@@ -78,7 +78,7 @@
 #include <net/net_osdep.h>
 
 #if INET
-static struct in_addr *ah4_finaldst __P((struct mbuf *));
+static struct in_addr *ah4_finaldst(struct mbuf *);
 #endif
 
 /*

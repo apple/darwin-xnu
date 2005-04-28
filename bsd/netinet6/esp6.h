@@ -38,14 +38,12 @@
 #define _NETINET6_ESP6_H_
 #include <sys/appleapiopts.h>
 
-#ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
-extern int esp6_output __P((struct mbuf *, u_char *, struct mbuf *,
-	struct ipsecrequest *));
-extern int esp6_input __P((struct mbuf **, int *));
+#ifdef KERNEL_PRIVATE
+extern int esp6_output(struct mbuf *, u_char *, struct mbuf *,
+	struct ipsecrequest *);
+extern int esp6_input(struct mbuf **, int *);
 
-extern void esp6_ctlinput __P((int, struct sockaddr *, void *));
-#endif /* __APPLE_API_PRIVATE */
-#endif /*_KERNEL*/
+extern void esp6_ctlinput(int, struct sockaddr *, void *);
+#endif KERNEL_PRIVATE
 
-#endif /*_NETINET6_ESP6_H_*/
+#endif _NETINET6_ESP6_H_

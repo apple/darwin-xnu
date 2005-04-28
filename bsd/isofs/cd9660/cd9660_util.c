@@ -76,6 +76,7 @@
 #include <sys/stat.h>
 #include <sys/buf.h>
 #include <sys/proc.h>
+#include <sys/kauth.h>
 #include <sys/conf.h>
 #include <sys/utfconv.h>
 #include <miscfs/specfs/specdev.h> /* XXX */
@@ -95,9 +96,7 @@
  * Note: Version number plus ';' may be omitted.
  */
 int
-isofncmp(fn, fnlen, isofn, isolen)
-	u_char *fn, *isofn;
-	int fnlen, isolen;
+isofncmp(u_char *fn, int fnlen, u_char *isofn, int isolen)
 {
 	int i, j;
 	char c;
@@ -160,11 +159,7 @@ isofncmp(fn, fnlen, isofn, isolen)
  */
 
 int
-ucsfncmp(fn, fnlen, ucsfn, ucslen)
-	u_int16_t *fn;
-	int fnlen;
-	u_int16_t *ucsfn;
-	int ucslen;
+ucsfncmp(u_int16_t *fn, int fnlen, u_int16_t *ucsfn, int ucslen)
 {
 	int i, j;
 	u_int16_t c;
@@ -216,12 +211,8 @@ ucsfncmp(fn, fnlen, ucsfn, ucslen)
  * translate a filename
  */
 void
-isofntrans(infn, infnlen, outfn, outfnlen, original, assoc)
-	u_char *infn, *outfn;
-	int infnlen;
-	u_short *outfnlen;
-	int original;
-	int assoc;
+isofntrans(u_char *infn, int infnlen, u_char *outfn, u_short *outfnlen,
+		int original, int assoc)
 {
 	int fnidx = 0;
 	
@@ -266,13 +257,8 @@ isofntrans(infn, infnlen, outfn, outfnlen, original, assoc)
  * translate a UCS-2 filename to UTF-8
  */
 void
-ucsfntrans(infn, infnlen, outfn, outfnlen, dir, assoc)
-	u_int16_t *infn;
-	int infnlen;
-	u_char *outfn;
-	u_short *outfnlen;
-	int dir;
-	int assoc;
+ucsfntrans(u_int16_t *infn, int infnlen, u_char *outfn, u_short *outfnlen,
+		int dir, int assoc)
 {
 	if (infnlen == 1) {
 		strcpy(outfn, "..");
@@ -325,22 +311,19 @@ ucsfntrans(infn, infnlen, outfn, outfnlen, dir, assoc)
  * count the number of children by enumerating the directory
  */
 static int
-isochildcount(vdp, dircnt, filcnt)
-	struct vnode *vdp;
-	int *dircnt;
-	int *filcnt;
+isochildcount(struct vnode *vdp, int *dircnt, int *filcnt)
 {
 	struct iso_node *dp;
 	struct buf *bp = NULL;
 	struct iso_mnt *imp;
 	struct iso_directory_record *ep;
-	u_long bmask;
+	uint32_t bmask;
 	int error = 0;
 	int reclen;
 	int dirs, files;
 	int blkoffset;
 	int logblksize;
-	long diroffset;
+	int32_t diroffset;
 
 	dp = VTOI(vdp);
 	imp = dp->i_mnt;
@@ -356,14 +339,14 @@ isochildcount(vdp, dircnt, filcnt)
 		 */
 		if ((diroffset & bmask) == 0) {
 			if (bp != NULL)
-				brelse(bp);
-			if ( (error = VOP_BLKATOFF(vdp, SECTOFF(imp, diroffset), NULL, &bp)) )
+				buf_brelse(bp);
+			if ( (error = cd9660_blkatoff(vdp, SECTOFF(imp, diroffset), NULL, &bp)) )
 				break;
 			blkoffset = 0;
 		}
 
 		ep = (struct iso_directory_record *)
-			((char *)bp->b_data + blkoffset);
+			(buf_dataptr(bp) + blkoffset);
 
 		reclen = isonum_711(ep->length);
 		if (reclen == 0) {
@@ -399,7 +382,7 @@ isochildcount(vdp, dircnt, filcnt)
 	}
 
 	if (bp)
-		brelse (bp);
+		buf_brelse (bp);
 
 	*dircnt = dirs;
 	*filcnt = files;
@@ -408,47 +391,33 @@ isochildcount(vdp, dircnt, filcnt)
 }
 
 
-/*
- * There are two ways to qualify for ownership rights on an object:
- *
- * 1. Your UID matches the UID of the vnode
- * 2. You are root
- *
- */
-static int cd9660_owner_rights(uid_t owner, struct iso_mnt *imp, struct ucred *cred, struct proc *p, int invokesuperuserstatus) {
-    return ((cred->cr_uid == owner) ||														/* [1] */
-    		(invokesuperuserstatus && (suser(cred, &p->p_acflag) == 0))) ? 0 : EPERM;			/* [2] */
-}
-
-
-
-static unsigned long DerivePermissionSummary(uid_t owner, gid_t group, mode_t obj_mode, struct iso_mnt *imp, struct ucred *cred, struct proc *p) {
-    register gid_t *gp;
-    unsigned long permissions;
-    int i;
+static uint32_t
+DerivePermissionSummary(uid_t owner, gid_t group, mode_t obj_mode, __unused struct iso_mnt *imp)
+{
+    kauth_cred_t cred = kauth_cred_get();
+    uint32_t permissions;
+    int is_member;
 
      /* User id 0 (root) always gets access. */
-     if (cred->cr_uid == 0) {
+     if (!suser(cred, NULL)) {
          permissions = R_OK | X_OK;
          goto Exit;
      };
 
     /* Otherwise, check the owner. */
-    if (cd9660_owner_rights(owner, imp, cred, p, 0) == 0) {
-        permissions = ((unsigned long)obj_mode & S_IRWXU) >> 6;
+    if (owner == kauth_cred_getuid(cred)) {
+        permissions = ((uint32_t)obj_mode & S_IRWXU) >> 6;
         goto Exit;
     }
 
     /* Otherwise, check the groups. */
-    for (i = 0, gp = cred->cr_groups; i < cred->cr_ngroups; i++, gp++) {
-        if (group == *gp) {
-            permissions = ((unsigned long)obj_mode & S_IRWXG) >> 3;
+		if (kauth_cred_ismember_gid(cred, group, &is_member) == 0 && is_member) {
+			permissions = ((uint32_t)obj_mode & S_IRWXG) >> 3;
 			goto Exit;
-        }
-    };
+		}
 
     /* Otherwise, settle for 'others' access. */
-    permissions = (unsigned long)obj_mode & S_IRWXO;
+    permissions = (uint32_t)obj_mode & S_IRWXO;
 
 Exit:
 	return permissions & ~W_OK;    	/* Write access is always impossible */
@@ -460,6 +429,7 @@ attrcalcsize(struct attrlist *attrlist)
 {
 	int size;
 	attrgroup_t a;
+	boolean_t is_64_bit = proc_is64bit(current_proc());
 	
 #if ((ATTR_CMN_NAME			| ATTR_CMN_DEVID			| ATTR_CMN_FSID 			| ATTR_CMN_OBJTYPE 		| \
       ATTR_CMN_OBJTAG		| ATTR_CMN_OBJID			| ATTR_CMN_OBJPERMANENTID	| ATTR_CMN_PAROBJID		| \
@@ -509,55 +479,80 @@ attrcalcsize(struct attrlist *attrlist)
         if (a & ATTR_CMN_OBJPERMANENTID) size += sizeof(fsobj_id_t);
 		if (a & ATTR_CMN_PAROBJID) size += sizeof(fsobj_id_t);
 		if (a & ATTR_CMN_SCRIPT) size += sizeof(text_encoding_t);
-		if (a & ATTR_CMN_CRTIME) size += sizeof(struct timespec);
-		if (a & ATTR_CMN_MODTIME) size += sizeof(struct timespec);
-		if (a & ATTR_CMN_CHGTIME) size += sizeof(struct timespec);
-		if (a & ATTR_CMN_ACCTIME) size += sizeof(struct timespec);
-		if (a & ATTR_CMN_BKUPTIME) size += sizeof(struct timespec);
+		if (a & ATTR_CMN_CRTIME) {
+            if (is_64_bit) 
+                size += sizeof(struct user_timespec);
+            else 
+                size += sizeof(struct timespec);
+		}
+		if (a & ATTR_CMN_MODTIME) {
+            if (is_64_bit) 
+                size += sizeof(struct user_timespec);
+            else 
+                size += sizeof(struct timespec);
+		}
+		if (a & ATTR_CMN_CHGTIME) {
+            if (is_64_bit) 
+                size += sizeof(struct user_timespec);
+            else 
+                size += sizeof(struct timespec);
+		}
+		if (a & ATTR_CMN_ACCTIME) {
+            if (is_64_bit) 
+                size += sizeof(struct user_timespec);
+            else 
+                size += sizeof(struct timespec);
+		}
+		if (a & ATTR_CMN_BKUPTIME) {
+            if (is_64_bit) 
+                size += sizeof(struct user_timespec);
+            else 
+                size += sizeof(struct timespec);
+		}
 		if (a & ATTR_CMN_FNDRINFO) size += 32 * sizeof(u_int8_t);
 		if (a & ATTR_CMN_OWNERID) size += sizeof(uid_t);
 		if (a & ATTR_CMN_GRPID) size += sizeof(gid_t);
-		if (a & ATTR_CMN_ACCESSMASK) size += sizeof(u_long);
-		if (a & ATTR_CMN_NAMEDATTRCOUNT) size += sizeof(u_long);
+		if (a & ATTR_CMN_ACCESSMASK) size += sizeof(uint32_t);
+		if (a & ATTR_CMN_NAMEDATTRCOUNT) size += sizeof(uint32_t);
 		if (a & ATTR_CMN_NAMEDATTRLIST) size += sizeof(struct attrreference);
-		if (a & ATTR_CMN_FLAGS) size += sizeof(u_long);
-		if (a & ATTR_CMN_USERACCESS) size += sizeof(u_long);
+		if (a & ATTR_CMN_FLAGS) size += sizeof(uint32_t);
+		if (a & ATTR_CMN_USERACCESS) size += sizeof(uint32_t);
 	};
 	if ((a = attrlist->volattr) != 0) {
-		if (a & ATTR_VOL_FSTYPE) size += sizeof(u_long);
-		if (a & ATTR_VOL_SIGNATURE) size += sizeof(u_long);
+		if (a & ATTR_VOL_FSTYPE) size += sizeof(uint32_t);
+		if (a & ATTR_VOL_SIGNATURE) size += sizeof(uint32_t);
 		if (a & ATTR_VOL_SIZE) size += sizeof(off_t);
 		if (a & ATTR_VOL_SPACEFREE) size += sizeof(off_t);
 		if (a & ATTR_VOL_SPACEAVAIL) size += sizeof(off_t);
 		if (a & ATTR_VOL_MINALLOCATION) size += sizeof(off_t);
 		if (a & ATTR_VOL_ALLOCATIONCLUMP) size += sizeof(off_t);
-		if (a & ATTR_VOL_IOBLOCKSIZE) size += sizeof(size_t);
-		if (a & ATTR_VOL_OBJCOUNT) size += sizeof(u_long);
-		if (a & ATTR_VOL_FILECOUNT) size += sizeof(u_long);
-		if (a & ATTR_VOL_DIRCOUNT) size += sizeof(u_long);
-		if (a & ATTR_VOL_MAXOBJCOUNT) size += sizeof(u_long);
+		if (a & ATTR_VOL_IOBLOCKSIZE) size += sizeof(uint32_t);
+		if (a & ATTR_VOL_OBJCOUNT) size += sizeof(uint32_t);
+		if (a & ATTR_VOL_FILECOUNT) size += sizeof(uint32_t);
+		if (a & ATTR_VOL_DIRCOUNT) size += sizeof(uint32_t);
+		if (a & ATTR_VOL_MAXOBJCOUNT) size += sizeof(uint32_t);
 		if (a & ATTR_VOL_MOUNTPOINT) size += sizeof(struct attrreference);
         if (a & ATTR_VOL_NAME) size += sizeof(struct attrreference);
-        if (a & ATTR_VOL_MOUNTFLAGS) size += sizeof(u_long);
+		if (a & ATTR_VOL_MOUNTFLAGS) size += sizeof(uint32_t);
         if (a & ATTR_VOL_MOUNTEDDEVICE) size += sizeof(struct attrreference);
         if (a & ATTR_VOL_ENCODINGSUSED) size += sizeof(unsigned long long);
         if (a & ATTR_VOL_CAPABILITIES) size += sizeof(vol_capabilities_attr_t);
         if (a & ATTR_VOL_ATTRIBUTES) size += sizeof(vol_attributes_attr_t);
 	};
 	if ((a = attrlist->dirattr) != 0) {
-		if (a & ATTR_DIR_LINKCOUNT) size += sizeof(u_long);
-		if (a & ATTR_DIR_ENTRYCOUNT) size += sizeof(u_long);
-		if (a & ATTR_DIR_MOUNTSTATUS) size += sizeof(u_long);
+		if (a & ATTR_DIR_LINKCOUNT) size += sizeof(uint32_t);
+		if (a & ATTR_DIR_ENTRYCOUNT) size += sizeof(uint32_t);
+		if (a & ATTR_DIR_MOUNTSTATUS) size += sizeof(uint32_t);
 	};
 	if ((a = attrlist->fileattr) != 0) {
-		if (a & ATTR_FILE_LINKCOUNT) size += sizeof(u_long);
+		if (a & ATTR_FILE_LINKCOUNT) size += sizeof(uint32_t);
 		if (a & ATTR_FILE_TOTALSIZE) size += sizeof(off_t);
 		if (a & ATTR_FILE_ALLOCSIZE) size += sizeof(off_t);
-		if (a & ATTR_FILE_IOBLOCKSIZE) size += sizeof(size_t);
-		if (a & ATTR_FILE_CLUMPSIZE) size += sizeof(off_t);
-		if (a & ATTR_FILE_DEVTYPE) size += sizeof(u_long);
-		if (a & ATTR_FILE_FILETYPE) size += sizeof(u_long);
-		if (a & ATTR_FILE_FORKCOUNT) size += sizeof(u_long);
+		if (a & ATTR_FILE_IOBLOCKSIZE) size += sizeof(uint32_t);
+		if (a & ATTR_FILE_CLUMPSIZE) size += sizeof(uint32_t);
+		if (a & ATTR_FILE_DEVTYPE) size += sizeof(uint32_t);
+		if (a & ATTR_FILE_FILETYPE) size += sizeof(uint32_t);
+		if (a & ATTR_FILE_FORKCOUNT) size += sizeof(uint32_t);
 		if (a & ATTR_FILE_FORKLIST) size += sizeof(struct attrreference);
 		if (a & ATTR_FILE_DATALENGTH) size += sizeof(off_t);
 		if (a & ATTR_FILE_DATAALLOCSIZE) size += sizeof(off_t);
@@ -576,7 +571,7 @@ attrcalcsize(struct attrlist *attrlist)
 
 
 
-void
+static void
 packvolattr (struct attrlist *alist,
 			 struct iso_node *ip,	/* ip for root directory */
 			 void **attrbufptrptr,
@@ -587,7 +582,8 @@ packvolattr (struct attrlist *alist,
 	struct iso_mnt *imp;
 	struct mount *mp;
 	attrgroup_t a;
-	u_long attrlength;
+	uint32_t attrlength;
+	boolean_t is_64_bit = proc_is64bit(current_proc());
 	
 	attrbufptr = *attrbufptrptr;
 	varbufptr = *varbufptrptr;
@@ -605,8 +601,8 @@ packvolattr (struct attrlist *alist,
             (u_int8_t *)varbufptr += attrlength + ((4 - (attrlength & 3)) & 3);
             ++((struct attrreference *)attrbufptr);
         };
-		if (a & ATTR_CMN_DEVID) *((dev_t *)attrbufptr)++ = imp->im_devvp->v_rdev;
-		if (a & ATTR_CMN_FSID) *((fsid_t *)attrbufptr)++ = ITOV(ip)->v_mount->mnt_stat.f_fsid;
+		if (a & ATTR_CMN_DEVID) *((dev_t *)attrbufptr)++ = vnode_specrdev(imp->im_devvp);
+		if (a & ATTR_CMN_FSID) *((fsid_t *)attrbufptr)++ = vfs_statfs(vnode_mount(ITOV(ip)))->f_fsid;
 		if (a & ATTR_CMN_OBJTYPE) *((fsobj_type_t *)attrbufptr)++ = 0;
 		if (a & ATTR_CMN_OBJTAG) *((fsobj_tag_t *)attrbufptr)++ = VT_ISOFS;
 		if (a & ATTR_CMN_OBJID)	{
@@ -625,10 +621,46 @@ packvolattr (struct attrlist *alist,
 			++((fsobj_id_t *)attrbufptr);
 		};
         if (a & ATTR_CMN_SCRIPT) *((text_encoding_t *)attrbufptr)++ = 0;
-		if (a & ATTR_CMN_CRTIME) *((struct timespec *)attrbufptr)++ = imp->creation_date;
-		if (a & ATTR_CMN_MODTIME) *((struct timespec *)attrbufptr)++ = imp->modification_date;
-		if (a & ATTR_CMN_CHGTIME) *((struct timespec *)attrbufptr)++ = imp->modification_date;
-		if (a & ATTR_CMN_ACCTIME) *((struct timespec *)attrbufptr)++ = imp->modification_date;
+		if (a & ATTR_CMN_CRTIME) {
+		    if (is_64_bit) {
+		        struct user_timespec *tmpp = ((struct user_timespec *)attrbufptr)++;
+		        tmpp->tv_sec = (user_time_t) imp->creation_date.tv_sec;
+		        tmpp->tv_nsec = imp->creation_date.tv_nsec;
+		    }
+		    else {
+		        *((struct timespec *)attrbufptr)++ = imp->creation_date;
+		    }
+		}
+		if (a & ATTR_CMN_MODTIME) {
+		    if (is_64_bit) {
+		        struct user_timespec *tmpp = ((struct user_timespec *)attrbufptr)++;
+		        tmpp->tv_sec = (user_time_t) imp->modification_date.tv_sec;
+		        tmpp->tv_nsec = imp->modification_date.tv_nsec;
+		    }
+		    else {
+		        *((struct timespec *)attrbufptr)++ = imp->modification_date;
+		    }
+		}
+		if (a & ATTR_CMN_CHGTIME) {
+		    if (is_64_bit) {
+		        struct user_timespec *tmpp = ((struct user_timespec *)attrbufptr)++;
+		        tmpp->tv_sec = (user_time_t) imp->modification_date.tv_sec;
+		        tmpp->tv_nsec = imp->modification_date.tv_nsec;
+		    }
+		    else {
+		        *((struct timespec *)attrbufptr)++ = imp->modification_date;
+		    }
+		}
+		if (a & ATTR_CMN_ACCTIME) {
+		    if (is_64_bit) {
+		        struct user_timespec *tmpp = ((struct user_timespec *)attrbufptr)++;
+		        tmpp->tv_sec = (user_time_t) imp->modification_date.tv_sec;
+		        tmpp->tv_nsec = imp->modification_date.tv_nsec;
+		    }
+		    else {
+		        *((struct timespec *)attrbufptr)++ = imp->modification_date;
+		    }
+		}
 		if (a & ATTR_CMN_BKUPTIME) {
 			((struct timespec *)attrbufptr)->tv_sec = 0;
 			((struct timespec *)attrbufptr)->tv_nsec = 0;
@@ -640,34 +672,32 @@ packvolattr (struct attrlist *alist,
 		};
 		if (a & ATTR_CMN_OWNERID) *((uid_t *)attrbufptr)++ = ip->inode.iso_uid;
 		if (a & ATTR_CMN_GRPID) *((gid_t *)attrbufptr)++ = ip->inode.iso_gid;
-		if (a & ATTR_CMN_ACCESSMASK) *((u_long *)attrbufptr)++ = (u_long)ip->inode.iso_mode;
-		if (a & ATTR_CMN_FLAGS) *((u_long *)attrbufptr)++ = 0;
+		if (a & ATTR_CMN_ACCESSMASK) *((uint32_t *)attrbufptr)++ = (uint32_t)ip->inode.iso_mode;
+		if (a & ATTR_CMN_FLAGS) *((uint32_t *)attrbufptr)++ = 0;
 		if (a & ATTR_CMN_USERACCESS) {
-			*((u_long *)attrbufptr)++ =
+			*((uint32_t *)attrbufptr)++ =
 				DerivePermissionSummary(ip->inode.iso_uid,
 										ip->inode.iso_gid,
 										ip->inode.iso_mode,
-										imp,
-										current_proc()->p_ucred,
-										current_proc());
+										imp);
 		};
 	};
 	
 	if ((a = alist->volattr) != 0) {
 		off_t blocksize = (off_t)imp->logical_block_size;
 
-		if (a & ATTR_VOL_FSTYPE) *((u_long *)attrbufptr)++ = (u_long)imp->im_mountp->mnt_vfc->vfc_typenum;
-		if (a & ATTR_VOL_SIGNATURE) *((u_long *)attrbufptr)++ = (u_long)ISO9660SIGNATURE;
+		if (a & ATTR_VOL_FSTYPE) *((uint32_t *)attrbufptr)++ = (uint32_t)vfs_typenum(mp);
+		if (a & ATTR_VOL_SIGNATURE) *((uint32_t *)attrbufptr)++ = (uint32_t)ISO9660SIGNATURE;
         if (a & ATTR_VOL_SIZE) *((off_t *)attrbufptr)++ = (off_t)imp->volume_space_size * blocksize;
         if (a & ATTR_VOL_SPACEFREE) *((off_t *)attrbufptr)++ = 0;
         if (a & ATTR_VOL_SPACEAVAIL) *((off_t *)attrbufptr)++ = 0;
         if (a & ATTR_VOL_MINALLOCATION) *((off_t *)attrbufptr)++ = blocksize;
 		if (a & ATTR_VOL_ALLOCATIONCLUMP) *((off_t *)attrbufptr)++ = blocksize;
-        if (a & ATTR_VOL_IOBLOCKSIZE) *((size_t *)attrbufptr)++ = blocksize;
-		if (a & ATTR_VOL_OBJCOUNT) *((u_long *)attrbufptr)++ = 0;
-		if (a & ATTR_VOL_FILECOUNT) *((u_long *)attrbufptr)++ = 0;
-		if (a & ATTR_VOL_DIRCOUNT) *((u_long *)attrbufptr)++ = 0;
-		if (a & ATTR_VOL_MAXOBJCOUNT) *((u_long *)attrbufptr)++ = 0xFFFFFFFF;
+        if (a & ATTR_VOL_IOBLOCKSIZE) *((uint32_t *)attrbufptr)++ = (uint32_t)blocksize;
+		if (a & ATTR_VOL_OBJCOUNT) *((uint32_t *)attrbufptr)++ = 0;
+		if (a & ATTR_VOL_FILECOUNT) *((uint32_t *)attrbufptr)++ = 0;
+		if (a & ATTR_VOL_DIRCOUNT) *((uint32_t *)attrbufptr)++ = 0;
+		if (a & ATTR_VOL_MAXOBJCOUNT) *((uint32_t *)attrbufptr)++ = 0xFFFFFFFF;
         if (a & ATTR_VOL_NAME) {
             attrlength = strlen( imp->volume_id ) + 1;
             ((struct attrreference *)attrbufptr)->attr_dataoffset = (u_int8_t *)varbufptr - (u_int8_t *)attrbufptr;
@@ -678,13 +708,15 @@ packvolattr (struct attrlist *alist,
             (u_int8_t *)varbufptr += attrlength + ((4 - (attrlength & 3)) & 3);
             ++((struct attrreference *)attrbufptr);
         };
-		if (a & ATTR_VOL_MOUNTFLAGS) *((u_long *)attrbufptr)++ = (u_long)imp->im_mountp->mnt_flag;
+		if (a & ATTR_VOL_MOUNTFLAGS) {
+		    *((uint32_t *)attrbufptr)++ = (uint32_t)vfs_flags(mp);
+		}
         if (a & ATTR_VOL_MOUNTEDDEVICE) {
             ((struct attrreference *)attrbufptr)->attr_dataoffset = (u_int8_t *)varbufptr - (u_int8_t *)attrbufptr;
-            ((struct attrreference *)attrbufptr)->attr_length = strlen(mp->mnt_stat.f_mntfromname) + 1;
+            ((struct attrreference *)attrbufptr)->attr_length = strlen(vfs_statfs(mp)->f_mntfromname) + 1;
 			attrlength = ((struct attrreference *)attrbufptr)->attr_length;
 			attrlength = attrlength + ((4 - (attrlength & 3)) & 3);		/* round up to the next 4-byte boundary: */
-			(void) bcopy(mp->mnt_stat.f_mntfromname, varbufptr, attrlength);
+			(void) bcopy(vfs_statfs(mp)->f_mntfromname, varbufptr, attrlength);
 			
 			/* Advance beyond the space just allocated: */
             (u_int8_t *)varbufptr += attrlength;
@@ -716,7 +748,8 @@ packvolattr (struct attrlist *alist,
 					VOL_CAP_FMT_ZERO_RUNS |
 					VOL_CAP_FMT_CASE_SENSITIVE |
 					VOL_CAP_FMT_CASE_PRESERVING |
-					VOL_CAP_FMT_FAST_STATFS;
+					VOL_CAP_FMT_FAST_STATFS | 
+					VOL_CAP_FMT_2TB_FILESIZE;
         	((vol_capabilities_attr_t *)attrbufptr)->valid[VOL_CAPABILITIES_INTERFACES] =
         			VOL_CAP_INT_SEARCHFS |
         			VOL_CAP_INT_ATTRLIST |
@@ -764,7 +797,8 @@ packcommonattr (struct attrlist *alist,
 	void *attrbufptr;
 	void *varbufptr;
 	attrgroup_t a;
-	u_long attrlength;
+	uint32_t attrlength;
+	boolean_t is_64_bit = proc_is64bit(current_proc());
 	
 	attrbufptr = *attrbufptrptr;
 	varbufptr = *varbufptrptr;
@@ -774,7 +808,7 @@ packcommonattr (struct attrlist *alist,
 
         if (a & ATTR_CMN_NAME) {
 			/* special case root since we know how to get it's name */
-			if (ITOV(ip)->v_flag & VROOT) {
+			if (vnode_isvroot(ITOV(ip))) {
 				attrlength = strlen( imp->volume_id ) + 1;
 				(void) strncpy((unsigned char *)varbufptr, imp->volume_id, attrlength);
         	} else {
@@ -789,11 +823,11 @@ packcommonattr (struct attrlist *alist,
             ++((struct attrreference *)attrbufptr);
         };
 		if (a & ATTR_CMN_DEVID) *((dev_t *)attrbufptr)++ = ip->i_dev;
-		if (a & ATTR_CMN_FSID) *((fsid_t *)attrbufptr)++ = ITOV(ip)->v_mount->mnt_stat.f_fsid;
-		if (a & ATTR_CMN_OBJTYPE) *((fsobj_type_t *)attrbufptr)++ = ITOV(ip)->v_type;
-		if (a & ATTR_CMN_OBJTAG) *((fsobj_tag_t *)attrbufptr)++ = ITOV(ip)->v_tag;
+		if (a & ATTR_CMN_FSID) *((fsid_t *)attrbufptr)++ = vfs_statfs(vnode_mount(ITOV(ip)))->f_fsid;
+		if (a & ATTR_CMN_OBJTYPE) *((fsobj_type_t *)attrbufptr)++ = vnode_vtype(ITOV(ip));
+		if (a & ATTR_CMN_OBJTAG) *((fsobj_tag_t *)attrbufptr)++ = vnode_tag(ITOV(ip));
         if (a & ATTR_CMN_OBJID)	{
-			if (ITOV(ip)->v_flag & VROOT)
+			if (vnode_isvroot(ITOV(ip)))
 				((fsobj_id_t *)attrbufptr)->fid_objno = 2;	/* force root to be 2 */
 			else
             	((fsobj_id_t *)attrbufptr)->fid_objno = ip->i_number;
@@ -801,7 +835,7 @@ packcommonattr (struct attrlist *alist,
 			++((fsobj_id_t *)attrbufptr);
 		};
         if (a & ATTR_CMN_OBJPERMANENTID)	{
-			if (ITOV(ip)->v_flag & VROOT)
+			if (vnode_isvroot(ITOV(ip)))
 				((fsobj_id_t *)attrbufptr)->fid_objno = 2;	/* force root to be 2 */
 			else
             	((fsobj_id_t *)attrbufptr)->fid_objno = ip->i_number;
@@ -822,22 +856,67 @@ packcommonattr (struct attrlist *alist,
 			++((fsobj_id_t *)attrbufptr);
 		};
         if (a & ATTR_CMN_SCRIPT) *((text_encoding_t *)attrbufptr)++ = 0;
-		if (a & ATTR_CMN_CRTIME) *((struct timespec *)attrbufptr)++ = ip->inode.iso_mtime;
-		if (a & ATTR_CMN_MODTIME) *((struct timespec *)attrbufptr)++ = ip->inode.iso_mtime;
-		if (a & ATTR_CMN_CHGTIME) *((struct timespec *)attrbufptr)++ = ip->inode.iso_ctime;
-		if (a & ATTR_CMN_ACCTIME) *((struct timespec *)attrbufptr)++ = ip->inode.iso_atime;
+		if (a & ATTR_CMN_CRTIME) {
+		    if (is_64_bit) {
+		        struct user_timespec *tmpp = ((struct user_timespec *)attrbufptr)++;
+		        tmpp->tv_sec = (user_time_t) ip->inode.iso_mtime.tv_sec;
+		        tmpp->tv_nsec = ip->inode.iso_mtime.tv_nsec;
+		    }
+		    else {
+                *((struct timespec *)attrbufptr)++ = ip->inode.iso_mtime;
+		    }
+		}
+		if (a & ATTR_CMN_MODTIME) {
+		    if (is_64_bit) {
+		        struct user_timespec *tmpp = ((struct user_timespec *)attrbufptr)++;
+		        tmpp->tv_sec = (user_time_t) ip->inode.iso_mtime.tv_sec;
+		        tmpp->tv_nsec = ip->inode.iso_mtime.tv_nsec;
+		    }
+		    else {
+                *((struct timespec *)attrbufptr)++ = ip->inode.iso_mtime;
+		    }
+		}
+		if (a & ATTR_CMN_CHGTIME) {
+		    if (is_64_bit) {
+		        struct user_timespec *tmpp = ((struct user_timespec *)attrbufptr)++;
+		        tmpp->tv_sec = (user_time_t) ip->inode.iso_ctime.tv_sec;
+		        tmpp->tv_nsec = ip->inode.iso_ctime.tv_nsec;
+		    }
+		    else {
+                *((struct timespec *)attrbufptr)++ = ip->inode.iso_ctime;
+		    }
+		}
+		if (a & ATTR_CMN_ACCTIME) {
+		    if (is_64_bit) {
+		        struct user_timespec *tmpp = ((struct user_timespec *)attrbufptr)++;
+		        tmpp->tv_sec = (user_time_t) ip->inode.iso_atime.tv_sec;
+		        tmpp->tv_nsec = ip->inode.iso_atime.tv_nsec;
+		    }
+		    else {
+                *((struct timespec *)attrbufptr)++ = ip->inode.iso_atime;
+		    }
+		}
 		if (a & ATTR_CMN_BKUPTIME) {
-			((struct timespec *)attrbufptr)->tv_sec = 0;
-			((struct timespec *)attrbufptr)->tv_nsec = 0;
-			++((struct timespec *)attrbufptr);
-		};
+		    if (is_64_bit) {
+		        struct user_timespec *tmpp = ((struct user_timespec *)attrbufptr)++;
+		        tmpp->tv_sec = (user_time_t) 0;
+		        tmpp->tv_nsec = 0;
+		    }
+		    else {
+                ((struct timespec *)attrbufptr)->tv_sec = 0;
+                ((struct timespec *)attrbufptr)->tv_nsec = 0;
+                ++((struct timespec *)attrbufptr);
+                    *((struct timespec *)attrbufptr)++ = ip->inode.iso_atime;
+		    }
+		}
 		if (a & ATTR_CMN_FNDRINFO) {
-			struct finder_info finfo = {0};
+			struct finder_info finfo;
 
+			bzero(&finfo, sizeof(finfo));
 			finfo.fdFlags = ip->i_FinderFlags;
 			finfo.fdLocation.v = -1;
 			finfo.fdLocation.h = -1;
-			if (ITOV(ip)->v_type == VREG) {
+			if (vnode_isreg(ITOV(ip))) {
 				finfo.fdType = ip->i_FileType;
 				finfo.fdCreator = ip->i_Creator;
 			}
@@ -848,16 +927,14 @@ packcommonattr (struct attrlist *alist,
 		};
 		if (a & ATTR_CMN_OWNERID) *((uid_t *)attrbufptr)++ = ip->inode.iso_uid;
 		if (a & ATTR_CMN_GRPID) *((gid_t *)attrbufptr)++ = ip->inode.iso_gid;
-		if (a & ATTR_CMN_ACCESSMASK) *((u_long *)attrbufptr)++ = (u_long)ip->inode.iso_mode;
-		if (a & ATTR_CMN_FLAGS) *((u_long *)attrbufptr)++ = 0; /* could also use ip->i_flag */
+		if (a & ATTR_CMN_ACCESSMASK) *((uint32_t *)attrbufptr)++ = (uint32_t)ip->inode.iso_mode;
+		if (a & ATTR_CMN_FLAGS) *((uint32_t *)attrbufptr)++ = 0; /* could also use ip->i_flag */
 		if (a & ATTR_CMN_USERACCESS) {
-			*((u_long *)attrbufptr)++ =
+			*((uint32_t *)attrbufptr)++ =
 				DerivePermissionSummary(ip->inode.iso_uid,
 										ip->inode.iso_gid,
 										ip->inode.iso_mode,
-										imp,
-										current_proc()->p_ucred,
-										current_proc());
+										imp);
 		};
 	};
 	
@@ -870,7 +947,7 @@ void
 packdirattr(struct attrlist *alist,
 			struct iso_node *ip,
 			void **attrbufptrptr,
-			void **varbufptrptr)
+			__unused void **varbufptrptr)
 {
     void *attrbufptr;
     attrgroup_t a;
@@ -880,7 +957,7 @@ packdirattr(struct attrlist *alist,
 	filcnt = dircnt = 0;
 	
 	a = alist->dirattr;
-	if ((ITOV(ip)->v_type == VDIR) && (a != 0)) {
+	if (vnode_isdir(ITOV(ip)) && (a != 0)) {
 		/*
 		 * if we haven't counted our children yet, do it now...
 		 */
@@ -895,17 +972,17 @@ packdirattr(struct attrlist *alist,
 		}
 
 		if (a & ATTR_DIR_LINKCOUNT) {
-			*((u_long *)attrbufptr)++ = ip->inode.iso_links;
+			*((uint32_t *)attrbufptr)++ = ip->inode.iso_links;
 		}
 		if (a & ATTR_DIR_ENTRYCOUNT) {
 			/* exclude '.' and '..' from total caount */
-			*((u_long *)attrbufptr)++ = ((ip->i_entries <= 2) ? 0 : (ip->i_entries - 2));
+			*((uint32_t *)attrbufptr)++ = ((ip->i_entries <= 2) ? 0 : (ip->i_entries - 2));
 		}
 		if (a & ATTR_DIR_MOUNTSTATUS) {
-			if (ITOV(ip)->v_mountedhere) {
-				*((u_long *)attrbufptr)++ = DIR_MNTSTATUS_MNTPOINT;
+			if (vnode_mountedhere(ITOV(ip))) {
+				*((uint32_t *)attrbufptr)++ = DIR_MNTSTATUS_MNTPOINT;
 			} else {
-				*((u_long *)attrbufptr)++ = 0;
+				*((uint32_t *)attrbufptr)++ = 0;
 			};
 		};
 	};
@@ -924,19 +1001,19 @@ packfileattr(struct attrlist *alist,
     void *varbufptr = *varbufptrptr;
     attrgroup_t a = alist->fileattr;
 	
-	if ((ITOV(ip)->v_type == VREG) && (a != 0)) {
+	if (vnode_isreg(ITOV(ip)) && (a != 0)) {
 		if (a & ATTR_FILE_LINKCOUNT)
-			*((u_long *)attrbufptr)++ = ip->inode.iso_links;
+			*((uint32_t *)attrbufptr)++ = ip->inode.iso_links;
 		if (a & ATTR_FILE_TOTALSIZE)
 			*((off_t *)attrbufptr)++ = (off_t)ip->i_size;
 		if (a & ATTR_FILE_ALLOCSIZE)
 			*((off_t *)attrbufptr)++ = (off_t)ip->i_size;
 		if (a & ATTR_FILE_IOBLOCKSIZE)
-			*((u_long *)attrbufptr)++ = ip->i_mnt->logical_block_size;
+			*((uint32_t *)attrbufptr)++ = ip->i_mnt->logical_block_size;
 		if (a & ATTR_FILE_CLUMPSIZE)
-			*((u_long *)attrbufptr)++ = ip->i_mnt->logical_block_size;
+			*((uint32_t *)attrbufptr)++ = ip->i_mnt->logical_block_size;
 		if (a & ATTR_FILE_DEVTYPE)
-			*((u_long *)attrbufptr)++ = (u_long)ip->inode.iso_rdev;
+			*((uint32_t *)attrbufptr)++ = (uint32_t)ip->inode.iso_rdev;
 		if (a & ATTR_FILE_DATALENGTH)
 			*((off_t *)attrbufptr)++ = (off_t)ip->i_size;
 		if (a & ATTR_FILE_DATAALLOCSIZE)
@@ -965,7 +1042,7 @@ packattrblk(struct attrlist *alist,
 	} else {
 		packcommonattr(alist, ip, attrbufptrptr, varbufptrptr);
 		
-		switch (ITOV(ip)->v_type) {
+		switch (vnode_vtype(ITOV(ip))) {
 		  case VDIR:
 			packdirattr(alist, ip, attrbufptrptr, varbufptrptr);
 			break;

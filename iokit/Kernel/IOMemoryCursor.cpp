@@ -116,11 +116,11 @@ IOMemoryCursor::genPhysicalSegments(IOMemoryDescriptor *inDescriptor,
      * If we finished cleanly return number of segments found
      * and update the position in the descriptor.
      */
-    PhysicalSegment curSeg = { 0 };
+    PhysicalSegment curSeg = { 0, 0 };
     UInt curSegIndex = 0;
     UInt curTransferSize = 0;
     IOByteCount inDescriptorLength = inDescriptor->getLength();
-    PhysicalSegment seg = { 0 };
+    PhysicalSegment seg = { 0, 0 };
 
     while ((seg.location) || (fromPosition < inDescriptorLength)) 
     {

@@ -28,12 +28,14 @@
 #include <vm/vm_map.h>
 #include <sys/systm.h>
 #include <sys/conf.h>
+#include <sys/proc_internal.h>
 #include <sys/buf.h>	/* for SET */
 #include <sys/user.h>
 
 /* Just to satisfy pstat command */
 int     dmmin, dmmax, dmtext;
 
+vm_offset_t
 kmem_mb_alloc(vm_map_t  mbmap, int size) 
 {
         vm_offset_t addr;
@@ -46,7 +48,13 @@ kmem_mb_alloc(vm_map_t  mbmap, int size)
 		
 }
 
-pcb_synch() {}
+/*
+ * XXX this function only exists to be exported and do nothing.
+ */
+void
+pcb_synch(void)
+{
+}
 
 struct proc *
 current_proc(void)
@@ -54,10 +62,10 @@ current_proc(void)
 	/* Never returns a NULL */
 	struct uthread * ut;
 	struct proc *p; 
-	thread_act_t thr_act = current_act();
+	thread_t thr_act = current_thread();
 
 	ut = (struct uthread *)get_bsdthread_info(thr_act); 
-	if (ut &&  (ut->uu_flag & P_VFORK) && ut->uu_proc) {
+	if (ut &&  (ut->uu_flag & UT_VFORK) && ut->uu_proc) {
 		p = ut->uu_proc;
 		if ((p->p_flag & P_INVFORK) == 0) 
 			panic("returning child proc not under vfork");

@@ -28,18 +28,10 @@
 #ifndef _KERN_AST_H_
 #define _KERN_AST_H_
 
-#include <kern/thread_act.h>
-
-#ifdef BSD_USE_APC
-
-extern thread_apc_handler_t bsd_ast;
-
-#else /* !BSD_USE_APC */
+#include <kern/thread.h>
 
 extern void astbsd_on(void);
-extern void act_set_astbsd(thread_act_t);
-extern void bsd_ast(thread_act_t);
-
-#endif /* !BSD_USE_APC */
+extern void act_set_astbsd(thread_t);
+extern void bsd_ast(thread_t);
 
 #endif  /* _KERN_AST_H_ */

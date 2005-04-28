@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -23,9 +23,9 @@
 #ifndef	_KERN_DEBUG_H_
 #define _KERN_DEBUG_H_
 
-#include <sys/appleapiopts.h>
+#include <sys/cdefs.h>
 
-#ifdef	__APPLE_API_PRIVATE
+#ifdef	KERNEL_PRIVATE
 
 extern unsigned int	systemLogDiags;
 
@@ -60,9 +60,8 @@ extern int db_run_mode;
 #define	STEP_COUNT	6
 #define STEP_TRACE	7	/* Show all calls to functions and returns */
 
-extern char	*panicstr;
-
-extern unsigned int	nestedpanic;
+extern const char		*panicstr;
+extern volatile unsigned int	nestedpanic;
 
 extern char *debug_buf;
 extern char *debug_buf_ptr;
@@ -70,6 +69,8 @@ extern unsigned int debug_buf_size;
 
 extern void	debug_log_init(void);
 extern void	debug_putc(char);
+
+extern void	panic_init(void);
 
 #endif /* MACH_KERNEL_PRIVATE */
 
@@ -88,6 +89,13 @@ extern void	debug_putc(char);
 #define DB_KERN_DUMP_ON_NMI         0x800 /* Trigger core dump on NMI */
 #define DB_DBG_POST_CORE            0x1000 /*Wait in debugger after NMI core */
 #define DB_PANICLOG_DUMP            0x2000 /* Send paniclog on panic,not core*/
-#endif	/* __APPLE_API_PRIVATE */
+
+#endif	/* KERNEL_PRIVATE */
+
+__BEGIN_DECLS
+
+extern void	panic(const char	*string, ...);
+
+__END_DECLS
 
 #endif	/* _KERN_DEBUG_H_ */

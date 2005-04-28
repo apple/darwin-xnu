@@ -25,68 +25,169 @@
  * SVID compatible sem.h file
  *
  * Author:  Daniel Boulet
- */
-/*
  * John Bellardo modified the implementation for Darwin. 12/2000
  */
 
 #ifndef _SYS_SEM_H_
 #define _SYS_SEM_H_
 
-#include <sys/appleapiopts.h>
+
+#include <sys/cdefs.h>
+#include <sys/_types.h>
+
+/*
+ * [XSI]	All of the symbols from <sys/ipc.h> SHALL be defined
+ *		when this header is included
+ */
 #include <sys/ipc.h>
 
-struct sem {
-	u_short	semval;		/* semaphore value */
-	pid_t	sempid;		/* pid of last operation */
-	u_short	semncnt;	/* # awaiting semval > cval */
-	u_short	semzcnt;	/* # awaiting semval = 0 */
-};
-
-struct semid_ds {
-	struct	ipc_perm sem_perm;	/* operation permission struct */
-	struct	sem *sem_base;	/* pointer to first semaphore in set */
-	u_short	sem_nsems;	/* number of sems in set */
-	time_t	sem_otime;	/* last operation time */
-	long	sem_pad1;	/* SVABI/386 says I need this here */
-	time_t	sem_ctime;	/* last change time */
-    				/* Times measured in secs since */
-    				/* 00:00:00 GMT, Jan. 1, 1970 */
-	long	sem_pad2;	/* SVABI/386 says I need this here */
-	long	sem_pad3[4];	/* SVABI/386 says I need this here */
-};
 
 /*
- * semop's sops parameter structure
+ * [XSI] The pid_t, time_t, key_t, and size_t types shall be defined as
+ * described in <sys/types.h>.
+ *
+ * NOTE:	The definition of the key_t type is implicit from the
+ *		inclusion of <sys/ipc.h>
+ */
+#ifndef _PID_T
+typedef __darwin_pid_t	pid_t;
+#define _PID_T
+#endif
+
+#ifndef	_TIME_T
+#define	_TIME_T
+typedef	__darwin_time_t	time_t;
+#endif
+
+#ifndef _SIZE_T
+#define _SIZE_T
+typedef __darwin_size_t	size_t;
+#endif
+
+/*
+ * Technically, we should force all code references to the new structure
+ * definition, not in just the standards conformance case, and leave the
+ * legacy interface there for binary compatibility only.  Currently, we
+ * are only forcing this for programs requesting standards conformance.
+ */
+#if defined(__POSIX_C_SOURCE) || defined(kernel) || defined(__LP64__)
+/*
+ * Structure used internally.
+ * 
+ * This structure is exposed because standards dictate that it is used as
+ * the semun union member 'buf' as the fourth argment to semctl() when the
+ * third argument is IPC_STAT or IPC_SET.
+ *
+ * Note: only the fields sem_perm, sem_nsems, sem_otime, and sem_ctime
+ * are meaningful in user space.
+ */
+struct __semid_ds_new {
+	struct __ipc_perm_new sem_perm;	/* [XSI] operation permission struct */
+	__int32_t	sem_base;	/* 32 bit base ptr for semaphore set */
+	unsigned short	sem_nsems;	/* [XSI] number of sems in set */
+	time_t		sem_otime;	/* [XSI] last operation time */
+	__int32_t	sem_pad1;	/* RESERVED: DO NOT USE! */
+	time_t		sem_ctime;	/* [XSI] last change time */
+    					/* Times measured in secs since */
+    					/* 00:00:00 GMT, Jan. 1, 1970 */
+	__int32_t	sem_pad2;	/* RESERVED: DO NOT USE! */
+	__int32_t	sem_pad3[4];	/* RESERVED: DO NOT USE! */
+};
+#define	semid_ds	__semid_ds_new
+#else	/* !_POSIX_C_SOURCE */
+#define	semid_ds	__semid_ds_old
+#endif	/* !_POSIX_C_SOURCE */
+
+#if !defined(__POSIX_C_SOURCE) && !defined(__LP64__)
+struct __semid_ds_old {
+	struct __ipc_perm_old sem_perm;	/* [XSI] operation permission struct */
+	__int32_t	sem_base;	/* 32 bit base ptr for semaphore set */
+	unsigned short	sem_nsems;	/* [XSI] number of sems in set */
+	time_t		sem_otime;	/* [XSI] last operation time */
+	__int32_t	sem_pad1;	/* RESERVED: DO NOT USE! */
+	time_t		sem_ctime;	/* [XSI] last change time */
+    					/* Times measured in secs since */
+    					/* 00:00:00 GMT, Jan. 1, 1970 */
+	__int32_t	sem_pad2;	/* RESERVED: DO NOT USE! */
+	__int32_t	sem_pad3[4];	/* RESERVED: DO NOT USE! */
+};
+#endif	/* !_POSIX_C_SOURCE */
+
+/*
+ * Possible values for the third argument to semctl()
+ */
+#define GETNCNT	3	/* [XSI] Return the value of semncnt {READ} */
+#define GETPID	4	/* [XSI] Return the value of sempid {READ} */
+#define GETVAL	5	/* [XSI] Return the value of semval {READ} */
+#define GETALL	6	/* [XSI] Return semvals into arg.array {READ} */
+#define GETZCNT	7	/* [XSI] Return the value of semzcnt {READ} */
+#define SETVAL	8	/* [XSI] Set the value of semval to arg.val {ALTER} */
+#define SETALL	9	/* [XSI] Set semvals from arg.array {ALTER} */
+
+
+/* A semaphore; this is an anonymous structure, not for external use */
+struct sem {
+	unsigned short	semval;		/* semaphore value */
+	pid_t		sempid;		/* pid of last operation */
+	unsigned short	semncnt;	/* # awaiting semval > cval */
+	unsigned short	semzcnt;	/* # awaiting semval == 0 */
+};
+
+
+/*
+ * Structure of array element for second argument to semop()
  */
 struct sembuf {
-	u_short	sem_num;	/* semaphore # */
-	short	sem_op;		/* semaphore operation */
-	short	sem_flg;	/* operation flags */
+	unsigned short	sem_num;	/* [XSI] semaphore # */
+	short		sem_op;		/* [XSI] semaphore operation */
+	short		sem_flg;	/* [XSI] operation flags */
 };
-#define SEM_UNDO	010000
 
+/*
+ * Possible flag values for sem_flg
+ */
+#define SEM_UNDO	010000		/* [XSI] Set up adjust on exit entry */
+
+
+#ifndef _POSIX_C_SOURCE
+
+/*
+ * System imposed limit on the value of the third parameter to semop().
+ * This is arbitrary, and the standards unfortunately do not provide a
+ * way for user applications to retrieve this value (e.g. via sysconf()
+ * or from a manifest value in <unistd.h>).  The value shown here is
+ * informational, and subject to change in future revisions.
+ */
 #define MAX_SOPS	5	/* maximum # of sembuf's per semop call */
 
-/*
- * semctl's arg parameter structure
- */
-union semun {
-	int	val;		/* value for SETVAL */
-	struct	semid_ds *buf;	/* buffer for IPC_STAT & IPC_SET */
-	u_short	*array;		/* array for GETALL & SETALL */
-};
 
 /*
- * commands for semctl
+ * Union used as the fourth argment to semctl() in all cases.  Specific
+ * member values are used for different values of the third parameter:
+ * 
+ * Command					Member
+ * -------------------------------------------	------
+ * GETALL, SETALL				array
+ * SETVAL					val
+ * IPC_STAT, IPC_SET				buf
+ *
+ * The union definition is intended to be defined by the user application
+ * in conforming applications; it is provided here for two reasons:
+ * 
+ * 1)	Historical source compatability for non-conforming applications
+ *	expecting this header to declare the union type on their behalf
+ *
+ * 2)	Documentation; specifically, 64 bit applications that do not pass
+ *	this structure for 'val', or, alternately, a 64 bit type, will
+ *	not function correctly
  */
-#define GETNCNT	3	/* Return the value of semncnt {READ} */
-#define GETPID	4	/* Return the value of sempid {READ} */
-#define GETVAL	5	/* Return the value of semval {READ} */
-#define GETALL	6	/* Return semvals into arg.array {READ} */
-#define GETZCNT	7	/* Return the value of semzcnt {READ} */
-#define SETVAL	8	/* Set the value of semval to arg.val {ALTER} */
-#define SETALL	9	/* Set semvals from arg.array {ALTER} */
+union semun {
+	int		val;		/* value for SETVAL */
+	struct semid_ds	*buf;		/* buffer for IPC_STAT & IPC_SET */
+	unsigned short	*array;		/* array for GETALL & SETALL */
+};
+typedef union semun semun_t;
+
 
 /*
  * Permissions
@@ -94,155 +195,21 @@ union semun {
 #define SEM_A		0200	/* alter permission */
 #define SEM_R		0400	/* read permission */
 
-#ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
-/*
- * Kernel implementation stuff
- */
-#define SEMVMX	32767		/* semaphore maximum value */
-#define SEMAEM	16384		/* adjust on exit max value */
-
-/*
- * Configuration parameters.  SEMMNI, SEMMNS, and SEMMNU are hard limits.
- * The code dynamically allocates enough memory to satisfy the current
- * demand in even increments of SEMMNI_INC, SEMMNS_INC, and SEMMNU_INC.
- * The code will never allocate more than the hard limits.  The *_INC's
- * are defined in the kernel section of the header.
- */
-/*
- * Configuration parameters
- */
-#ifndef SEMMNS			/* # of semaphores in system */
-#define SEMMNS	(1048576/sizeof(struct sem))
-#endif				/* no more than 1M of semaphore data */
-#ifndef SEMMNI			/* # of semaphore identifiers */
-#define SEMMNI	SEMMNS		/* max of 1 for each semaphore */
-#endif
-#ifndef SEMUME
-#define SEMUME	10		/* max # of undo entries per process */
-#endif
-#ifndef SEMMNU			/* # of undo structures in system */
-#define SEMMNU	SEMMNS		/* 1 for each semaphore.  This is quite large */
-#endif				/* This should be max 1 for each process */
-
-/* shouldn't need tuning */
-#ifndef SEMMAP
-#define SEMMAP	30		/* # of entries in semaphore map */
-#endif
-#ifndef SEMMSL
-#define SEMMSL	SEMMNS		/* max # of semaphores per id */
-#endif
-#ifndef SEMOPM
-#define SEMOPM	100		/* max # of operations per semop call */
-#endif
+#endif	/* !_POSIX_C_SOURCE */
 
 
-/*
- * Undo structure (one per process)
- */
-struct sem_undo {
-	struct	sem_undo *un_next;	/* ptr to next active undo structure */
-	struct	proc *un_proc;		/* owner of this structure */
-	short	un_cnt;			/* # of active entries */
-	struct undo {
-		short	un_adjval;	/* adjust on exit values */
-		short	un_num;		/* semaphore # */
-		int	un_id;		/* semid */
-	} un_ent[SEMUME];		/* undo entries */
-};
-
-/*
- * semaphore info struct
- */
-struct seminfo {
-	int	semmap,		/* # of entries in semaphore map */
-		semmni,		/* # of semaphore identifiers */
-		semmns,		/* # of semaphores in system */
-		semmnu,		/* # of undo structures in system */
-		semmsl,		/* max # of semaphores per id */
-		semopm,		/* max # of operations per semop call */
-		semume,		/* max # of undo entries per process */
-		semusz,		/* size in bytes of undo structure */
-		semvmx,		/* semaphore maximum value */
-		semaem;		/* adjust on exit max value */
-};
-extern struct seminfo	seminfo;
-
-/* internal "mode" bits */
-#define	SEM_ALLOC	01000	/* semaphore is allocated */
-#define	SEM_DEST	02000	/* semaphore will be destroyed on last detach */
-
-#define SEMMNI_INC	8	/* increment value for semaphore identifiers */
-#define SEMMNS_INC	64	/* increment value for semaphores */
-#define SEMMNU_INC	32	/* increment value for undo structures */
-
-/*
- * Due to the way semaphore memory is allocated, we have to ensure that
- * SEMUSZ is properly aligned.
- *
- * We are not doing strange semaphore memory allocation anymore, so
- * these macros are no longer needed.
- */
-
-/*
- * #define SEM_ALIGN(bytes) (((bytes) + (sizeof(long) - 1)) & ~(sizeof(long) - 1))
- */
-
-/* actual size of an undo structure */
-/*
- * #define SEMUSZ	SEM_ALIGN(offsetof(struct sem_undo, un_ent[SEMUME]))
- */
-#define SEMUSZ		sizeof(struct sem_undo)
-
-extern struct semid_ds *sema;	/* semaphore id pool */
-extern struct sem *sem;		/* semaphore pool */
-/* This is now a struct sem_undo with the new memory allocation 
- * extern int	*semu;		/* undo structure pool
- */
-extern struct sem_undo	*semu;		/* undo structure pool */
-
-/*
- * Macro to find a particular sem_undo vector
- */
-/* Until we can initialize seminfo.semusz to SEMUSZ, we hard code the size macro
- * in SEMU.  This should be fixed when (if) we implement dynamic pool sizes
- *
- * #define SEMU(ix)     ((struct sem_undo *)(((intptr_t)semu)+ix * seminfo.semusz))
- */
-/*
- * This macro doesn't work because we are using a staticly allocated array
- * for semu now.
- * #define SEMU(ix)        ((struct sem_undo *)(((intptr_t)semu)+ix * SEMUSZ)) 
- */
-#define SEMU(ix)        (&semu[ix])
-
-
-/*
- * Process sem_undo vectors at proc exit.
- */
-void	semexit __P((struct proc *p));
-
-/*
- * Parameters to the semconfig system call
- */
-typedef enum {
-	SEM_CONFIG_FREEZE,	/* Freeze the semaphore facility. */
-	SEM_CONFIG_THAW		/* Thaw the semaphore facility. */
-} semconfig_ctl_t;
-
-#endif /* __APPLE_API_PRIVATE */
-
-#endif /* KERNEL */
 
 #ifndef KERNEL
-#include <sys/cdefs.h>
 
 __BEGIN_DECLS
-int semsys __P((int, ...));
-int semctl __P((int, int, int, ...));
-int semget __P((key_t, int, int));
-int semop __P((int, struct sembuf *,unsigned));
+#ifndef _POSIX_C_SOURCE
+int	semsys(int, ...);
+#endif /* !_POSIX_C_SOURCE */
+int	semctl(int, int, int, ...) __DARWIN_ALIAS(semctl);
+int	semget(key_t, int, int);
+int	semop(int, struct sembuf *, size_t);
 __END_DECLS
+
 #endif /* !KERNEL */
 
 #endif /* !_SEM_H_ */

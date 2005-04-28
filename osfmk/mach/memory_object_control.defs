@@ -114,6 +114,8 @@ routine memory_object_lock_request(
 		memory_control	: memory_object_control_t;
 		offset		: memory_object_offset_t;
 		size		: memory_object_size_t;
+	out	resid_offset	: memory_object_offset_t;
+	out	io_errno	: integer_t;
 		should_return	: memory_object_return_t;
 		flags		: integer_t;
 		lock_value	: vm_prot_t

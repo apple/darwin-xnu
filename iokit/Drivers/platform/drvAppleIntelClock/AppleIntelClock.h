@@ -25,8 +25,6 @@
 
 #include <IOKit/IOService.h>
 
-#define	kIRQ_Clock	0
-
 class AppleIntelClock : public IOService
 {
   OSDeclareDefaultStructors(AppleIntelClock);

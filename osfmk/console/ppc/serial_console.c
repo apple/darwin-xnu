@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -34,11 +34,15 @@
 #include <machine/machparam.h>		/* spl definitions */
 #include <types.h>
 #include <console/video_console.h>
+#include <kern/kalloc.h>
+#include <kern/thread.h>
 #include <ppc/misc_protos.h>
 #include <ppc/serial_io.h>
 #include <kern/cpu_number.h>
 #include <ppc/Firmware.h>
 #include <ppc/proc_reg.h>
+#include <ppc/cpu_internal.h>
+#include <ppc/exception.h>
 #include <pexpert/pexpert.h>
 
 /*
@@ -85,8 +89,9 @@ struct ppcbfr {													/* Controls multiple processor output */
 	unsigned int	echo;										/* Control character echoing */
 	char			buffer[256];								/* Fairly big buffer */	
 };
-typedef struct ppcbfr ppcbfr;
-ppcbfr cbfr[NCPUS];												/* Get one of these for each processor */
+typedef struct ppcbfr ppcbfr_t;
+
+ppcbfr_t cbfr_boot_cpu;											/* Get one for boot cpu */
 volatile unsigned int cbfpend;									/* A buffer is pending output */
 volatile unsigned int sconowner=-1;								/* Mark who's actually writing */
 
@@ -97,8 +102,31 @@ unsigned int cons_ops_index = CONS_OPS;
 unsigned int killprint = 0;
 unsigned int debcnputc = 0;
 extern unsigned int	mappingdeb0;
-extern int debugger_holdoff[NCPUS];
 extern int debugger_cpu;
+
+void *console_per_proc_alloc(boolean_t boot_processor)
+{
+	ppcbfr_t  *cbfr_cpu;
+
+	if (boot_processor)
+		cbfr_cpu = &cbfr_boot_cpu;
+	else {
+		cbfr_cpu = (ppcbfr_t *)kalloc(sizeof(ppcbfr_t));
+		if (cbfr_cpu == (ppcbfr_t *)NULL)
+			return (void *)NULL;
+	}
+	bzero((char *)cbfr_cpu, sizeof(ppcbfr_t));
+	return (void *)cbfr_cpu;
+}
+
+void console_per_proc_free(void *per_proc_cbfr)
+{
+	if (per_proc_cbfr == (void *)&cbfr_boot_cpu)
+		return;
+	else
+		kfree(per_proc_cbfr, sizeof(ppcbfr_t));
+}
+
 
 static void _cnputc(char c)
 {
@@ -106,26 +134,29 @@ static void _cnputc(char c)
 }
 
 void cnputcusr(char c) {										/* Echo input character directly */
+	struct per_proc_info	*procinfo;
+	spl_t 					s;
+	
+	s=splhigh();
+	procinfo = getPerProc();
 
-	unsigned int cpu;
-	
-	cpu = cpu_number();
-	
-	hw_atomic_add(&debugger_holdoff[cpu], 1);					/* Don't allow debugger entry just now (this is a HACK) */
-	
+	hw_atomic_add(&(procinfo->debugger_holdoff), 1);			/* Don't allow debugger entry just now (this is a HACK) */
+
 	_cnputc( c);												/* Echo the character */
 	if(c=='\n') _cnputc( '\r');									/* Add a return if we had a new line */
-	
-	hw_atomic_sub(&debugger_holdoff[cpu], 1);					/* Don't allow debugger entry just now (this is a HACK) */
+
+	hw_atomic_sub(&(procinfo->debugger_holdoff), 1);			/* Don't allow debugger entry just now (this is a HACK) */
+	splx(s);
 	return;
 }
 
 void
 cnputc(char c)
 {
-
-	unsigned int oldpend, i, cpu, ourbit, sccpu;
-	spl_t 		s;
+	unsigned int				oldpend, i, cpu, ourbit, sccpu;
+	struct per_proc_info		*procinfo;
+	ppcbfr_t					*cbfr, *cbfr_cpu;
+	spl_t 						s;
 		
 #if MP_SAFE_CONSOLE
 
@@ -139,9 +170,12 @@ cnputc(char c)
 		return;													/* If printing is disabled, bail... */
 	}	
 	
-	cpu = cpu_number();
+	s=splhigh();												/* Don't bother me */
+	procinfo = getPerProc();
+	cpu = procinfo->cpu_number;
+	cbfr = procinfo->pp_cbfr;
 
-	hw_atomic_add(&debugger_holdoff[cpu], 1);					/* Don't allow debugger entry just now (this is a HACK) */
+	hw_atomic_add(&(procinfo->debugger_holdoff), 1);			/* Don't allow debugger entry just now (this is a HACK) */
 
 	ourbit = 1 << cpu;											/* Make a mask for just us */
 	if(debugger_cpu != -1) {									/* Are we in the debugger with empty buffers? */
@@ -155,46 +189,46 @@ cnputc(char c)
 			_cnputc( '\r');										/* Yeah, just add a return */
 			
 		sconowner=-1;											/* Mark it idle */	
-		hw_atomic_sub(&debugger_holdoff[cpu], 1);				/* Don't allow debugger entry just now (this is a HACK) */
+		hw_atomic_sub(&(procinfo->debugger_holdoff), 1);			/* Don't allow debugger entry just now (this is a HACK) */
 		
+		splx(s);
 		return;													/* Leave... */
 	}
 
-	s=splhigh();												/* Don't bother me */
 	
 	while(ourbit&cbfpend);										/* We aren't "double buffered," so we'll just wait until the buffers are written */
 	isync();													/* Just in case we had to wait */
 	
 	if(c) {														/* If the character is not null */
-		cbfr[cpu].buffer[cbfr[cpu].pos]=c;						/* Fill in the buffer for our CPU */
-		cbfr[cpu].pos++;										/* Up the count */
-		if(cbfr[cpu].pos > 253) {								/* Is the buffer full? */
-			cbfr[cpu].buffer[254]='\n';							/* Yeah, set the second to last as a LF */
-			cbfr[cpu].buffer[255]='\r';							/* And the last to a CR */
-			cbfr[cpu].pos=256;									/* Push the buffer to the end */
+		cbfr->buffer[cbfr->pos]=c;							/* Fill in the buffer for our CPU */
+		cbfr->pos++;										/* Up the count */
+		if(cbfr->pos > 253) {								/* Is the buffer full? */
+			cbfr->buffer[254]='\n';							/* Yeah, set the second to last as a LF */
+			cbfr->buffer[255]='\r';							/* And the last to a CR */
+			cbfr->pos=256;									/* Push the buffer to the end */
 			c='\r';												/* Set character to a CR */
 		}
 	}
 	
 	if(c == '\n') {												/* Are we finishing a line? */
-		cbfr[cpu].buffer[cbfr[cpu].pos]='\r';					/* And the last to a CR */
-		cbfr[cpu].pos++;										/* Up the count */
+		cbfr->buffer[cbfr->pos]='\r';							/* And the last to a CR */
+		cbfr->pos++;											/* Up the count */
 		c='\r';													/* Set character to a CR */
 	}
 
 #if 1
-	if(cbfr[cpu].echo == 1) {									/* Did we hit an escape last time? */
+	if(cbfr->echo == 1) {										/* Did we hit an escape last time? */
 		if(c == 'K') {											/* Is it a partial clear? */
-			cbfr[cpu].echo = 2;									/* Yes, enter echo mode */
+			cbfr->echo = 2;										/* Yes, enter echo mode */
 		}
-		else cbfr[cpu].echo = 0;								/* Otherwise reset escape */
+		else cbfr->echo = 0;									/* Otherwise reset escape */
 	}
-	else if(cbfr[cpu].echo == 0) {								/* Not in escape sequence, see if we should enter */
-		cbfr[cpu].echo = 1;										/* Set that we are in escape sequence */
+	else if(cbfr->echo == 0) {									/* Not in escape sequence, see if we should enter */
+		cbfr->echo = 1;											/* Set that we are in escape sequence */
 	}
 #endif
 
-	if((c == 0x00) || (c == '\r') || (cbfr[cpu].echo == 2)) {	/* Try to push out all buffers if we see CR or null */
+	if((c == 0x00) || (c == '\r') || (cbfr->echo == 2)) {		/* Try to push out all buffers if we see CR or null */
 				
 		while(1) {												/* Loop until we see who's doing this */
 			oldpend=cbfpend;									/* Get the currentest pending buffer flags */
@@ -203,19 +237,24 @@ cnputc(char c)
 		}
 		
 		if(!hw_compare_and_store(-1, cpu, (unsigned int *)&sconowner)) {	/* See if someone else has this, and take it if not */
-			debugger_holdoff[cpu] = 0;							/* Allow debugger entry (this is a HACK) */
+			procinfo->debugger_holdoff = 0;						/* Allow debugger entry (this is a HACK) */
 			splx(s);											/* Let's take some 'rupts now */
 			return;												/* We leave here, 'cause another processor is already writing the buffers */
 		}
 				
 		while(1) {												/* Loop to dump out all of the finished buffers */
 			oldpend=cbfpend;									/* Get the most current finished buffers */
-			for(sccpu=0; sccpu<NCPUS; sccpu++) {				/* Cycle through all CPUs buffers */
+			for(sccpu=0; sccpu<real_ncpus; sccpu++) {				/* Cycle through all CPUs buffers */
+				if ((PerProcTable[sccpu].ppe_vaddr == 0)
+				    || (PerProcTable[sccpu].ppe_vaddr->pp_cbfr == 0))
+					continue;
+
+				cbfr_cpu = PerProcTable[sccpu].ppe_vaddr->pp_cbfr;
 				
 				if(oldpend&(1<<sccpu)) {						/* Does this guy have a buffer to do? */
 
 #if 0
-					if(!cbfr[sccpu].noprompt) {					/* Don't prompt if there was not CR before */
+					if(!cbfr_cpu->noprompt) {					/* Don't prompt if there was not CR before */
 						_cnputc( '{');	/* Mark CPU number */
 						_cnputc( '0'+sccpu);	/* Mark CPU number */
 						_cnputc( '.');	/* (TEST/DEBUG) */
@@ -225,19 +264,19 @@ cnputc(char c)
 					}
 #endif
 					
-					for(i=0; i<cbfr[sccpu].pos; i++) {			/* Do the whole buffer */
-						_cnputc( cbfr[sccpu].buffer[i]); /* Write it */
+					for(i=0; i<cbfr_cpu->pos; i++) {				/* Do the whole buffer */
+						_cnputc(cbfr_cpu->buffer[i]);	 			/* Write it */
 					}
 					
-					if(cbfr[sccpu].buffer[cbfr[sccpu].pos-1]!='\r') {	/* Was the last character a return? */
-						cbfr[sccpu].noprompt = 1;				/* Remember not to prompt */
+					if(cbfr_cpu->buffer[cbfr_cpu->pos-1]!='\r') {	/* Was the last character a return? */
+						cbfr_cpu->noprompt = 1;						/* Remember not to prompt */
 					}
-					else {										/* Last was a return */
-						cbfr[sccpu].noprompt = 0;				/* Otherwise remember to prompt */
-						cbfr[sccpu].echo = 0;					/* And clear echo */
+					else {											/* Last was a return */
+						cbfr_cpu->noprompt = 0;						/* Otherwise remember to prompt */
+						cbfr_cpu->echo = 0;							/* And clear echo */
 					}
 						
-					cbfr[sccpu].pos=0;							/* Reset the buffer pointer */
+					cbfr_cpu->pos=0;								/* Reset the buffer pointer */
 		
 					while(!hw_compare_and_store(cbfpend, cbfpend&~(1<<sccpu), (unsigned int *)&cbfpend));	/* Swap it off */
 				}
@@ -249,7 +288,7 @@ cnputc(char c)
 	
 		}
 	}
-	hw_atomic_sub(&debugger_holdoff[cpu], 1);					/* Don't allow debugger entry just now (this is a HACK) */
+	hw_atomic_sub(&(procinfo->debugger_holdoff), 1);					/* Don't allow debugger entry just now (this is a HACK) */
 	splx(s);													/* Let's take some 'rupts now */
 
 #else  /* MP_SAFE_CONSOLE */
@@ -313,7 +352,10 @@ switch_to_old_console(int old_console)
 
 
 int
-vcgetc(int l, int u, boolean_t wait, boolean_t raw)
+vcgetc(__unused int l, 
+       __unused int u, 
+       __unused boolean_t wait, 
+       __unused boolean_t raw)
 {
 	char c;
 

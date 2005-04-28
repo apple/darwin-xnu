@@ -34,7 +34,7 @@
 #include <mach/std_types.defs>
 
 type clock_serv_t = mach_port_t
-		ctype: clock_serv_t
+		cusertype: clock_serv_t
 #if	KERNEL_SERVER
 		intran: clock_serv_t convert_port_to_clock(mach_port_t)
 		outtran: mach_port_t convert_clock_to_port(clock_serv_t)
@@ -42,7 +42,7 @@ type clock_serv_t = mach_port_t
 		;
 
 type clock_ctrl_t = mach_port_t
-		ctype: clock_ctrl_t
+		cusertype: clock_ctrl_t
 #if	KERNEL_SERVER
 		intran: clock_ctrl_t convert_port_to_clock_ctrl(mach_port_t)
 		outtran: mach_port_t convert_clock_ctrl_to_port(clock_ctrl_t)

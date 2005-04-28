@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -55,6 +55,7 @@
 #include <mach/vm_statistics.h>
 #include <kern/queue.h>
 #include <vm/pmap.h>
+#include <ppc/mappings.h>
 
 #define maxPPage32 0x000FFFFF			/* Maximum page number in 32-bit machines */
 
@@ -76,6 +77,77 @@ struct sgc {
 typedef struct sgc sgc;
 
 #pragma pack(4)							/* Make sure the structure stays as we defined it */
+struct pmap_vmm_stats {
+	unsigned int	vxsGpf;				/* Guest faults */
+	unsigned int	vxsGpfMiss;			/* Faults that miss in hash table */
+	
+	unsigned int	vxsGrm;				/* Guest mapping remove requests */
+	unsigned int	vxsGrmMiss;			/* Remove misses in hash table */
+	unsigned int	vxsGrmActive;		/* Remove hits that are active */
+	
+	unsigned int	vxsGra;				/* Guest remove all mappings requests */
+	unsigned int	vxsGraHits;			/* Remove hits in hash table */
+	unsigned int	vxsGraActive;		/* Remove hits that are active */
+	
+	unsigned int	vxsGrl;				/* Guest remove local mappings requests */
+	unsigned int	vxsGrlActive;		/* Active mappings removed */
+
+	unsigned int	vxsGrs;				/* Guest mapping resumes */
+	unsigned int	vxsGrsHitAct;		/* Resume hits active entry */
+	unsigned int	vxsGrsHitSusp;		/* Resume hits suspended entry */
+	unsigned int	vxsGrsMissGV;		/* Resume misses on guest virtual */
+	unsigned int	vxsGrsHitPE;		/* Resume hits on host virtual */
+	unsigned int	vxsGrsMissPE;		/* Resume misses on host virtual */
+
+	unsigned int	vxsGad;				/* Guest mapping adds */
+	unsigned int	vxsGadHit;			/* Add hits entry (active or dormant) */
+	unsigned int	vxsGadFree;			/* Add takes free entry in group */
+	unsigned int	vxsGadDormant;		/* Add steals dormant entry in group */
+	unsigned int	vxsGadSteal;		/* Add steals active entry in group */
+	
+	unsigned int	vxsGsu;				/* Guest mapping suspends */
+	unsigned int	vxsGsuHit;			/* Suspend hits entry (active only) */
+	unsigned int	vxsGsuMiss;			/* Suspend misses entry */
+	
+	unsigned int	vxsGtd;				/* Guest test ref&chg */
+	unsigned int	vxsGtdHit;			/* Test r&c hits entry (active only) */
+	unsigned int	vxsGtdMiss;			/* Test r&c misses entry */
+};
+#pragma pack()
+typedef struct pmap_vmm_stats pmap_vmm_stats;
+
+/* Not wanting to tax all of our customers for the sins of those that use virtual operating
+   systems, we've built the hash table from its own primitive virtual memory. We first
+   allocate a pmap_vmm_ext with sufficient space following to accomodate the hash table 
+   index (one 64-bit physical address per 4k-byte page of hash table). The allocation 
+   must not cross a 4k-byte page boundary (we'll be accessing the block with relocation
+   off), so we'll try a couple of times, then just burn a whole page. We stuff the effective
+   address of the cache-aligned index into hIdxBase; the physical-mode code locates the index
+   by adding the size of a pmap_vmm_extension to its translated physical address, then rounding
+   up to the next 32-byte boundary. Now we grab enough virtual pages to contain the hash table,
+   and fill in the index with the page's physical addresses. For the final touch that's sure
+   to please, we initialize the hash table. Mmmmm, golden brown perfection.
+ */
+
+#pragma pack(4)
+struct pmap_vmm_ext {
+	addr64_t		vmxSalt;			/* This block's virt<->real conversion salt */
+	addr64_t		vmxHostPmapPhys;	/* Host pmap physical address */
+	struct pmap		*vmxHostPmap;		/* Host pmap effective address */
+	addr64_t		*vmxHashPgIdx;		/* Hash table physical index base address */
+	vm_offset_t		*vmxHashPgList;		/* List of virtual pages comprising the hash table */
+	unsigned int	*vmxActiveBitmap;	/* Bitmap of active mappings in hash table */
+	pmap_vmm_stats	vmxStats;			/* Stats for VMM assists */
+#define VMX_HPIDX_OFFSET ((sizeof(pmap_vmm_ext) + 127) & ~127)
+										/* The hash table physical index begins at the first
+										   128-byte boundary after the pmap_vmm_ext struct */
+#define VMX_HPLIST_OFFSET (VMX_HPIDX_OFFSET + (GV_HPAGES * sizeof(addr64_t)))
+#define VMX_ACTMAP_OFFSET (VMX_HPLIST_OFFSET + (GV_HPAGES * sizeof(vm_offset_t)))
+};
+#pragma pack()
+typedef struct pmap_vmm_ext pmap_vmm_ext;
+
+#pragma pack(4)							/* Make sure the structure stays as we defined it */
 struct pmap {
 	queue_head_t	pmap_link;			/* MUST BE FIRST */
 	addr64_t		pmapvr;				/* Virtual to real conversion mask */
@@ -87,6 +159,7 @@ struct pmap {
 #define pmapKeys	0x00000007			/* Keys and no execute bit to use with this pmap */
 #define pmapKeyDef	0x00000006			/* Default keys - Sup = 1, user = 1, no ex = 0 */
 #define pmapVMhost	0x00000010			/* pmap with Virtual Machines attached to it */
+#define pmapVMgsaa	0x00000020			/* Guest shadow assist active */
 	unsigned int	spaceNum;			/* Space number */
 	unsigned int	pmapCCtl;			/* Cache control */
 #define pmapCCtlVal	0xFFFF0000			/* Valid entries */
@@ -98,8 +171,8 @@ struct pmap {
 #define pmapSegCacheUse	16				/* Number of cache entries to use */
 
 	struct pmap		*freepmap;			/* Free pmaps */
-
-	unsigned int	pmapRsv1[3];
+	pmap_vmm_ext   *pmapVmmExt;			/* VMM extension block, for VMM host and guest pmaps */
+	addr64_t		pmapVmmExtPhys;		/* VMM extension block physical address */
 /*											0x038 */
 	uint64_t		pmapSCSubTag;		/* Segment cache sub-tags. This is a 16 entry 4 bit array */
 /*											0x040 */
@@ -123,7 +196,6 @@ struct pmap {
 /*											0x1C0 */	
 
 	struct pmap_statistics	stats;		/* statistics */
-	decl_simple_lock_data(,lock)		/* lock on map */
 	
 /* Need to pad out to a power of 2 - right now it is 512 bytes */
 #define pmapSize 512
@@ -139,9 +211,23 @@ struct pmapTransTab {
 
 typedef struct pmapTransTab pmapTransTab;
 
+/*
+ *	Address Chunk IDentified Table
+ */
+ 
+struct acidTabEnt {
+	unsigned int	acidVAddr;			/* Virtual address of pmap or pointer to next free entry */
+	unsigned int	acidGas;			/* reserved */
+	addr64_t		acidPAddr;			/* Physcial address of pmap */
+};
+
+typedef struct acidTabEnt acidTabEnt;
+
+extern acidTabEnt *acidTab;				/* Pointer to acid table */
+extern acidTabEnt *acidFree;			/* List of free acid entries */
+
 #define PMAP_NULL  ((pmap_t) 0)
 
-extern pmap_t	kernel_pmap;			/* The kernel's map */
 extern pmap_t	cursor_pmap;			/* The pmap to start allocations with */
 extern pmap_t	sharedPmap;
 extern unsigned int sharedPage;
@@ -151,8 +237,6 @@ extern addr64_t vm_max_physical;		/* Maximum physical address supported */
 extern pmapTransTab *pmapTrans;			/* Space to pmap translate table */
 #define	PMAP_SWITCH_USER(th, map, my_cpu) th->map = map;	
 
-#define PMAP_ACTIVATE(pmap, th, cpu)
-#define PMAP_DEACTIVATE(pmap, th, cpu)
 #define PMAP_CONTEXT(pmap,th)
 
 #define pmap_kernel_va(VA)	\
@@ -162,7 +246,10 @@ extern pmapTransTab *pmapTrans;			/* Space to pmap translate table */
 
 #define maxAdrSp 16384
 #define maxAdrSpb 14
-#define copyIOaddr 0x00000000E0000000ULL
+#define USER_MEM_WINDOW_VADDR	0x00000000E0000000ULL
+#define PHYS_MEM_WINDOW_VADDR	0x0000000100000000ULL
+#define IO_MEM_WINDOW_VADDR		0x0000000080000000ULL
+#define IO_MEM_WINDOW_SIZE		0x0000000080000000ULL
 
 #define pmap_kernel()			(kernel_pmap)
 #define	pmap_resident_count(pmap)	((pmap)->stats.resident_count)
@@ -201,15 +288,9 @@ extern kern_return_t    pmap_add_physical_memory(vm_offset_t spa,
 extern void		pmap_bootstrap(uint64_t msize,
 				       vm_offset_t *first_avail,
 				       unsigned int kmapsize);
-extern void		pmap_switch(pmap_t);
 
-extern vm_offset_t pmap_extract(pmap_t pmap,
-				vm_offset_t va);
+extern vm_offset_t pmap_boot_map(vm_size_t size);
 
-extern void pmap_remove_all(vm_offset_t pa);
-
-extern boolean_t pmap_verify_free(ppnum_t pa);
-extern void sync_cache(vm_offset_t pa, unsigned length);
 extern void sync_cache64(addr64_t pa, unsigned length);
 extern void sync_ppage(ppnum_t pa);
 extern void	sync_cache_virtual(vm_offset_t va, unsigned length);
@@ -219,18 +300,26 @@ extern void invalidate_dcache(vm_offset_t va, unsigned length, boolean_t phys);
 extern void invalidate_dcache64(addr64_t va, unsigned length, boolean_t phys);
 extern void invalidate_icache(vm_offset_t va, unsigned length, boolean_t phys);
 extern void invalidate_icache64(addr64_t va, unsigned length, boolean_t phys);
-extern void pmap_sync_caches_phys(ppnum_t pa);
+extern void pmap_sync_page_data_phys(ppnum_t pa);
+extern void pmap_sync_page_attributes_phys(ppnum_t pa);
 extern void pmap_map_block(pmap_t pmap, addr64_t va, ppnum_t pa, vm_size_t size, vm_prot_t prot, int attr, unsigned int flags);
 extern int pmap_map_block_rc(pmap_t pmap, addr64_t va, ppnum_t pa, vm_size_t size, vm_prot_t prot, int attr, unsigned int flags);
 
 extern kern_return_t pmap_nest(pmap_t grand, pmap_t subord, addr64_t vstart, addr64_t nstart, uint64_t size);
+extern kern_return_t pmap_unnest(pmap_t grand, addr64_t vaddr);
 extern ppnum_t pmap_find_phys(pmap_t pmap, addr64_t va);
-extern addr64_t MapUserAddressSpace(vm_map_t map, addr64_t va, unsigned int size);
-extern void ReleaseUserAddressSpace(addr64_t kva);
-extern kern_return_t pmap_attribute_cache_sync(ppnum_t pp, vm_size_t size,
-				vm_machine_attribute_t  attribute,
-				vm_machine_attribute_val_t* value);
-extern int pmap_canExecute(ppnum_t pa);
+extern void MapUserMemoryWindowInit(void);
+extern addr64_t MapUserMemoryWindow(vm_map_t map, addr64_t va);
+extern boolean_t pmap_eligible_for_execute(ppnum_t pa);
+extern int pmap_list_resident_pages(
+	struct pmap	*pmap,
+	vm_offset_t	*listp,
+	int		space);
+extern void pmap_init_sharedpage(vm_offset_t cpg);
+extern void pmap_map_sharedpage(task_t task, pmap_t pmap);
+extern void pmap_unmap_sharedpage(pmap_t pmap);
+
+
 
 #endif /* _PPC_PMAP_H_ */
 

@@ -239,6 +239,8 @@ public:
     */
     virtual kern_return_t removeKernelLinker(void);
 
+    static void disableExternalLinker(void);
+
 private:
 
     /*!

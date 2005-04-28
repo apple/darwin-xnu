@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -55,6 +55,8 @@ extern kern_return_t iokit_destroy_object_port( ipc_port_t port );
 extern mach_port_name_t iokit_make_send_right( task_t task,
 				io_object_t obj, ipc_kobject_type_t type );
 
+extern kern_return_t iokit_mod_send_right( task_t task, mach_port_name_t name, mach_port_delta_t delta );
+
 extern io_object_t iokit_lookup_connect_ref(io_object_t clientRef, ipc_space_t task);
 
 extern io_object_t iokit_lookup_connect_ref_current_task(io_object_t clientRef);
@@ -66,6 +68,7 @@ extern void iokit_release_port( ipc_port_t port );
 
 extern kern_return_t iokit_switch_object_port( ipc_port_t port, io_object_t obj, ipc_kobject_type_t type );
 
+#include <mach/mach_traps.h>
 #include <vm/vm_map.h>
 
 } /* extern "C" */
@@ -1015,11 +1018,98 @@ kern_return_t is_io_object_get_class(
 	io_object_t object,
 	io_name_t className )
 {
+	const OSMetaClass* my_obj = NULL;
+
     if( !object)
         return( kIOReturnBadArgument );
-
-    strcpy( className, object->getMetaClass()->getClassName());
+		
+	my_obj = object->getMetaClass();
+	if (!my_obj) {
+		return (kIOReturnNotFound);
+	}
+	
+    strcpy( className, my_obj->getClassName());
     return( kIOReturnSuccess );
+}
+
+/* Routine io_object_get_superclass */
+kern_return_t is_io_object_get_superclass(
+	mach_port_t master_port,
+	io_name_t obj_name, 
+	io_name_t class_name)
+{
+	const OSMetaClass* my_obj = NULL;
+	const OSMetaClass* superclass = NULL;
+	const OSSymbol *my_name = NULL;
+	const char *my_cstr = NULL;
+
+	if (!obj_name || !class_name) 
+		return (kIOReturnBadArgument);
+
+    if( master_port != master_device_port)
+        return( kIOReturnNotPrivileged);
+
+	my_name = OSSymbol::withCString(obj_name);
+	
+	if (my_name) {
+		my_obj = OSMetaClass::getMetaClassWithName(my_name);
+		my_name->release();
+	}
+	if (my_obj) {
+		superclass = my_obj->getSuperClass();
+	}
+	
+	if (!superclass)  {
+		return( kIOReturnNotFound );
+	}
+
+	my_cstr = superclass->getClassName();
+		
+	if (my_cstr) {
+		strncpy(class_name, my_cstr, sizeof(io_name_t)-1);
+		return( kIOReturnSuccess );
+	}
+	return (kIOReturnNotFound);
+}
+
+/* Routine io_object_get_bundle_identifier */
+kern_return_t is_io_object_get_bundle_identifier(
+	mach_port_t master_port,
+	io_name_t obj_name, 
+	io_name_t bundle_name)
+{
+	const OSMetaClass* my_obj = NULL;
+	const OSSymbol *my_name = NULL;
+	const OSSymbol *identifier = NULL;
+	const char *my_cstr = NULL;
+
+	if (!obj_name || !bundle_name) 
+		return (kIOReturnBadArgument);
+
+    if( master_port != master_device_port)
+        return( kIOReturnNotPrivileged);
+	
+	my_name = OSSymbol::withCString(obj_name);	
+	
+	if (my_name) {
+		my_obj = OSMetaClass::getMetaClassWithName(my_name);
+		my_name->release();
+	}
+
+	if (my_obj) {
+		identifier = my_obj->getKmodName();
+	}
+	if (!identifier) {
+		return( kIOReturnNotFound );
+	}
+	
+	my_cstr = identifier->getCStringNoCopy();
+	if (my_cstr) {
+		strncpy(bundle_name, identifier->getCStringNoCopy(), sizeof(io_name_t)-1);
+		return( kIOReturnSuccess );
+	}
+
+	return (kIOReturnBadArgument);
 }
 
 /* Routine io_object_conforms_to */
@@ -1124,8 +1214,10 @@ kern_return_t is_io_service_match_property_table_ool(
 {
     kern_return_t	kr;
     vm_offset_t 	data;
+    vm_map_offset_t	map_data;
 
-    kr = vm_map_copyout( kernel_map, &data, (vm_map_copy_t) matching );
+    kr = vm_map_copyout( kernel_map, &map_data, (vm_map_copy_t) matching );
+    data = CAST_DOWN(vm_offset_t, map_data);
 
     if( KERN_SUCCESS == kr) {
         // must return success after vm_map_copyout() succeeds
@@ -1174,8 +1266,10 @@ kern_return_t is_io_service_get_matching_services_ool(
 {
     kern_return_t	kr;
     vm_offset_t 	data;
+    vm_map_offset_t	map_data;
 
-    kr = vm_map_copyout( kernel_map, &data, (vm_map_copy_t) matching );
+    kr = vm_map_copyout( kernel_map, &map_data, (vm_map_copy_t) matching );
+    data = CAST_DOWN(vm_offset_t, map_data);
 
     if( KERN_SUCCESS == kr) {
         // must return success after vm_map_copyout() succeeds
@@ -1275,8 +1369,10 @@ kern_return_t is_io_service_add_notification_ool(
 {
     kern_return_t	kr;
     vm_offset_t 	data;
+    vm_map_offset_t	map_data;
 
-    kr = vm_map_copyout( kernel_map, &data, (vm_map_copy_t) matching );
+    kr = vm_map_copyout( kernel_map, &map_data, (vm_map_copy_t) matching );
+    data = CAST_DOWN(vm_offset_t, map_data);
 
     if( KERN_SUCCESS == kr) {
         // must return success after vm_map_copyout() succeeds
@@ -1558,7 +1654,7 @@ static kern_return_t copyoutkdata( void * data, vm_size_t len,
     kern_return_t	err;
     vm_map_copy_t	copy;
 
-    err = vm_map_copyin( kernel_map, (vm_offset_t) data, len,
+    err = vm_map_copyin( kernel_map, CAST_USER_ADDR_T(data), len,
                     false /* src_destroy */, &copy);
 
     assert( err == KERN_SUCCESS );
@@ -1752,10 +1848,12 @@ kern_return_t is_io_registry_entry_set_properties
     kern_return_t	err;
     IOReturn		res;
     vm_offset_t 	data;
+    vm_map_offset_t	map_data;
 
     CHECK( IORegistryEntry, registry_entry, entry );
 
-    err = vm_map_copyout( kernel_map, &data, (vm_map_copy_t) properties );
+    err = vm_map_copyout( kernel_map, &map_data, (vm_map_copy_t) properties );
+    data = CAST_DOWN(vm_offset_t, map_data);
 
     if( KERN_SUCCESS == err) {
 
@@ -2014,14 +2112,28 @@ kern_return_t is_io_connect_unmap_memory(
 
 	map = memory->map( task, mapAddr, options );
 	memory->release();
-        if( map) {
+        if( map)
+	{
             IOLockLock( gIOObjectPortLock);
             if( client->mappings)
                 client->mappings->removeObject( map);
             IOLockUnlock( gIOObjectPortLock);
-            IOMachPort::releasePortForObject( map, IKOT_IOKIT_OBJECT );
-            map->release();
-        } else
+
+	    mach_port_name_t name = 0;
+	    if (task != current_task())
+		name = IOMachPort::makeSendRightForTask( task, map, IKOT_IOKIT_OBJECT );
+	    if (name)
+	    {
+		map->unmap();
+		err = iokit_mod_send_right( task, name, -2 );
+		err = kIOReturnSuccess;
+	    }
+	    else
+		IOMachPort::releasePortForObject( map, IKOT_IOKIT_OBJECT );
+	    if (task == current_task())
+		map->release();
+        }
+	else
             err = kIOReturnBadArgument;
     }
 
@@ -2698,8 +2810,12 @@ kern_return_t is_io_catalog_send_data(
     if(flag != kIOCatalogRemoveKernelLinker && ( !inData || !inDataCount) )
         return kIOReturnBadArgument;
 
-    if (data) {
-        kr = vm_map_copyout( kernel_map, &data, (vm_map_copy_t)inData);
+    if (inData) {
+        vm_map_offset_t map_data;
+
+        kr = vm_map_copyout( kernel_map, &map_data, (vm_map_copy_t)inData);
+	data = CAST_DOWN(vm_offset_t, map_data);
+
         if( kr != KERN_SUCCESS)
             return kr;
 
@@ -2869,10 +2985,11 @@ kern_return_t is_io_catalog_get_data(
         vm_size_t size;
 
         size = s->getLength();
-        kr = vm_allocate(kernel_map, &data, size, true);
+        kr = vm_allocate(kernel_map, &data, size, VM_FLAGS_ANYWHERE);
         if ( kr == kIOReturnSuccess ) {
             bcopy(s->text(), (void *)data, size);
-            kr = vm_map_copyin(kernel_map, data, size, true, &copy);
+            kr = vm_map_copyin(kernel_map, (vm_map_address_t)data,
+			       (vm_map_size_t)size, true, &copy);
             *outData = (char *)copy;
             *outDataCount = size;
         }
@@ -2938,19 +3055,17 @@ kern_return_t is_io_catalog_reset(
     return kIOReturnSuccess;
 }
 
-kern_return_t iokit_user_client_trap(io_object_t userClientRef, UInt32 index,
-                                    void *p1, void *p2, void *p3,
-                                    void *p4, void *p5, void *p6)
+kern_return_t iokit_user_client_trap(struct iokit_user_client_trap_args *args)
 {
     kern_return_t result = kIOReturnBadArgument;
     IOUserClient *userClient;
 
     if ((userClient = OSDynamicCast(IOUserClient,
-            iokit_lookup_connect_ref_current_task(userClientRef)))) {
+            iokit_lookup_connect_ref_current_task((OSObject *)(args->userClientRef))))) {
         IOExternalTrap *trap;
         IOService *target = NULL;
 
-        trap = userClient->getTargetAndTrapForIndex(&target, index);
+        trap = userClient->getTargetAndTrapForIndex(&target, args->index);
 
         if (trap && target) {
             IOTrap func;
@@ -2958,7 +3073,7 @@ kern_return_t iokit_user_client_trap(io_object_t userClientRef, UInt32 index,
             func = trap->func;
 
             if (func) {
-                result = (target->*func)(p1, p2, p3, p4, p5, p6);
+                result = (target->*func)(args->p1, args->p2, args->p3, args->p4, args->p5, args->p6);
             }
         }
 

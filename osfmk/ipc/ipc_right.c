@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002,2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -382,10 +382,10 @@ ipc_right_dnrequest(
 
 ipc_port_t
 ipc_right_dncancel(
-	ipc_space_t		space,
-	ipc_port_t		port,
-	mach_port_name_t	name,
-	ipc_entry_t		entry)
+	__unused ipc_space_t		space,
+	ipc_port_t			port,
+	mach_port_name_t		name,
+	ipc_entry_t			entry)
 {
 	ipc_port_t dnrequest;
 
@@ -410,9 +410,9 @@ ipc_right_dncancel(
 
 boolean_t
 ipc_right_inuse(
-	ipc_space_t		space,
-	mach_port_name_t	name,
-	ipc_entry_t		entry)
+	ipc_space_t			space,
+	__unused mach_port_name_t	name,
+	ipc_entry_t			entry)
 {
 	if (IE_BITS_TYPE(entry->ie_bits) != MACH_PORT_TYPE_NONE) {
 		is_write_unlock(space);
@@ -558,7 +558,7 @@ ipc_right_clean(
 		ipc_port_t port = (ipc_port_t) entry->ie_object;
 		ipc_port_t dnrequest;
 		ipc_port_t nsrequest = IP_NULL;
-		mach_port_mscount_t mscount;
+		mach_port_mscount_t mscount = 0;
 
 		assert(port != IP_NULL);
 		ip_lock(port);
@@ -671,7 +671,7 @@ ipc_right_destroy(
 	    case MACH_PORT_TYPE_SEND_ONCE: {
 		ipc_port_t port = (ipc_port_t) entry->ie_object;
 		ipc_port_t nsrequest = IP_NULL;
-		mach_port_mscount_t mscount;
+		mach_port_mscount_t mscount = 0;
 		ipc_port_t dnrequest;
 
 		assert(port != IP_NULL);
@@ -828,7 +828,7 @@ ipc_right_dealloc(
 		ipc_port_t port;
 		ipc_port_t dnrequest = IP_NULL;
 		ipc_port_t nsrequest = IP_NULL;
-		mach_port_mscount_t mscount;
+		mach_port_mscount_t mscount =  0;
 
 
 		assert(IE_BITS_UREFS(bits) > 0);
@@ -881,7 +881,7 @@ ipc_right_dealloc(
 	    case MACH_PORT_TYPE_SEND_RECEIVE: {
 		ipc_port_t port;
 		ipc_port_t nsrequest = IP_NULL;
-		mach_port_mscount_t mscount;
+		mach_port_mscount_t mscount = 0;
 
 		assert(IE_BITS_UREFS(bits) > 0);
 
@@ -1157,7 +1157,7 @@ ipc_right_delta(
 		ipc_port_t port;
 		ipc_port_t dnrequest = IP_NULL;
 		ipc_port_t nsrequest = IP_NULL;
-		mach_port_mscount_t mscount;
+		mach_port_mscount_t mscount = 0;
 
 		if ((bits & MACH_PORT_TYPE_SEND) == 0)
 			goto invalid_right;
@@ -1310,10 +1310,10 @@ ipc_right_info(
 
 boolean_t
 ipc_right_copyin_check(
-	ipc_space_t		space,
-	mach_port_name_t	name,
-	ipc_entry_t		entry,
-	mach_msg_type_name_t	msgt_name)
+	__assert_only ipc_space_t	space,
+	__unused mach_port_name_t	name,
+	ipc_entry_t			entry,
+	mach_msg_type_name_t		msgt_name)
 {
 	ipc_entry_bits_t bits;
 

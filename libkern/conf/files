@@ -7,6 +7,7 @@ OPTIONS/gprof						optional gprof
 # libkern
 
 libkern/gen/OSAtomicOperations.c			standard
+libkern/gen/OSDebug.cpp					standard
 
 libkern/c++/OSMetaClass.cpp				optional libkerncpp
 libkern/c++/OSObject.cpp				optional libkerncpp
@@ -29,3 +30,6 @@ libkern/c++/OSSymbol.cpp				optional libkerncpp
 libkern/c++/OSUnserialize.cpp				optional libkerncpp
 libkern/c++/OSUnserializeXML.cpp			optional libkerncpp
 
+libkern/stdio/scanf.c					standard
+
+libkern/uuid/uuid.c					standard

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -58,6 +58,7 @@
 /*
  * Machine-dependent simple locks for the i386.
  */
+#ifdef	KERNEL_PRIVATE
 
 #ifndef	_I386_LOCK_H_
 #define	_I386_LOCK_H_
@@ -71,10 +72,32 @@
 #include <kern/macro_help.h>
 #include <kern/assert.h>
 #include <i386/hw_lock_types.h>
+#include <i386/locks.h>
 
 #include <mach_rt.h>
 #include <mach_ldebug.h>
-#include <cpus.h>
+
+typedef struct {
+	lck_mtx_t	lck_mtx;	/* inlined lck_mtx, need to be first */
+#if     MACH_LDEBUG     
+	int				type;
+#define MUTEX_TAG       0x4d4d
+	vm_offset_t		pc;
+	vm_offset_t		thread;
+#endif  /* MACH_LDEBUG */
+} mutex_t;
+
+typedef struct {
+	decl_simple_lock_data(,interlock) /* "hardware" interlock field */
+	volatile unsigned int
+		read_count:16,	/* No. of accepted readers */
+		want_upgrade:1,	/* Read-to-write upgrade waiting */
+		want_write:1,	/* Writer is waiting, or locked for write */ 
+		waiting:1,		/* Someone is sleeping on lock */
+	can_sleep:1;		/* Can attempts to lock go to sleep? */
+} lock_t;
+
+extern unsigned int LockTimeOut;			/* Number of hardware ticks of a lock timeout */
 
 
 #if defined(__GNUC__)
@@ -118,34 +141,34 @@
 								:	\
 			"r" (bit), "m" (*(volatile int *)(l)));
 
-extern __inline__ unsigned long i_bit_isset(unsigned int testbit, volatile unsigned long *word)
+static inline unsigned long i_bit_isset(unsigned int test, volatile unsigned long *word)
 {
 	int	bit;
 
 	__asm__ volatile("btl %2,%1\n\tsbbl %0,%0" : "=r" (bit)
-		: "m" (word), "ir" (testbit));
+		: "m" (word), "ir" (test));
 	return bit;
 }
 
-extern __inline__ char	xchgb(volatile char * cp, char new);
+static inline char	xchgb(volatile char * cp, char new);
 
-extern __inline__ void	atomic_incl(long * p, long delta);
-extern __inline__ void	atomic_incs(short * p, short delta);
-extern __inline__ void	atomic_incb(char * p, char delta);
+static inline void	atomic_incl(long * p, long delta);
+static inline void	atomic_incs(short * p, short delta);
+static inline void	atomic_incb(char * p, char delta);
 
-extern __inline__ void	atomic_decl(long * p, long delta);
-extern __inline__ void	atomic_decs(short * p, short delta);
-extern __inline__ void	atomic_decb(char * p, char delta);
+static inline void	atomic_decl(long * p, long delta);
+static inline void	atomic_decs(short * p, short delta);
+static inline void	atomic_decb(char * p, char delta);
 
-extern __inline__ long	atomic_getl(long * p);
-extern __inline__ short	atomic_gets(short * p);
-extern __inline__ char	atomic_getb(char * p);
+static inline long	atomic_getl(long * p);
+static inline short	atomic_gets(short * p);
+static inline char	atomic_getb(char * p);
 
-extern __inline__ void	atomic_setl(long * p, long value);
-extern __inline__ void	atomic_sets(short * p, short value);
-extern __inline__ void	atomic_setb(char * p, char value);
+static inline void	atomic_setl(long * p, long value);
+static inline void	atomic_sets(short * p, short value);
+static inline void	atomic_setb(char * p, char value);
 
-extern __inline__ char	xchgb(volatile char * cp, char new)
+static inline char	xchgb(volatile char * cp, char new)
 {
 	register char	old = new;
 
@@ -155,104 +178,141 @@ extern __inline__ char	xchgb(volatile char * cp, char new)
 	return (old);
 }
 
-extern __inline__ void	atomic_incl(long * p, long delta)
+/*
+ * Compare and exchange:
+ * - returns failure (0) if the location did not contain the old value,
+ * - returns success (1) if the location was set to the new value.
+ */
+static inline uint32_t
+atomic_cmpxchg(uint32_t *p, uint32_t old, uint32_t new)
 {
-#if NEED_ATOMIC
+	uint32_t res = old;
+
+	asm volatile(
+		"lock;	cmpxchgl	%1,%2;	\n\t"
+		"	setz		%%al;	\n\t"
+		"	movzbl		%%al,%0"
+		: "+a" (res)	/* %0: old value to compare, returns success */
+		: "r" (new),	/* %1: new value to set */
+		  "m" (*(p))	/* %2: memory address */
+		: "memory");
+	return (res);
+}
+
+static inline uint64_t
+atomic_load64(uint64_t *quadp)
+{
+	uint64_t ret;
+
+	asm volatile(
+		"	lock; cmpxchg8b	%1"
+		: "=A" (ret)
+		: "m" (*quadp), "a" (0), "d" (0), "b" (0), "c" (0));
+	return (ret);
+}
+
+static inline uint64_t
+atomic_loadstore64(uint64_t *quadp, uint64_t new)
+{
+	uint64_t ret;
+
+	ret = *quadp;
+	asm volatile(
+		"1:				\n\t"
+		"	lock; cmpxchg8b	%1	\n\t"
+		"	jnz	1b"
+		: "+A" (ret)
+		: "m" (*quadp),
+		  "b" ((uint32_t)new), "c" ((uint32_t)(new >> 32)));
+	return (ret);
+}
+
+static inline void	atomic_incl(long * p, long delta)
+{
 	__asm__ volatile ("	lock		\n		\
 				addl    %0,%1"		:	\
 							:	\
 				"r" (delta), "m" (*(volatile long *)p));
-#else /* NEED_ATOMIC */
-	*p += delta;
-#endif /* NEED_ATOMIC */
 }
 
-extern __inline__ void	atomic_incs(short * p, short delta)
+static inline void	atomic_incs(short * p, short delta)
 {
-#if NEED_ATOMIC
 	__asm__ volatile ("	lock		\n		\
 				addw    %0,%1"		:	\
 							:	\
 				"q" (delta), "m" (*(volatile short *)p));
-#else /* NEED_ATOMIC */
-	*p += delta;
-#endif /* NEED_ATOMIC */
 }
 
-extern __inline__ void	atomic_incb(char * p, char delta)
+static inline void	atomic_incb(char * p, char delta)
 {
-#if NEED_ATOMIC
 	__asm__ volatile ("	lock		\n		\
 				addb    %0,%1"		:	\
 							:	\
 				"q" (delta), "m" (*(volatile char *)p));
-#else /* NEED_ATOMIC */
-	*p += delta;
-#endif /* NEED_ATOMIC */
 }
 
-extern __inline__ void	atomic_decl(long * p, long delta)
+static inline void	atomic_decl(long * p, long delta)
 {
-#if NCPUS > 1
 	__asm__ volatile ("	lock		\n		\
 				subl	%0,%1"		:	\
 							:	\
 				"r" (delta), "m" (*(volatile long *)p));
-#else /* NCPUS > 1 */
-	*p -= delta;
-#endif /* NCPUS > 1 */
 }
 
-extern __inline__ void	atomic_decs(short * p, short delta)
+static inline int	atomic_decl_and_test(long * p, long delta)
 {
-#if NEED_ATOMIC
+	uint8_t	ret;
+	asm volatile (
+		"	lock		\n\t"
+		"	subl	%1,%2	\n\t"
+		"	sete	%0"
+		: "=qm" (ret)
+		: "r" (delta), "m" (*(volatile long *)p));
+	return ret;
+}
+
+static inline void	atomic_decs(short * p, short delta)
+{
 	__asm__ volatile ("	lock		\n		\
 				subw    %0,%1"		:	\
 							:	\
 				"q" (delta), "m" (*(volatile short *)p));
-#else /* NEED_ATOMIC */
-	*p -= delta;
-#endif /* NEED_ATOMIC */
 }
 
-extern __inline__ void	atomic_decb(char * p, char delta)
+static inline void	atomic_decb(char * p, char delta)
 {
-#if NEED_ATOMIC
 	__asm__ volatile ("	lock		\n		\
 				subb    %0,%1"		:	\
 							:	\
 				"q" (delta), "m" (*(volatile char *)p));
-#else /* NEED_ATOMIC */
-	*p -= delta;
-#endif /* NEED_ATOMIC */
 }
 
-extern __inline__ long	atomic_getl(long * p)
+static inline long	atomic_getl(long * p)
 {
 	return (*p);
 }
 
-extern __inline__ short	atomic_gets(short * p)
+static inline short	atomic_gets(short * p)
 {
 	return (*p);
 }
 
-extern __inline__ char	atomic_getb(char * p)
+static inline char	atomic_getb(char * p)
 {
 	return (*p);
 }
 
-extern __inline__ void	atomic_setl(long * p, long value)
+static inline void	atomic_setl(long * p, long value)
 {
 	*p = value;
 }
 
-extern __inline__ void	atomic_sets(short * p, short value)
+static inline void	atomic_sets(short * p, short value)
 {
 	*p = value;
 }
 
-extern __inline__ void	atomic_setb(char * p, char value)
+static inline void	atomic_setb(char * p, char value)
 {
 	*p = value;
 }
@@ -290,3 +350,5 @@ extern void		kernel_preempt_check (void);
 #endif /* __APLE_API_PRIVATE */
 
 #endif	/* _I386_LOCK_H_ */
+
+#endif	/* KERNEL_PRIVATE */

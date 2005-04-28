@@ -63,8 +63,8 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/socket.h>
-#include <sys/vnode.h>
-#include <sys/file.h>
+#include <sys/vnode_internal.h>
+#include <sys/file_internal.h>
 #include <sys/callout.h>
 #include <sys/clist.h>
 #include <sys/mbuf.h>
@@ -73,7 +73,7 @@
 #include <sys/quota.h>
 #include <ufs/ufs/inode.h>
 #include <miscfs/fifofs/fifo.h>
-#include <sys/shm.h>
+#include <sys/shm_internal.h>
 #include <sys/aio_kern.h>
 
 struct	timezone tz = { TIMEZONE, PST };

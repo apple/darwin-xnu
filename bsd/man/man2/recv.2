@@ -47,7 +47,7 @@
 .Ft ssize_t
 .Fn recv "int s" "void *buf" "size_t len" "int flags"
 .Ft ssize_t
-.Fn recvfrom "int s" "void *buf" "size_t len" "int flags" "struct sockaddr *from" "int *fromlen"
+.Fn recvfrom "int s" "void *buf" "size_t len" "int flags" "struct sockaddr *from" "socklen_t *fromlen"
 .Ft ssize_t
 .Fn recvmsg "int s" "struct msghdr *msg" "int flags"
 .Sh DESCRIPTION
@@ -147,13 +147,13 @@ This structure has the following form, as defined in
 .Pp
 .Bd -literal
 struct msghdr {
-	caddr_t	msg_name;	/* optional address */
-	u_int	msg_namelen;	/* size of address */
-	struct	iovec *msg_iov;	/* scatter/gather array */
-	u_int	msg_iovlen;	/* # elements in msg_iov */
-	caddr_t	msg_control;	/* ancillary data, see below */
-	u_int	msg_controllen; /* ancillary data buffer len */
-	int	msg_flags;	/* flags on received message */
+	caddr_t		msg_name;	/* optional address */
+	socklen_t	msg_namelen;	/* size of address */
+	struct		iovec *msg_iov;	/* scatter/gather array */
+	u_int		msg_iovlen;	/* # elements in msg_iov */
+	caddr_t		msg_control;	/* ancillary data, see below */
+	socklen_t	msg_controllen; /* ancillary data buffer len */
+	int			msg_flags;	/* flags on received message */
 };
 .Ed
 .Pp

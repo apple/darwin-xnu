@@ -51,7 +51,7 @@
 
 MALLOC_DEFINE(M_SECA, "key mgmt", "security associations, key management");
 
-static void keydb_delsecasvar __P((struct secasvar *));
+static void keydb_delsecasvar(struct secasvar *);
 
 /*
  * secpolicy management

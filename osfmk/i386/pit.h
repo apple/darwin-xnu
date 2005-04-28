@@ -100,7 +100,7 @@ WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  * Clock speed for the timer in hz divided by the constant HZ
  * (defined in param.h)
  */
-#define CLKNUM		1193167
+#define CLKNUM		1193182		/* formerly 1193167 */
 
 #if	EXL
 /* added micro-timer support.   --- csy */

@@ -26,7 +26,7 @@
 
 #include <sys/cdefs.h>
 #include <sys/vnode.h>
-#include <sys/ipc.h>
+#include <sys/types.h>
 #include <sys/un.h>
 #include <sys/event.h>
 #include <netinet/in_systm.h>
@@ -52,19 +52,19 @@
 
 #define ADD_U_INT16(loc, val) \
         do { \
-		memcpy(loc, (u_char *)&val, sizeof(u_int16_t));\
+		memcpy(loc, (const u_char *)&val, sizeof(u_int16_t));\
                 loc += sizeof(u_int16_t); \
         }while(0)
 
 #define ADD_U_INT32(loc, val) \
         do { \
-		memcpy(loc, (u_char *)&val, sizeof(u_int32_t));\
+		memcpy(loc, (const u_char *)&val, sizeof(u_int32_t));\
                 loc += sizeof(u_int32_t); \
         }while(0)
 
 #define ADD_U_INT64(loc, val)\
         do {\
-		memcpy(loc, (u_char *)&val, sizeof(u_int64_t));\
+		memcpy(loc, (const u_char *)&val, sizeof(u_int64_t));\
                 loc += sizeof(u_int64_t); \
         }while(0)
 
@@ -243,9 +243,9 @@ token_t			*au_to_me(void);
 token_t			*au_to_arg(char n, char *text, u_int32_t v);
 token_t			*au_to_arg32(char n, char *text, u_int32_t v);
 token_t			*au_to_arg64(char n, char *text, u_int64_t v);
-token_t			*au_to_attr(struct vattr *attr);
-token_t			*au_to_attr32(struct vattr *attr);
-token_t			*au_to_attr64(struct vattr *attr);
+token_t			*au_to_attr(struct vnode_attr *attr);
+token_t			*au_to_attr32(struct vnode_attr *attr);
+token_t			*au_to_attr64(struct vnode_attr *attr);
 token_t			*au_to_data(char unit_print, char unit_type,
 				char unit_count, char *p);
 token_t			*au_to_exit(int retval, int err);

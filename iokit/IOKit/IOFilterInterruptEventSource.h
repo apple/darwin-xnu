@@ -39,7 +39,9 @@ class IOService;
 <br><br>
     As the routine is called in the primary interrupt context great care must be taken in the writing of this routine.  In general none of the generic IOKit environment is safe to call in this context.  We intend this routine to be used by hardware that can interrogate its registers without destroying state.  Primarily this variant of event sources will be used by drivers that share interrupts.  The filter routine will determine if the interrupt is a real interrupt or a ghost and thus optimise the work thread context switch away.
 <br><br>
-    CAUTION:  Called in primary interrupt context, if you need to disable interrupt to guard you registers against an unexpected call then it is better to use a straight IOInterruptEventSource and its secondary interrupt delivery mechanism.
+If you are implementing 'SoftDMA' (or pseudo-DMA), you may not want the I/O Kit to automatically start your interrupt handler routine on your work loop when your filter routine returns true.  In this case, you may choose to have your filter routine schedule the work on the work loop itself and then return false.  If you do this, the interrupt will not be disabled in hardware and you could receive additional primary interrupts before your work loop–level service routine completes.  Because this scheme has implications for synchronization between your filter routine and your interrupt service routine, you should avoid doing this unless your driver requires SoftDMA.
+<br><br>
+CAUTION:  Called in primary interrupt context, if you need to disable interrupt to guard you registers against an unexpected call then it is better to use a straight IOInterruptEventSource and its secondary interrupt delivery mechanism.
 */
 class IOFilterInterruptEventSource : public IOInterruptEventSource
 {
@@ -118,7 +120,7 @@ successfully.  */
 
 /*! @function signalInterrupt
     @abstract Cause the work loop to schedule the action.
-    @discussion Cause the work loop to schedule the interrupt action even if the filter routine returns 'false'. Note well the interrupting condition MUST be cleared from the hardware otherwise an infinite process interrupt loop will occur.  Use this function when 'SoftDMA' is desired.  See $link IOFilterInterruptSource::Filter */
+    @discussion Cause the work loop to schedule the interrupt action even if the filter routine returns 'false'. Note well the interrupting condition MUST be cleared from the hardware otherwise an infinite process interrupt loop will occur.  Use this function when SoftDMA is desired.  See $link IOFilterInterruptSource::Filter */
     virtual void signalInterrupt();
 
 /*! @function getFilterAction

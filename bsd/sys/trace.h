@@ -133,7 +133,7 @@ extern struct	proc *traceproc;
 extern int	tracewhich, tracebuf[TRCSIZ];
 extern u_int	tracex;
 extern char	traceflags[TR_NFLAGS];
-#define	pack(v,b)	(((v)->v_mount->mnt_stat.f_fsid.val[0])<<16)|(b)
+#define	pack(v,b)	(((v)->v_mount->mnt_vfsstat.f_fsid.val[0])<<16)|(b)
 #define	trace(a,b,c) {							\
 	if (traceflags[a])						\
 		trace1(a,b,c);						\

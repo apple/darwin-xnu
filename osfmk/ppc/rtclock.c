@@ -40,13 +40,12 @@
 
 #include <kern/host_notify.h>
 
-#include <machine/mach_param.h>	/* HZ */
 #include <machine/commpage.h>
 #include <machine/machine_routines.h>
 #include <ppc/exception.h>
 #include <ppc/proc_reg.h>
 
-#include <pexpert/pexpert.h>
+#include <IOKit/IOPlatformExpert.h>
 
 #include <sys/kdebug.h>
 
@@ -76,8 +75,6 @@ struct clock_ops sysclk_ops = {
 
 int		calend_config(void);
 
-int		calend_init(void);
-
 kern_return_t	calend_gettime(
 	mach_timespec_t			*cur_time);
 
@@ -87,7 +84,7 @@ kern_return_t	calend_getattr(
 	mach_msg_type_number_t	*count);
 
 struct clock_ops calend_ops = {
-	calend_config,			calend_init,
+	calend_config,			0,
 	calend_gettime,			0,
 	calend_getattr,			0,
 	0,
@@ -105,11 +102,27 @@ static struct rtclock_calend {
 	int32_t				adjdelta;
 }					rtclock_calend;
 
-static boolean_t		rtclock_initialized;
+static uint32_t		rtclock_boottime;
 
-static uint64_t			rtclock_tick_deadline[NCPUS];
+#define TIME_ADD(rsecs, secs, rfrac, frac, unit)	\
+MACRO_BEGIN											\
+	if (((rfrac) += (frac)) >= (unit)) {			\
+		(rfrac) -= (unit);							\
+		(rsecs) += 1;								\
+	}												\
+	(rsecs) += (secs);								\
+MACRO_END
 
-#define NSEC_PER_HZ		(NSEC_PER_SEC / HZ)
+#define TIME_SUB(rsecs, secs, rfrac, frac, unit)	\
+MACRO_BEGIN											\
+	if ((int32_t)((rfrac) -= (frac)) < 0) {			\
+		(rfrac) += (unit);							\
+		(rsecs) -= 1;								\
+	}												\
+	(rsecs) -= (secs);								\
+MACRO_END
+
+#define NSEC_PER_HZ		(NSEC_PER_SEC / 100)
 static uint32_t		 	rtclock_tick_interval;
 
 static uint32_t			rtclock_sec_divisor;
@@ -118,21 +131,14 @@ static mach_timebase_info_data_t	rtclock_timebase_const;
 
 static boolean_t		rtclock_timebase_initialized;
 
-static struct rtclock_timer {
-	uint64_t			deadline;
-	uint32_t
-	/*boolean_t*/		is_set:1,
-						has_expired:1,
-						:0;
-}					rtclock_timer[NCPUS];
-
 static clock_timer_func_t	rtclock_timer_expire;
 
 static timer_call_data_t	rtclock_alarm_timer;
 
-static void		timespec_to_absolutetime(
-					mach_timespec_t		*ts,
-					uint64_t			*result);
+static void		nanotime_to_absolutetime(
+					uint32_t		secs,
+					uint32_t		nanosecs,
+					uint64_t		*result);
 
 static int		deadline_to_decrementer(
 					uint64_t		deadline,
@@ -197,7 +203,7 @@ timebase_callback(
 	}
 	else {
 		UNLOCK_RTC(s);
-		printf("rtclock timebase_callback: late old %d / %d new %d / %d",
+		printf("rtclock timebase_callback: late old %d / %d new %d / %d\n",
 					rtclock_timebase_const.numer, rtclock_timebase_const.denom,
 							numer, denom);
 		return;
@@ -213,12 +219,9 @@ timebase_callback(
 int
 sysclk_config(void)
 {
-	if (cpu_number() != master_cpu)
-		return(1);
-
 	timer_call_setup(&rtclock_alarm_timer, rtclock_alarm_expire, NULL);
 
-	simple_lock_init(&rtclock_lock, ETAP_MISC_RT_CLOCK);
+	simple_lock_init(&rtclock_lock, 0);
 
 	PE_register_timebase_callback(timebase_callback);
 
@@ -231,31 +234,28 @@ sysclk_config(void)
 int
 sysclk_init(void)
 {
-	uint64_t		abstime;
-	int				decr, mycpu = cpu_number();
+	uint64_t				abstime, nexttick;
+	int						decr1, decr2;
+	struct rtclock_timer	*mytimer;
+	struct per_proc_info	*pp;
 
-	if (mycpu != master_cpu) {
-		if (rtclock_initialized == FALSE) {
-			panic("sysclk_init on cpu %d, rtc not initialized\n", mycpu);
-		}
-		/* Set decrementer and hence our next tick due */
-		abstime = mach_absolute_time();
-		rtclock_tick_deadline[mycpu] = abstime;
-		rtclock_tick_deadline[mycpu] += rtclock_tick_interval;
-		decr = deadline_to_decrementer(rtclock_tick_deadline[mycpu], abstime);
-		treqs(decr);
+	decr1 = decr2 = DECREMENTER_MAX;
 
-		return(1);
-	}
+	pp = getPerProc();
+	mytimer = &pp->rtclock_timer;
 
-	/* Set decrementer and our next tick due */
 	abstime = mach_absolute_time();
-	rtclock_tick_deadline[mycpu] = abstime;
-	rtclock_tick_deadline[mycpu] += rtclock_tick_interval;
-	decr = deadline_to_decrementer(rtclock_tick_deadline[mycpu], abstime);
-	treqs(decr);
+	nexttick = abstime + rtclock_tick_interval;
+	pp->rtclock_tick_deadline = nexttick;
+	decr1 = deadline_to_decrementer(nexttick, abstime);
 
-	rtclock_initialized = TRUE;
+	if (mytimer->is_set)
+		decr2 = deadline_to_decrementer(mytimer->deadline, abstime);
+
+	if (decr1 > decr2)
+		decr1 = decr2;
+
+	treqs(decr1);
 
 	return (1);
 }
@@ -348,7 +348,7 @@ sysclk_setalarm(
 {
 	uint64_t	abstime;
 
-	timespec_to_absolutetime(deadline, &abstime);
+	nanotime_to_absolutetime(deadline->tv_sec, deadline->tv_nsec, &abstime);
 	timer_call_enter(&rtclock_alarm_timer, abstime);
 }
 
@@ -358,18 +358,6 @@ sysclk_setalarm(
 int
 calend_config(void)
 {
-	return (1);
-}
-
-/*
- * Initialize the calendar clock.
- */
-int
-calend_init(void)
-{
-	if (cpu_number() != master_cpu)
-		return(1);
-
 	return (1);
 }
 
@@ -446,12 +434,7 @@ clock_get_calendar_microtime(
 		now -= (t64 * divisor);
 		*microsecs = (now * USEC_PER_SEC) / divisor;
 
-		if ((*microsecs += microepoch) >= USEC_PER_SEC) {
-			*microsecs -= USEC_PER_SEC;
-			epoch += 1;
-		}
-
-		*secs += epoch;
+		TIME_ADD(*secs, epoch, *microsecs, microepoch, USEC_PER_SEC);
 	}
 	else {
 		uint32_t	delta, t32;
@@ -469,12 +452,7 @@ clock_get_calendar_microtime(
 			t32 = (t64 * USEC_PER_SEC) / rtclock_sec_divisor;
 
 			if (t32 > delta)
-				*microsecs += (t32 - delta);
-
-			if (*microsecs >= USEC_PER_SEC) {
-				*microsecs -= USEC_PER_SEC;
-				*secs += 1;
-			}
+				TIME_ADD(*secs, 0, *microsecs, (t32 - delta), USEC_PER_SEC);
 		}
 
 		simple_unlock(&rtclock_lock);
@@ -512,12 +490,7 @@ clock_gettimeofday(
 		t64 = now - (secs_64 * rtclock_sec_divisor);
 		microsecs = usec_64 = (t64 * USEC_PER_SEC) / rtclock_sec_divisor;
 
-		if ((microsecs += microepoch) >= USEC_PER_SEC) {
-			microsecs -= USEC_PER_SEC;
-			epoch += 1;
-		}
-        
-		secs += epoch;
+		TIME_ADD(secs, epoch, microsecs, microepoch, USEC_PER_SEC);
         
         /* adjust "now" to be absolute time at _start_ of usecond */
         now -= t64 - ((usec_64 * rtclock_sec_divisor) / USEC_PER_SEC);
@@ -540,12 +513,7 @@ clock_gettimeofday(
 			t32 = (t64 * USEC_PER_SEC) / rtclock_sec_divisor;
 
 			if (t32 > delta)
-				microsecs += (t32 - delta);
-
-			if (microsecs >= USEC_PER_SEC) {
-				microsecs -= USEC_PER_SEC;
-				secs += 1;
-			}
+				TIME_ADD(secs, 0, microsecs, (t32 - delta), USEC_PER_SEC);
 		}
 
         /* no need to disable timestamp, it is already off */
@@ -583,12 +551,7 @@ clock_get_calendar_nanotime(
 		now -= (t64 * divisor);
 		*nanosecs = ((now * USEC_PER_SEC) / divisor) * NSEC_PER_USEC;
 
-		if ((*nanosecs += nanoepoch) >= NSEC_PER_SEC) {
-			*nanosecs -= NSEC_PER_SEC;
-			epoch += 1;
-		}
-
-		*secs += epoch;
+		TIME_ADD(*secs, epoch, *nanosecs, nanoepoch, NSEC_PER_SEC);
 	}
 	else {
 		uint32_t	delta, t32;
@@ -606,12 +569,7 @@ clock_get_calendar_nanotime(
 			t32 = (t64 * USEC_PER_SEC) / rtclock_sec_divisor;
 
 			if (t32 > delta)
-				*nanosecs += ((t32 - delta) * NSEC_PER_USEC);
-
-			if (*nanosecs >= NSEC_PER_SEC) {
-				*nanosecs -= NSEC_PER_SEC;
-				*secs += 1;
-			}
+				TIME_ADD(*secs, 0, *nanosecs, ((t32 - delta) * NSEC_PER_USEC), NSEC_PER_SEC);
 		}
 
 		simple_unlock(&rtclock_lock);
@@ -632,25 +590,47 @@ clock_set_calendar_microtime(
 	newsecs = (microsecs < 500*USEC_PER_SEC)?
 						secs: secs + 1;
 
-	LOCK_RTC(s);
+	s = splclock();
+	simple_lock(&rtclock_lock);
+
     commpage_set_timestamp(0,0,0,0);
 
+	/*
+	 *	Calculate the new calendar epoch based on
+	 *	the new value and the system clock.
+	 */
 	clock_get_system_microtime(&sys, &microsys);
-	if ((int32_t)(microsecs -= microsys) < 0) {
-		microsecs += USEC_PER_SEC;
-		secs -= 1;
-	}
+	TIME_SUB(secs, sys, microsecs, microsys, USEC_PER_SEC);
 
-	secs -= sys;
+	/*
+	 *	Adjust the boottime based on the delta.
+	 */
+	rtclock_boottime += secs - rtclock_calend.epoch;
 
+	/*
+	 *	Set the new calendar epoch.
+	 */
 	rtclock_calend.epoch = secs;
 	rtclock_calend.microepoch = microsecs;
+
+	/*
+	 *	Cancel any adjustment in progress.
+	 */
 	rtclock_calend.epoch1 = 0;
 	rtclock_calend.adjdelta = rtclock_calend.adjtotal = 0;
-	UNLOCK_RTC(s);
 
+	simple_unlock(&rtclock_lock);
+
+	/*
+	 *	Set the new value for the platform clock.
+	 */
 	PESetGMTTimeOfDay(newsecs);
 
+	splx(s);
+
+	/*
+	 *	Send host notifications.
+	 */
 	host_notify_calendar_change();
 }
 
@@ -693,12 +673,7 @@ clock_set_calendar_adjtime(
 		t32 = (t64 * USEC_PER_SEC) / rtclock_sec_divisor;
 
 		if (t32 > delta)
-			microsys += (t32 - delta);
-
-		if (microsys >= USEC_PER_SEC) {
-			microsys -= USEC_PER_SEC;
-			sys += 1;
-		}
+			TIME_ADD(sys, 0, microsys, (t32 - delta), USEC_PER_SEC);
 
 		rtclock_calend.epoch = sys;
 		rtclock_calend.microepoch = microsys;
@@ -707,12 +682,7 @@ clock_set_calendar_adjtime(
 		now -= (t64 * rtclock_sec_divisor);
 		microsys = (now * USEC_PER_SEC) / rtclock_sec_divisor;
 
-		if ((int32_t)(rtclock_calend.microepoch -= microsys) < 0) {
-			rtclock_calend.microepoch += USEC_PER_SEC;
-			sys	+= 1;
-		}
-
-		rtclock_calend.epoch -= sys;
+		TIME_SUB(rtclock_calend.epoch, sys, rtclock_calend.microepoch, microsys, USEC_PER_SEC);
 	}
 
 	if (total != 0) {
@@ -742,12 +712,7 @@ clock_set_calendar_adjtime(
 			now -= (t64 * rtclock_sec_divisor);
 			microsys = (now * USEC_PER_SEC) / rtclock_sec_divisor;
 
-			if ((rtclock_calend.microepoch += microsys) >= USEC_PER_SEC) {
-				rtclock_calend.microepoch -= USEC_PER_SEC;
-				sys	+= 1;
-			}
-
-			rtclock_calend.epoch += sys;
+			TIME_ADD(rtclock_calend.epoch, sys, rtclock_calend.microepoch, microsys, USEC_PER_SEC);
 		}
 
 		rtclock_calend.adjtotal = total;
@@ -775,7 +740,7 @@ clock_set_calendar_adjtime(
 uint32_t
 clock_adjust_calendar(void)
 {
-	uint32_t		micronew, interval = 0;
+	uint32_t		interval = 0;
 	int32_t			delta;
 	spl_t			s;
 
@@ -785,13 +750,7 @@ clock_adjust_calendar(void)
 	delta = rtclock_calend.adjdelta;
 
 	if (delta > 0) {
-		micronew = rtclock_calend.microepoch + delta;
-		if (micronew >= USEC_PER_SEC) {
-			micronew -= USEC_PER_SEC;
-			rtclock_calend.epoch += 1;
-		}
-
-		rtclock_calend.microepoch = micronew;
+		TIME_ADD(rtclock_calend.epoch, 0, rtclock_calend.microepoch, delta, USEC_PER_SEC);
 
 		rtclock_calend.adjtotal -= delta;
 		if (delta > rtclock_calend.adjtotal)
@@ -813,13 +772,7 @@ clock_adjust_calendar(void)
 
 		t32 = (t64 * USEC_PER_SEC) / rtclock_sec_divisor;
 
-		micronew = rtclock_calend.microepoch + t32 + delta;
-		if (micronew >= USEC_PER_SEC) {
-			micronew -= USEC_PER_SEC;
-			rtclock_calend.epoch += 1;
-		}
-
-		rtclock_calend.microepoch = micronew;
+		TIME_ADD(rtclock_calend.epoch, 0, rtclock_calend.microepoch, (t32 + delta), USEC_PER_SEC);
 
 		rtclock_calend.adjtotal -= delta;
 		if (delta < rtclock_calend.adjtotal)
@@ -832,12 +785,7 @@ clock_adjust_calendar(void)
 			now -= (t64 * rtclock_sec_divisor);
 			microsys = (now * USEC_PER_SEC) / rtclock_sec_divisor;
 
-			if ((int32_t)(rtclock_calend.microepoch -= microsys) < 0) {
-				rtclock_calend.microepoch += USEC_PER_SEC;
-				sys += 1;
-			}
-
-			rtclock_calend.epoch -= sys;
+			TIME_SUB(rtclock_calend.epoch, sys, rtclock_calend.microepoch, microsys, USEC_PER_SEC);
 
 			rtclock_calend.epoch1 = 0;
 		}
@@ -851,6 +799,13 @@ clock_adjust_calendar(void)
 	return (interval);
 }
 
+/*
+ *	clock_initialize_calendar:
+ *
+ *	Set the calendar and related clocks
+ *	from the platform clock at boot or
+ *	wake event.
+ */
 void
 clock_initialize_calendar(void)
 {
@@ -861,21 +816,49 @@ clock_initialize_calendar(void)
 	LOCK_RTC(s);
     commpage_set_timestamp(0,0,0,0);
 
-	clock_get_system_microtime(&sys, &microsys);
-	if ((int32_t)(microsecs -= microsys) < 0) {
-		microsecs += USEC_PER_SEC;
-		secs -= 1;
+	if ((int32_t)secs >= (int32_t)rtclock_boottime) {
+		/*
+		 *	Initialize the boot time based on the platform clock.
+		 */
+		if (rtclock_boottime == 0)
+			rtclock_boottime = secs;
+
+		/*
+		 *	Calculate the new calendar epoch based
+		 *	on the platform clock and the system
+		 *	clock.
+		 */
+		clock_get_system_microtime(&sys, &microsys);
+		TIME_SUB(secs, sys, microsecs, microsys, USEC_PER_SEC);
+
+		/*
+		 *	Set the new calendar epoch.
+		 */
+		rtclock_calend.epoch = secs;
+		rtclock_calend.microepoch = microsecs;
+
+		/*
+		 *	 Cancel any adjustment in progress.
+		 */
+		rtclock_calend.epoch1 = 0;
+		rtclock_calend.adjdelta = rtclock_calend.adjtotal = 0;
 	}
 
-	secs -= sys;
-
-	rtclock_calend.epoch = secs;
-	rtclock_calend.microepoch = microsecs;
-	rtclock_calend.epoch1 = 0;
-	rtclock_calend.adjdelta = rtclock_calend.adjtotal = 0;
 	UNLOCK_RTC(s);
 
+	/*
+	 *	Send host notifications.
+	 */
 	host_notify_calendar_change();
+}
+
+void
+clock_get_boottime_nanotime(
+	uint32_t			*secs,
+	uint32_t			*nanosecs)
+{
+	*secs = rtclock_boottime;
+	*nanosecs = 0;
 }
 
 void
@@ -895,18 +878,19 @@ clock_set_timer_deadline(
 	uint64_t				deadline)
 {
 	uint64_t				abstime;
-	int						decr, mycpu;
+	int						decr;
 	struct rtclock_timer	*mytimer;
+	struct per_proc_info	*pp;
 	spl_t					s;
 
 	s = splclock();
-	mycpu = cpu_number();
-	mytimer = &rtclock_timer[mycpu];
+	pp = getPerProc();
+	mytimer = &pp->rtclock_timer;
 	mytimer->deadline = deadline;
 	mytimer->is_set = TRUE;
 	if (!mytimer->has_expired) {
 		abstime = mach_absolute_time();
-		if (	mytimer->deadline < rtclock_tick_deadline[mycpu]		) {
+		if (	mytimer->deadline < pp->rtclock_tick_deadline			) {
 			decr = deadline_to_decrementer(mytimer->deadline, abstime);
 			if (	rtclock_decrementer_min != 0				&&
 					rtclock_decrementer_min < (natural_t)decr		)
@@ -933,45 +917,38 @@ clock_set_timer_func(
 	UNLOCK_RTC(s);
 }
 
-/*
- * Reset the clock device. This causes the realtime clock
- * device to reload its mode and count value (frequency).
- */
 void
-rtclock_reset(void)
-{
-	return;
-}
+rtclock_intr(
+	int					device,
+	struct savearea		*ssp,
+	spl_t				old);
 
 /*
  * Real-time clock device interrupt.
  */
 void
 rtclock_intr(
-	int						device,
+	__unused int			device,
 	struct savearea			*ssp,
-	spl_t					old_spl)
+	__unused spl_t			old_spl)
 {
 	uint64_t				abstime;
-	int						decr1, decr2, mycpu = cpu_number();
-	struct rtclock_timer	*mytimer = &rtclock_timer[mycpu];
-
-	/*
-	 * We may receive interrupts too early, we must reject them.
-	 */
-	if (rtclock_initialized == FALSE) {
-		treqs(DECREMENTER_MAX);		/* Max the decrementer if not init */
-		return;
-	}
+	int						decr1, decr2;
+	struct rtclock_timer	*mytimer;
+	struct per_proc_info	*pp;
 
 	decr1 = decr2 = DECREMENTER_MAX;
 
+	pp = getPerProc();
+
 	abstime = mach_absolute_time();
-	if (	rtclock_tick_deadline[mycpu] <= abstime		) {
+	if (	pp->rtclock_tick_deadline <= abstime		) {
 		clock_deadline_for_periodic_event(rtclock_tick_interval, abstime,
-										  		&rtclock_tick_deadline[mycpu]);
+										  		&pp->rtclock_tick_deadline);
 		hertz_tick(USER_MODE(ssp->save_srr1), ssp->save_srr0);
 	}
+
+	mytimer = &pp->rtclock_timer;
 
 	abstime = mach_absolute_time();
 	if (	mytimer->is_set					&&
@@ -982,7 +959,7 @@ rtclock_intr(
 	}
 
 	abstime = mach_absolute_time();
-	decr1 = deadline_to_decrementer(rtclock_tick_deadline[mycpu], abstime);
+	decr1 = deadline_to_decrementer(pp->rtclock_tick_deadline, abstime);
 
 	if (mytimer->is_set)
 		decr2 = deadline_to_decrementer(mytimer->deadline, abstime);
@@ -1002,8 +979,8 @@ rtclock_intr(
 
 static void
 rtclock_alarm_expire(
-	timer_call_param_t		p0,
-	timer_call_param_t		p1)
+	__unused void	*p0,
+	__unused void	*p1)
 {
 	mach_timespec_t		timestamp;
 
@@ -1029,14 +1006,29 @@ deadline_to_decrementer(
 }
 
 static void
-timespec_to_absolutetime(
-	mach_timespec_t		*ts,
+nanotime_to_absolutetime(
+	uint32_t			secs,
+	uint32_t			nanosecs,
 	uint64_t			*result)
 {
+	uint32_t	divisor = rtclock_sec_divisor;
+
+	*result = ((uint64_t)secs * divisor) +
+				((uint64_t)nanosecs * divisor) / NSEC_PER_SEC;
+}
+
+void
+absolutetime_to_microtime(
+	uint64_t			abstime,
+	uint32_t			*secs,
+	uint32_t			*microsecs)
+{
+	uint64_t	t64;
 	uint32_t	divisor;
 
-	*result = ((uint64_t)ts->tv_sec * (divisor = rtclock_sec_divisor)) +
-				((uint64_t)ts->tv_nsec * divisor) / NSEC_PER_SEC;
+	*secs = t64 = abstime / (divisor = rtclock_sec_divisor);
+	abstime -= (t64 * divisor);
+	*microsecs = (abstime * USEC_PER_SEC) / divisor;
 }
 
 void
@@ -1107,25 +1099,8 @@ nanoseconds_to_absolutetime(
 	*result += (nanosecs * divisor) / NSEC_PER_SEC;
 }
 
-/*
- * Spin-loop delay primitives.
- */
 void
-delay_for_interval(
-	uint32_t		interval,
-	uint32_t		scale_factor)
-{
-	uint64_t		now, end;
-
-	clock_interval_to_deadline(interval, scale_factor, &end);
-
-	do {
-		now = mach_absolute_time();
-	} while (now < end);
-}
-
-void
-clock_delay_until(
+machine_delay_until(
 	uint64_t		deadline)
 {
 	uint64_t		now;
@@ -1133,13 +1108,6 @@ clock_delay_until(
 	do {
 		now = mach_absolute_time();
 	} while (now < deadline);
-}
-
-void
-delay(
-	int		usec)
-{
-	delay_for_interval((usec < 0)? -usec: usec, NSEC_PER_USEC);
 }
 
 /*

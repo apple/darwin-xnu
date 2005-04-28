@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -49,121 +49,23 @@
  */
 /*
  */
-
+#include <mach/mach_types.h>
 #include <mach/error.h>
 #include <mach/vm_param.h>
 #include <mach/boolean.h>
+#include <mach/task.h>
+
+#include <kern/kern_types.h>
 #include <kern/misc_protos.h>
-#include <kern/syscall_emulation.h>
 #include <kern/task.h>
 #include <kern/kalloc.h>
+
+#include <vm/vm_map.h>
 #include <vm/vm_kern.h>
-#include <machine/thread.h>	/* for syscall_emulation_sync */
 
 /*
  * Exported interface
  */
-
-/*
- * WARNING:
- * This code knows that kalloc() allocates memory most efficiently
- * in sizes that are powers of 2, and asks for those sizes.
- */
-
-/*
- * Go from number of entries to size of struct eml_dispatch and back.
- */
-#define	base_size	(sizeof(struct eml_dispatch) - sizeof(eml_routine_t))
-#define	count_to_size(count) \
-	(base_size + sizeof(vm_offset_t) * (count))
-
-#define	size_to_count(size) \
-	( ((size) - base_size) / sizeof(vm_offset_t) )
-
-/* Forwards */
-kern_return_t
-task_set_emulation_vector_internal(
-	task_t 			task,
-	int			vector_start,
-	emulation_vector_t	emulation_vector,
-	mach_msg_type_number_t	emulation_vector_count);
-
-/*
- *  eml_init:	initialize user space emulation code
- */
-void
-eml_init(void)
-{
-}
-
-/*
- * eml_task_reference() [Exported]
- *
- *	Bumps the reference count on the common emulation
- *	vector.
- */
-
-void
-eml_task_reference(
-	task_t	task,
-	task_t	parent)
-{
-	register eml_dispatch_t	eml;
-
-	if (parent == TASK_NULL)
-	    eml = EML_DISPATCH_NULL;
-	else
-	    eml = parent->eml_dispatch;
-
-	if (eml != EML_DISPATCH_NULL) {
-	    mutex_lock(&eml->lock);
-	    eml->ref_count++;
-	    mutex_unlock(&eml->lock);
-	}
-	task->eml_dispatch = eml;
-}
-
-
-/*
- * eml_task_deallocate() [Exported]
- *
- *	Cleans up after the emulation code when a process exits.
- */
- 
-void
-eml_task_deallocate(
-	task_t task)
-{
-	register eml_dispatch_t	eml;
-
-	eml = task->eml_dispatch;
-	if (eml != EML_DISPATCH_NULL) {
-	    int count;
-
-	    mutex_lock(&eml->lock);
-	    count = --eml->ref_count;
-	    mutex_unlock(&eml->lock);
-
-	    if (count == 0)
-		kfree((vm_offset_t)eml, count_to_size(eml->disp_count));
-
-	    task->eml_dispatch = EML_DISPATCH_NULL;
-	}
-}
-
-/*
- *   task_set_emulation_vector:  [Server Entry]
- *   set a list of emulated system calls for this task.
- */
-kern_return_t
-task_set_emulation_vector_internal(
-	task_t 			task,
-	int			vector_start,
-	emulation_vector_t	emulation_vector,
-	mach_msg_type_number_t	emulation_vector_count)
-{
-	return KERN_NOT_SUPPORTED;
-}
 
 /*
  *	task_set_emulation_vector:  [Server Entry]

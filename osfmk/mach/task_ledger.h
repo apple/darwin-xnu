@@ -22,12 +22,13 @@
 /*
  * @OSF_COPYRIGHT@
  */
-#include <sys/appleapiopts.h>
 
 #ifndef _MACH_TASK_LEDGER_H_
 #define _MACH_TASK_LEDGER_H_
 
-#ifdef  __APPLE_API_EVOLVING
+/*
+ * Evolving and likely to change.
+ */
 
 /*
  * Definitions for task ledger line items
@@ -40,7 +41,5 @@
 #define LEDGER_N_ITEMS		3	/* Total line items	*/
 
 #define LEDGER_UNLIMITED	0	/* ignored item.maximum	*/
-
-#endif  /* __APPLE_API_EVOLVING */
 
 #endif  /* _MACH_TASK_LEDGER_H_ */

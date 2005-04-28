@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -63,6 +63,7 @@
 #define _NFS_NFS_H_
 
 #include <sys/appleapiopts.h>
+#include <sys/cdefs.h>
 
 #ifdef __APPLE_API_PRIVATE
 /*
@@ -79,12 +80,19 @@
 #define	NFS_MAXREXMIT	100		/* Stop counting after this many */
 #define	NFS_MAXWINDOW	1024		/* Max number of outstanding requests */
 #define	NFS_RETRANS	10		/* Num of retrans for soft mounts */
+#define	NFS_TRYLATERDEL	15		/* Initial try later delay (sec) */
 #define	NFS_MAXGRPS	16		/* Max. size of groups list */
 #ifndef NFS_MINATTRTIMO
 #define	NFS_MINATTRTIMO 5		/* Attribute cache timeout in sec */
 #endif
 #ifndef NFS_MAXATTRTIMO
 #define	NFS_MAXATTRTIMO 60
+#endif
+#ifndef NFS_MINDIRATTRTIMO
+#define	NFS_MINDIRATTRTIMO 5		/* directory attribute cache timeout in sec */
+#endif
+#ifndef NFS_MAXDIRATTRTIMO
+#define	NFS_MAXDIRATTRTIMO 60
 #endif
 #define	NFS_WSIZE	16384		/* Def. write data size <= 16K */
 #define	NFS_RSIZE	16384		/* Def. read data size <= 16K */
@@ -111,7 +119,7 @@
 #define	NMOD(a)		((a) % nfs_asyncdaemons)
 #define NFS_CMPFH(n, f, s) \
 	((n)->n_fhsize == (s) && !bcmp((caddr_t)(n)->n_fhp, (caddr_t)(f), (s)))
-#define NFS_ISV3(v)	(VFSTONFS((v)->v_mount)->nm_flag & NFSMNT_NFSV3)
+#define NFS_ISV3(v)	(VFSTONFS(vnode_mount(v))->nm_flag & NFSMNT_NFSV3)
 #define NFS_SRVMAXDATA(n) \
 		(((n)->nd_flag & ND_NFSV3) ? (((n)->nd_nam2) ? \
 		 NFS_MAXDGRAMDATA : NFS_MAXDATA) : NFS_V2MAXDATA)
@@ -153,7 +161,7 @@
 /*
  * Arguments to mount NFS
  */
-#define NFS_ARGSVERSION	3		/* change when nfs_args changes */
+#define NFS_ARGSVERSION	4		/* change when nfs_args changes */
 struct nfs_args {
 	int		version;	/* args structure version number */
 	struct sockaddr	*addr;		/* file server address */
@@ -170,10 +178,98 @@ struct nfs_args {
 	int		retrans;	/* times to retry send */
 	int		maxgrouplist;	/* Max. size of group list */
 	int		readahead;	/* # of blocks to readahead */
-	int		leaseterm;	/* Term (sec) of lease */
-	int		deadthresh;	/* Retrans threshold */
+	int		leaseterm;	/* obsolete: Term (sec) of lease */
+	int		deadthresh;	/* obsolete: Retrans threshold */
+	char		*hostname;	/* server's name */
+	/* NFS_ARGSVERSION 3 ends here */
+	int		acregmin;	/* reg file min attr cache timeout */
+	int		acregmax;	/* reg file max attr cache timeout */
+	int		acdirmin;	/* dir min attr cache timeout */
+	int		acdirmax;	/* dir max attr cache timeout */
+};
+
+struct nfs_args3 {
+	int		version;	/* args structure version number */
+	struct sockaddr	*addr;		/* file server address */
+	int		addrlen;	/* length of address */
+	int		sotype;		/* Socket type */
+	int		proto;		/* and Protocol */
+	u_char		*fh;		/* File handle to be mounted */
+	int		fhsize;		/* Size, in bytes, of fh */
+	int		flags;		/* flags */
+	int		wsize;		/* write size in bytes */
+	int		rsize;		/* read size in bytes */
+	int		readdirsize;	/* readdir size in bytes */
+	int		timeo;		/* initial timeout in .1 secs */
+	int		retrans;	/* times to retry send */
+	int		maxgrouplist;	/* Max. size of group list */
+	int		readahead;	/* # of blocks to readahead */
+	int		leaseterm;	/* obsolete: Term (sec) of lease */
+	int		deadthresh;	/* obsolete: Retrans threshold */
 	char		*hostname;	/* server's name */
 };
+
+// LP64todo - should this move?
+#ifdef KERNEL
+/* LP64 version of nfs_args.  all pointers and longs
+ * grow when we're dealing with a 64-bit process.
+ * WARNING - keep in sync with nfs_args
+ */
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=natural
+#endif
+
+struct user_nfs_args {
+	int		version;	/* args structure version number */
+	user_addr_t	addr;		/* file server address */
+	int		addrlen;	/* length of address */
+	int		sotype;		/* Socket type */
+	int		proto;		/* and Protocol */
+	user_addr_t	fh;		/* File handle to be mounted */
+	int		fhsize;		/* Size, in bytes, of fh */
+	int		flags;		/* flags */
+	int		wsize;		/* write size in bytes */
+	int		rsize;		/* read size in bytes */
+	int		readdirsize;	/* readdir size in bytes */
+	int		timeo;		/* initial timeout in .1 secs */
+	int		retrans;	/* times to retry send */
+	int		maxgrouplist;	/* Max. size of group list */
+	int		readahead;	/* # of blocks to readahead */
+	int		leaseterm;	/* obsolete: Term (sec) of lease */
+	int		deadthresh;	/* obsolete: Retrans threshold */
+	user_addr_t	hostname;	/* server's name */
+	/* NFS_ARGSVERSION 3 ends here */
+	int		acregmin;	/* reg file min attr cache timeout */
+	int		acregmax;	/* reg file max attr cache timeout */
+	int		acdirmin;	/* dir min attr cache timeout */
+	int		acdirmax;	/* dir max attr cache timeout */
+};
+struct user_nfs_args3 {
+	int		version;	/* args structure version number */
+	user_addr_t	addr;		/* file server address */
+	int		addrlen;	/* length of address */
+	int		sotype;		/* Socket type */
+	int		proto;		/* and Protocol */
+	user_addr_t	fh;		/* File handle to be mounted */
+	int		fhsize;		/* Size, in bytes, of fh */
+	int		flags;		/* flags */
+	int		wsize;		/* write size in bytes */
+	int		rsize;		/* read size in bytes */
+	int		readdirsize;	/* readdir size in bytes */
+	int		timeo;		/* initial timeout in .1 secs */
+	int		retrans;	/* times to retry send */
+	int		maxgrouplist;	/* Max. size of group list */
+	int		readahead;	/* # of blocks to readahead */
+	int		leaseterm;	/* obsolete: Term (sec) of lease */
+	int		deadthresh;	/* obsolete: Retrans threshold */
+	user_addr_t	hostname;	/* server's name */
+};
+
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=reset
+#endif
+
+#endif // KERNEL
 
 /*
  * NFS mount option flags
@@ -186,29 +282,31 @@ struct nfs_args {
 #define	NFSMNT_MAXGRPS		0x00000020  /* set maximum grouplist size */
 #define	NFSMNT_INT		0x00000040  /* allow interrupts on hard mount */
 #define	NFSMNT_NOCONN		0x00000080  /* Don't Connect the socket */
-#define	NFSMNT_NQNFS		0x00000100  /* Use Nqnfs protocol */
 #define	NFSMNT_NFSV3		0x00000200  /* Use NFS Version 3 protocol */
 #define	NFSMNT_KERB		0x00000400  /* Use Kerberos authentication */
 #define	NFSMNT_DUMBTIMR		0x00000800  /* Don't estimate rtt dynamically */
-#define	NFSMNT_LEASETERM	0x00001000  /* set lease term (nqnfs) */
 #define	NFSMNT_READAHEAD	0x00002000  /* set read ahead */
-#define	NFSMNT_DEADTHRESH	0x00004000  /* set dead server retry thresh */
 #define	NFSMNT_RESVPORT		0x00008000  /* Allocate a reserved port */
 #define	NFSMNT_RDIRPLUS		0x00010000  /* Use Readdirplus for V3 */
 #define	NFSMNT_READDIRSIZE	0x00020000  /* Set readdir size */
 #define	NFSMNT_NOLOCKS		0x00040000  /* don't support file locking */
+#define	NFSMNT_ACREGMIN		0x00100000  /* reg min attr cache timeout */
+#define	NFSMNT_ACREGMAX		0x00200000  /* reg max attr cache timeout */
+#define	NFSMNT_ACDIRMIN		0x00400000  /* dir min attr cache timeout */
+#define	NFSMNT_ACDIRMAX		0x00800000  /* dir max attr cache timeout */
 
+/*
+ * NFS mount state flags (nm_state)
+ */
 #define NFSSTA_LOCKTIMEO	0x00002000  /* experienced a lock req timeout */
 #define	NFSSTA_MOUNTED		0x00004000  /* completely mounted */
-#define NFSSTA_LOCKSWORK	0x00008000  /* lock ops have worked. */   
+#define NFSSTA_LOCKSWORK	0x00008000  /* lock ops have worked. */
 #define NFSSTA_TIMEO		0x00010000  /* experienced a timeout. */
 #define NFSSTA_FORCE		0x00020000  /* doing a forced unmount. */
 #define NFSSTA_HASWRITEVERF	0x00040000  /* Has write verifier for V3 */
 #define NFSSTA_GOTPATHCONF	0x00080000  /* Got the V3 pathconf info */
 #define NFSSTA_GOTFSINFO	0x00100000  /* Got the V3 fsinfo */
 #define	NFSSTA_MNTD		0x00200000  /* Mnt server for mnt point */
-#define	NFSSTA_DISMINPROG	0x00400000  /* Dismount in progress */
-#define	NFSSTA_DISMNT		0x00800000  /* Dismounted */
 #define	NFSSTA_SNDLOCK		0x01000000  /* Send socket lock */
 #define	NFSSTA_WANTSND		0x02000000  /* Want above */
 #define	NFSSTA_RCVLOCK		0x04000000  /* Rcv socket lock */
@@ -219,6 +317,14 @@ struct nfs_args {
 #define	NFSSTA_AUTHERR		0x80000000  /* Authentication error */
 
 /*
+ * NFS mount pathconf info flags (nm_fsinfo.pcflags)
+ */
+#define NFSPCINFO_NOTRUNC		0x01
+#define NFSPCINFO_CHOWN_RESTRICTED	0x02
+#define NFSPCINFO_CASE_INSENSITIVE	0x04
+#define NFSPCINFO_CASE_PRESERVING	0x08
+
+/*
  * Structures for the nfssvc(2) syscall. Not that anyone but nfsd and mount_nfs
  * should ever try and use it.
  */
@@ -227,6 +333,28 @@ struct nfsd_args {
 	caddr_t	name;		/* Client addr for connection based sockets */
 	int	namelen;	/* Length of name */
 };
+
+// LP64todo - should this move?
+#ifdef KERNEL
+/* LP64 version of nfsd_args.  all pointers and longs
+ * grow when we're dealing with a 64-bit process.
+ * WARNING - keep in sync with nfsd_args
+ */
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=natural
+#endif
+
+struct user_nfsd_args {
+	int	        sock;		/* Socket to serve */
+	user_addr_t	name;		/* Client addr for connection based sockets */
+	int	        namelen;	/* Length of name */
+};
+
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=reset
+#endif
+
+#endif // KERNEL
 
 struct nfsd_srvargs {
 	struct nfsd	*nsd_nfsd;	/* Pointer to in kernel nfsd struct */
@@ -252,6 +380,140 @@ struct nfsd_cargs {
 	u_char		*ncd_verfstr;
 	NFSKERBKEY_T	ncd_key;	/* Session key */
 };
+
+/*
+ * NFS Server File Handle structures
+ */
+
+/* NFS export handle identifies which NFS export */
+#define	NFS_FH_VERSION	0x4e580000		/* 'NX00' */
+struct nfs_exphandle {
+	uint32_t	nxh_version;		/* data structure version */
+	uint32_t	nxh_fsid;		/* File System Export ID */
+	uint32_t	nxh_expid;		/* Export ID */
+	uint16_t	nxh_flags;		/* export handle flags */
+	uint8_t		nxh_reserved;		/* future use */
+	uint8_t		nxh_fidlen;		/* length of File ID */
+};
+
+/* nxh_flags */
+#define NXHF_INVALIDFH		0x0001		/* file handle is invalid */
+
+#define	NFS_MAX_FID_SIZE	(NFS_MAX_FH_SIZE - sizeof(struct nfs_exphandle))
+#define	NFSV2_MAX_FID_SIZE	(NFSV2_MAX_FH_SIZE - sizeof(struct nfs_exphandle))
+
+/* NFS server internal view of fhandle_t */
+struct nfs_filehandle {
+	int			nfh_len;	/* total length of file handle */
+	struct nfs_exphandle	nfh_xh;		/* export handle */
+	unsigned char		nfh_fid[NFS_MAX_FID_SIZE]; /* File ID */
+};
+
+/*
+ * NFS export data structures
+ */
+
+struct nfs_export_net_args {
+	uint32_t		nxna_flags;	/* export flags */
+	struct xucred		nxna_cred;	/* mapped credential for root/all user */
+	struct sockaddr_storage	nxna_addr;	/* net address to which exported */
+	struct sockaddr_storage	nxna_mask;	/* mask for net address */
+};
+
+struct nfs_export_args {
+	uint32_t		nxa_fsid;	/* export FS ID */
+	uint32_t		nxa_expid;	/* export ID */
+	char			*nxa_fspath;	/* export FS path */
+	char			*nxa_exppath;	/* export sub-path */
+	uint32_t		nxa_flags;	/* export arg flags */
+	uint32_t		nxa_netcount;	/* #entries in ex_nets array */
+	struct nfs_export_net_args *nxa_nets;	/* array of net args */
+};
+
+#ifdef KERNEL
+/* LP64 version of export_args */
+
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=natural
+#endif
+
+struct user_nfs_export_args {
+	uint32_t		nxa_fsid;	/* export FS ID */
+	uint32_t		nxa_expid;	/* export ID */
+	user_addr_t		nxa_fspath;	/* export FS path */
+	user_addr_t		nxa_exppath;	/* export sub-path */
+	uint32_t		nxa_flags;	/* export arg flags */
+	uint32_t		nxa_netcount;	/* #entries in ex_nets array */
+	user_addr_t		nxa_nets;	/* array of net args */
+};
+
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=reset
+#endif
+
+#endif /* KERNEL */
+
+/* nfs export arg flags */
+#define NXA_DELETE		0x0001	/* delete the specified export(s) */
+#define NXA_ADD			0x0002	/* add the specified export(s) */
+#define NXA_REPLACE		0x0003	/* delete and add the specified export(s) */
+
+/* export option flags */
+#define NX_READONLY		0x0001	/* exported read-only */
+#define NX_DEFAULTEXPORT	0x0002	/* exported to the world */
+#define NX_MAPROOT		0x0004	/* map root access to anon credential */
+#define NX_MAPALL		0x0008	/* map all access to anon credential */
+#define NX_KERB			0x0010	/* exported with Kerberos uid mapping */
+
+#ifdef KERNEL
+struct nfs_exportfs;
+
+struct nfs_export_options {
+	uint32_t		nxo_flags;	/* export options */
+	kauth_cred_t		nxo_cred;	/* mapped credential */
+};
+
+/* Network address lookup element and individual export options */
+struct nfs_netopt {
+	struct radix_node		no_rnodes[2];	/* radix tree glue */
+	struct nfs_export_options	no_opt;		/* export options */
+};
+
+/* Network export information */
+/* one of these for each exported directory */
+struct nfs_export {
+	LIST_ENTRY(nfs_export)		nx_next;	/* FS export list */
+	LIST_ENTRY(nfs_export)		nx_hash;	/* export hash chain */
+	struct nfs_export		*nx_parent;	/* parent export */
+	uint32_t			nx_id;		/* export ID */
+	uint32_t			nx_flags;	/* export flags */
+	struct nfs_exportfs		*nx_fs;		/* exported file system */
+	char				*nx_path;	/* exported file system sub-path */
+	struct nfs_filehandle		nx_fh;		/* export root file handle */
+	struct nfs_export_options	nx_defopt;	/* default options */
+	uint32_t			nx_expcnt;	/* # exports in table */
+	struct radix_node_head		*nx_rtable[AF_MAX+1]; /* table of exports (netopts) */
+};
+
+/* NFS exported file system info */
+/* one of these for each exported file system */
+struct nfs_exportfs {
+	LIST_ENTRY(nfs_exportfs)	nxfs_next;	/* exported file system list */
+	uint32_t			nxfs_id;	/* exported file system ID */
+	char				*nxfs_path;	/* exported file system path */
+	LIST_HEAD(,nfs_export)		nxfs_exports;	/* list of exports for this file system */
+};
+
+extern LIST_HEAD(nfsexpfslist, nfs_exportfs) nfs_exports;
+extern lck_rw_t nfs_export_rwlock;  // lock for export data structures
+#define	NFSEXPHASHVAL(FSID, EXPID)	\
+	(((FSID) >> 24) ^ ((FSID) >> 16) ^ ((FSID) >> 8) ^ (EXPID))
+#define	NFSEXPHASH(FSID, EXPID)	\
+	(&nfsexphashtbl[NFSEXPHASHVAL((FSID),(EXPID)) & nfsexphash])
+extern LIST_HEAD(nfsexphashhead, nfs_export) *nfsexphashtbl;
+extern u_long nfsexphash;
+
+#endif // KERNEL
 
 /*
  * XXX to allow amd to include nfs.h without nfsproto.h
@@ -290,9 +552,6 @@ struct nfsstats {
 	int	srvcache_idemdonehits;
 	int	srvcache_nonidemdonehits;
 	int	srvcache_misses;
-	int	srvnqnfs_leases;
-	int	srvnqnfs_maxleases;
-	int	srvnqnfs_getleases;
 	int	srvvop_writes;
 	int pageins;
 	int pageouts;
@@ -309,6 +568,7 @@ struct nfsstats {
 #define	NFSSVC_GOTAUTH	0x040
 #define	NFSSVC_AUTHINFAIL 0x080
 #define	NFSSVC_MNTD	0x100
+#define	NFSSVC_EXPORT	0x200
 
 /*
  * Flags for nfsclnt() system call.
@@ -345,6 +605,7 @@ struct nfsstats {
  * by them and break.
  */
 #ifdef KERNEL
+#include <sys/kernel_types.h>
 
 #ifdef MALLOC_DECLARE
 MALLOC_DECLARE(M_NFSREQ);
@@ -352,16 +613,20 @@ MALLOC_DECLARE(M_NFSMNT);
 MALLOC_DECLARE(M_NFSDIROFF);
 MALLOC_DECLARE(M_NFSRVDESC);
 MALLOC_DECLARE(M_NFSUID);
-MALLOC_DECLARE(M_NQLEASE);
 MALLOC_DECLARE(M_NFSD);
 MALLOC_DECLARE(M_NFSBIGFH);
 #endif
 
-struct uio; struct vattr; struct nameidata;	/* XXX */
+struct uio; struct vnode_attr; struct nameidata;	/* XXX */
 struct nfsbuf;
+struct nfs_vattr;
+struct nfsnode;
 
 #define	NFSINT_SIGMASK	(sigmask(SIGINT)|sigmask(SIGTERM)|sigmask(SIGKILL)| \
 			 sigmask(SIGHUP)|sigmask(SIGQUIT))
+
+__private_extern__ int nfs_mbuf_mlen, nfs_mbuf_mhlen,
+	nfs_mbuf_minclsize, nfs_mbuf_mclbytes;
 
 /*
  * Socket errors ignored for connectionless sockets??
@@ -369,19 +634,19 @@ struct nfsbuf;
  */
 #define	NFSIGNORE_SOERROR(s, e) \
 		((e) != EINTR && (e) != ERESTART && (e) != EWOULDBLOCK && \
-		 (e) != EIO && ((s) & PR_CONNREQUIRED) == 0)
+		 (e) != EIO && ((s)) != SOCK_STREAM)
 
 /*
  * Nfs outstanding request list element
  */
 struct nfsreq {
 	TAILQ_ENTRY(nfsreq) r_chain;
-	struct mbuf	*r_mreq;
-	struct mbuf	*r_mrep;
-	struct mbuf	*r_md;
+	mbuf_t		r_mreq;
+	mbuf_t		r_mrep;
+	mbuf_t		r_md;
 	caddr_t		r_dpos;
 	struct nfsmount *r_nmp;
-	struct vnode	*r_vp;
+	vnode_t		r_vp;
 	u_long		r_xid;
 	int		r_flags;	/* flags on request, see below */
 	int		r_retry;	/* max retransmission count */
@@ -389,7 +654,7 @@ struct nfsreq {
 	int		r_timer;	/* tick counter on reply */
 	u_int32_t	r_procnum;	/* NFS procedure number */
 	int		r_rtt;		/* RTT for rpc */
-	struct proc	*r_procp;	/* Proc that did I/O system call */
+	proc_t		r_procp;	/* Proc that did I/O system call */
 	long		r_lastmsg;	/* time of last tprintf */
 };
 
@@ -406,7 +671,6 @@ extern TAILQ_HEAD(nfs_reqq, nfsreq) nfs_reqq;
 #define R_SOCKERR	0x0010		/* Fatal error on socket */
 #define R_TPRINTFMSG	0x0020		/* Did a tprintf msg. */
 #define R_MUSTRESEND	0x0040		/* Must resend request */
-#define R_GETONEREP	0x0080		/* Probe for one reply only */
 #define R_BUSY		0x0100		/* Locked. */
 #define R_WAITING	0x0200		/* Someone waiting for lock. */
 #define R_RESENDERR	0x0400		/* resend failed. */
@@ -418,7 +682,7 @@ extern TAILQ_HEAD(nfs_reqq, nfsreq) nfs_reqq;
  * and uid hash lists.
  */
 #ifndef NFS_UIDHASHSIZ
-#define	NFS_UIDHASHSIZ	29	/* Tune the size of nfssvc_sock with this */
+#define	NFS_UIDHASHSIZ	13	/* Tune the size of nfssvc_sock with this */
 #endif
 #define	NUIDHASH(sock, uid) \
 	(&(sock)->ns_uidhashtbl[(uid) % NFS_UIDHASHSIZ])
@@ -434,7 +698,7 @@ extern TAILQ_HEAD(nfs_reqq, nfsreq) nfs_reqq;
  */
 union nethostaddr {
 	u_long had_inetaddr;
-	struct mbuf *had_nam;
+	mbuf_t had_nam;
 };
 
 struct nfsuid {
@@ -442,7 +706,7 @@ struct nfsuid {
 	LIST_ENTRY(nfsuid) nu_hash;	/* Hash list */
 	int		nu_flag;	/* Flags */
 	union nethostaddr nu_haddr;	/* Host addr. for dgram sockets */
-	struct ucred	nu_cr;		/* Cred uid mapped to */
+	kauth_cred_t	nu_cr;		/* Cred uid mapped to */
 	int		nu_expire;	/* Expiry time (sec) */
 	struct timeval	nu_timestamp;	/* Kerb. timestamp */
 	u_long		nu_nickname;	/* Nickname on server */
@@ -461,46 +725,50 @@ struct nfsuid {
 struct nfsrv_rec {
 	STAILQ_ENTRY(nfsrv_rec) nr_link;
 	struct sockaddr	*nr_address;
-	struct mbuf	*nr_packet;
+	mbuf_t		nr_packet;
 };
 #endif
 
 struct nfssvc_sock {
 	TAILQ_ENTRY(nfssvc_sock) ns_chain;	/* List of all nfssvc_sock's */
-	TAILQ_HEAD(, nfsuid) ns_uidlruhead;
-	struct file	*ns_fp;
-	struct socket	*ns_so;
-	struct mbuf	*ns_nam;
-	struct mbuf	*ns_raw;
-	struct mbuf	*ns_rawend;
-	struct mbuf	*ns_rec;
-	struct mbuf	*ns_recend;
-	struct mbuf	*ns_frag;
-	short		ns_flag;	/* modified under kernel funnel */
-	short		ns_nflag;	/* modified under network funnel */
-	int		ns_solock;
+	lck_rw_t	ns_rwlock;		/* lock for most fields */
+	socket_t	ns_so;
+	mbuf_t		ns_nam;
+	mbuf_t		ns_raw;
+	mbuf_t		ns_rawend;
+	mbuf_t		ns_rec;
+	mbuf_t		ns_recend;
+	mbuf_t		ns_frag;
+	int		ns_flag;
+	int		ns_sotype;
 	int		ns_cc;
 	int		ns_reclen;
 	int		ns_numuids;
 	u_long		ns_sref;
+	lck_mtx_t	ns_wgmutex;		/* mutex for write gather fields */
+	u_quad_t	ns_wgtime;		/* next Write deadline (usec) */
 	LIST_HEAD(, nfsrv_descript) ns_tq;	/* Write gather lists */
-	LIST_HEAD(, nfsuid) ns_uidhashtbl[NFS_UIDHASHSIZ];
 	LIST_HEAD(nfsrvw_delayhash, nfsrv_descript) ns_wdelayhashtbl[NFS_WDELAYHASHSIZ];
+	TAILQ_HEAD(, nfsuid) ns_uidlruhead;
+	LIST_HEAD(, nfsuid) ns_uidhashtbl[NFS_UIDHASHSIZ];
 };
 
-/* Bits for "ns_*flag" */
-#define	SLP_VALID	0x01 /* ns_flag */
-#define	SLP_DOREC	0x02 /* ns_flag */
-#define	SLPN_NEEDQ	0x04 /* ns_nflag */
-#define	SLPN_DISCONN	0x08 /* ns_nflag */
-#define	SLPN_GETSTREAM	0x10 /* ns_nflag */
-#define	SLPN_LASTFRAG	0x20 /* ns_nflag */
-#define SLP_ALLFLAGS	0xff /* ns_flag && ns_nflag */
+/* Bits for "ns_flag" */
+#define	SLP_VALID	0x01 /* nfs sock valid */
+#define	SLP_DOREC	0x02 /* nfs sock has received data to process */
+#define	SLP_NEEDQ	0x04 /* network socket has data to receive */
+#define	SLP_DISCONN	0x08 /* socket needs to be zapped */
+#define	SLP_GETSTREAM	0x10 /* currently in nfsrv_getstream() */
+#define	SLP_LASTFRAG	0x20 /* on last fragment of RPC record */
+#define SLP_ALLFLAGS	0xff
 
 extern TAILQ_HEAD(nfssvc_sockhead, nfssvc_sock) nfssvc_sockhead;
-extern int nfssvc_sockhead_flag;
-#define	SLP_INIT	0x01
-#define	SLP_WANTINIT	0x02
+
+/* locks for nfssvc_sock's */
+extern lck_grp_attr_t *nfs_slp_group_attr;
+extern lck_attr_t *nfs_slp_lock_attr;
+extern lck_grp_t *nfs_slp_rwlock_group;
+extern lck_grp_t *nfs_slp_mutex_group;
 
 /*
  * One of these structures is allocated for each nfsd.
@@ -513,7 +781,7 @@ struct nfsd {
 	u_char		nfsd_authstr[RPCAUTH_MAXSIZ]; /* Authenticator data */
 	int		nfsd_verflen;	/* and the Verifier */
 	u_char		nfsd_verfstr[RPCVERF_MAXSIZ];
-	struct proc	*nfsd_procp;	/* Proc ptr */
+	proc_t		nfsd_procp;	/* Proc ptr */
 	struct nfsrv_descript *nfsd_nd;	/* Associated nfsrv_descript */
 };
 
@@ -534,11 +802,11 @@ struct nfsrv_descript {
 	LIST_ENTRY(nfsrv_descript) nd_hash;	/* Hash list */
 	LIST_ENTRY(nfsrv_descript) nd_tq;		/* and timer list */
 	LIST_HEAD(,nfsrv_descript) nd_coalesce;	/* coalesced writes */
-	struct mbuf		*nd_mrep;	/* Request mbuf list */
-	struct mbuf		*nd_md;		/* Current dissect mbuf */
-	struct mbuf		*nd_mreq;	/* Reply mbuf list */
-	struct mbuf		*nd_nam;	/* and socket addr */
-	struct mbuf		*nd_nam2;	/* return socket addr */
+	mbuf_t			nd_mrep;	/* Request mbuf list */
+	mbuf_t			nd_md;		/* Current dissect mbuf */
+	mbuf_t			nd_mreq;	/* Reply mbuf list */
+	mbuf_t			nd_nam;		/* and socket addr */
+	mbuf_t			nd_nam2;	/* return socket addr */
 	caddr_t			nd_dpos;	/* Current dissect pos */
 	u_int32_t		nd_procnum;	/* RPC # */
 	int			nd_stable;	/* storage type */
@@ -546,19 +814,13 @@ struct nfsrv_descript {
 	int			nd_len;		/* Length of this write */
 	int			nd_repstat;	/* Reply status */
 	u_long			nd_retxid;	/* Reply xid */
-	u_long			nd_duration;	/* Lease duration */
 	struct timeval		nd_starttime;	/* Time RPC initiated */
-	fhandle_t		nd_fh;		/* File handle */
-	struct ucred		nd_cr;		/* Credentials */
+	struct nfs_filehandle	nd_fh;		/* File handle */
+	kauth_cred_t		nd_cr;		/* Credentials */
 };
 
 /* Bits for "nd_flag" */
-#define	ND_READ		LEASE_READ
-#define ND_WRITE	LEASE_WRITE
-#define ND_CHECK	0x04
-#define ND_LEASE	(ND_READ | ND_WRITE | ND_CHECK)
 #define ND_NFSV3	0x08
-#define ND_NQNFS	0x10
 #define ND_KERBNICK	0x20
 #define ND_KERBFULL	0x40
 #define ND_KERBAUTH	(ND_KERBNICK | ND_KERBFULL)
@@ -571,13 +833,22 @@ extern int nfsd_head_flag;
  * These macros compare nfsrv_descript structures.
  */
 #define NFSW_CONTIG(o, n) \
-		((o)->nd_eoff >= (n)->nd_off && \
-		 !bcmp((caddr_t)&(o)->nd_fh, (caddr_t)&(n)->nd_fh, NFSX_V3FH))
+		(((o)->nd_eoff >= (n)->nd_off) && \
+		 ((o)->nd_fh.nfh_len == (n)->nd_fh.nfh_len) && \
+		 !bcmp((caddr_t)&(o)->nd_fh, (caddr_t)&(n)->nd_fh, (o)->nd_fh.nfh_len))
 
 #define NFSW_SAMECRED(o, n) \
 	(((o)->nd_flag & ND_KERBAUTH) == ((n)->nd_flag & ND_KERBAUTH) && \
- 	 !bcmp((caddr_t)&(o)->nd_cr, (caddr_t)&(n)->nd_cr, \
+ 	 !bcmp((caddr_t)(o)->nd_cr, (caddr_t)(n)->nd_cr, \
 		sizeof (struct ucred)))
+
+/* mutex for nfs server */
+extern lck_grp_t * nfsd_lck_grp;
+extern lck_grp_attr_t * nfsd_lck_grp_attr;
+extern lck_attr_t * nfsd_lck_attr;
+extern lck_mtx_t *nfsd_mutex;
+
+extern int nfs_numnfsd, nfsd_waiting;
 
 /*
  * Defines for WebNFS
@@ -596,280 +867,177 @@ extern int nfsd_head_flag;
  * Macro for converting escape characters in WebNFS pathnames.
  * Should really be in libkern.
  */
-
+#define ISHEX(c) \
+	((((c) >= 'a') && ((c) <= 'f')) || \
+	 (((c) >= 'A') && ((c) <= 'F')) || \
+	 (((c) >= '0') && ((c) <= '9')))
 #define HEXTOC(c) \
 	((c) >= 'a' ? ((c) - ('a' - 10)) : \
 	    ((c) >= 'A' ? ((c) - ('A' - 10)) : ((c) - '0')))
 #define HEXSTRTOI(p) \
 	((HEXTOC(p[0]) << 4) + HEXTOC(p[1]))
 
-#define NFSDIAG 0
-#if NFSDIAG
+__BEGIN_DECLS
 
-extern int nfs_debug;
-#define NFS_DEBUG_ASYNCIO	1 /* asynchronous i/o */
-#define NFS_DEBUG_WG		2 /* server write gathering */
-#define NFS_DEBUG_RC		4 /* server request caching */
-#define NFS_DEBUG_SILLY		8 /* nfs_sillyrename (.nfsXXX aka turd files) */
-#define NFS_DEBUG_DUP		16 /* debug duplicate requests */
-#define NFS_DEBUG_ATTR		32
+int	nfs_init(struct vfsconf *vfsp);
+void	nfs_mbuf_init(void);
+int	nfs_reply(struct nfsreq *);
+int	nfs_getreq(struct nfsrv_descript *,struct nfsd *,int);
+int	nfs_send(socket_t, mbuf_t, mbuf_t, struct nfsreq *);
+int	nfs_rephead(int, struct nfsrv_descript *, struct nfssvc_sock *,
+			 int, mbuf_t *, mbuf_t *, caddr_t *);
+int	nfs_sndlock(struct nfsreq *);
+void	nfs_sndunlock(struct nfsreq *);
+int	nfs_vinvalbuf(vnode_t, int, struct ucred *, proc_t, int);
+int	nfs_buf_page_inval(vnode_t vp, off_t offset);
+int	nfs_readrpc(vnode_t, struct uio *, struct ucred *, proc_t);
+int	nfs_writerpc(vnode_t, struct uio *, struct ucred *, proc_t, int *, int *);
+int	nfs_readdirrpc(vnode_t, struct uio *, struct ucred *, proc_t);
+int	nfs_readdirplusrpc(vnode_t, struct uio *, struct ucred *, proc_t);
+int	nfs_asyncio(struct nfsbuf *, struct ucred *);
+int	nfs_doio(struct nfsbuf *, struct ucred *, proc_t);
+int	nfs_readlinkrpc(vnode_t, struct uio *, struct ucred *, proc_t);
+int	nfs_sigintr(struct nfsmount *, struct nfsreq *, proc_t);
+int	nfsm_disct(mbuf_t *, caddr_t *, int, int, caddr_t *);
+void	nfsm_srvfattr(struct nfsrv_descript *, struct vnode_attr *, 
+			   struct nfs_fattr *);
+void	nfsm_srvwcc(struct nfsrv_descript *, int, struct vnode_attr *, int,
+			 struct vnode_attr *, mbuf_t *, char **);
+void	nfsm_srvpostopattr(struct nfsrv_descript *, int, struct vnode_attr *,
+				mbuf_t *, char **);
+int	netaddr_match(int, union nethostaddr *, mbuf_t);
+int	nfs_request(vnode_t, mount_t, mbuf_t, int, proc_t,
+			 struct ucred *, mbuf_t *, mbuf_t *,
+			 caddr_t *, u_int64_t *);
+int	nfs_parsefattr(mbuf_t *, caddr_t *, int, struct nfs_vattr *);
+int	nfs_loadattrcache(struct nfsnode *, struct nfs_vattr *, u_int64_t *, int);
+int	nfsm_path_mbuftond(mbuf_t *, caddr_t *, int, int, int *, struct nameidata *);
+int	nfs_namei(struct nfsrv_descript *, struct vfs_context *, struct nameidata *,
+			struct nfs_filehandle *, mbuf_t, int, vnode_t *,
+			struct nfs_export **, struct nfs_export_options **);
+void	nfsm_adj(mbuf_t, int, int);
+int	nfsm_mbuftouio(mbuf_t *, struct uio *, int, caddr_t *);
+void	nfsrv_initcache(void);
+int	nfs_getauth(struct nfsmount *, struct nfsreq *, struct ucred *, 
+			 char **, int *, char *, int *, NFSKERBKEY_T);
+int	nfs_getnickauth(struct nfsmount *, struct ucred *, char **, 
+			     int *, char *, int);
+int	nfs_savenickauth(struct nfsmount *, struct ucred *, int, 
+			      NFSKERBKEY_T, mbuf_t *, char **,
+			      mbuf_t);
+int	nfs_adv(mbuf_t *, caddr_t *, int, int);
+void	nfs_nhinit(void);
+void	nfs_timer_funnel(void*);
+void	nfs_timer(void*);
+u_long	nfs_hash(u_char *, int);
+int	nfsrv_dorec(struct nfssvc_sock *, struct nfsd *, 
+			 struct nfsrv_descript **);
+int	nfsrv_getcache(struct nfsrv_descript *, struct nfssvc_sock *,
+			    mbuf_t *);
+void	nfsrv_updatecache(struct nfsrv_descript *, int, mbuf_t);
+void	nfsrv_cleancache(void);
+int	nfs_bind_resv_thread_wake(void);
+int	nfs_connect(struct nfsmount *, struct nfsreq *);
+void	nfs_disconnect(struct nfsmount *);
+int	nfs_getattr_no_vnode(mount_t,u_char *,int,struct ucred *,proc_t,struct nfs_vattr *,u_int64_t *);
+int	nfs_getattr(vnode_t vp, struct nfs_vattr *nvap, struct ucred *cred, proc_t p);
+int	nfs_getattrcache(vnode_t, struct nfs_vattr *);
+int	nfs_attrcachetimeout(vnode_t);
+int	nfsm_strtmbuf(mbuf_t *, char **, char *, long);
+int	nfs_bioread(vnode_t, struct uio *, int, struct ucred *, proc_t);
+int	nfsm_uiotombuf(struct uio *, mbuf_t *, int, caddr_t *);
+void	nfsrv_init(int);
+int	nfs_commit(vnode_t vp, u_quad_t offset, u_int32_t count,
+			struct ucred *cred, proc_t procp);
+int	nfs_flushcommits(vnode_t, proc_t, int);
+int	nfs_flush(vnode_t,int,struct ucred *,proc_t,int);
+void	nfs_clearcommit(mount_t);
+int	nfsrv_errmap(struct nfsrv_descript *, int);
+void	nfsrvw_sort(gid_t *, int);
+void	nfsrv_setcred(struct ucred *, struct ucred *);
+int	nfs_buf_write(struct nfsbuf *);
+void	nfsrv_wakenfsd(struct nfssvc_sock *slp);
+int	nfsrv_writegather(struct nfsrv_descript **, struct nfssvc_sock *,
+			       proc_t, mbuf_t *);
+int	nfs_fsinfo(struct nfsmount *, vnode_t, struct ucred *, proc_t p);
+int	nfs_pathconfrpc(vnode_t, struct nfsv3_pathconf *, kauth_cred_t, proc_t);
+void	nfs_pathconf_cache(struct nfsmount *, struct nfsv3_pathconf *);
 
-#define NFS_DPF(cat, args)					\
-	do {							\
-		if (nfs_debug & NFS_DEBUG_##cat) kprintf args;	\
-	} while (0)
-
-#else
-
-#define NFS_DPF(cat, args)
-
-#endif /* NFSDIAG */
-
-int	nfs_init __P((struct vfsconf *vfsp));
-int	nfs_reply __P((struct nfsreq *));
-int	nfs_getreq __P((struct nfsrv_descript *,struct nfsd *,int));
-int	nfs_send __P((struct socket *, struct mbuf *, struct mbuf *, 
-		      struct nfsreq *));
-int	nfs_rephead __P((int, struct nfsrv_descript *, struct nfssvc_sock *,
-			 int, int, u_quad_t *, struct mbuf **, struct mbuf **,
-			 caddr_t *));
-int	nfs_sndlock __P((struct nfsreq *));
-void	nfs_sndunlock __P((struct nfsreq *));
-int	nfs_slplock __P((struct nfssvc_sock *, int));
-void	nfs_slpunlock __P((struct nfssvc_sock *));
-int	nfs_disct __P((struct mbuf **, caddr_t *, int, int, caddr_t *));
-int	nfs_vinvalbuf __P((struct vnode *, int, struct ucred *, struct proc *,
-			   int));
-int	nfs_readrpc __P((struct vnode *, struct uio *, struct ucred *));
-int	nfs_writerpc __P((struct vnode *, struct uio *, struct ucred *, int *, 
-			  int *));
-int	nfs_readdirrpc __P((struct vnode *, struct uio *, struct ucred *));
-int	nfs_asyncio __P((struct nfsbuf *, struct ucred *));
-int	nfs_doio __P((struct nfsbuf *, struct ucred *, struct proc *));
-int	nfs_readlinkrpc __P((struct vnode *, struct uio *, struct ucred *));
-int	nfs_sigintr __P((struct nfsmount *, struct nfsreq *, struct proc *));
-int	nfs_readdirplusrpc __P((struct vnode *, struct uio *, struct ucred *));
-int	nfsm_disct __P((struct mbuf **, caddr_t *, int, int, caddr_t *));
-void	nfsm_srvfattr __P((struct nfsrv_descript *, struct vattr *, 
-			   struct nfs_fattr *));
-void	nfsm_srvwcc __P((struct nfsrv_descript *, int, struct vattr *, int,
-			 struct vattr *, struct mbuf **, char **));
-void	nfsm_srvpostopattr __P((struct nfsrv_descript *, int, struct vattr *,
-				struct mbuf **, char **));
-int	netaddr_match __P((int, union nethostaddr *, struct mbuf *));
-int	nfs_request __P((struct vnode *, struct mbuf *, int, struct proc *,
-			 struct ucred *, struct mbuf **, struct mbuf **,
-			 caddr_t *, u_int64_t *));
-int	nfs_loadattrcache __P((struct vnode **, struct mbuf **, caddr_t *,
-			       struct vattr *, int, u_int64_t *));
-int	nfs_namei __P((struct nameidata *, fhandle_t *, int,
-		       struct nfssvc_sock *, struct mbuf *, struct mbuf **,
-		       caddr_t *, struct vnode **, struct proc *, int, int));
-void	nfsm_adj __P((struct mbuf *, int, int));
-int	nfsm_mbuftouio __P((struct mbuf **, struct uio *, int, caddr_t *));
-void	nfsrv_initcache __P((void));
-int	nfs_getauth __P((struct nfsmount *, struct nfsreq *, struct ucred *, 
-			 char **, int *, char *, int *, NFSKERBKEY_T));
-int	nfs_getnickauth __P((struct nfsmount *, struct ucred *, char **, 
-			     int *, char *, int));
-int	nfs_savenickauth __P((struct nfsmount *, struct ucred *, int, 
-			      NFSKERBKEY_T, struct mbuf **, char **,
-			      struct mbuf *));
-int	nfs_adv __P((struct mbuf **, caddr_t *, int, int));
-void	nfs_nhinit __P((void));
-void	nfs_timer __P((void*));
-u_long	nfs_hash __P((nfsfh_t *, int));
-int	nfsrv_dorec __P((struct nfssvc_sock *, struct nfsd *, 
-			 struct nfsrv_descript **));
-int	nfsrv_getcache __P((struct nfsrv_descript *, struct nfssvc_sock *,
-			    struct mbuf **));
-void	nfsrv_updatecache __P((struct nfsrv_descript *, int, struct mbuf *));
-void	nfsrv_cleancache __P((void));
-int	nfs_bind_resv_thread_wake __P((void));
-int	nfs_connect __P((struct nfsmount *, struct nfsreq *));
-void	nfs_disconnect __P((struct nfsmount *));
-int	nfs_getattrcache __P((struct vnode *, struct vattr *));
-int	nfsm_strtmbuf __P((struct mbuf **, char **, char *, long));
-int	nfs_bioread __P((struct vnode *, struct uio *, int, struct ucred *,
-			 int));
-int	nfsm_uiotombuf __P((struct uio *, struct mbuf **, int, caddr_t *));
-void	nfsrv_init __P((int));
-int	nfs_commit __P((struct vnode *vp, u_quad_t offset, int cnt,
-			struct ucred *cred, struct proc *procp));
-int	nfs_flushcommits(struct vnode *, struct proc *);
-void	nfs_clearcommit __P((struct mount *));
-int	nfsrv_errmap __P((struct nfsrv_descript *, int));
-void	nfsrvw_sort __P((gid_t *, int));
-void	nfsrv_setcred __P((struct ucred *, struct ucred *));
-int	nfs_buf_write __P((struct nfsbuf *));
-int	nfsrv_object_create __P((struct vnode *));
-void	nfsrv_wakenfsd __P((struct nfssvc_sock *slp));
-int	nfsrv_writegather __P((struct nfsrv_descript **, struct nfssvc_sock *,
-			       struct proc *, struct mbuf **));
-int	nfs_fsinfo __P((struct nfsmount *, struct vnode *, struct ucred *,
-			struct proc *p));
-
-int	nfsrv3_access __P((struct nfsrv_descript *nfsd, 
+int	nfsrv3_access(struct nfsrv_descript *nfsd, 
 			   struct nfssvc_sock *slp,
-			   struct proc *procp, struct mbuf **mrq));
-int	nfsrv_commit __P((struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
-			  struct proc *procp, struct mbuf **mrq));
-int	nfsrv_create __P((struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
-			  struct proc *procp, struct mbuf **mrq));
-int	nfsrv_fhtovp __P((fhandle_t *, int, struct vnode **, struct ucred *,
-			  struct nfssvc_sock *, struct mbuf *, int *,
-			  int, int));
-int	nfsrv_setpublicfs __P((struct mount *, struct netexport *,
-			       struct export_args *));
-int	nfs_ispublicfh __P((fhandle_t *));
-int	nfsrv_fsinfo __P((struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
-			  struct proc *procp, struct mbuf **mrq));
-int	nfsrv_getattr __P((struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
-			   struct proc *procp, struct mbuf **mrq));
-int	nfsrv_link __P((struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
-			struct proc *procp, struct mbuf **mrq));
-int	nfsrv_lookup __P((struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
-			  struct proc *procp, struct mbuf **mrq));
-int	nfsrv_mkdir __P((struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
-			 struct proc *procp, struct mbuf **mrq));
-int	nfsrv_mknod __P((struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
-			 struct proc *procp, struct mbuf **mrq));
-int	nfsrv_noop __P((struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
-			struct proc *procp, struct mbuf **mrq));
-int	nfsrv_null __P((struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
-			struct proc *procp, struct mbuf **mrq));
-int	nfsrv_pathconf __P((struct nfsrv_descript *nfsd,
-			    struct nfssvc_sock *slp, struct proc *procp,
-			    struct mbuf **mrq));
-int	nfsrv_read __P((struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
-			struct proc *procp, struct mbuf **mrq));
-int	nfsrv_readdir __P((struct nfsrv_descript *nfsd, 
+			   proc_t procp, mbuf_t *mrq);
+int	nfsrv_commit(struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
+			  proc_t procp, mbuf_t *mrq);
+int	nfsrv_create(struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
+			  proc_t procp, mbuf_t *mrq);
+int	nfsrv_credcheck(struct nfsrv_descript *, struct nfs_export *,
+			struct nfs_export_options *);
+int	nfsrv_export(struct user_nfs_export_args *, struct vfs_context *);
+int	nfsrv_fhmatch(struct nfs_filehandle *fh1, struct nfs_filehandle *fh2);
+int	nfsrv_fhtovp(struct nfs_filehandle *, mbuf_t, int, vnode_t *,
+			struct nfs_export **, struct nfs_export_options **);
+int	nfs_ispublicfh(struct nfs_filehandle *);
+int	nfsrv_fsinfo(struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
+			  proc_t procp, mbuf_t *mrq);
+int	nfsrv_getattr(struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
+			   proc_t procp, mbuf_t *mrq);
+int	nfsrv_link(struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
+			proc_t procp, mbuf_t *mrq);
+int	nfsrv_lookup(struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
+			  proc_t procp, mbuf_t *mrq);
+int	nfsrv_mkdir(struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
+			 proc_t procp, mbuf_t *mrq);
+int	nfsrv_mknod(struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
+			 proc_t procp, mbuf_t *mrq);
+int	nfsrv_noop(struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
+			proc_t procp, mbuf_t *mrq);
+int	nfsrv_null(struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
+			proc_t procp, mbuf_t *mrq);
+int	nfsrv_pathconf(struct nfsrv_descript *nfsd,
+			    struct nfssvc_sock *slp, proc_t procp,
+			    mbuf_t *mrq);
+void	nfsrv_rcv(socket_t, caddr_t arg, int waitflag);
+void	nfsrv_rcv_locked(socket_t, struct nfssvc_sock *slp, int waitflag);
+int	nfsrv_read(struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
+			proc_t procp, mbuf_t *mrq);
+int	nfsrv_readdir(struct nfsrv_descript *nfsd, 
 			   struct nfssvc_sock *slp,
-			   struct proc *procp, struct mbuf **mrq));
-int	nfsrv_readdirplus __P((struct nfsrv_descript *nfsd,
-			       struct nfssvc_sock *slp, struct proc *procp,
-			       struct mbuf **mrq));
-int	nfsrv_readlink __P((struct nfsrv_descript *nfsd,
-			    struct nfssvc_sock *slp, struct proc *procp,
-			    struct mbuf **mrq));
-int	nfsrv_remove __P((struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
-			  struct proc *procp, struct mbuf **mrq));
-int	nfsrv_rename __P((struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
-			  struct proc *procp, struct mbuf **mrq));
-int	nfsrv_rmdir __P((struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
-			 struct proc *procp, struct mbuf **mrq));
-int	nfsrv_setattr __P((struct nfsrv_descript *nfsd, 
+			   proc_t procp, mbuf_t *mrq);
+int	nfsrv_readdirplus(struct nfsrv_descript *nfsd,
+			       struct nfssvc_sock *slp, proc_t procp,
+			       mbuf_t *mrq);
+int	nfsrv_readlink(struct nfsrv_descript *nfsd,
+			    struct nfssvc_sock *slp, proc_t procp,
+			    mbuf_t *mrq);
+int	nfsrv_remove(struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
+			  proc_t procp, mbuf_t *mrq);
+int	nfsrv_rename(struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
+			  proc_t procp, mbuf_t *mrq);
+int	nfsrv_rmdir(struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
+			 proc_t procp, mbuf_t *mrq);
+int	nfsrv_setattr(struct nfsrv_descript *nfsd, 
 			   struct nfssvc_sock *slp,
-			   struct proc *procp, struct mbuf **mrq));
-int	nfsrv_statfs __P((struct nfsrv_descript *nfsd, 
+			   proc_t procp, mbuf_t *mrq);
+void	nfsrv_slpderef(struct nfssvc_sock *slp);
+int	nfsrv_statfs(struct nfsrv_descript *nfsd, 
 			  struct nfssvc_sock *slp,
-			  struct proc *procp, struct mbuf **mrq));
-int	nfsrv_symlink __P((struct nfsrv_descript *nfsd, 
+			  proc_t procp, mbuf_t *mrq);
+int	nfsrv_symlink(struct nfsrv_descript *nfsd, 
 			   struct nfssvc_sock *slp,
-			   struct proc *procp, struct mbuf **mrq));
-int	nfsrv_write __P((struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
-			 struct proc *procp, struct mbuf **mrq));
-void	nfsrv_rcv __P((struct socket *so, caddr_t arg, int waitflag));
-void	nfsrv_slpderef __P((struct nfssvc_sock *slp));
+			   proc_t procp, mbuf_t *mrq);
+int	nfsrv_write(struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
+			 proc_t procp, mbuf_t *mrq);
+int	nfsrv_vptofh( struct nfs_export *, int, struct nfs_filehandle *,
+			vnode_t, struct vfs_context *, struct nfs_filehandle *);
 
-void	nfs_up(struct nfsreq *, struct nfsmount *, struct proc *,
-		const char *, int);
-void	nfs_down(struct nfsreq *, struct nfsmount *, struct proc *,
-		const char *, int, int);
+void	nfs_up(struct nfsmount *, proc_t, int, const char *);
+void	nfs_down(struct nfsmount *, proc_t, int, int, const char *);
 
-/*
- * NFSTRACE points were changed to FSDBG (KERNEL_DEBUG)
- * But some of this code may prove useful someday...
- */
-#undef NFSDIAG
-#if NFSDIAG
+struct nfs_diskless;
+int	nfs_boot_init(struct nfs_diskless *nd, proc_t procp);
+int	nfs_boot_getfh(struct nfs_diskless *nd, proc_t procp, int v3, int sotype);
 
-extern int nfstraceindx;
-#define NFSTBUFSIZ 8912
-struct nfstracerec { uint i1, i2, i3, i4; };
-extern struct nfstracerec nfstracebuf[NFSTBUFSIZ];
-extern uint nfstracemask; /* 32 bits - trace points over 31 are unconditional */
-
-/* 0x0000000f nfs_getattrcache trace points */
-#define NFSTRC_GAC_MISS 0x00	/* 0x00000001 cache miss */
-#define NFSTRC_GAC_HIT	0x01	/* 0x00000002 cache hit */
-#define NFSTRC_GAC_NP	0x02	/* 0x00000004 np size mismatch - vp... */
-/* 0x00000038 nfs_loadattrcache trace points */
-#define NFSTRC_LAC	0x03	/* 0x00000008 function entry point - vp */
-#define NFSTRC_LAC_INIT	0x04	/* 0x00000010 new vp & init n_mtime - vp */
-#define NFSTRC_LAC_NP	0x05	/* 0x00000020 np size mismatch - vp... */
-/* 0x000000c0 nfs_getattr trace points */
-#define NFSTRC_GA_INV	0x06	/* 0x00000040 times mismatch - vp */
-#define NFSTRC_GA_INV1	0x07	/* 0x00000080 invalidate ok - vp */
-/* 0x00000100 vmp_invalidate trace points */
-#define NFSTRC_VMP_INV	0x08	/* 0x00000100 function entry point - vmp */
-/* 0x00000200 nfs_request trace points */
-#define NFSTRC_REQ	0x09	/* 0x00000200 - alternates vp and procnum */
-/* 0x00000c00 vmp_push_range trace points */
-#define NFSTRC_VPR	0xa	/* 0x00000400 entry point - vp... */
-#define NFSTRC_VPR_DONE	0xb	/* 0x00000800 tail exit - error # */
-/* 0x00003000 nfs_doio trace points */
-#define NFSTRC_DIO	0xc	/* 0x00001000 entry point - vp */
-#define NFSTRC_DIO_DONE	0xd	/* 0x00002000 exit points - vp */
-/* 0x000fc000 congestion window trace points */
-#define NFSTRC_CWND_INIT      0xe
-#define NFSTRC_CWND_REPLY     0xf
-#define NFSTRC_CWND_TIMER     0x10
-#define NFSTRC_CWND_REQ1      0x11
-#define NFSTRC_CWND_REQ2      0x12
-#define NFSTRC_CWND_SOFT      0x13
-/* 0xfff00000 nfs_rcvlock & nfs_rcvunlock trace points */
-#define NFSTRC_ECONN	0x14
-#define NFSTRC_RCVERR	0x15
-#define NFSTRC_REQFREE	0x16
-#define NFSTRC_NOTMINE	0x17
-#define NFSTRC_6	0x18
-#define NFSTRC_7	0x19
-#define NFSTRC_RCVLCKINTR	0x1a
-#define NFSTRC_RCVALREADY	0x1b
-#define NFSTRC_RCVLCKW	0x1c	/* 0x10000000 seeking recieve lock (waiting) */
-#define NFSTRC_RCVLCK	0x1d	/* 0x20000000 getting recieve lock */ 
-#define NFSTRC_RCVUNLW	0x1e	/* 0x40000000 releasing rcv lock w/ wakeup */
-#define NFSTRC_RCVUNL	0x1f	/* 0x80000000 releasing rcv lock w/o wakeup */
-/* trace points beyond 31 are on if any of above points are on */
-#define NFSTRC_GA_INV2	0x20	/* nfs_getattr invalidate - error# */
-#define NFSTRC_VBAD	0x21
-#define NFSTRC_REQERR	0x22
-#define NFSTRC_RPCERR	0x23
-#define NFSTRC_DISSECTERR	0x24
-#define NFSTRC_CONTINUE	0xff	/* continuation record for previous entry */
-
-#define NFSTRACEX(a1, a2, a3, a4) \
-( \
-	nfstracebuf[nfstraceindx].i1 = (uint)(a1), \
-	nfstracebuf[nfstraceindx].i2 = (uint)(a2), \
-	nfstracebuf[nfstraceindx].i3 = (uint)(a3), \
-	nfstracebuf[nfstraceindx].i4 = (uint)(a4), \
-	nfstraceindx = (nfstraceindx + 1) % NFSTBUFSIZ, \
-	1 \
-)
-
-#define NFSTRACE(cnst, fptr) \
-( \
-	(nfstracemask && ((cnst) > 31 || nfstracemask & 1<<(cnst))) ? \
-		NFSTRACEX((cnst), (fptr), current_thread(), \
-			  clock_get_system_value().tv_nsec) : \
-		0 \
-)
-
-#define NFSTRACE4(cnst, fptr, a2, a3, a4) \
-( \
-	NFSTRACE(cnst,fptr) ? \
-		NFSTRACEX(NFSTRC_CONTINUE, a2, a3, a4) : \
-		0 \
-)
-
-#else	/* NFSDIAG */
-
-#	define NFSTRACE(cnst, fptr)
-#	define NFSTRACE4(cnst, fptr, a2, a3, a4)
-
-#endif	/* NFSDIAG */
+__END_DECLS
 
 #endif	/* KERNEL */
 #endif /* __APPLE_API_PRIVATE */

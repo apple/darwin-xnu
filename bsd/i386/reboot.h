@@ -29,8 +29,7 @@
  
 #include <sys/appleapiopts.h>
 
-#ifdef	KERNEL_PRIVATE
-#ifdef __APPLE_API_PRIVATE
+#ifdef	BSD_KERNEL_PRIVATE
 
 /*
  *	Use most significant 16 bits to avoid collisions with
@@ -46,7 +45,6 @@
 #define RB_BOOTDOS	0x00800000	/* reboot into DOS */
 #define RB_PRETTY	0x01000000	/* shutdown with pretty graphics */
 
-#endif /* __APPLE_API_PRIVATE */
-#endif	/* KERNEL_PRIVATE */
+#endif	/* BSD_KERNEL_PRIVATE */
 
 #endif	/* _BSD_I386_REBOOT_H_ */

@@ -29,19 +29,16 @@
 #define super IOService
 OSDefineMetaClassAndStructors(AppleIntelClock, IOService);
 
-extern "C" {
-extern void	hardclock(void);
-};
-
 bool
 AppleIntelClock::start(IOService *provider)
 {
 	if (!super::start(provider))
 		return false;
 
-	provider->registerInterrupt(kIRQ_Clock, 0, (IOInterruptAction) hardclock);
-	provider->enableInterrupt(kIRQ_Clock);
-
+	/*
+	 * The clock is already provided by the kernel, so all we need 
+	 * here is publish its availability for any IOKit client to use.
+	 */
 	publishResource("IORTC", this);
 	return true;
 }

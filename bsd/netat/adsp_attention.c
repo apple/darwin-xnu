@@ -70,9 +70,7 @@
  *	errAttention		attention message too long
  *	errAborted		request aborted by Remove or Close call
  */
-int adspAttention(sp, pb)	/* (DSPPBPtr pb) */
-    register struct adspcmd *pb;
-    register CCBPtr sp;
+int adspAttention(register struct adspcmd *pb, register CCBPtr sp)
 {
     int	s;
     register gbuf_t *mp, *nmp;

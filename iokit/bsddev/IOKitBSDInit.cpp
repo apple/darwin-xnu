@@ -26,8 +26,6 @@
 #include <IOKit/IOKitKeys.h>
 #include <IOKit/IOPlatformExpert.h>
 
-#include <sys/disklabel.h>
-
 extern "C" {
 
 #include <pexpert/pexpert.h>
@@ -74,6 +72,12 @@ OSDictionary * IOBSDNameMatching( const char * name )
 
     return( 0 );
 }
+
+OSDictionary * IOUUIDMatching( void )
+{
+    return IOService::resourceMatching( "boot-uuid-media" );
+}
+
 
 OSDictionary * IOCDMatching( void )
 {
@@ -255,7 +259,6 @@ OSDictionary * IODiskMatching( const char * path, char * buf, int maxLen )
     long         partition = -1;
     long		 lun = -1;
     char         c;
-    const char * partitionSep = NULL;
 
     // scan the tail of the path for "@unit:partition"
     do {
@@ -269,24 +272,12 @@ OSDictionary * IODiskMatching( const char * path, char * buf, int maxLen )
             if( *(--look) == c) {
                 if( c == ':') {
                     partition = strtol( look + 1, 0, 0 );
-                    partitionSep = look;
                     c = '@';
                 } else if( c == '@') {
-                    int diff = -1;
-                    
-                    unit = strtol( look + 1, 0, 16 );
-                    
-                    diff = (int)partitionSep - (int)look;
-                    if ( diff > 0 ) {
-                    	
-                    	for ( ; diff > 0; diff-- )
-                    	{
-                    		if( look[diff] == ',' )
-                    		{
-                    		   lun = strtol ( &look[diff + 1], 0, 16 );
-                    		   break;
-                    		}
-                    	}
+                    unit = strtol( look + 1, &comp, 16 );
+
+                    if( *comp == ',') {
+                        lun = strtol( comp + 1, 0, 16 );
                     }
                     
                     c = '/';
@@ -343,11 +334,53 @@ OSDictionary * IODiskMatching( const char * path, char * buf, int maxLen )
 
 OSDictionary * IOOFPathMatching( const char * path, char * buf, int maxLen )
 {
+    OSDictionary *	matching;
+    OSString *		str;
+    char *		comp;
+    int			len;
+
     /* need to look up path, get device type,
         call matching help based on device type */
 
-    return( IODiskMatching( path, buf, maxLen ));
+    matching = IODiskMatching( path, buf, maxLen );
+    if( matching)
+	return( matching );
 
+    do {
+
+	len = strlen( kIODeviceTreePlane ":" );
+	maxLen -= len;
+	if( maxLen < 0)
+	    continue;
+
+	strcpy( buf, kIODeviceTreePlane ":" );
+	comp = buf + len;
+
+	len = strlen( path );
+	maxLen -= len;
+	if( maxLen < 0)
+	    continue;
+        strncpy( comp, path, len );
+        comp[ len ] = 0;
+
+	matching = OSDictionary::withCapacity( 1 );
+	if( !matching)
+	    continue;
+
+	str = OSString::withCString( buf );
+	if( !str)
+	    continue;
+        matching->setObject( kIOPathMatchKey, str );
+	str->release();
+
+	return( matching );
+
+    } while( false );
+
+    if( matching)
+        matching->release();
+
+    return( 0 );
 }
 
 IOService * IOFindMatchingChild( IOService * service )
@@ -403,6 +436,7 @@ kern_return_t IOFindBSDRoot( char * rootName,
     UInt32		flags = 0;
     int			minor, major;
     bool		findHFSChild = false;
+    char *              mediaProperty = 0;
     char *		rdBootVar;
     enum {		kMaxPathBuf = 512, kMaxBootVar = 128 };
     char *		str;
@@ -410,10 +444,11 @@ kern_return_t IOFindBSDRoot( char * rootName,
     int			len;
     bool		forceNet = false;
     bool		debugInfoPrintedOnce = false;
+    const char * 	uuidStr = NULL;
 
     static int		mountAttempts = 0;
 				
-	int xchar, dchar;
+    int xchar, dchar;
                                     
 
     if( mountAttempts++)
@@ -429,19 +464,39 @@ kern_return_t IOFindBSDRoot( char * rootName,
 	rdBootVar[0] = 0;
 
     do {
-        if( (regEntry = IORegistryEntry::fromPath( "/chosen", gIODTPlane ))) {
-			data = (OSData *) regEntry->getProperty( "rootpath" );
-			regEntry->release();
-			if( data) continue;
+	if( (regEntry = IORegistryEntry::fromPath( "/chosen", gIODTPlane ))) {
+	    data = (OSData *) regEntry->getProperty( "boot-uuid" );
+	    if( data) {
+		uuidStr = (const char*)data->getBytesNoCopy();
+		OSString *uuidString = OSString::withCString( uuidStr );
+
+		// match the boot-args boot-uuid processing below
+		if( uuidString) {
+		    IOLog("rooting via boot-uuid from /chosen: %s\n", uuidStr);
+		    IOService::publishResource( "boot-uuid", uuidString );
+		    uuidString->release();
+		    matching = IOUUIDMatching();
+		    mediaProperty = "boot-uuid-media";
+		    regEntry->release();
+		    continue;
+		} else {
+		    uuidStr = NULL;
 		}
+	    }
+
+	    // else try for an OF Path
+	    data = (OSData *) regEntry->getProperty( "rootpath" );
+	    regEntry->release();
+	    if( data) continue;
+	}
         if( (regEntry = IORegistryEntry::fromPath( "/options", gIODTPlane ))) {
-			data = (OSData *) regEntry->getProperty( "boot-file" );
-			regEntry->release();
-			if( data) continue;
-		}
+	    data = (OSData *) regEntry->getProperty( "boot-file" );
+	    regEntry->release();
+	    if( data) continue;
+	}
     } while( false );
 
-    if( data)
+    if( data && !uuidStr)
         look = (const char *) data->getBytesNoCopy();
 
     if( rdBootVar[0] == '*') {
@@ -527,6 +582,26 @@ kern_return_t IOFindBSDRoot( char * rootName,
 	} else if ( strncmp( look, "cdrom", strlen( "cdrom" )) == 0 ) {
             matching = IOCDMatching();
             findHFSChild = true;
+        } else if ( strncmp( look, "uuid", strlen( "uuid" )) == 0 ) {
+            char *uuid;
+            OSString *uuidString;
+
+            uuid = (char *)IOMalloc( kMaxBootVar );
+                  
+            if ( uuid ) {
+                if (!PE_parse_boot_arg( "boot-uuid", uuid )) {
+                    panic( "rd=uuid but no boot-uuid=<value> specified" ); 
+                } 
+                uuidString = OSString::withCString( uuid );
+                if ( uuidString ) {
+                    IOService::publishResource( "boot-uuid", uuidString );
+                    uuidString->release();
+                    IOLog( "\nWaiting for boot volume with UUID %s\n", uuid );
+                    matching = IOUUIDMatching();
+                    mediaProperty = "boot-uuid-media";
+                }
+                IOFree( uuid, kMaxBootVar );
+            }
 	} else {
 	    matching = IOBSDNameMatching( look );
 	}
@@ -593,6 +668,8 @@ kern_return_t IOFindBSDRoot( char * rootName,
         // look for a subservice with an Apple_HFS child
         IOService * subservice = IOFindMatchingChild( service );
         if ( subservice ) service = subservice;
+    } else if ( service && mediaProperty ) {
+        service = service->getProperty(mediaProperty);
     }
 
     major = 0;

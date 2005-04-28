@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -25,6 +25,7 @@
 
 #include <sys/ioctl.h>
 #include <sys/types.h>
+#include <sys/cdefs.h>
 
 /*
  * Definitions
@@ -54,6 +55,10 @@
  * DKIOCGETMAXSEGMENTBYTECOUNTWRITE get maximum segment byte count for writes
  */
 
+#if __DARWIN_ALIGN_POWER
+#pragma options align=power
+#endif
+
 typedef struct
 {
     char path[128];
@@ -67,6 +72,7 @@ typedef struct
     u_int8_t               reserved0096[4];        /* reserved, clear to zero */
 } dk_format_capacity_t;
 
+/* LP64todo: not 64-bit clean */
 typedef struct
 {
     dk_format_capacity_t * capacities;
@@ -74,6 +80,10 @@ typedef struct
 
     u_int8_t               reserved0064[8];        /* reserved, clear to zero */
 } dk_format_capacities_t;
+
+#if __DARWIN_ALIGN_POWER
+#pragma options align=reset
+#endif
 
 #define DKIOCEJECT                       _IO('d', 21)
 #define DKIOCSYNCHRONIZECACHE            _IO('d', 22)
@@ -98,10 +108,11 @@ typedef struct
 #define DKIOCGETMAXSEGMENTBYTECOUNTWRITE _IOR('d', 69, u_int64_t)
 
 #ifdef KERNEL
-#define DKIOCGETISVIRTUAL                _IOR('d', 72, u_int32_t)
 #define DKIOCGETBLOCKCOUNT32             _IOR('d', 25, u_int32_t)
 #define DKIOCSETBLOCKSIZE                _IOW('d', 24, u_int32_t)
 #define DKIOCGETBSDUNIT                  _IOR('d', 27, u_int32_t)
+#define DKIOCISVIRTUAL                   _IOR('d', 72, u_int32_t)
+#define DKIOCGETBASE                     _IOR('d', 73, u_int64_t)
 #endif /* KERNEL */
 
 #endif	/* _SYS_DISK_H_ */

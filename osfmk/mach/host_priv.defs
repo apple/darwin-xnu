@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -122,7 +122,7 @@ routine	vm_wire(
 		task		: vm_map_t;
 		address		: vm_address_t;
 		size		: vm_size_t;
-		access		: vm_prot_t);
+		desired_access	: vm_prot_t);
 
 /*
  *	Specify that the target thread must always be able
@@ -162,8 +162,8 @@ routine	vm_allocate_cpm(
  *	Get list of processors on this host.
  */
 routine host_processors(
-		host_priv	: host_priv_t;
-	out	processor_list	: processor_array_t);
+		host_priv		: host_priv_t;
+	out	out_processor_list	: processor_array_t);
 
 
 /*
@@ -273,12 +273,18 @@ routine host_load_symbol_table(
 		symtab		: pointer_t);
 
 /*
- *	Make the target task swappable or unswappable.
+ *	Specify that the range of the virtual address space
+ *	of the target task must not cause page faults for
+ *	the indicated accesses.
+ *
+ *	[ To unwire the pages, specify VM_PROT_NONE. ]
  */
-routine task_swappable(
+routine	mach_vm_wire(
 		host_priv	: host_priv_t;
-		target_task	: task_t;
-		make_swappable	: boolean_t);
+		task		: vm_map_t;
+		address		: mach_vm_address_t;
+		size		: mach_vm_size_t;
+		desired_access	: vm_prot_t);
 
 /*
  * JMM - Keep all processor_set related items at the end for easy

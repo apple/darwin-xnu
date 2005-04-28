@@ -82,8 +82,6 @@
 
 typedef mach_port_t notify_port_t;
 
-#include <sys/appleapiopts.h>
-#ifdef __APPLE_API_OBSOLETE
 /*
  * Hard-coded message structures for receiving Mach port notification
  * messages.  However, they are not actual large enough to receive 
@@ -124,7 +122,5 @@ typedef struct {
     mach_port_name_t not_port;/* MACH_MSG_TYPE_PORT_NAME */
     mach_msg_format_0_trailer_t trailer;
 } mach_dead_name_notification_t;
-
-#endif  /* __APPLE_API_OBSOLETE */
 
 #endif	/* _MACH_NOTIFY_H_ */

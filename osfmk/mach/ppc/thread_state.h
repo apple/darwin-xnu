@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -22,13 +22,14 @@
 /*
  * @OSF_COPYRIGHT@
  */
+
 #ifndef _MACH_PPC_THREAD_STATE_H_
 #define _MACH_PPC_THREAD_STATE_H_
 
 /* Size of maximum exported thread state in words */
 #define PPC_THREAD_STATE_MAX	(144)    /* Size of biggest state possible */
 
-#if defined (__ppc__)
+#if defined (__ppc__) || defined (__ppc64__)
 #define THREAD_STATE_MAX	PPC_THREAD_STATE_MAX
 #endif
 

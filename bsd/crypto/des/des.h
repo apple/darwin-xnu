@@ -81,35 +81,34 @@ typedef struct des_ks_struct
 
 extern int des_check_key;	/* defaults to false */
 
-char *des_options __P((void));
-void des_ecb_encrypt __P((des_cblock *, des_cblock *,
-	des_key_schedule, int));
+char *des_options(void);
+void des_ecb_encrypt(des_cblock *, des_cblock *, des_key_schedule, int);
 
-void des_encrypt1 __P((DES_LONG *, des_key_schedule, int));
-void des_encrypt2 __P((DES_LONG *, des_key_schedule, int));
-void des_encrypt3 __P((DES_LONG *, des_key_schedule, des_key_schedule,
-		      des_key_schedule));
-void des_decrypt3 __P((DES_LONG *, des_key_schedule, des_key_schedule,
-		      des_key_schedule));
+void des_encrypt1(DES_LONG *, des_key_schedule, int);
+void des_encrypt2(DES_LONG *, des_key_schedule, int);
+void des_encrypt3(DES_LONG *, des_key_schedule, des_key_schedule,
+		      des_key_schedule);
+void des_decrypt3(DES_LONG *, des_key_schedule, des_key_schedule,
+		      des_key_schedule);
 
-void des_ecb3_encrypt __P((des_cblock *, des_cblock *, des_key_schedule, 
-			  des_key_schedule, des_key_schedule, int));
+void des_ecb3_encrypt(des_cblock *, des_cblock *, des_key_schedule, 
+			  des_key_schedule, des_key_schedule, int);
 
-void des_ncbc_encrypt __P((const unsigned char *, unsigned char *, long,
-			  des_key_schedule, des_cblock *, int));
+void des_ncbc_encrypt(const unsigned char *, unsigned char *, long,
+			  des_key_schedule, des_cblock *, int);
 
 void des_ede3_cbc_encrypt(const unsigned char *, unsigned char *, long,
 			  des_key_schedule, des_key_schedule, 
 			  des_key_schedule, des_cblock *, int);
 
-void des_set_odd_parity __P((des_cblock *));
-void des_fixup_key_parity __P((des_cblock *)); 
-int des_is_weak_key __P((des_cblock *));
-int des_set_key __P((des_cblock *, des_key_schedule));
-int des_key_sched __P((des_cblock *, des_key_schedule));
-int des_set_key_checked __P((des_cblock *, des_key_schedule));
-void des_set_key_unchecked __P((des_cblock *, des_key_schedule));
-int des_check_key_parity __P((des_cblock *));
+void des_set_odd_parity(des_cblock *);
+void des_fixup_key_parity(des_cblock *); 
+int des_is_weak_key(des_cblock *);
+int des_set_key(des_cblock *, des_key_schedule);
+int des_key_sched(des_cblock *, des_key_schedule);
+int des_set_key_checked(des_cblock *, des_key_schedule);
+void des_set_key_unchecked(des_cblock *, des_key_schedule);
+int des_check_key_parity(des_cblock *);
 
 #ifdef  __cplusplus
 }

@@ -75,6 +75,7 @@
  */
 
 #include <sys/lock.h>
+#include <sys/kauth.h>
 #include <isofs/cd9660/iso.h>
 
 #ifndef doff_t
@@ -121,7 +122,7 @@ struct iso_node {
 	doff_t	i_diroff;	/* offset in dir, where we found last entry */
 	doff_t	i_offset;	/* offset of free space in directory */
 	ino_t	i_ino;		/* inode number of found directory */
-	struct   lock__bsd__ i_lock;    /* Inode lock. */
+        daddr_t	i_lastr;	/* last read (read ahead) */
 	long iso_extent;	/* extent of file */
 	long i_size;
 	long iso_start;		/* actual start of data of file (may be different */
@@ -147,54 +148,65 @@ struct iso_node {
 
 /* These flags are kept in i_flag. */
 #define	ISO_ASSOCIATED	0x0001		/* node is an associated file. */
+#define ISO_INALLOC	0x0002
+#define ISO_INWALLOC	0x0004
+
 
 /* <ufs/inode.h> defines VTOI and ITOV macros */
 #undef VTOI
 #undef ITOV
 
-#define VTOI(vp) ((struct iso_node *)(vp)->v_data)
+#define VTOI(vp) ((struct iso_node *)(vnode_fsnode(vp)))
 #define ITOV(ip) ((ip)->i_vnode)
+
+/* similar in <hfs/hfs_mount.h> as default UID and GID */
+#define ISO_UNKNOWNUID 	((uid_t)99)
+#define ISO_UNKNOWNGID	((gid_t)99)
+
+int cd9660_access_internal(vnode_t, mode_t, kauth_cred_t);
 
 /*
  * Prototypes for ISOFS vnode operations
  */
-int cd9660_lookup __P((struct vop_lookup_args *));
-int cd9660_open __P((struct vop_open_args *));
-int cd9660_close __P((struct vop_close_args *));
-int cd9660_access __P((struct vop_access_args *));
-int cd9660_getattr __P((struct vop_getattr_args *));
-int cd9660_read __P((struct vop_read_args *));
-int cd9660_xa_read __P((struct vop_read_args *));
-int cd9660_ioctl __P((struct vop_ioctl_args *));
-int cd9660_select __P((struct vop_select_args *));
-int cd9660_mmap __P((struct vop_mmap_args *));
-int cd9660_seek __P((struct vop_seek_args *));
-int cd9660_readdir __P((struct vop_readdir_args *));
-int cd9660_readlink __P((struct vop_readlink_args *));
-int cd9660_inactive __P((struct vop_inactive_args *));
-int cd9660_reclaim __P((struct vop_reclaim_args *));
-int cd9660_bmap __P((struct vop_bmap_args *));
-int cd9660_lock __P((struct vop_lock_args *));
-int cd9660_unlock __P((struct vop_unlock_args *));
-int cd9660_strategy __P((struct vop_strategy_args *));
-int cd9660_print __P((struct vop_print_args *));
-int cd9660_islocked __P((struct vop_islocked_args *));
-int cd9660_pathconf __P((struct vop_pathconf_args *));
-int cd9660_blkatoff __P((struct vop_blkatoff_args *));
+int cd9660_lookup (struct vnop_lookup_args *);
+int cd9660_open (struct vnop_open_args *);
+int cd9660_close (struct vnop_close_args *);
+int cd9660_access (struct vnop_access_args *);
+int cd9660_getattr (struct vnop_getattr_args *);
+int cd9660_read (struct vnop_read_args *);
+int cd9660_xa_read (struct vnop_read_args *);
+int cd9660_ioctl (struct vnop_ioctl_args *);
+int cd9660_select (struct vnop_select_args *);
+int cd9660_mmap (struct vnop_mmap_args *);
+int cd9660_readdir (struct vnop_readdir_args *);
+int cd9660_readlink (struct vnop_readlink_args *);
+int cd9660_inactive (struct vnop_inactive_args *);
+int cd9660_reclaim (struct vnop_reclaim_args *);
+int cd9660_strategy (struct vnop_strategy_args *);
+int cd9660_pathconf (struct vnop_pathconf_args *);
+int cd9660_enotsupp(void);
+int cd9660_pagein(struct vnop_pagein_args *ap);
+int cd9660_remove(struct vnop_remove_args *ap);
+int cd9660_rmdir(struct vnop_rmdir_args *ap);
+int cd9660_getattrlist(struct vnop_getattrlist_args *ap);
 
-void cd9660_defattr __P((struct iso_directory_record *,
-			struct iso_node *, struct buf *));
-void cd9660_deftstamp __P((struct iso_directory_record *,
-			struct iso_node *, struct buf *));
-struct vnode *cd9660_ihashget __P((dev_t, ino_t, struct proc *));
-void cd9660_ihashins __P((struct iso_node *));
-void cd9660_ihashrem __P((struct iso_node *));
-int cd9660_tstamp_conv7 __P((u_char *, struct timespec *));
-int cd9660_tstamp_conv17 __P((u_char *, struct timespec *));
-ino_t isodirino __P((struct iso_directory_record *, struct iso_mnt *));
+__private_extern__ void cd9660_xa_init(struct iso_node *ip,
+				       struct iso_directory_record *isodir);
+__private_extern__ int cd9660_blkatoff (vnode_t, off_t, char **, buf_t *);
+
+void cd9660_defattr (struct iso_directory_record *,
+			struct iso_node *, struct buf *);
+void cd9660_deftstamp (struct iso_directory_record *,
+			struct iso_node *, struct buf *);
+struct vnode *cd9660_ihashget (dev_t, ino_t, struct proc *);
+void cd9660_ihashins (struct iso_node *);
+void cd9660_ihashrem (struct iso_node *);
+int cd9660_tstamp_conv7 (u_char *, struct timespec *);
+int cd9660_tstamp_conv17 (u_char *, struct timespec *);
+ino_t isodirino (struct iso_directory_record *, struct iso_mnt *);
 #ifdef	ISODEVMAP
-struct iso_dnode *iso_dmap __P((dev_t, ino_t, int));
-void iso_dunmap __P((dev_t));
+struct iso_dnode *iso_dmap (dev_t, ino_t, int);
+void iso_dunmap (dev_t);
 #endif
 
 #endif /* __APPLE_API_PRIVATE */

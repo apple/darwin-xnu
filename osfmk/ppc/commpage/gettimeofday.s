@@ -38,8 +38,6 @@
 
         .text
         .align	2
-        .globl	EXT(gettimeofday_32)
-        .globl	EXT(gettimeofday_64)
 
 
 // *********************************
@@ -67,7 +65,7 @@
 //
 //		r3 = ptr to user's timeval structure (should not be null)
 
-gettimeofday_32:								// int gettimeofday_32(timeval *tp);
+gettimeofday_32:								// int gettimeofday(timeval *tp);
 0:
         lwz		r5,_COMM_PAGE_TIMEBASE+0(0)		// r5,r6 = TBR at timestamp
         lwz		r6,_COMM_PAGE_TIMEBASE+4(0)
@@ -143,14 +141,17 @@ gettimeofday_32:								// int gettimeofday_32(timeval *tp);
         li		r3,1				// return bad status so our caller will make syscall
         blr
         
-        COMMPAGE_DESCRIPTOR(gettimeofday_32,_COMM_PAGE_GETTIMEOFDAY,0,k64Bit,kCommPageSYNC)
+	COMMPAGE_DESCRIPTOR(gettimeofday_32,_COMM_PAGE_GETTIMEOFDAY,0,k64Bit,kCommPageSYNC+kCommPage32)
         
         
-// *********************************
-// * G E T T I M E O F D A Y _ 6 4 *
-// *********************************
+// ***************************************
+// * G E T T I M E O F D A Y _ G 5 _ 3 2 *
+// ***************************************
+//
+// This routine is called in 32-bit mode on 64-bit processors.  A timeval is a struct of
+// a long seconds and int useconds, so it's size depends on mode.
 
-gettimeofday_64:							// int gettimeofday_64(timeval *tp);
+gettimeofday_g5_32:							// int gettimeofday(timeval *tp);
 0:
         ld		r6,_COMM_PAGE_TIMEBASE(0)	// r6 = TBR at timestamp
         ld		r8,_COMM_PAGE_TIMESTAMP(0)	// r8 = timestamp (seconds,useconds)
@@ -204,6 +205,70 @@ gettimeofday_64:							// int gettimeofday_64(timeval *tp);
         li		r3,1				// return bad status so our caller will make syscall
         blr
 
-        COMMPAGE_DESCRIPTOR(gettimeofday_64,_COMM_PAGE_GETTIMEOFDAY,k64Bit,0,kCommPageSYNC)
+	COMMPAGE_DESCRIPTOR(gettimeofday_g5_32,_COMM_PAGE_GETTIMEOFDAY,k64Bit,0,kCommPageSYNC+kCommPage32)
+        
+        
+// ***************************************
+// * G E T T I M E O F D A Y _ G 5 _ 6 4 *
+// ***************************************
+//
+// This routine is called in 64-bit mode on 64-bit processors.  A timeval is a struct of
+// a long seconds and int useconds, so it's size depends on mode.
+
+gettimeofday_g5_64:							// int gettimeofday(timeval *tp);
+0:
+        ld		r6,_COMM_PAGE_TIMEBASE(0)	// r6 = TBR at timestamp
+        ld		r8,_COMM_PAGE_TIMESTAMP(0)	// r8 = timestamp (seconds,useconds)
+        lfd		f1,_COMM_PAGE_SEC_PER_TICK(0)
+        mftb	r10							// r10 = get current timebase
+        lwsync								// create a barrier if MP (patched to NOP if UP)
+        ld		r11,_COMM_PAGE_TIMEBASE(0)	// then get data a 2nd time
+        ld		r12,_COMM_PAGE_TIMESTAMP(0)
+        cmpdi	cr1,r6,0			// is the timestamp disabled?
+        cmpld	cr6,r6,r11			// did we read a consistent set?
+        cmpld	cr7,r8,r12
+        beq--	cr1,3f				// exit if timestamp disabled
+        crand	cr6_eq,cr7_eq,cr6_eq
+        sub		r11,r10,r6			// compute elapsed ticks from timestamp
+        bne--	cr6,0b				// loop until we have a consistent set of data
+                
+        srdi.	r0,r11,35			// has it been more than 2**35 ticks since last timestamp?
+        std		r11,rzTicks(r1)		// put ticks in redzone where we can "lfd" it
+        bne--	3f					// timestamp too old, so reprime
+
+        lfd		f3,rzTicks(r1)		// get elapsed ticks since timestamp (fixed pt)
+        fcfid	f4,f3				// float the tick count
+        fmul	f5,f4,f1			// f5 <- elapsed seconds since timestamp
+        lfd		f3,_COMM_PAGE_10_TO_6(0)	// get 10**6
+        fctidz	f6,f5				// convert integer seconds to fixed pt
+        stfd	f6,rzSeconds(r1)	// save fixed pt integer seconds in red zone
+        fcfid	f6,f6				// float the integer seconds
+        fsub	f6,f5,f6			// f6 <- fractional part of elapsed seconds
+        fmul	f6,f6,f3			// f6 <- fractional elapsed useconds
+        fctidz	f6,f6				// convert useconds to fixed pt integer
+        stfd	f6,rzUSeconds(r1)	// store useconds into red zone
+        
+        lis		r12,hi16(USEC_PER_SEC)	// r12 <- 10**6
+        srdi	r7,r8,32			// extract seconds from doubleword timestamp
+        lwz		r5,rzSeconds+4(r1)	// r5 <- seconds since timestamp
+        ori		r12,r12,lo16(USEC_PER_SEC)
+        lwz		r6,rzUSeconds+4(r1)	// r6 <- useconds since timestamp
+        add		r7,r7,r5			// add elapsed seconds to timestamp seconds
+        add		r8,r8,r6			// ditto useconds
+        
+        cmplw	r8,r12				// r8 >= USEC_PER_SEC ?
+        blt		2f					// no
+        addi	r7,r7,1				// add 1 to secs
+        sub		r8,r8,r12			// subtract USEC_PER_SEC from usecs
+2:
+        std		r7,0(r3)			// store secs//usecs into user's timeval
+        stw		r8,8(r3)
+        li		r3,0				// return success
+        blr
+3:									// too long since last timestamp or this code is disabled
+        li		r3,1				// return bad status so our caller will make syscall
+        blr
+
+	COMMPAGE_DESCRIPTOR(gettimeofday_g5_64,_COMM_PAGE_GETTIMEOFDAY,k64Bit,0,kCommPageSYNC+kCommPage64)
 
         

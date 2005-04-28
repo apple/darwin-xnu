@@ -22,33 +22,6 @@
 /*
  * @OSF_COPYRIGHT@
  */
-/*
- * HISTORY
- * 
- * Revision 1.1.1.1  1998/09/22 21:05:31  wsanchez
- * Import of Mac OS X kernel (~semeria)
- *
- * Revision 1.1.1.1  1998/03/07 02:26:02  wsanchez
- * Import of OSF Mach kernel (~mburg)
- *
- * Revision 1.1.8.1  1996/12/09  16:55:41  stephen
- * 	nmklinux_1.0b3_shared into pmk1.1
- * 	[1996/12/09  11:10:10  stephen]
- *
- * Revision 1.1.6.1  1996/04/11  09:10:43  emcmanus
- * 	Copied from mainline.ppc.
- * 	[1996/04/10  17:09:22  emcmanus]
- * 
- * Revision 1.1.4.1  1995/11/23  17:39:22  stephen
- * 	first powerpc checkin to mainline.ppc
- * 	[1995/11/23  16:53:16  stephen]
- * 
- * Revision 1.1.2.1  1995/08/25  06:35:32  stephen
- * 	Initial checkin of files for PowerPC port
- * 	[1995/08/23  15:13:31  stephen]
- * 
- * $EndLog$
- */
 
 #include <mach/ndr.h>
 

@@ -34,15 +34,17 @@
 .\"
 .\" $FreeBSD: src/share/man/man9/fetch.9,v 1.6.2.4 2001/12/17 11:30:18 ru Exp $
 .\"
-.Dd January 7, 1996
+.Dd December 16, 2004
 .Dt FETCH 9
 .Os
 .Sh NAME
 .Nm fetch ,
 .Nm fubyte ,
-.Nm fusword ,
-.Nm fuswintr ,
-.Nm fuword
+.Nm fuibyte ,
+.Nm fuword ,
+.Nm fuiword ,
+.Nm fulong ,
+.Nm fuulong
 .Nd fetch data from user-space
 .Sh SYNOPSIS
 .In sys/types.h
@@ -50,13 +52,17 @@
 .In sys/systm.h
 .In sys/resourcevar.h
 .Ft int
-.Fn fubyte "const void *base"
+.Fn fubyte "const user_addr_t addr"
 .Ft int
-.Fn fusword "void *base"
+.Fn fuibyte "const user_addr_t addr"
 .Ft int
-.Fn fuswintr "void *base"
-.Ft long
-.Fn fuword "const void *base"
+.Fn fuword "user_addr_t addr"
+.Ft int
+.Fn fuiword "user_addr_t addr"
+.Ft int64_t
+.Fn fulong "user_addr_t addr"
+.Ft uint64_t
+.Fn fuulong "user_addr_t addr"
 .Sh DESCRIPTION
 The
 .Nm
@@ -65,20 +71,27 @@ functions are designed to copy small amounts of data from user-space.
 The
 .Nm
 routines provide the following functionality:
-.Bl -tag -width "fuswintr()"
+.Bl -tag -width "fuiword()"
 .It Fn fubyte
 Fetches a byte of data from the user-space address
-.Pa base .
-.It Fn fusword
-Fetches a short word of data from the user-space address
-.Pa base .
-.It Fn fuswintr
-Fetches a short word of data from the user-space address
-.Pa base .
+.Pa addr .
+.It Fn fuibyte
+Fetches a byte of data from the user-space address
+.Pa addr .
 This function is safe to call during an interrupt context.
 .It Fn fuword
 Fetches a word of data from the user-space address
-.Pa base .
+.Pa addr .
+.It Fn fuiword
+Fetches a word of data from the user-space address
+.Pa addr .
+This function is safe to call during an interrupt context.
+.It Fn fulong
+Fetches a long word of data from the user-space address
+.Pa addr .
+.It Fn fuulong
+Fetches a unsigned long word of data from the user-space address
+.Pa addr .
 .El
 .Sh RETURN VALUES
 The

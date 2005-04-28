@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -59,6 +59,7 @@
 #define	_SYS_MTIO_H_
 
 #include <sys/appleapiopts.h>
+#include <sys/cdefs.h>
 
 #ifdef	__APPLE_API_OBSOLETE
 
@@ -67,6 +68,7 @@
  */
 
 /* structure for MTIOCTOP - mag tape op command */
+/* LP64todo - not 64-bit safe */
 struct mtop {
 	short	mt_op;		/* operations defined below */
 	daddr_t	mt_count;	/* how many of them */
@@ -91,7 +93,7 @@ struct mtop {
 #define MTSETDNSTY	15	/* set density code for current mode */
 
 /* structure for MTIOCGET - mag tape get status command */
-
+/* LP64todo - not 64-bit safe */
 struct mtget {
 	short	mt_type;	/* type of magtape device */
 /* the following two registers are grossly device dependent */

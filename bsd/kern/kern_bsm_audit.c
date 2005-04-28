@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -19,9 +19,8 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
-
 #include <sys/types.h>
-#include <sys/vnode.h>
+#include <sys/vnode_internal.h>
 #include <sys/ipc.h>
 #include <sys/sem.h>
 #include <sys/socketvar.h>
@@ -30,6 +29,7 @@
 #include <sys/fcntl.h>
 #include <sys/user.h>
 
+#include <sys/ipc.h>
 #include <bsm/audit.h>
 #include <bsm/audit_record.h>
 #include <bsm/audit_kernel.h>
@@ -41,6 +41,7 @@
 #include <netinet/ip.h>
 
 #include <kern/lock.h>
+#include <kern/kalloc.h>
 
 /* The number of BSM records allocated. */
 static int bsm_rec_count = 0; 
@@ -58,6 +59,8 @@ LIST_HEAD(, au_record) bsm_free_q;
  */
 static mutex_t	*bsm_audit_mutex;
 
+static void audit_sys_auditon(struct audit_record *ar, struct au_record *rec);
+
 /*
  * Initialize the BSM auditing subsystem.
  */
@@ -66,7 +69,7 @@ kau_init(void)
 {
 	printf("BSM auditing present\n");
 	LIST_INIT(&bsm_free_q);
-	bsm_audit_mutex = mutex_alloc(ETAP_NO_TRACE);
+	bsm_audit_mutex = mutex_alloc(0);
 	au_evclassmap_init();
 }
 
@@ -111,7 +114,7 @@ kau_open(void)
 		}
 		rec->data = (u_char *)kalloc(MAX_AUDIT_RECORD_SIZE * sizeof(u_char));
 		if((rec->data) == NULL) {
-			kfree((vm_offset_t)rec, (vm_size_t)sizeof(*rec));
+			kfree(rec, sizeof(*rec));
 			return NULL;
 		}
 		mutex_lock(bsm_audit_mutex);
@@ -153,7 +156,8 @@ int kau_write(struct au_record *rec, struct au_token *tok)
  * Close out the audit record by adding the header token, identifying 
  * any missing tokens.  Write out the tokens to the record memory.
  */
-int kau_close(struct au_record *rec, struct timespec *ctime, short event)
+int
+kau_close(struct au_record *rec, struct timespec *ctime, short event)
 {
 	u_char *dptr;
 	size_t tot_rec_size;
@@ -183,6 +187,8 @@ int kau_close(struct au_record *rec, struct timespec *ctime, short event)
 			dptr += cur->len;
 		}
 	}
+
+	return(retval);
 }
 
 /*
@@ -196,7 +202,7 @@ void kau_free(struct au_record *rec)
 	/* Free the token list */
 	while ((tok = TAILQ_FIRST(&rec->token_q))) {
 		TAILQ_REMOVE(&rec->token_q, tok, tokens);
-		kfree((vm_offset_t)tok, sizeof(*tok) + tok->len);
+		kfree(tok, sizeof(*tok) + tok->len);
 	}	
 
 	rec->used = 0;
@@ -246,7 +252,7 @@ void kau_free(struct au_record *rec)
 			kau_write(rec, tok);			\
 		}						\
 	} while (0)
- 
+
 #define KPATH1_VNODE1_TOKENS	\
 	do { \
 		if (ar->ar_valid_arg & ARG_KPATH1) {  		\
@@ -307,13 +313,13 @@ void kau_free(struct au_record *rec)
  * auditon() system call.
  *
  */
-void
+static void
 audit_sys_auditon(struct audit_record *ar, struct au_record *rec)
 {
 	struct au_token *tok;
 
 	switch (ar->ar_arg_cmd) {
-        case A_SETPOLICY:
+	case A_SETPOLICY:
 		if (sizeof(ar->ar_arg_auditon.au_flags) > 4)
 			tok = au_to_arg64(1, "policy", 
 				ar->ar_arg_auditon.au_flags);
@@ -322,7 +328,7 @@ audit_sys_auditon(struct audit_record *ar, struct au_record *rec)
 				ar->ar_arg_auditon.au_flags);
 		kau_write(rec, tok);
 		break;
-        case A_SETKMASK:
+	case A_SETKMASK:
 		tok = au_to_arg32(2, "setkmask:as_success", 
 			ar->ar_arg_auditon.au_mask.am_success);
 		kau_write(rec, tok);
@@ -330,7 +336,7 @@ audit_sys_auditon(struct audit_record *ar, struct au_record *rec)
 			ar->ar_arg_auditon.au_mask.am_failure);
 		kau_write(rec, tok);
 		break;
-        case A_SETQCTRL:
+	case A_SETQCTRL:
 		tok = au_to_arg32(3, "setqctrl:aq_hiwater", 
 			ar->ar_arg_auditon.au_qctrl.aq_hiwater);
 		kau_write(rec, tok);
@@ -347,7 +353,7 @@ audit_sys_auditon(struct audit_record *ar, struct au_record *rec)
 			ar->ar_arg_auditon.au_qctrl.aq_minfree);
 		kau_write(rec, tok);
 		break;
-        case A_SETUMASK:
+	case A_SETUMASK:
 		tok = au_to_arg32(3, "setumask:as_success", 
 			ar->ar_arg_auditon.au_auinfo.ai_mask.am_success);
 		kau_write(rec, tok);
@@ -355,7 +361,7 @@ audit_sys_auditon(struct audit_record *ar, struct au_record *rec)
 			ar->ar_arg_auditon.au_auinfo.ai_mask.am_failure);
 		kau_write(rec, tok);
 		break;
-        case A_SETSMASK:
+	case A_SETSMASK:
 		tok = au_to_arg32(3, "setsmask:as_success", 
 			ar->ar_arg_auditon.au_auinfo.ai_mask.am_success);
 		kau_write(rec, tok);
@@ -363,7 +369,7 @@ audit_sys_auditon(struct audit_record *ar, struct au_record *rec)
 			ar->ar_arg_auditon.au_auinfo.ai_mask.am_failure);
 		kau_write(rec, tok);
 		break;
-        case A_SETCOND:
+	case A_SETCOND:
 		if (sizeof(ar->ar_arg_auditon.au_cond) > 4)
 			tok = au_to_arg64(3, "setcond", 
 				ar->ar_arg_auditon.au_cond);
@@ -372,7 +378,7 @@ audit_sys_auditon(struct audit_record *ar, struct au_record *rec)
 				ar->ar_arg_auditon.au_cond);
 		kau_write(rec, tok);
 		break;
-        case A_SETCLASS:
+	case A_SETCLASS:
 		tok = au_to_arg32(2, "setclass:ec_event",
 			ar->ar_arg_auditon.au_evclass.ec_number);
 		kau_write(rec, tok);
@@ -380,7 +386,7 @@ audit_sys_auditon(struct audit_record *ar, struct au_record *rec)
 			ar->ar_arg_auditon.au_evclass.ec_class);
 		kau_write(rec, tok);
 		break;
-        case A_SETPMASK:
+	case A_SETPMASK:
 		tok = au_to_arg32(2, "setpmask:as_success", 
 			ar->ar_arg_auditon.au_aupinfo.ap_mask.am_success);
 		kau_write(rec, tok);
@@ -388,7 +394,7 @@ audit_sys_auditon(struct audit_record *ar, struct au_record *rec)
 			ar->ar_arg_auditon.au_aupinfo.ap_mask.am_failure);
 		kau_write(rec, tok);
 		break;
-        case A_SETFSIZE:
+	case A_SETFSIZE:
 		tok = au_to_arg32(2, "setfsize:filesize", 
 			ar->ar_arg_auditon.au_fstat.af_filesz);
 		kau_write(rec, tok);
@@ -608,6 +614,7 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 		break;
 	
 	case AUE_CHOWN:
+	case AUE_LCHOWN:
 		tok = au_to_arg32(2, "new file uid", ar->ar_arg_uid);
 		kau_write(rec, tok);
 		tok = au_to_arg32(3, "new file gid", ar->ar_arg_gid);
@@ -729,7 +736,7 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 		kau_write(rec, tok);
 		UPATH1_KPATH1_VNODE1_TOKENS;
 		break;
-	
+
 	case AUE_MKDIR:
 		tok = au_to_arg32(2, "mode", ar->ar_arg_mode);
 		kau_write(rec, tok);
@@ -750,9 +757,9 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 	case AUE_MLOCK:
 	case AUE_MUNLOCK:
 	case AUE_MINHERIT:
-		tok = au_to_arg32(1, "addr", (u_int32_t)ar->ar_arg_addr);
+		tok = au_to_arg32(1, "addr", (u_int32_t)ar->ar_arg_addr); /* LP64todo */
 		kau_write(rec, tok);
-		tok = au_to_arg32(2, "len", ar->ar_arg_len);
+		tok = au_to_arg32(2, "len", ar->ar_arg_len); /* LP64todo */
 		kau_write(rec, tok);
 		if (ar->ar_event == AUE_MMAP)
 			FD_KPATH1_VNODE1_TOKENS;
@@ -829,7 +836,7 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 	case AUE_PTRACE:
 		tok = au_to_arg32(1, "request", ar->ar_arg_cmd);
 		kau_write(rec, tok);
-		tok = au_to_arg32(3, "addr", (u_int32_t)ar->ar_arg_addr);
+		tok = au_to_arg32(3, "addr", (u_int32_t)ar->ar_arg_addr); /* LP64todo */
 		kau_write(rec, tok);
 		tok = au_to_arg32(4, "data", ar->ar_arg_value);
 		kau_write(rec, tok);
@@ -886,7 +893,7 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 		if (ar->ar_valid_arg & ARG_GROUPSET) {
 			for(ctr = 0; ctr < ar->ar_arg_groups.gidset_size; ctr++)
 			{
-				tok = au_to_arg32(1, "setgroups", 							ar->ar_arg_groups.gidset[ctr]);
+				tok = au_to_arg32(1, "setgroups", ar->ar_arg_groups.gidset[ctr]);
 				kau_write(rec, tok);
 			}
 		}
@@ -1140,7 +1147,7 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
  *
  */
 int
-bsm_rec_verify(void *rec)
+bsm_rec_verify(void* rec)
 {
 	char c = *(char *)rec;
 	/* 

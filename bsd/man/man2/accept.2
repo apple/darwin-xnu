@@ -43,7 +43,7 @@
 .Fd #include <sys/types.h>
 .Fd #include <sys/socket.h>
 .Ft int
-.Fn accept "int s" "struct sockaddr *addr" "int *addrlen"
+.Fn accept "int s" "struct sockaddr *addr" "socklen_t *addrlen"
 .Sh DESCRIPTION
 The argument
 .Fa s

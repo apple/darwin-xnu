@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -65,21 +65,23 @@
  */
 
 #include <mach/port.h>
+#include <mach/message.h>
 #include <mach/vm_types.h>
 #include <mach/machine/vm_types.h>
 
-#include <sys/appleapiopts.h>
+#include <sys/cdefs.h>
 
 #define VM_64_BIT_DATA_OBJECTS
 
 typedef unsigned long long	memory_object_offset_t;
 typedef unsigned long long	memory_object_size_t;
 
-#ifdef __APPLE_API_EVOLVING
 /*
  * Temporary until real EMMI version gets re-implemented
  */
-#ifdef KERNEL_PRIVATE
+
+#ifdef	KERNEL_PRIVATE
+
 typedef struct 		memory_object {
 	int		*pager;
 } *memory_object_t;
@@ -88,12 +90,12 @@ typedef struct		memory_object_control {
 	struct vm_object *object;
 } *memory_object_control_t;
 
-#else /* !KERNEL_PRIVATE */
+#else	/* KERNEL_PRIVATE */
 
 typedef mach_port_t	memory_object_t;
 typedef mach_port_t	memory_object_control_t;
 
-#endif /* !KERNEL_PRIVATE */
+#endif	/* KERNEL_PRIVATE */
 
 typedef memory_object_t *memory_object_array_t;
 					/* A memory object ... */
@@ -171,6 +173,7 @@ typedef	int		memory_object_return_t;
 #define		MEMORY_OBJECT_DATA_PURGE	0x4
 #define		MEMORY_OBJECT_COPY_SYNC		0x8
 #define		MEMORY_OBJECT_DATA_SYNC		0x10
+#define         MEMORY_OBJECT_IO_SYNC           0x20
 
 /*
  *	Types for the memory object flavor interfaces
@@ -186,7 +189,8 @@ typedef int      memory_object_info_data_t[MEMORY_OBJECT_INFO_MAX];
 #define MEMORY_OBJECT_ATTRIBUTE_INFO	14
 #define MEMORY_OBJECT_BEHAVIOR_INFO 	15	
 
-#ifdef  __APPLE_API_UNSTABLE
+#ifdef	PRIVATE
+
 #define OLD_MEMORY_OBJECT_BEHAVIOR_INFO 	10	
 #define OLD_MEMORY_OBJECT_ATTRIBUTE_INFO	12
 
@@ -207,20 +211,39 @@ typedef struct old_memory_object_behave_info old_memory_object_behave_info_data_
 typedef struct old_memory_object_attr_info *old_memory_object_attr_info_t;
 typedef struct old_memory_object_attr_info old_memory_object_attr_info_data_t;
 
-#define OLD_MEMORY_OBJECT_BEHAVE_INFO_COUNT   	\
-                (sizeof(old_memory_object_behave_info_data_t)/sizeof(int))
-#define OLD_MEMORY_OBJECT_ATTR_INFO_COUNT		\
-		(sizeof(old_memory_object_attr_info_data_t)/sizeof(int))
-#endif  /* __APPLE_API_UNSTABLE */
+#define OLD_MEMORY_OBJECT_BEHAVE_INFO_COUNT   	((mach_msg_type_number_t) \
+                (sizeof(old_memory_object_behave_info_data_t)/sizeof(int)))
+#define OLD_MEMORY_OBJECT_ATTR_INFO_COUNT	((mach_msg_type_number_t) \
+		(sizeof(old_memory_object_attr_info_data_t)/sizeof(int)))
+
+#ifdef KERNEL
+
+__BEGIN_DECLS
+extern void memory_object_reference(memory_object_t object);
+extern void memory_object_deallocate(memory_object_t object);
+
+extern void memory_object_default_reference(memory_object_default_t);
+extern void memory_object_default_deallocate(memory_object_default_t);
+
+extern void memory_object_control_reference(memory_object_control_t control);
+extern void memory_object_control_deallocate(memory_object_control_t control);
+extern int  memory_object_control_uiomove(memory_object_control_t, memory_object_offset_t, void *, int, int, int);
+__END_DECLS
+
+#endif  /* KERNEL */
+
+#endif	/* PRIVATE */
+
+typedef natural_t memory_object_cluster_size_t;
 
 struct memory_object_perf_info {
-	vm_size_t			cluster_size;
+	memory_object_cluster_size_t	cluster_size;
 	boolean_t			may_cache;
 };
 
 struct memory_object_attr_info {
 	memory_object_copy_strategy_t	copy_strategy;
-	vm_offset_t			cluster_size;
+	memory_object_cluster_size_t	cluster_size;
 	boolean_t			may_cache_object;
 	boolean_t			temporary;
 };
@@ -243,12 +266,12 @@ typedef struct memory_object_perf_info	memory_object_perf_info_data_t;
 typedef struct memory_object_attr_info	*memory_object_attr_info_t;
 typedef struct memory_object_attr_info	memory_object_attr_info_data_t;
 
-#define MEMORY_OBJECT_BEHAVE_INFO_COUNT   	\
-                (sizeof(memory_object_behave_info_data_t)/sizeof(int))
-#define MEMORY_OBJECT_PERF_INFO_COUNT		\
-		(sizeof(memory_object_perf_info_data_t)/sizeof(int))
-#define MEMORY_OBJECT_ATTR_INFO_COUNT		\
-		(sizeof(memory_object_attr_info_data_t)/sizeof(int))
+#define MEMORY_OBJECT_BEHAVE_INFO_COUNT ((mach_msg_type_number_t)	\
+                (sizeof(memory_object_behave_info_data_t)/sizeof(int)))
+#define MEMORY_OBJECT_PERF_INFO_COUNT	((mach_msg_type_number_t)	\
+		(sizeof(memory_object_perf_info_data_t)/sizeof(int)))
+#define MEMORY_OBJECT_ATTR_INFO_COUNT	((mach_msg_type_number_t)	\
+		(sizeof(memory_object_attr_info_data_t)/sizeof(int)))
 
 #define invalid_memory_object_flavor(f)					\
 	(f != MEMORY_OBJECT_ATTRIBUTE_INFO && 				\
@@ -265,27 +288,6 @@ typedef struct memory_object_attr_info	memory_object_attr_info_data_t;
 #define MEMORY_OBJECT_RESPECT_CACHE	0x2
 #define MEMORY_OBJECT_RELEASE_NO_OP	0x4
 
-
-/*
- *  Universal Page List data structures
- */
-
-#define MAX_UPL_TRANSFER 256
-
-struct upl_page_info {
-	vm_offset_t	phys_addr;
-        unsigned int
-                        pageout:1,      /* page is to be removed on commit */
-                        absent:1,       /* No valid data in this page */
-                        dirty:1,        /* Page must be cleaned (O) */
-			precious:1,     /* must be cleaned, we have only copy */
-			device:1,	/* no page data, mapped dev memory */
-                        :0;		/* force to long boundary */
-};
-
-typedef struct upl_page_info	upl_page_info_t;
-typedef upl_page_info_t		*upl_page_info_array_t;
-typedef upl_page_info_array_t	upl_page_list_ptr_t;
 
 /* named entry processor mapping options */
 /* enumerated */
@@ -306,43 +308,149 @@ typedef upl_page_info_array_t	upl_page_list_ptr_t;
 /* leave room for vm_prot bits */
 #define MAP_MEM_ONLY		0x10000	/* change processor caching  */
 #define MAP_MEM_NAMED_CREATE	0x20000 /* create extant object      */
+#define MAP_MEM_PURGABLE	0x40000	/* create a purgable VM object */
+#define MAP_MEM_NAMED_REUSE	0x80000	/* reuse provided entry if identical */
+
+#ifdef KERNEL
+
+/*
+ *  Universal Page List data structures
+ *
+ *  A UPL describes a bounded set of physical pages
+ *  associated with some range of an object or map
+ *  and a snapshot of the attributes associated with
+ *  each of those pages.
+ */
+#ifdef PRIVATE
+#define MAX_UPL_TRANSFER 256
+
+struct upl_page_info {
+	ppnum_t		phys_addr;	/* physical page index number */
+        unsigned int
+#ifdef  XNU_KERNEL_PRIVATE
+                        pageout:1,      /* page is to be removed on commit */
+                        absent:1,       /* No valid data in this page */
+                        dirty:1,        /* Page must be cleaned (O) */
+			precious:1,     /* must be cleaned, we have only copy */
+			device:1,	/* no page data, mapped dev memory */
+                        :0;		/* force to long boundary */
+#else
+			opaque;		/* use upl_page_xxx() accessor funcs */
+#endif /* XNU_KERNEL_PRIVATE */
+};
+
+#else
+
+struct upl_page_info {
+	unsigned int	opaque[2];	/* use upl_page_xxx() accessor funcs */
+};
+
+#endif /* PRIVATE */
+
+typedef struct upl_page_info	upl_page_info_t;
+typedef upl_page_info_t		*upl_page_info_array_t;
+typedef upl_page_info_array_t	upl_page_list_ptr_t;
+
+typedef uint32_t	upl_offset_t;	/* page-aligned byte offset */
+typedef uint32_t	upl_size_t;	/* page-aligned byte size */
 
 /* upl invocation flags */
 /* top nibble is used by super upl */
 
-#define UPL_FLAGS_NONE		0x0
-#define UPL_COPYOUT_FROM	0x1
-#define UPL_PRECIOUS		0x2
-#define UPL_NO_SYNC		0x4
-#define UPL_CLEAN_IN_PLACE	0x8
-#define UPL_NOBLOCK		0x10
-#define UPL_RET_ONLY_DIRTY	0x20
-#define UPL_SET_INTERNAL	0x40
-#define	UPL_QUERY_OBJECT_TYPE	0x80
-#define UPL_RET_ONLY_ABSENT	0x100  /* used only for COPY_FROM = FALSE */
-#define UPL_FILE_IO             0x200
-#define UPL_SET_LITE		0x400
-#define UPL_SET_INTERRUPTIBLE	0x800
-#define UPL_SET_IO_WIRE		0x1000
-#define UPL_FOR_PAGEOUT		0x2000
-#define UPL_WILL_BE_DUMPED      0x4000
+#define UPL_FLAGS_NONE		0x00000000
+#define UPL_COPYOUT_FROM	0x00000001
+#define UPL_PRECIOUS		0x00000002
+#define UPL_NO_SYNC		0x00000004
+#define UPL_CLEAN_IN_PLACE	0x00000008
+#define UPL_NOBLOCK		0x00000010
+#define UPL_RET_ONLY_DIRTY	0x00000020
+#define UPL_SET_INTERNAL	0x00000040
+#define UPL_QUERY_OBJECT_TYPE	0x00000080
+#define UPL_RET_ONLY_ABSENT	0x00000100 /* used only for COPY_FROM = FALSE */
+#define UPL_FILE_IO             0x00000200
+#define UPL_SET_LITE		0x00000400
+#define UPL_SET_INTERRUPTIBLE	0x00000800
+#define UPL_SET_IO_WIRE		0x00001000
+#define UPL_FOR_PAGEOUT		0x00002000
+#define UPL_WILL_BE_DUMPED      0x00004000
+#define UPL_FORCE_DATA_SYNC	0x00008000
+/* continued after the ticket bits... */
+
+#define UPL_PAGE_TICKET_MASK	0x000F0000
+#define UPL_PAGE_TICKET_SHIFT   16
+
+/* ... flags resume here */
+#define UPL_BLOCK_ACCESS	0x00100000
+#define UPL_ENCRYPT		0x00200000
+#define UPL_NOZEROFILL		0x00400000
+#define UPL_WILL_MODIFY		0x00800000 /* caller will modify the pages */
+
+/* UPL flags known by this kernel */
+#define UPL_VALID_FLAGS		0x00FFFFFF
 
 
 /* upl abort error flags */
-#define UPL_ABORT_RESTART	0x1
+#define UPL_ABORT_RESTART		0x1
 #define UPL_ABORT_UNAVAILABLE	0x2
 #define UPL_ABORT_ERROR		0x4
 #define UPL_ABORT_FREE_ON_EMPTY	0x8  /* only implemented in wrappers */
 #define UPL_ABORT_DUMP_PAGES	0x10
 #define UPL_ABORT_NOTIFY_EMPTY	0x20
+#define UPL_ABORT_ALLOW_ACCESS	0x40
 
 /* upl pages check flags */
 #define UPL_CHECK_DIRTY         0x1
 
-/* upl pagein/pageout  flags */
+
+/*
+ *  upl pagein/pageout  flags
+ *
+ * 
+ * when I/O is issued from this UPL it should be done synchronously
+ */
 #define UPL_IOSYNC	0x1
+
+/*
+ * the passed in UPL should not have either a commit or abort 
+ * applied to it by the underlying layers... the site that
+ * created the UPL is responsible for cleaning it up.
+ */
 #define UPL_NOCOMMIT	0x2
-#define UPL_NORDAHEAD   0x4
+
+/*
+ * turn off any speculative read-ahead applied at the I/O layer
+ */
+#define UPL_NORDAHEAD	0x4
+
+/*
+ * pageout request is targeting a real file
+ * as opposed to a swap file.
+ */
+
+#define UPL_VNODE_PAGER	0x8
+/*
+ * this pageout is being originated as part of an explicit
+ * memory synchronization operation... no speculative clustering
+ * should be applied, only the range specified should be pushed.
+ */
+#define UPL_MSYNC		0x10
+
+/*
+ *
+ */
+#ifdef MACH_KERNEL_PRIVATE
+#define UPL_PAGING_ENCRYPTED	0x20
+#endif /* MACH_KERNEL_PRIVATE */
+
+/*
+ * this pageout is being originated as part of an explicit
+ * memory synchronization operation that is checking for I/O
+ * errors and taking it's own action... if an error occurs,
+ * just abort the pages back into the cache unchanged
+ */
+#define UPL_KEEPCACHED		0x40
+
+
 
 /* upl commit flags */
 #define UPL_COMMIT_FREE_ON_EMPTY	0x1 /* only implemented in wrappers */
@@ -350,44 +458,12 @@ typedef upl_page_info_array_t	upl_page_list_ptr_t;
 #define UPL_COMMIT_SET_DIRTY		0x4
 #define UPL_COMMIT_INACTIVATE		0x8
 #define UPL_COMMIT_NOTIFY_EMPTY		0x10
+#define UPL_COMMIT_ALLOW_ACCESS		0x20
 
 /* flags for return of state from vm_map_get_upl,  vm_upl address space */
 /* based call */
 #define UPL_DEV_MEMORY			0x1
 #define UPL_PHYS_CONTIG			0x2
-
-
-/* access macros for upl_t */
-
-#define UPL_DEVICE_PAGE(upl) \
-	(((upl)[(index)].phys_addr != 0) ? (!((upl)[0].device)) : FALSE)
-
-#define UPL_PAGE_PRESENT(upl, index)  \
-	((upl)[(index)].phys_addr != 0)
-
-#define UPL_PHYS_PAGE(upl, index) \
-	(((upl)[(index)].phys_addr != 0) ?  \
-			((upl)[(index)].phys_addr) : (vm_offset_t)NULL)
-
-#define UPL_DIRTY_PAGE(upl, index) \
-	(((upl)[(index)].phys_addr != 0) ? ((upl)[(index)].dirty) : FALSE)
-
-#define UPL_PRECIOUS_PAGE(upl, index) \
-	(((upl)[(index)].phys_addr != 0) ? ((upl)[(index)].precious) : FALSE)
-
-#define UPL_VALID_PAGE(upl, index) \
-	(((upl)[(index)].phys_addr != 0) ? (!((upl)[(index)].absent)) : FALSE)
-
-#define UPL_PAGEOUT_PAGE(upl, index) \
-	(((upl)[(index)].phys_addr != 0) ? ((upl)[(index)].pageout) : FALSE)
-
-#define UPL_SET_PAGE_FREE_ON_COMMIT(upl, index) \
-	if ((upl)[(index)].phys_addr != 0)     \
-		((upl)[(index)].pageout) =  TRUE
-
-#define UPL_CLR_PAGE_FREE_ON_COMMIT(upl, index) \
-	if ((upl)[(index)].phys_addr != 0)     \
-		((upl)[(index)].pageout) =  FALSE
 
 
 /* 
@@ -396,12 +472,12 @@ typedef upl_page_info_array_t	upl_page_list_ptr_t;
  */
 #define UPL_POP_DIRTY		0x1
 #define UPL_POP_PAGEOUT		0x2
-#define UPL_POP_PRECIOUS	0x4
+#define UPL_POP_PRECIOUS		0x4
 #define UPL_POP_ABSENT		0x8
-#define UPL_POP_BUSY		0x10
+#define UPL_POP_BUSY			0x10
 
 #define UPL_POP_PHYSICAL	0x10000000
-#define UPL_POP_DUMP            0x20000000
+#define UPL_POP_DUMP		0x20000000
 #define UPL_POP_SET		0x40000000
 #define UPL_POP_CLR		0x80000000
 
@@ -423,26 +499,45 @@ typedef upl_page_info_array_t	upl_page_list_ptr_t;
  * UPL_ROP_DUMP: Dump the pages which are found in the target object
  * for the target range.
  */
-#define UPL_ROP_DUMP		0x04
+#define UPL_ROP_DUMP			0x04
 
+#ifdef	PRIVATE
 
+/* access macros for upl_t */
 
-#ifdef KERNEL_PRIVATE
+#define UPL_DEVICE_PAGE(upl) \
+	(((upl)[(index)].phys_addr != 0) ? (!((upl)[0].device)) : FALSE)
 
-extern void memory_object_reference(memory_object_t object);
-extern void memory_object_deallocate(memory_object_t object);
+#define UPL_PAGE_PRESENT(upl, index) \
+	((upl)[(index)].phys_addr != 0)
 
-extern void memory_object_default_reference(memory_object_default_t);
-extern void memory_object_default_deallocate(memory_object_default_t);
+#define UPL_PHYS_PAGE(upl, index) \
+	((upl)[(index)].phys_addr)
 
-extern void memory_object_control_reference(memory_object_control_t control);
-extern void memory_object_control_deallocate(memory_object_control_t control);
+#define UPL_DIRTY_PAGE(upl, index) \
+	(((upl)[(index)].phys_addr != 0) ? ((upl)[(index)].dirty) : FALSE)
 
+#define UPL_PRECIOUS_PAGE(upl, index) \
+	(((upl)[(index)].phys_addr != 0) ? ((upl)[(index)].precious) : FALSE)
+
+#define UPL_VALID_PAGE(upl, index) \
+	(((upl)[(index)].phys_addr != 0) ? (!((upl)[(index)].absent)) : FALSE)
+
+#define UPL_PAGEOUT_PAGE(upl, index) \
+	(((upl)[(index)].phys_addr != 0) ? ((upl)[(index)].pageout) : FALSE)
+
+#define UPL_SET_PAGE_FREE_ON_COMMIT(upl, index) \
+	(((upl)[(index)].phys_addr != 0) ?	      \
+	 ((upl)[(index)].pageout = TRUE) : FALSE)
+
+#define UPL_CLR_PAGE_FREE_ON_COMMIT(upl, index) \
+	(((upl)[(index)].phys_addr != 0) ?       \
+	 ((upl)[(index)].pageout = FALSE) : FALSE)
 
 /* The call prototyped below is used strictly by UPL_GET_INTERNAL_PAGE_LIST */
 
 extern vm_size_t	upl_offset_to_pagelist;
-extern vm_size_t upl_get_internal_pagelist_offset();
+extern vm_size_t 	upl_get_internal_pagelist_offset(void);
 
 /* UPL_GET_INTERNAL_PAGE_LIST is only valid on internal objects where the */
 /* list request was made with the UPL_INTERNAL flag */
@@ -452,74 +547,25 @@ extern vm_size_t upl_get_internal_pagelist_offset();
 	(unsigned int)upl + (unsigned int)(upl_offset_to_pagelist = upl_get_internal_pagelist_offset()): \
 	(unsigned int)upl + (unsigned int)upl_offset_to_pagelist))
 
-extern boolean_t	upl_page_present(upl_page_info_t *upl, int index);
+__BEGIN_DECLS
 
-extern boolean_t	upl_dirty_page(upl_page_info_t *upl, int index);
-
-extern boolean_t	upl_valid_page(upl_page_info_t *upl, int index);
-
-extern vm_offset_t	upl_phys_page(upl_page_info_t *upl, int index);
-
+extern ppnum_t	upl_phys_page(upl_page_info_t *upl, int index);
 extern void	   	upl_set_dirty(upl_t   upl);
-
 extern void		upl_clear_dirty(upl_t   upl);
 
+__END_DECLS
 
-/* 
- * The following interface definitions should be generated automatically 
- * through Mig definitions or whatever follows the MIG tool as part of the
- * component API.  Until this is up and running however this explicit 
- * description will do.
- */
+#endif /* PRIVATE */
 
-#include <mach/message.h>
+__BEGIN_DECLS
 
-/*  supply a map and a range, a upl will be returned. */
-extern int kernel_vm_map_get_upl(
-	vm_map_t		map,
-	vm_address_t		offset,
-	vm_size_t		*upl_size,
-	upl_t			*upl,
-	upl_page_info_array_t	page_list,
-	unsigned int		*count,
-	int			*flags,
-	int             	force_data_sync);
+extern boolean_t	upl_page_present(upl_page_info_t *upl, int index);
+extern boolean_t	upl_dirty_page(upl_page_info_t *upl, int index);
+extern boolean_t	upl_valid_page(upl_page_info_t *upl, int index);
+extern void		upl_deallocate(upl_t upl);
 
-extern int kernel_upl_map(
-	vm_map_t        map,
-	upl_t           upl,
-	vm_offset_t     *dst_addr);
+__END_DECLS
 
-extern int kernel_upl_unmap(
-	vm_map_t        map,
-	upl_t           upl);
-
-extern int     kernel_upl_commit(
-	upl_t                   upl,
-	upl_page_info_t         *pl,
-	mach_msg_type_number_t	 count);
-
-extern int kernel_upl_commit_range(
-	upl_t                   upl,
-	vm_offset_t             offset,
-	vm_size_t		size,
-	int			flags,
-	upl_page_info_array_t	pl,
-	mach_msg_type_number_t	count);
-
-extern int kernel_upl_abort(
-	upl_t                   upl,
-	int                     abort_type);
-
-extern int kernel_upl_abort_range(
-	upl_t                   upl,
-	vm_offset_t             offset,
-	vm_size_t               size,
-	int                     abort_flags);
-
-
-#endif  /* KERNEL_PRIVATE */
-
-#endif  /* __APPLE_API_EVOLVING */
+#endif  /* KERNEL */
 
 #endif	/* _MACH_MEMORY_OBJECT_TYPES_H_ */

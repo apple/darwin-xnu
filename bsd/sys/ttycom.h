@@ -104,6 +104,12 @@ struct winsize {
 #define	TIOCSETA	_IOW('t', 20, struct termios) /* set termios struct */
 #define	TIOCSETAW	_IOW('t', 21, struct termios) /* drain output, set */
 #define	TIOCSETAF	_IOW('t', 22, struct termios) /* drn out, fls in, set */
+#ifdef KERNEL
+#define	TIOCGETA_64	_IOR('t', 19, struct user_termios)
+#define	TIOCSETA_64	_IOW('t', 20, struct user_termios)
+#define	TIOCSETAW_64	_IOW('t', 21, struct user_termios)
+#define	TIOCSETAF_64	_IOW('t', 22, struct user_termios)
+#endif	/* KERNEL */
 #define	TIOCGETD	_IOR('t', 26, int)	/* get line discipline */
 #define	TIOCSETD	_IOW('t', 27, int)	/* set line discipline */
 						/* 127-124 compat */

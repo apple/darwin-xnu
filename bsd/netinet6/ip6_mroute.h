@@ -51,7 +51,7 @@
 /*
  * Multicast Routing set/getsockopt commands.
  */
-#ifdef KERNEL
+#ifdef KERNEL_PRIVATE
 #define MRT6_OINIT		100	/* initialize forwarder (omrt6msg) */
 #endif
 #define MRT6_DONE		101	/* shut down forwarder */
@@ -62,12 +62,8 @@
 #define MRT6_PIM                107     /* enable pim code */
 #define MRT6_INIT		108	/* initialize forwarder (mrt6msg) */
 
-#if BSD >= 199103
-#define GET_TIME(t)	microtime(&t)
-#elif defined(sun)
-#define GET_TIME(t)	uniqtime(&t)
-#else
-#define GET_TIME(t)	((t) = time)
+#ifdef __APPLE__
+#define GET_TIME(t)	getmicrotime(&t)
 #endif
 
 /*
@@ -140,6 +136,7 @@ struct mrt6stat {
 	u_quad_t mrt6s_upq_sockfull;	/* upcalls dropped - socket full   */
 };
 
+#ifdef KERNEL_PRIVATE
 #if MRT6_OINIT
 /*
  * Struct used to communicate from kernel to multicast router
@@ -160,6 +157,7 @@ struct omrt6msg {
 	struct in6_addr  im6_src, im6_dst;
 };
 #endif
+#endif KERNEL_PRIVATE
 
 /*
  * Structure used to communicate from kernel to multicast router.
@@ -203,8 +201,7 @@ struct sioc_mif_req6 {
 	u_quad_t obytes;	/* Output byte count on mif		*/
 };
 
-#ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
+#ifdef PRIVATE
 /*
  * The kernel's multicast-interface structure.
  */
@@ -247,6 +244,15 @@ struct mf6c {
 
 #define MF6C_INCOMPLETE_PARENT ((mifi_t)-1)
 
+#define MF6CTBLSIZ	256
+#if (MF6CTBLSIZ & (MF6CTBLSIZ - 1)) == 0	  /* from sys:route.h */
+#define MF6CHASHMOD(h)	((h) & (MF6CTBLSIZ - 1))
+#else
+#define MF6CHASHMOD(h)	((h) % MF6CTBLSIZ)
+#endif
+
+#define MAX_UPQ6	4		/* max. no of pkts in upcall Q */
+
 /*
  * Argument structure used for pkt info. while upcall is made
  */
@@ -261,20 +267,14 @@ struct rtdetq {		/* XXX: rtdetq is also defined in ip_mroute.h */
 };
 #endif /* _NETINET_IP_MROUTE_H_ */
 
-#define MF6CTBLSIZ	256
-#if (MF6CTBLSIZ & (MF6CTBLSIZ - 1)) == 0	  /* from sys:route.h */
-#define MF6CHASHMOD(h)	((h) & (MF6CTBLSIZ - 1))
-#else
-#define MF6CHASHMOD(h)	((h) % MF6CTBLSIZ)
-#endif
+#ifdef KERNEL
+extern struct mrt6stat mrt6stat;
 
-#define MAX_UPQ6	4		/* max. no of pkts in upcall Q */
-
-int	ip6_mrouter_set __P((struct socket *so, struct sockopt *sopt));
-int	ip6_mrouter_get __P((struct socket *so, struct sockopt *sopt));
-int	ip6_mrouter_done __P((void));
-int	mrt6_ioctl __P((int, caddr_t));
-#endif /* __APPLE_API_PRIVATE */
+int	ip6_mrouter_set(struct socket *so, struct sockopt *sopt);
+int	ip6_mrouter_get(struct socket *so, struct sockopt *sopt);
+int	ip6_mrouter_done(void);
+int	mrt6_ioctl(int, caddr_t);
 #endif /* KERNEL */
+#endif /* PRIVATE */
 
 #endif /* !_NETINET6_IP6_MROUTE_H_ */

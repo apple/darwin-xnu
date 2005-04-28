@@ -269,9 +269,11 @@ enum {
     kPMMinutesToSleep,
     kPMEthernetWakeOnLANSettings,
     kPMSetProcessorSpeed,
-    kPMPowerSource
+    kPMPowerSource,
+    kPMMotionSensor,
+    kPMLastAggressivenessType
 };
-#define kMaxType kPMEthernetWakeOnLANSettings
+#define kMaxType (kPMLastAggressivenessType-1)
 
 // SetAggressiveness values for the kPMPowerSource aggressiveness type
 enum {

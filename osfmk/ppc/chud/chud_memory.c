@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -20,20 +20,19 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 
+#include <mach/vm_param.h>
 #include <ppc/chud/chud_xnu.h>
 #include <ppc/machine_routines.h>
 
 __private_extern__
 uint64_t chudxnu_avail_memory_size(void)
 {
-    extern vm_size_t mem_size;
     return mem_size;
 }
 
 __private_extern__
 uint64_t chudxnu_phys_memory_size(void)
 {
-    extern uint64_t mem_actual;
     return mem_actual;
 }
 

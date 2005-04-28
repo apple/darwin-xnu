@@ -44,7 +44,7 @@
 .Fd #include <sys/ucred.h>
 .Fd #include <sys/mount.h>
 .Ft int
-.Fn getfsstat "struct statfs *buf" "long bufsize" "int flags"
+.Fn getfsstat "struct statfs *buf" "int bufsize" "int flags"
 .Sh DESCRIPTION
 .Fn Getfsstat
 returns information about all mounted file systems.
@@ -95,21 +95,22 @@ is given as NULL,
 .Fn getfsstat
 returns just the number of mounted file systems.
 .Pp
-Normally
-.Fa flags
-should be specified as
-.Dv MNT_WAIT .
 If
 .Fa flags
 is set to
 .Dv MNT_NOWAIT ,
 .Fn getfsstat
-will return the information it has available without requesting
-an update from each file system.
-Thus, some of the information will be out of date, but
+will directly return the information retained in the kernel
+to avoid delays caused by waiting for updated information from
+a file system that is perhaps temporarily unable to respond.
+Some of the information returned may be out of date, however; if
+.Fa flags
+is set to
+.Dv MNT_WAIT
+instead,
 .Fn getfsstat
-will not block waiting for information from a file system that is
-unable to respond.
+will request updated information from each mounted filesystem before
+returning.
 .Sh RETURN VALUES
 Upon successful completion, the number of 
 .Fa statfs

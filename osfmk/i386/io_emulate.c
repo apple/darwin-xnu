@@ -51,7 +51,6 @@
  */
 
 #include <platforms.h>
-#include <cpus.h>
 #include <mach/boolean.h>
 #include <mach/port.h>
 #include <kern/thread.h>
@@ -68,13 +67,13 @@
 #include <i386/io_emulate.h>
 #include <i386/iopb_entries.h>
 
+#if 1
 int
 emulate_io(
-	struct i386_saved_state	*regs,
-	int			opcode,
-	int			io_port)
+	__unused struct i386_saved_state	*regs,
+	__unused int				opcode,
+	__unused int				io_port)
 {
-#if 1
 	/* At the moment, we are not allowing I/O emulation 
 	 *
  	 * FIXME - this should probably change due to 
@@ -82,7 +81,14 @@ emulate_io(
 	 */
 
 	return EM_IO_ERROR;
+}
 #else
+int
+emulate_io(
+	struct i386_saved_state	*regs,
+	int			opcode,
+	int			io_port)
+{
 	thread_t	thread = current_thread();
 	at386_io_lock_state();
 
@@ -133,8 +139,8 @@ emulate_io(
 	 * Make the thread use its IO_TSS to get the IO permissions;
 	 * it may not have had one before this.
 	 */
-	act_machine_switch_pcb(thread->top_act);
+	act_machine_switch_pcb(thread);
 
 	return EM_IO_RETRY;
-#endif
 }
+#endif

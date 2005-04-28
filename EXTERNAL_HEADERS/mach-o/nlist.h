@@ -82,6 +82,20 @@ struct nlist {
 };
 
 /*
+ * This is the symbol table entry structure for 64-bit architectures.
+ */
+struct nlist_64 {
+	union {
+		uint32_t n_strx;	/* index into the string table */
+	} n_un;
+	uint8_t n_type;		/* type flag, see below */
+	uint8_t n_sect;		/* section number or NO_SECT */
+	uint16_t n_desc;	/* see <mach-o/stab.h> */
+	uint64_t n_value;	/* value of this symbol (or stab offset) */
+};
+
+
+/*
  * Symbols with a index into the string table of zero (n_un.n_strx == 0) are
  * defined to have a null, "", name.  Therefore all string indexes to non null
  * names must not have a zero string index.  This is bit historical information

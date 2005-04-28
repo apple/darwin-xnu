@@ -80,7 +80,6 @@
 
 #include <net/if.h>
 #include <net/if_types.h>
-#include <net/netisr.h>
 #include <net/route.h>
 #include <net/bpf.h>
 #include <net/if_faith.h>
@@ -106,12 +105,12 @@
 
 #include <net/net_osdep.h>
 
-static int faithioctl __P((struct ifnet *, u_long, void*));
-int faith_pre_output __P((struct ifnet *, register struct mbuf **, struct sockaddr *,
-	caddr_t, char *, char *, u_long));
-static void faithrtrequest __P((int, struct rtentry *, struct sockaddr *));
+static int faithioctl(struct ifnet *, u_long, void*);
+int faith_pre_output(struct ifnet *, register struct mbuf **,
+	const struct sockaddr *, caddr_t, char *, char *, u_long);
+static void faithrtrequest(int, struct rtentry *, struct sockaddr *);
 
-void faithattach __P((void));
+void faithattach(void);
 #ifndef __APPLE__
 PSEUDO_SET(faithattach, if_faith);
 #endif
@@ -196,21 +195,15 @@ int  faith_attach_inet(struct ifnet *ifp, u_long *dl_tag)
         }
     }
 
+	bzero(&reg, sizeof(reg));
+	bzero(&desc, sizeof(desc));
     TAILQ_INIT(&reg.demux_desc_head); 
     desc.type = DLIL_DESC_RAW;
-    desc.variants.bitmask.proto_id_length = 0;
-    desc.variants.bitmask.proto_id = 0;
-    desc.variants.bitmask.proto_id_mask = 0;
     desc.native_type = (char *) &native;
     TAILQ_INSERT_TAIL(&reg.demux_desc_head, &desc, next);
     reg.interface_family = ifp->if_family;
     reg.unit_number      = ifp->if_unit;
-    reg.input            = 0;
     reg.pre_output       = faith_pre_output;
-    reg.event            = 0;
-    reg.offer            = 0;
-    reg.ioctl            = 0;
-    reg.default_proto    = 0;
     reg.protocol_family  = PF_INET;
 
     stat = dlil_attach_protocol(&reg, dl_tag);
@@ -288,14 +281,12 @@ int
 faith_pre_output(ifp, m0, dst, route_entry, frame_type, dst_addr, dl_tag)
 	struct ifnet *ifp;
 	register struct mbuf **m0;
-	struct sockaddr *dst;
+	const struct sockaddr *dst;
 	caddr_t			 route_entry;
 	char		     *frame_type;
 	char		     *dst_addr;
 	u_long		     dl_tag;
 {
-	int s, isr;
-	register struct ifqueue *ifq = 0;
 	register struct mbuf *m = *m0;
 	struct rtentry *rt = (struct rtentry*)route_entry;
 
@@ -339,37 +330,10 @@ faith_pre_output(ifp, m0, dst, route_entry, frame_type, dst_addr, dl_tag)
 	}
 	ifp->if_opackets++;
 	ifp->if_obytes += m->m_pkthdr.len;
-	switch (dst->sa_family) {
-#if INET
-	case AF_INET:
-		ifq = &ipintrq;
-		isr = NETISR_IP;
-		break;
-#endif
-#if INET6
-	case AF_INET6:
-		ifq = &ip6intrq;
-		isr = NETISR_IPV6;
-		break;
-#endif
-	default:
-		return EAFNOSUPPORT;
-	}
-
-	/* XXX do we need more sanity checks? */
-
 	m->m_pkthdr.rcvif = ifp;
-	s = splimp();
-	if (IF_QFULL(ifq)) {
-		IF_DROP(ifq);
-		splx(s);
-		return (ENOBUFS);
-	}
-	IF_ENQUEUE(ifq, m);
-	schednetisr(isr);
+	proto_inject(dst->sa_family, m);
 	ifp->if_ipackets++;
 	ifp->if_ibytes += m->m_pkthdr.len;
-	splx(s);
 	return (EJUSTRETURN);
 }
 
@@ -409,7 +373,7 @@ faithioctl(ifp, cmd, data)
 	switch (cmd) {
 
 	case SIOCSIFADDR:
-		ifp->if_flags |= IFF_UP | IFF_RUNNING;
+		ifnet_set_flags(ifp, IFF_UP | IFF_RUNNING, IFF_UP | IFF_RUNNING);
 		ifa = (struct ifaddr *)data;
 		ifa->ifa_rtrequest = faithrtrequest;
 		/*

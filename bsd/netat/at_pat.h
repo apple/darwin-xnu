@@ -28,6 +28,8 @@
 #define _NETAT_AT_PAT_H_
 #include <sys/appleapiopts.h>
 
+#ifdef __APPLE_API_OBSOLETE
+
 /* This is header for the PAT module. This contains a table of pointers that 
  * should get initialized with the BNET stuff and the ethernet driver. The 
  * number of interfaces supported should be communicated. Should include
@@ -62,4 +64,5 @@ typedef struct {
         ((*((unsigned long *)(a1)) == *((unsigned long *)(a2))) &&      \
 	 (a1[4] == a2[4])				                \
 	)
+#endif /* __APPLE_API_OBSOLETE */
 #endif /* _NETAT_AT_PAT_H_ */

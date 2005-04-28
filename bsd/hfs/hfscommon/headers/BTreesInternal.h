@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -280,7 +280,7 @@ typedef BTreeIterator *BTreeIteratorPtr;
 //typedef SInt32 				(* KeyCompareProcPtr)(BTreeKeyPtr a, BTreeKeyPtr b);
 
 
-typedef SInt32 (* IterateCallBackProcPtr)(BTreeKeyPtr key, void * record, UInt16 recordLen, void * state);
+typedef SInt32 (* IterateCallBackProcPtr)(BTreeKeyPtr key, void * record, void * state);
 
 
 extern OSStatus	BTOpenPath(FCB *filePtr, KeyCompareProcPtr keyCompareProc);
@@ -323,7 +323,7 @@ extern OSStatus	BTDeleteRecord		(FCB		 				*filePtr,
 									 BTreeIterator				*iterator );
 
 extern OSStatus	BTGetInformation	(FCB		 				*filePtr,
-									 UInt16						 version,
+									 UInt16						 vers,
 									 BTreeInfoRec				*info );
 
 extern OSStatus	BTFlushPath			(FCB		 				*filePtr );

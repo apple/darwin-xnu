@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002,2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -36,6 +36,17 @@
 #include <mach/vm_prot.h>
 #include <mach/vm_inherit.h>
 #include <mach/vm_behavior.h>
+#include <mach/vm_types.h>
+#include <mach/message.h>
+#include <mach/machine/vm_param.h>
+#include <mach/machine/vm_types.h>
+#include <mach/memory_object_types.h>
+
+#include <sys/cdefs.h>
+
+#if __DARWIN_ALIGN_POWER
+#pragma options align=power
+#endif
 
 /*
  *	Types defined:
@@ -51,37 +62,42 @@ typedef int	*vm_region_recurse_info_64_t;
 typedef int	 vm_region_flavor_t;
 typedef int	 vm_region_info_data_t[VM_REGION_INFO_MAX];
 
-#define VM_REGION_BASIC_INFO	10
-
+#define VM_REGION_BASIC_INFO_64		9
 struct vm_region_basic_info_64 {
 	vm_prot_t		protection;
 	vm_prot_t		max_protection;
 	vm_inherit_t		inheritance;
 	boolean_t		shared;
 	boolean_t		reserved;
-	vm_object_offset_t	offset;
+	memory_object_offset_t	offset;
 	vm_behavior_t		behavior;
 	unsigned short		user_wired_count;
 };
-
 typedef struct vm_region_basic_info_64		*vm_region_basic_info_64_t;
 typedef struct vm_region_basic_info_64		 vm_region_basic_info_data_64_t;
 
-#define VM_REGION_BASIC_INFO_COUNT_64		\
-	(sizeof(vm_region_basic_info_data_64_t)/sizeof(int))
+#define VM_REGION_BASIC_INFO_COUNT_64	((mach_msg_type_number_t) \
+	(sizeof(vm_region_basic_info_data_64_t)/sizeof(int)))
 
+/*
+ * Passing VM_REGION_BASIC_INFO to vm_region_64
+ * automatically converts it to a VM_REGION_BASIC_INFO_64.
+ * Please use that explicitly instead.
+ */
+#define VM_REGION_BASIC_INFO		10
 
+/*
+ * This is the legacy basic info structure.  It is
+ * deprecated because it passes only a 32-bit memory object
+ * offset back - too small for many larger objects (e.g. files).
+ */
 struct vm_region_basic_info {
 	vm_prot_t		protection;
 	vm_prot_t		max_protection;
 	vm_inherit_t		inheritance;
 	boolean_t		shared;
 	boolean_t		reserved;
-#ifdef soon
-	vm_object_offset_t	offset;
-#else
-	vm_offset_t	offset;
-#endif
+	uint32_t		offset; /* too small for a real offset */
 	vm_behavior_t		behavior;
 	unsigned short		user_wired_count;
 };
@@ -89,10 +105,8 @@ struct vm_region_basic_info {
 typedef struct vm_region_basic_info		*vm_region_basic_info_t;
 typedef struct vm_region_basic_info		 vm_region_basic_info_data_t;
 
-#define VM_REGION_BASIC_INFO_COUNT		\
-	(sizeof(vm_region_basic_info_data_t)/sizeof(int))
-
-
+#define VM_REGION_BASIC_INFO_COUNT ((mach_msg_type_number_t) \
+	(sizeof(vm_region_basic_info_data_t)/sizeof(int)))
 
 #define VM_REGION_EXTENDED_INFO	11
 
@@ -112,7 +126,6 @@ typedef struct vm_region_basic_info		 vm_region_basic_info_data_t;
  * back.
  */
 
-
 struct vm_region_extended_info {
 	vm_prot_t		protection;
         unsigned int            user_tag;
@@ -129,8 +142,8 @@ struct vm_region_extended_info {
 typedef struct vm_region_extended_info		*vm_region_extended_info_t;
 typedef struct vm_region_extended_info		 vm_region_extended_info_data_t;
 
-#define VM_REGION_EXTENDED_INFO_COUNT		\
-	(sizeof(vm_region_extended_info_data_t)/sizeof(int))
+#define VM_REGION_EXTENDED_INFO_COUNT	((mach_msg_type_number_t) \
+	(sizeof(vm_region_extended_info_data_t)/sizeof(int)))
 
 
 #define VM_REGION_TOP_INFO	12
@@ -146,8 +159,8 @@ struct vm_region_top_info {
 typedef struct vm_region_top_info		*vm_region_top_info_t;
 typedef struct vm_region_top_info		 vm_region_top_info_data_t;
 
-#define VM_REGION_TOP_INFO_COUNT		\
-	(sizeof(vm_region_top_info_data_t)/sizeof(int))
+#define VM_REGION_TOP_INFO_COUNT ((mach_msg_type_number_t) \
+	(sizeof(vm_region_top_info_data_t)/sizeof(int)))
 
 
 
@@ -170,15 +183,12 @@ typedef struct vm_region_top_info		 vm_region_top_info_data_t;
  * chain (where one is present), and a walking of the resident page queue.
  * 
  */
+
 struct vm_region_submap_info {
 	vm_prot_t		protection;     /* present access protection */
 	vm_prot_t		max_protection; /* max avail through vm_prot */
 	vm_inherit_t		inheritance;/* behavior of map/obj on fork */
-#ifdef soon
-	vm_object_offset_t	offset;		/* offset into object/map */
-#else
-	vm_offset_t	offset;		/* offset into object/map */
-#endif
+	uint32_t		offset;		/* offset into object/map */
         unsigned int            user_tag;	/* user tag on map entry */
         unsigned int            pages_resident;	/* only valid for objects */
         unsigned int            pages_shared_now_private; /* only for objects */
@@ -197,16 +207,14 @@ struct vm_region_submap_info {
 typedef struct vm_region_submap_info		*vm_region_submap_info_t;
 typedef struct vm_region_submap_info		 vm_region_submap_info_data_t;
 
-#define VM_REGION_SUBMAP_INFO_COUNT		\
-	(sizeof(vm_region_submap_info_data_t)/sizeof(int))
-
-
+#define VM_REGION_SUBMAP_INFO_COUNT ((mach_msg_type_number_t) \
+	(sizeof(vm_region_submap_info_data_t)/sizeof(int)))
 
 struct vm_region_submap_info_64 {
 	vm_prot_t		protection;     /* present access protection */
 	vm_prot_t		max_protection; /* max avail through vm_prot */
 	vm_inherit_t		inheritance;/* behavior of map/obj on fork */
-	vm_object_offset_t	offset;		/* offset into object/map */
+	memory_object_offset_t	offset;		/* offset into object/map */
         unsigned int            user_tag;	/* user tag on map entry */
         unsigned int            pages_resident;	/* only valid for objects */
         unsigned int            pages_shared_now_private; /* only for objects */
@@ -225,31 +233,13 @@ struct vm_region_submap_info_64 {
 typedef struct vm_region_submap_info_64		*vm_region_submap_info_64_t;
 typedef struct vm_region_submap_info_64		 vm_region_submap_info_data_64_t;
 
-#define VM_REGION_SUBMAP_INFO_COUNT_64		\
-	(sizeof(vm_region_submap_info_data_64_t)/sizeof(int))
+#define VM_REGION_SUBMAP_INFO_COUNT_64		((mach_msg_type_number_t) \
+	(sizeof(vm_region_submap_info_data_64_t)/sizeof(int)))
 
-
-#define VM_REGION_OBJECT_INFO_64	13
-
-struct vm_region_object_info_64 {
-	vm_prot_t		protection;
-	vm_prot_t		max_protection;
-	vm_inherit_t		inheritance;
-	boolean_t		shared;
-	boolean_t		is_sub_map;
-	vm_object_offset_t	offset;
-	vm_behavior_t		behavior;
-	unsigned short		user_wired_count;
-	vm_offset_t		object_id;
+struct mach_vm_read_entry {
+	mach_vm_address_t address;
+	mach_vm_size_t size;
 };
-
-typedef struct vm_region_object_info_64		*vm_region_object_info_64_t;
-typedef struct vm_region_object_info_64		 vm_region_object_info_data_64_t;
-
-#define VM_REGION_OBJECT_INFO_COUNT_64		\
-	(sizeof(vm_region_object_info_data_64_t)/sizeof(int))
-
-
 
 struct vm_read_entry {
 	vm_address_t	address;
@@ -258,6 +248,11 @@ struct vm_read_entry {
 
 #define VM_MAP_ENTRY_MAX  (256)
 
-typedef struct vm_read_entry	vm_read_entry_t[VM_MAP_ENTRY_MAX];
+typedef struct mach_vm_read_entry	mach_vm_read_entry_t[VM_MAP_ENTRY_MAX];
+typedef struct vm_read_entry		vm_read_entry_t[VM_MAP_ENTRY_MAX];
+
+#if __DARWIN_ALIGN_POWER
+#pragma options align=reset
+#endif
 
 #endif	/*_MACH_VM_REGION_H_*/

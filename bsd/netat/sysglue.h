@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -35,6 +35,9 @@
 #ifndef _NETAT_SYSGLUE_H_
 #define _NETAT_SYSGLUE_H_
 #include <sys/appleapiopts.h>
+#include <sys/cdefs.h>
+
+#ifdef __APPLE_API_OBSOLETE
 
 /* 
    The following is originally from netat/h/localglue.h, which was 
@@ -47,6 +50,31 @@ typedef struct {
 	int  ic_len;
 	char *ic_dp;
 } ioccmd_t;
+
+#ifdef KERNEL
+#ifdef KERNEL_PRIVATE
+
+/* LP64 version of ioccmd_t.  all pointers 
+ * grow when we're dealing with a 64-bit process.
+ * WARNING - keep in sync with ioccmd_t
+ */
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=natural
+#endif
+
+typedef struct {
+	int  		ic_cmd;
+	int  		ic_timout;
+	int  		ic_len;
+	user_addr_t	ic_dp;
+} user_ioccmd_t;
+
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=reset
+#endif
+
+#endif // KERNEL_PRIVATE
+#endif // KERNEL
 
 typedef struct {
 	int  ioc_cmd;
@@ -89,7 +117,7 @@ typedef struct {
 #endif
 
 #ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
+#ifdef KERNEL_PRIVATE
 
 #define SYS_HZ HZ 	/* Number of clock (SYS_SETTIMER) ticks per second */
 #define HZ hz		/* HZ ticks definition used throughout AppleTalk */
@@ -100,7 +128,6 @@ typedef struct {
  * in MacOSX. Need to find a better Error code ###LD
  */
 #define ENOTREADY 	ESHUTDOWN
-#define EPROTO 		EPROTOTYPE
 
 /* T_MPSAFE is used only in atp_open. I suspect it's a
  * trick to accelerate local atp transactions.
@@ -130,11 +157,11 @@ typedef struct {
 #endif
 typedef int atevent_t;
 
-typedef simple_lock_t atlock_t;
+typedef int atlock_t;
 typedef int *atomic_p; 
 #define ATLOCKINIT(a)  (a = (atlock_t) EVENT_NULL)
-#define ATDISABLE(l, a) (l = splimp())
-#define ATENABLE(l, a)  splx(l)
+#define ATDISABLE(l, a)
+#define ATENABLE(l, a)
 #define ATEVENTINIT(a)  (a = (atevent_t) EVENT_NULL)
 #define DDP_OUTPUT(m) ddp_putmsg(0,m)
 #define StaticProc static
@@ -187,6 +214,7 @@ int gbuf_msgsize(gbuf_t *m);
 #undef timeout
 #undef untimeout
 
-#endif /* __APPLE_API_PRIVATE */
+#endif /* KERNEL_PRIVATE */
 #endif /* KERNEL */
+#endif /* __APPLE_API_OBSOLETE */
 #endif /* _NETAT_SYSGLUE_H_ */

@@ -37,13 +37,16 @@
 #define	UTF_PRECOMPOSED		0x08	/* generate precomposed UCS-2 */
 
 __BEGIN_DECLS
-size_t	utf8_encodelen __P((const u_int16_t *, size_t, u_int16_t, int));
+size_t	utf8_encodelen(const u_int16_t *, size_t, u_int16_t, int);
 
-int	utf8_encodestr __P((const u_int16_t *, size_t, u_int8_t *, size_t *,
-		size_t, u_int16_t, int));
+int	utf8_encodestr(const u_int16_t *, size_t, u_int8_t *, size_t *,
+		size_t, u_int16_t, int);
 
-int	utf8_decodestr __P((const u_int8_t *, size_t, u_int16_t *,size_t *,
-		size_t, u_int16_t, int));
+int	utf8_decodestr(const u_int8_t *, size_t, u_int16_t *,size_t *,
+		size_t, u_int16_t, int);
+
+int	utf8_validatestr(const u_int8_t*, size_t);
+
 __END_DECLS
 
 #endif /* __APPLE_API_UNSTABLE */

@@ -37,7 +37,6 @@ OPTIONS/mach_xp				optional mach_xp
 OPTIONS/mach_xp_fpd			optional mach_xp_fpd
 OPTIONS/quota				optional quota
 OPTIONS/simple_clock			optional simple_clock
-OPTIONS/stat_time			optional stat_time
 OPTIONS/xpr_debug			optional xpr_debug
 OPTIONS/kdebug				optional kdebug
 OPTIONS/nfsclient			optional nfsclient
@@ -56,11 +55,14 @@ OPTIONS/norma_ether			optional norma_ether
 OPTIONS/new_vm_code			optional new_vm_code
 OPTIONS/old_vm_code			optional old_vm_code
 OPTIONS/compat_43			optional compat_43
+OPTIONS/compat_43_tty			optional compat_43_tty
+OPTIONS/compat_43_socket		optional compat_43_socket
 OPTIONS/diagnostic			optional diagnostic
 OPTIONS/ktrace				optional ktrace
 OPTIONS/profiling			optional profiling
 OPTIONS/vndevice			optional vndevice
 OPTIONS/audit				optional audit
+OPTIONS/fsevents			optional fsevents
 
 #
 # Network options
@@ -88,7 +90,9 @@ OPTIONS/fddi				optional fddi
 
 OPTIONS/ipdivert			optional ipdivert
 OPTIONS/dummynet			optional dummynet
+OPTIONS/ipfw2				optional ipfw2
 OPTIONS/ipfirewall			optional ipfirewall
+OPTIONS/ipv6firewall		optional ipv6firewall
 OPTIONS/tcpdebug			optional tcpdebug
 OPTIONS/bridge				optional bridge
 OPTIONS/faith				optional faith
@@ -117,17 +121,21 @@ bsd/dev/random/YarrowCoreLib/src/prng.c				standard
 bsd/dev/random/YarrowCoreLib/src/sha1mod.c			standard
 bsd/dev/random/YarrowCoreLib/src/yarrowUtils.c		standard
 
-bsd/dev/memdev.c				standard
+bsd/dev/memdev.c			standard
+
+bsd/dev/unix_startup.c			standard
 
 bsd/dev/vn/vn.c				optional vndevice
 bsd/dev/vn/shadow.c			optional vndevice
 
+bsd/libkern/crc32.c			standard
 bsd/libkern/random.c			standard
 bsd/libkern/scanc.c			standard
 bsd/libkern/skpc.c			standard
-bsd/libkern/inet_ntoa.c			standard
+bsd/libkern/inet_ntop.c			standard
 bsd/libkern/bcd.c			standard
 
+bsd/vfs/vfs_attrlist.c			standard
 bsd/vfs/vfs_bio.c			standard
 bsd/vfs/vfs_cache.c			standard
 bsd/vfs/vfs_cluster.c			standard
@@ -140,8 +148,12 @@ bsd/vfs/vfs_syscalls.c			standard
 bsd/vfs/vfs_support.c			standard
 bsd/vfs/vfs_utfconv.c			standard
 bsd/vfs/vfs_vnops.c			standard
+bsd/vfs/vfs_xattr.c			standard
 bsd/vfs/vnode_if.c			standard
+bsd/vfs/kpi_vfs.c			standard
 bsd/vfs/vfs_journal.c			standard
+#bsd/vfs/vfs_fsevents.c			optional fsevents
+bsd/vfs/vfs_fsevents.c			standard
 
 bsd/miscfs/deadfs/dead_vnops.c		standard
 bsd/miscfs/fdesc/fdesc_vfsops.c		optional fdesc
@@ -151,7 +163,6 @@ bsd/miscfs/nullfs/null_subr.c		optional nullfs
 bsd/miscfs/nullfs/null_vfsops.c		optional nullfs
 bsd/miscfs/nullfs/null_vnops.c		optional nullfs
 bsd/miscfs/specfs/spec_vnops.c		standard
-bsd/miscfs/specfs/spec_lockf.c		standard
 bsd/miscfs/union/union_subr.c		optional union
 bsd/miscfs/union/union_vfsops.c		optional union
 bsd/miscfs/union/union_vnops.c		optional union
@@ -175,7 +186,7 @@ bsd/isofs/cd9660/cd9660_util.c		optional cd9660
 bsd/isofs/cd9660/cd9660_vfsops.c	optional cd9660
 bsd/isofs/cd9660/cd9660_vnops.c		optional cd9660
 
-bsd/net/slcompress.c		         optional i4bipr
+#bsd/net/slcompress.c		         optional i4bipr
 bsd/net/bpf.c				optional bpfilter
 bsd/net/bpf_filter.c			optional bpfilter
 bsd/net/bridge.c			optional bridge
@@ -183,19 +194,23 @@ bsd/net/bsd_comp.c			optional ppp_bsdcomp
 bsd/net/if.c				standard
 bsd/net/if_atmsubr.c			optional atm
 bsd/net/if_disc.c			optional disc
+bsd/net/init.c				standard
 bsd/net/dlil.c				standard
 bsd/net/ether_if_module.c		optional ether
 bsd/net/ether_at_pr_module.c		optional ether
 bsd/net/ether_inet_pr_module.c		optional ether
 bsd/net/ether_inet6_pr_module.c		optional ether inet6
-bsd/net/if_ethersubr.c			optional ether
+#bsd/net/if_ethersubr.c			optional ether
 bsd/net/if_loop.c			optional loop
-bsd/net/if_media.c			standard
-bsd/net/if_mib.c			standard
+#bsd/net/if_media.c			standard
+bsd/net/if_mib.c			optional netmibs
 bsd/net/if_sl.c				optional sl
 bsd/net/if_tun.c			optional tun
 bsd/net/if_vlan.c			optional vlan
-bsd/net/kext_net.c		standard
+bsd/net/multicast_list.c		standard
+bsd/net/if_bond.c			optional bond
+bsd/net/devtimer.c			optional bond
+#bsd/net/kext_net.c		standard
 bsd/net/ndrv.c				standard
 bsd/net/ppp_deflate.c			optional ppp_deflate
 bsd/net/radix.c				standard
@@ -206,7 +221,7 @@ bsd/net/rtsock.c			standard
 bsd/net/slcompress.c			optional ppp
 bsd/net/slcompress.c			optional sl
 bsd/net/zlib.c				optional ppp_deflate
-bsd/net/netisr.c			standard
+#bsd/net/netisr.c			standard
 bsd/net/zlib.c				optional ipsec 
 bsd/net/if_dummy.c         		optional dummy
 bsd/net/if_gif.c          		optional gif
@@ -215,20 +230,25 @@ bsd/net/if_stf.c          		optional stf
 bsd/net/if_faith.c          		optional faith
 bsd/net/net_osdep.c			optional ipsec 
 bsd/net/net_osdep.c			optional inet6
+bsd/net/kpi_interface.c		standard
+bsd/net/kpi_protocol.c		standard
+bsd/net/kpi_interfacefilter.c	standard
 
 
 bsd/netinet/if_atm.c			optional atm
-bsd/netinet/if_ether.c			optional ether
 bsd/netinet/igmp.c			standard
 bsd/netinet/in.c			standard
 bsd/netinet/in_bootp.c			standard
 bsd/netinet/dhcp_options.c		standard
+bsd/netinet/in_arp.c			standard
 bsd/netinet/in_pcb.c			standard
 bsd/netinet/in_proto.c			standard
 bsd/netinet/in_rmx.c			standard
 bsd/netinet/ip_divert.c			optional ipdivert
 bsd/netinet/ip_dummynet.c  		optional dummynet
 bsd/netinet/ip_flow.c			standard
+bsd/netinet/ip_fw2.c			optional ipfw2
+bsd/netinet/ip_fw2_compat.c		optional ipfw2
 bsd/netinet/ip_icmp.c			standard
 bsd/netinet/ip_id.c			optional randomipid
 bsd/netinet/ip_input.c			standard
@@ -246,6 +266,7 @@ bsd/netinet/in_gif.c      		optional gif inet
 bsd/netinet/ip_ecn.c          		optional inet inet6
 bsd/netinet/ip_ecn.c          		optional inet ipsec
 bsd/netinet/ip_encap.c         		optional inet 
+bsd/netinet/kpi_ipfilter.c		standard
 bsd/netinet6/ah_core.c      		optional ipsec
 bsd/netinet6/ah_input.c     		optional ipsec
 bsd/netinet6/ah_output.c   		optional ipsec
@@ -260,10 +281,11 @@ bsd/netinet6/icmp6.c        		optional inet6
 bsd/netinet6/in6.c          		optional inet6
 bsd/netinet6/in6_cksum.c    		optional inet6
 bsd/netinet6/in6_gif.c      		optional gif inet6
+bsd/netinet6/ip6_fw.c      		    optional inet6
 bsd/netinet6/ip6_forward.c  		optional inet6
 bsd/netinet6/in6_ifattach.c 		optional inet6
 bsd/netinet6/ip6_input.c    		optional inet6
-bsd/netinet6/ip6_mroute.c   		optional inet6
+bsd/netinet6/ip6_mroute.c   		optional inet6 
 bsd/netinet6/ip6_output.c   		optional inet6
 bsd/netinet6/in6_src.c      		optional inet6
 bsd/netinet6/ipcomp_core.c  		optional ipsec
@@ -299,8 +321,9 @@ bsd/crypto/des/des_setkey.c       	optional crypto
 bsd/crypto/blowfish/bf_enc.c      	optional crypto
 bsd/crypto/blowfish/bf_skey.c     	optional crypto
 bsd/crypto/cast128/cast128.c      	optional crypto
-bsd/crypto/rijndael/rijndael-alg-fst.c  optional crypto
-bsd/crypto/rijndael/rijndael-api-fst.c  optional crypto
+bsd/crypto/aes/aescrypt.c		optional crypto
+bsd/crypto/aes/aeskey.c			optional crypto
+bsd/crypto/aes/aestab.c			optional crypto
 bsd/crypto/rc4/rc4.c              	optional crypto
 
 #bsd/netpm/pm_aTT.c        optional pm
@@ -378,7 +401,6 @@ bsd/nfs/krpc_subr.c			optional nfsclient
 bsd/nfs/nfs_bio.c			optional nfsclient
 bsd/nfs/nfs_boot.c			optional nfsclient
 bsd/nfs/nfs_node.c			optional nfsclient
-bsd/nfs/nfs_nqlease.c			optional nfsclient nfsserver
 bsd/nfs/nfs_serv.c			optional nfsserver
 bsd/nfs/nfs_socket.c			optional nfsclient nfsserver
 bsd/nfs/nfs_srvcache.c			optional nfsserver
@@ -404,7 +426,6 @@ bsd/ufs/ufs/ufs_bmap.c			standard
 bsd/ufs/ufs/ufs_byte_order.c		optional rev_endian_fs
 bsd/ufs/ufs/ufs_ihash.c			standard
 bsd/ufs/ufs/ufs_inode.c			standard
-bsd/ufs/ufs/ufs_lockf.c			standard
 bsd/ufs/ufs/ufs_lookup.c		standard
 bsd/ufs/ufs/ufs_quota.c			optional quota
 bsd/ufs/ufs/ufs_vfsops.c		standard
@@ -420,7 +441,6 @@ bsd/hfs/hfs_encodings.c				optional hfs
 bsd/hfs/hfs_endian.c				optional hfs
 bsd/hfs/hfs_hotfiles.c				optional hfs
 bsd/hfs/hfs_link.c				optional hfs
-bsd/hfs/hfs_lockf.c				optional hfs
 bsd/hfs/hfs_lookup.c				optional hfs
 bsd/hfs/hfs_notification.c			optional hfs
 bsd/hfs/hfs_quota.c				optional quota
@@ -429,6 +449,7 @@ bsd/hfs/hfs_search.c				optional hfs
 bsd/hfs/hfs_vfsops.c				optional hfs
 bsd/hfs/hfs_vfsutils.c				optional hfs
 bsd/hfs/hfs_vnops.c				optional hfs
+bsd/hfs/hfs_xattr.c				optional hfs
 bsd/hfs/MacOSStubs.c				optional hfs
 bsd/hfs/rangelist.c				optional hfs
 bsd/hfs/hfscommon/BTree/BTree.c			optional hfs
@@ -438,8 +459,6 @@ bsd/hfs/hfscommon/BTree/BTreeNodeOps.c		optional hfs
 bsd/hfs/hfscommon/BTree/BTreeNodeReserve.c	optional hfs
 bsd/hfs/hfscommon/BTree/BTreeScanner.c		optional hfs
 bsd/hfs/hfscommon/BTree/BTreeTreeOps.c		optional hfs
-bsd/hfs/hfscommon/Catalog/Catalog.c		optional hfs
-bsd/hfs/hfscommon/Catalog/CatalogIterators.c	optional hfs
 bsd/hfs/hfscommon/Catalog/CatalogUtilities.c	optional hfs
 bsd/hfs/hfscommon/Catalog/FileIDsServices.c	optional hfs
 bsd/hfs/hfscommon/Misc/BTreeWrapper.c		optional hfs
@@ -451,19 +470,22 @@ bsd/kern/bsd_init.c			standard
 bsd/kern/init_sysent.c			standard
 bsd/kern/kdebug.c			standard
 bsd/kern/kern_acct.c			standard
-bsd/kern/kern_aio.c				standard
+bsd/kern/kern_aio.c			standard
 bsd/kern/kern_audit.c			standard
+bsd/kern/kern_authorization.c		standard
 bsd/kern/kern_bsm_token.c		standard
 bsd/kern/kern_bsm_audit.c		standard
 bsd/kern/kern_bsm_klib.c		standard
 bsd/kern/kern_clock.c			standard
 bsd/kern/kern_core.c			standard
+bsd/kern/kern_credential.c		standard
 bsd/kern/kern_symfile.c			standard
 bsd/kern/kern_descrip.c			standard
 bsd/kern/kern_event.c			standard
 bsd/kern/kern_control.c			standard
 bsd/kern/kern_exec.c			standard
 bsd/kern/kern_exit.c			standard
+bsd/kern/kern_lockf.c			standard
 bsd/kern/kern_fork.c			standard
 bsd/kern/kern_ktrace.c			standard 
 bsd/kern/kern_lock.c			optional cpus
@@ -481,6 +503,7 @@ bsd/kern/kern_synch.c			standard
 bsd/kern/kern_sysctl.c			standard
 bsd/kern/kern_newsysctl.c		standard
 bsd/kern/kern_mib.c			standard
+bsd/kern/kpi_mbuf.c			standard
 bsd/kern/sysctl_init.c			standard
 bsd/kern/kern_time.c			standard
 bsd/kern/kern_xxx.c			standard
@@ -492,11 +515,12 @@ bsd/kern/subr_prf.c			standard
 bsd/kern/subr_prof.c			standard
 bsd/kern/subr_xxx.c			standard
 bsd/kern/sys_generic.c			standard
+bsd/kern/sys_pipe.c			standard
 bsd/kern/sys_socket.c			standard
 bsd/kern/sys_domain.c	                standard
 bsd/kern/syscalls.c			standard
 bsd/kern/tty.c				standard
-bsd/kern/tty_compat.c			optional compat_43
+bsd/kern/tty_compat.c			optional compat_43_tty
 bsd/kern/tty_conf.c			standard
 bsd/kern/tty_pty.c			optional pty
 bsd/kern/tty_subr.c			standard
@@ -513,6 +537,7 @@ bsd/kern/uipc_usrreq.c			standard
 bsd/kern/sysv_ipc.c			standard
 bsd/kern/sysv_shm.c			standard
 bsd/kern/sysv_sem.c			standard
+bsd/kern/sysv_msg.c			standard
 bsd/kern/mach_fat.c			standard
 bsd/kern/mach_header.c			standard
 bsd/kern/mach_loader.c			standard
@@ -520,6 +545,8 @@ bsd/kern/posix_sem.c			standard
 bsd/kern/posix_shm.c			standard
 # XXXdbg - I need this in the journaling and block cache code
 bsd/kern/qsort.c			standard
+bsd/kern/kpi_socket.c		standard
+bsd/kern/kpi_socketfilter.c	standard
 
 bsd/vm/vnode_pager.c			standard
 bsd/vm/vm_unix.c			standard

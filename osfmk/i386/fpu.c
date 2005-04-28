@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -50,7 +50,6 @@
 /*
  */
 
-#include <cpus.h>
 #include <platforms.h>
 
 #include <mach/exception_types.h>
@@ -58,6 +57,7 @@
 #include <mach/i386/fp_reg.h>
 
 #include <kern/mach_param.h>
+#include <kern/processor.h>
 #include <kern/thread.h>
 #include <kern/zalloc.h>
 #include <kern/misc_protos.h>
@@ -88,36 +88,20 @@ extern int curr_ipl;
 int		fp_kind = FP_387;	/* 80387 present */
 zone_t		ifps_zone;		/* zone for FPU save area */
 
-#if	NCPUS == 1
-volatile thread_act_t	fp_act = THR_ACT_NULL;
-				    /* thread whose state is in FPU */
-				    /* always THR_ACT_NULL if emulating FPU */
-volatile thread_act_t	fp_intr_act = THR_ACT_NULL;
-
-
-#define	clear_fpu() \
-    { \
-	set_ts(); \
-	fp_act = THR_ACT_NULL; \
-    }
-
-#else	/* NCPUS > 1 */
 #define	clear_fpu() \
     { \
 	set_ts(); \
     }
 
-#endif
- 
 #define ALIGNED(addr,size)	(((unsigned)(addr)&((size)-1))==0)
 
 /* Forward */
 
 extern void		fpinit(void);
 extern void		fp_save(
-				thread_act_t	thr_act);
+				thread_t	thr_act);
 extern void		fp_load(
-				thread_act_t	thr_act);
+				thread_t	thr_act);
 
 /*
  * Look for FPU and initialize it.
@@ -133,7 +117,7 @@ init_fpu(void)
 	 * then trying to read the correct bit patterns from
 	 * the control and status registers.
 	 */
-	set_cr0(get_cr0() & ~(CR0_EM|CR0_TS));	/* allow use of FPU */
+	set_cr0((get_cr0() & ~(CR0_EM|CR0_TS)) | CR0_NE);	/* allow use of FPU */
 
 	fninit();
 	status = fnstsw();
@@ -188,23 +172,11 @@ fpu_module_init(void)
  * Called only when thread terminating - no locking necessary.
  */
 void
-fp_free(fps)
+fpu_free(fps)
 	struct i386_fpsave_state *fps;
 {
 ASSERT_IPL(SPL0);
-#if	NCPUS == 1
-	if ((fp_act != THR_ACT_NULL) && (fp_act->mact.pcb->ims.ifps == fps)) {
-		/* 
-		 * Make sure we don't get FPU interrupts later for
-		 * this thread
-		 */
-		fwait();
-
-		/* Mark it free and disable access */
-	    clear_fpu();
-	}
-#endif	/* NCPUS == 1 */
-	zfree(ifps_zone, (vm_offset_t) fps);
+	zfree(ifps_zone, fps);
 }
 
 /*
@@ -218,7 +190,7 @@ ASSERT_IPL(SPL0);
  */
 kern_return_t
 fpu_set_fxstate(
-	thread_act_t		thr_act,
+	thread_t		thr_act,
 	struct i386_float_state	*state)
 {
 	register pcb_t	pcb;
@@ -234,22 +206,9 @@ ASSERT_IPL(SPL0);
             return fpu_set_state(thr_act, state);
         }
         
-	assert(thr_act != THR_ACT_NULL);
-	pcb = thr_act->mact.pcb;
+	assert(thr_act != THREAD_NULL);
+	pcb = thr_act->machine.pcb;
 
-#if	NCPUS == 1
-
-	/*
-	 * If this thread`s state is in the FPU,
-	 * discard it; we are replacing the entire
-	 * FPU state.
-	 */
-	if (fp_act == thr_act) {
-	    fwait();			/* wait for possible interrupt */
-	    clear_fpu();		/* no state in FPU */
-	}
-#endif
-        
 	if (state->initialized == 0) {
 	    /*
 	     * new FPU state is 'invalid'.
@@ -261,7 +220,7 @@ ASSERT_IPL(SPL0);
 	    simple_unlock(&pcb->lock);
 
 	    if (ifps != 0) {
-		zfree(ifps_zone, (vm_offset_t) ifps);
+		zfree(ifps_zone, ifps);
 	    }
 	}
 	else {
@@ -293,7 +252,7 @@ ASSERT_IPL(SPL0);
             ifps->fp_save_flavor = FP_FXSR;
 	    simple_unlock(&pcb->lock);
 	    if (new_ifps != 0)
-		zfree(ifps_zone, (vm_offset_t) ifps);
+		zfree(ifps_zone, ifps);
 	}
 
 	return KERN_SUCCESS;
@@ -307,18 +266,21 @@ ASSERT_IPL(SPL0);
  */
 kern_return_t
 fpu_get_fxstate(
-	thread_act_t				thr_act,
+	thread_t				thr_act,
 	register struct i386_float_state	*state)
 {
 	register pcb_t	pcb;
 	register struct i386_fpsave_state *ifps;
 
 ASSERT_IPL(SPL0);
-	if (fp_kind == FP_NO)
+	if (fp_kind == FP_NO) {
 	    return KERN_FAILURE;
+	} else if (fp_kind == FP_387) {
+	    return fpu_get_state(thr_act, state);
+	}
 
-	assert(thr_act != THR_ACT_NULL);
-	pcb = thr_act->mact.pcb;
+	assert(thr_act != THREAD_NULL);
+	pcb = thr_act->machine.pcb;
 
 	simple_lock(&pcb->lock);
 	ifps = pcb->ims.ifps;
@@ -333,11 +295,7 @@ ASSERT_IPL(SPL0);
 
 	/* Make sure we`ve got the latest fp state info */
 	/* If the live fpu state belongs to our target */
-#if	NCPUS == 1
-	if (thr_act == fp_act)
-#else
-	if (thr_act == current_act())
-#endif
+	if (thr_act == current_thread())
 	{
 	    clear_ts();
 	    fp_save(thr_act);
@@ -362,7 +320,7 @@ ASSERT_IPL(SPL0);
  */
 kern_return_t
 fpu_set_state(
-	thread_act_t		thr_act,
+	thread_t		thr_act,
 	struct i386_float_state	*state)
 {
 	register pcb_t	pcb;
@@ -373,21 +331,8 @@ ASSERT_IPL(SPL0);
 	if (fp_kind == FP_NO)
 	    return KERN_FAILURE;
 
-	assert(thr_act != THR_ACT_NULL);
-	pcb = thr_act->mact.pcb;
-
-#if	NCPUS == 1
-
-	/*
-	 * If this thread`s state is in the FPU,
-	 * discard it; we are replacing the entire
-	 * FPU state.
-	 */
-	if (fp_act == thr_act) {
-	    fwait();			/* wait for possible interrupt */
-	    clear_fpu();		/* no state in FPU */
-	}
-#endif
+	assert(thr_act != THREAD_NULL);
+	pcb = thr_act->machine.pcb;
 
 	if (state->initialized == 0) {
 	    /*
@@ -400,7 +345,7 @@ ASSERT_IPL(SPL0);
 	    simple_unlock(&pcb->lock);
 
 	    if (ifps != 0) {
-		zfree(ifps_zone, (vm_offset_t) ifps);
+		zfree(ifps_zone, ifps);
 	    }
 	}
 	else {
@@ -448,7 +393,7 @@ ASSERT_IPL(SPL0);
             ifps->fp_save_flavor = FP_387;
 	    simple_unlock(&pcb->lock);
 	    if (new_ifps != 0)
-		zfree(ifps_zone, (vm_offset_t) ifps);
+		zfree(ifps_zone, ifps);
 	}
 
 	return KERN_SUCCESS;
@@ -462,7 +407,7 @@ ASSERT_IPL(SPL0);
  */
 kern_return_t
 fpu_get_state(
-	thread_act_t				thr_act,
+	thread_t				thr_act,
 	register struct i386_float_state	*state)
 {
 	register pcb_t	pcb;
@@ -472,8 +417,8 @@ ASSERT_IPL(SPL0);
 	if (fp_kind == FP_NO)
 	    return KERN_FAILURE;
 
-	assert(thr_act != THR_ACT_NULL);
-	pcb = thr_act->mact.pcb;
+	assert(thr_act != THREAD_NULL);
+	pcb = thr_act->machine.pcb;
 
 	simple_lock(&pcb->lock);
 	ifps = pcb->ims.ifps;
@@ -488,11 +433,7 @@ ASSERT_IPL(SPL0);
 
 	/* Make sure we`ve got the latest fp state info */
 	/* If the live fpu state belongs to our target */
-#if	NCPUS == 1
-	if (thr_act == fp_act)
-#else
-	if (thr_act == current_act())
-#endif
+	if (thr_act == current_thread())
 	{
 	    clear_ts();
 	    fp_save(thr_act);
@@ -575,36 +516,11 @@ fpnoextflt(void)
 	 */
 ASSERT_IPL(SPL0);
 	clear_ts();
-#if	NCPUS == 1
-
-	/*
-	 * If this thread`s state is in the FPU, we are done.
-	 */
-	if (fp_act == current_act())
-	    return;
-
-	/* Make sure we don't do fpsave() in fp_intr while doing fpsave()
-	 * here if the current fpu instruction generates an error.
-	 */
-	fwait();
-	/*
-	 * If another thread`s state is in the FPU, save it.
-	 */
-	if (fp_act != THR_ACT_NULL) {
-	    fp_save(fp_act);
-	}
-
-	/*
-	 * Give this thread the FPU.
-	 */
-	fp_act = current_act();
-
-#endif	/* NCPUS == 1 */
 
 	/*
 	 * Load this thread`s state into the FPU.
 	 */
-	fp_load(current_act());
+	fp_load(current_thread());
 }
 
 /*
@@ -615,26 +531,15 @@ ASSERT_IPL(SPL0);
 void
 fpextovrflt(void)
 {
-	register thread_act_t	thr_act = current_act();
+	register thread_t	thr_act = current_thread();
 	register pcb_t		pcb;
 	register struct i386_fpsave_state *ifps;
-
-#if	NCPUS == 1
-
-	/*
-	 * Is exception for the currently running thread?
-	 */
-	if (fp_act != thr_act) {
-	    /* Uh oh... */
-	    panic("fpextovrflt");
-	}
-#endif
 
 	/*
 	 * This is a non-recoverable error.
 	 * Invalidate the thread`s FPU state.
 	 */
-	pcb = thr_act->mact.pcb;
+	pcb = thr_act->machine.pcb;
 	simple_lock(&pcb->lock);
 	ifps = pcb->ims.ifps;
 	pcb->ims.ifps = 0;
@@ -652,7 +557,7 @@ fpextovrflt(void)
 	clear_fpu();
 
 	if (ifps)
-	    zfree(ifps_zone, (vm_offset_t) ifps);
+	    zfree(ifps_zone, ifps);
 
 	/*
 	 * Raise exception.
@@ -668,43 +573,13 @@ fpextovrflt(void)
 void
 fpexterrflt(void)
 {
-	register thread_act_t	thr_act = current_act();
+	register thread_t	thr_act = current_thread();
 
 ASSERT_IPL(SPL0);
-#if	NCPUS == 1
-	/*
-	 * Since FPU errors only occur on ESC or WAIT instructions,
-	 * the current thread should own the FPU.  If it didn`t,
-	 * we should have gotten the task-switched interrupt first.
-	 */
-	if (fp_act != THR_ACT_NULL) {
-	    panic("fpexterrflt");
-		return;
-	}
-
-	/*
-	 * Check if we got a context switch between the interrupt and the AST
-	 * This can happen if the interrupt arrived after the FPU AST was
-	 * checked. In this case, raise the exception in fp_load when this
-	 * thread next time uses the FPU. Remember exception condition in
-	 * fp_valid (extended boolean 2).
-	 */
-	if (fp_intr_act != thr_act) {
-		if (fp_intr_act == THR_ACT_NULL) {
-			panic("fpexterrflt: fp_intr_act == THR_ACT_NULL");
-			return;
-		}
-		fp_intr_act->mact.pcb->ims.ifps->fp_valid = 2;
-		fp_intr_act = THR_ACT_NULL;
-		return;
-	}
-	fp_intr_act = THR_ACT_NULL;
-#else	/* NCPUS == 1 */
 	/*
 	 * Save the FPU state and turn off the FPU.
 	 */
 	fp_save(thr_act);
-#endif	/* NCPUS == 1 */
 
 	/*
 	 * Raise FPU exception.
@@ -713,7 +588,7 @@ ASSERT_IPL(SPL0);
 	 */
 	i386_exception(EXC_ARITHMETIC,
 		       EXC_I386_EXTERR,
-		       thr_act->mact.pcb->ims.ifps->fp_save_state.fp_status);
+		       thr_act->machine.pcb->ims.ifps->fp_save_state.fp_status);
 	/*NOTREACHED*/
 }
 
@@ -727,9 +602,9 @@ ASSERT_IPL(SPL0);
  */
 void
 fp_save(
-	thread_act_t	thr_act)
+	thread_t	thr_act)
 {
-	register pcb_t pcb = thr_act->mact.pcb;
+	register pcb_t pcb = thr_act->machine.pcb;
 	register struct i386_fpsave_state *ifps = pcb->ims.ifps;
 	if (ifps != 0 && !ifps->fp_valid) {
 	    /* registers are in FPU */
@@ -751,9 +626,9 @@ fp_save(
 
 void
 fp_load(
-	thread_act_t	thr_act)
+	thread_t	thr_act)
 {
-	register pcb_t pcb = thr_act->mact.pcb;
+	register pcb_t pcb = thr_act->machine.pcb;
 	register struct i386_fpsave_state *ifps;
 
 ASSERT_IPL(SPL0);
@@ -782,7 +657,7 @@ ASSERT_IPL(SPL0);
 		 */
 		i386_exception(EXC_ARITHMETIC,
 		       EXC_I386_EXTERR,
-		       thr_act->mact.pcb->ims.ifps->fp_save_state.fp_status);
+		       thr_act->machine.pcb->ims.ifps->fp_save_state.fp_status);
 		/*NOTREACHED*/
 #endif
 	} else {
@@ -802,7 +677,7 @@ ASSERT_IPL(SPL0);
 void
 fp_state_alloc(void)
 {
-	pcb_t	pcb = current_act()->mact.pcb;
+	pcb_t	pcb = current_thread()->machine.pcb;
 	struct i386_fpsave_state *ifps;
 
 	ifps = (struct i386_fpsave_state *)zalloc(ifps_zone);
@@ -825,24 +700,16 @@ fp_state_alloc(void)
 
 
 /*
- * fpflush(thread_act_t)
+ * fpflush(thread_t)
  *	Flush the current act's state, if needed
  *	(used by thread_terminate_self to ensure fp faults
  *	aren't satisfied by overly general trap code in the
  *	context of the reaper thread)
  */
 void
-fpflush(thread_act_t thr_act)
+fpflush(__unused thread_t thr_act)
 {
-#if	NCPUS == 1
-	if (fp_act && thr_act == fp_act) {
-	    clear_ts();
-	    fwait();
-	    clear_fpu();
-	}
-#else
 	/* not needed on MP x86s; fp not lazily evaluated */
-#endif
 }
 
 
@@ -855,7 +722,7 @@ void
 fpintr(void)
 {
 	spl_t	s;
-	thread_act_t thr_act = current_act();
+	thread_t thr_act = current_thread();
 
 ASSERT_IPL(SPL1);
 	/*
@@ -866,34 +733,6 @@ ASSERT_IPL(SPL1);
 	/*
 	 * Save the FPU context to the thread using it.
 	 */
-#if	NCPUS == 1
-	if (fp_act == THR_ACT_NULL) {
-		printf("fpintr: FPU not belonging to anyone!\n");
-		clear_ts();
-		fninit();
-		clear_fpu();
-		return;
-	}
-
-	if (fp_act != thr_act) {
-	    /*
-	     * FPU exception is for a different thread.
-	     * When that thread again uses the FPU an exception will be
-	     * raised in fp_load. Remember the condition in fp_valid (== 2).
-	     */
-	    clear_ts();
-	    fp_save(fp_act);
-	    fp_act->mact.pcb->ims.ifps->fp_valid = 2;
-	    fninit();
-	    clear_fpu();
-	    /* leave fp_intr_act THR_ACT_NULL */
-	    return;
-	}
-	if (fp_intr_act != THR_ACT_NULL)
-	    panic("fp_intr: already caught intr");
-	fp_intr_act = thr_act;
-#endif	/* NCPUS == 1 */
-
 	clear_ts();
 	fp_save(thr_act);
 	fninit();

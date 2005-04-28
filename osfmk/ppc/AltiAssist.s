@@ -29,7 +29,6 @@
 
 */
 
-#include <cpus.h>
 #include <ppc/asm.h>
 #include <ppc/proc_reg.h>
 #include <ppc/exception.h>

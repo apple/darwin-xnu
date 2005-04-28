@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -72,8 +72,13 @@
 #ifndef	_SYS_MBUF_H_
 #define	_SYS_MBUF_H_
 
+#include <sys/cdefs.h>
 #include <sys/appleapiopts.h>
+
+#ifdef KERNEL_PRIVATE
+
 #include <sys/lock.h>
+#include <sys/queue.h>
 
 /*
  * Mbufs are of a single size, MSIZE (machine/param.h), which
@@ -83,7 +88,6 @@
  * at least MINCLSIZE of data must be stored.
  */
 
-#ifdef __APPLE_API_UNSTABLE
 #define	MLEN		(MSIZE - sizeof(struct m_hdr))	/* normal data len */
 #define	MHLEN		(MLEN - sizeof(struct pkthdr))	/* data len w/pkthdr */
 
@@ -117,6 +121,16 @@ struct m_hdr {
 	short	mh_flags;		/* flags; see below */
 };
 
+/*
+ * Packet tag structure (see below for details).
+ */
+struct m_tag {
+	SLIST_ENTRY(m_tag)	m_tag_link;	/* List of packet tags */
+	u_int16_t			m_tag_type;	/* Module specific type */
+	u_int16_t			m_tag_len;	/* Length of data */
+	u_int32_t			m_tag_id;	/* Module ID */
+};
+
 /* record/packet header in first mbuf of chain; valid if M_PKTHDR set */
 struct	pkthdr {
 	int	len;			/* total packet length */
@@ -133,11 +147,11 @@ struct	pkthdr {
 	struct mbuf *aux;		/* extra data buffer; ipsec/others */
 #ifdef KERNEL_PRIVATE
 	u_short	vlan_tag;		/* VLAN tag, host byte order */
-	u_short reserved_1;		/* for future use */
+	u_short socket_id;		/* socket id */
 #else KERNEL_PRIVATE
-	void	*reserved1;		/* for future use */
+	u_int	reserved1;		/* for future use */
 #endif KERNEL_PRIVATE
-	void	*reserved2;		/* for future use */
+        SLIST_HEAD(packet_tags, m_tag) tags; /* list of packet tags */
 };
 
 
@@ -194,10 +208,12 @@ struct mbuf {
 #define	M_FRAG		0x0400	/* packet is a fragment of a larger packet */
 #define	M_FIRSTFRAG	0x0800	/* packet is first fragment */
 #define	M_LASTFRAG	0x1000	/* packet is last fragment */
+#define	M_PROMISC	0x2000	/* packet is promiscuous (shouldn't go to stack) */
 
 /* flags copied when copying m_pkthdr */
-#define	M_COPYFLAGS	(M_PKTHDR|M_EOR|M_PROTO1|M_PROTO1|M_PROTO2|M_PROTO3 | \
-			    M_PROTO4|M_PROTO5|M_BCAST|M_MCAST|M_FRAG)
+#define M_COPYFLAGS     (M_PKTHDR|M_EOR|M_PROTO1|M_PROTO2|M_PROTO3 | \
+                            M_PROTO4|M_PROTO5|M_BCAST|M_MCAST|M_FRAG | \
+                            M_FIRSTFRAG|M_LASTFRAG|M_PROMISC)
 
 /* flags indicating hw checksum support and sw checksum requirements [freebsd4.1]*/
 #define CSUM_IP                 0x0001          /* will csum IP */
@@ -214,7 +230,6 @@ struct mbuf {
  
 #define CSUM_DELAY_DATA         (CSUM_TCP | CSUM_UDP)
 #define CSUM_DELAY_IP           (CSUM_IP)       /* XXX add ipv6 here too? */
-#ifdef KERNEL_PRIVATE
 /*
  * Note: see also IF_HWASSIST_CSUM defined in <net/if_var.h>
  */
@@ -242,7 +257,10 @@ struct mbuf {
 #define	MT_IFADDR	13	/* interface address */
 #define MT_CONTROL	14	/* extra-data protocol message */
 #define MT_OOBDATA	15	/* expedited data  */
+#define MT_TAG          16      /* volatile metadata associated to pkts */
 #define MT_MAX		32	/* enough? */
+
+#ifdef KERNEL_PRIVATE
 
 /* flags to m_get/MGET */
 /* Need to include malloc.h to get right options for malloc  */
@@ -250,8 +268,6 @@ struct mbuf {
 
 #define	M_DONTWAIT	M_NOWAIT
 #define	M_WAIT		M_WAITOK
-
-#ifdef __APPLE_API_PRIVATE 
 
 /*
  * mbuf utility macros:
@@ -261,14 +277,14 @@ struct mbuf {
  * drivers.
  */
 
+#ifdef _KERN_LOCKS_H_
+extern lck_mtx_t * mbuf_mlock;
+#else
+extern void * mbuf_mlock;
+#endif
 
-extern
-decl_simple_lock_data(, mbuf_slock);
-#define MBUF_LOCK() usimple_lock(&mbuf_slock);
-#define MBUF_UNLOCK() usimple_unlock(&mbuf_slock);
-#define MBUF_LOCKINIT() simple_lock_init(&mbuf_slock);
-
-#endif /* __APPLE_API_PRIVATE */
+#define MBUF_LOCK()	lck_mtx_lock(mbuf_mlock);
+#define MBUF_UNLOCK()	lck_mtx_unlock(mbuf_mlock);
 
 /*
  * mbuf allocation/deallocation macros:
@@ -287,11 +303,7 @@ decl_simple_lock_data(, mbuf_slock);
 #define MCHECK(m)
 #endif
 
-#ifdef __APPLE_API_PRIVATE
 extern struct mbuf *mfree;				/* mbuf free list */
-extern simple_lock_data_t   mbuf_slock;
-#endif /* __APPLE_API_PRIVATE */
-
 
 #define	MGET(m, how, type) ((m) = m_get((how), (type)))
 
@@ -319,6 +331,16 @@ union mcluster {
 #define	MCLFREE(p)	m_mclfree(p)
 
 #define	MCLGET(m, how) 	((m) = m_mclget(m, how))
+
+/*
+ * Mbuf big cluster
+ */
+
+union mbigcluster {
+	union mbigcluster	*mbc_next;
+	char 			mbc_buf[NBPG];
+};
+
 
 #define MCLHASREFERENCE(m) m_mclhasreference(m)
 
@@ -381,10 +403,35 @@ union mcluster {
 /* compatiblity with 4.3 */
 #define  m_copy(m, o, l)	m_copym((m), (o), (l), M_DONTWAIT)
 
+#endif /* KERNEL_PRIVATE */
+
 /*
  * Mbuf statistics.
  */
+/* LP64todo - not 64-bit safe */
 struct mbstat {
+	u_long  m_mbufs;        /* mbufs obtained from page pool */
+	u_long  m_clusters;     /* clusters obtained from page pool */
+	u_long  m_spare;        /* spare field */
+	u_long  m_clfree;       /* free clusters */
+	u_long  m_drops;        /* times failed to find space */
+	u_long  m_wait;         /* times waited for space */
+	u_long  m_drain;        /* times drained protocols for space */
+	u_short m_mtypes[256];  /* type specific mbuf allocations */
+	u_long  m_mcfail;       /* times m_copym failed */
+	u_long  m_mpfail;       /* times m_pullup failed */
+	u_long  m_msize;        /* length of an mbuf */
+	u_long  m_mclbytes;     /* length of an mbuf cluster */
+	u_long  m_minclsize;    /* min length of data to allocate a cluster */
+	u_long  m_mlen;         /* length of data in an mbuf */
+	u_long  m_mhlen;        /* length of data in a header mbuf */
+	u_long  m_bigclusters;     /* clusters obtained from page pool */
+	u_long  m_bigclfree;       /* free clusters */
+	u_long  m_bigmclbytes;     /* length of an mbuf cluster */
+};
+
+/* Compatibillity with 10.3 */
+struct ombstat {
 	u_long	m_mbufs;	/* mbufs obtained from page pool */
 	u_long	m_clusters;	/* clusters obtained from page pool */
 	u_long	m_spare;	/* spare field */
@@ -401,6 +448,7 @@ struct mbstat {
 	u_long	m_mlen;		/* length of data in an mbuf */
 	u_long	m_mhlen;	/* length of data in a header mbuf */
 };
+#ifdef KERNEL_PRIVATE
 
 /*
  * pkthdr.aux type tags.
@@ -423,50 +471,136 @@ extern int	max_protohdr;		/* largest protocol header */
 extern int	max_hdr;		/* largest link+protocol header */
 extern int	max_datalen;		/* MHLEN - max_hdr */
 
-struct	mbuf *m_copym __P((struct mbuf *, int, int, int));
-struct	mbuf *m_split __P((struct mbuf *, int, int));
-struct	mbuf *m_free __P((struct mbuf *));
-struct	mbuf *m_get __P((int, int));
-struct	mbuf *m_getpacket __P((void));
-struct	mbuf *m_getclr __P((int, int));
-struct	mbuf *m_gethdr __P((int, int));
-struct	mbuf *m_prepend __P((struct mbuf *, int, int));
-struct  mbuf *m_prepend_2 __P((struct mbuf *, int, int));
-struct	mbuf *m_pullup __P((struct mbuf *, int));
-struct	mbuf *m_retry __P((int, int));
-struct	mbuf *m_retryhdr __P((int, int));
-void m_adj __P((struct mbuf *, int));
-int	 m_clalloc __P((int, int));
-void m_freem __P((struct mbuf *));
-int m_freem_list __P((struct mbuf *));
-struct	mbuf *m_devget __P((char *, int, int, struct ifnet *, void (*)()));
-char   *mcl_to_paddr __P((char *));
-struct mbuf *m_pulldown __P((struct mbuf*, int, int, int*));
-struct mbuf *m_aux_add __P((struct mbuf *, int, int));
-struct mbuf *m_aux_find __P((struct mbuf *, int, int));
-void m_aux_delete __P((struct mbuf *, struct mbuf *));
+__BEGIN_DECLS
+struct	mbuf *m_copym(struct mbuf *, int, int, int);
+struct	mbuf *m_split(struct mbuf *, int, int);
+struct	mbuf *m_free(struct mbuf *);
+struct	mbuf *m_get(int, int);
+struct	mbuf *m_getpacket(void);
+struct	mbuf *m_getclr(int, int);
+struct	mbuf *m_gethdr(int, int);
+struct	mbuf *m_prepend(struct mbuf *, int, int);
+struct  mbuf *m_prepend_2(struct mbuf *, int, int);
+struct	mbuf *m_pullup(struct mbuf *, int);
+struct	mbuf *m_retry(int, int);
+struct	mbuf *m_retryhdr(int, int);
+void m_adj(struct mbuf *, int);
+void m_freem(struct mbuf *);
+int m_freem_list(struct mbuf *);
+struct	mbuf *m_devget(char *, int, int, struct ifnet *, void (*)(const void *, void *, size_t));
+char   *mcl_to_paddr(char *);
+struct mbuf *m_pulldown(struct mbuf*, int, int, int*);
+struct mbuf *m_aux_add(struct mbuf *, int, int);
+struct mbuf *m_aux_find(struct mbuf *, int, int);
+void m_aux_delete(struct mbuf *, struct mbuf *);
 
-struct mbuf *m_mclget __P((struct mbuf *, int));
-caddr_t m_mclalloc __P((int));
-void m_mclfree __P((caddr_t p));
-int m_mclhasreference __P((struct mbuf *));
-void m_copy_pkthdr __P((struct mbuf *, struct mbuf*));
+struct mbuf *m_mclget(struct mbuf *, int);
+caddr_t m_mclalloc(int);
+void m_mclfree(caddr_t p);
+int m_mclhasreference(struct mbuf *);
+void m_copy_pkthdr(struct mbuf *, struct mbuf*);
 
-int m_mclref __P((struct mbuf *));
-int m_mclunref __P((struct mbuf *));
+int m_mclref(struct mbuf *);
+int m_mclunref(struct mbuf *);
 
-void *          m_mtod __P((struct mbuf *));
-struct mbuf *   m_dtom __P((void *));
-int             m_mtocl __P((void *));
-union mcluster *m_cltom __P((int ));
+void *          m_mtod(struct mbuf *);
+struct mbuf *   m_dtom(void *);
+int             m_mtocl(void *);
+union mcluster *m_cltom(int );
 
-int m_trailingspace __P((struct mbuf *));
-int m_leadingspace __P((struct mbuf *));
+int m_trailingspace(struct mbuf *);
+int m_leadingspace(struct mbuf *);
 
-void m_mchtype __P((struct mbuf *m, int t));
+void m_mchtype(struct mbuf *m, int t);
+void m_mcheck(struct mbuf*);
 
-void m_mcheck __P((struct mbuf*));
+void m_copyback(struct mbuf *, int , int , caddr_t);
+void m_copydata(struct mbuf *, int , int , caddr_t);
+struct mbuf* m_dup(struct mbuf *m, int how);
+void m_cat(struct mbuf *, struct mbuf *);
+struct  mbuf *m_copym_with_hdrs(struct mbuf*, int, int, int, struct mbuf**, int*);
+struct mbuf *m_getpackets(int, int, int);
+struct mbuf * m_getpackethdrs(int , int );
+struct mbuf* m_getpacket_how(int );
+struct mbuf * m_getpackets_internal(unsigned int *, int , int , int , size_t);
+struct mbuf * m_allocpacket_internal(unsigned int * , size_t , unsigned int *, int , int , size_t );
 
+__END_DECLS
+
+/*
+ Packets may have annotations attached by affixing a list of "packet
+ tags" to the pkthdr structure.  Packet tags are dynamically allocated
+ semi-opaque data structures that have a fixed header (struct m_tag)
+ that specifies the size of the memory block and an <id,type> pair that
+ identifies it. The id identifies the module and the type identifies the
+ type of data for that module. The id of zero is reserved for the kernel.
+ 
+ Note that the packet tag returned by m_tag_allocate has the default
+ memory alignment implemented by malloc.  To reference private data one
+ can use a construct like:
+ 
+      struct m_tag *mtag = m_tag_allocate(...);
+      struct foo *p = (struct foo *)(mtag+1);
+ 
+ if the alignment of struct m_tag is sufficient for referencing members
+ of struct foo.  Otherwise it is necessary to embed struct m_tag within
+ the private data structure to insure proper alignment; e.g.
+ 
+      struct foo {
+              struct m_tag    tag;
+              ...
+      };
+      struct foo *p = (struct foo *) m_tag_allocate(...);
+      struct m_tag *mtag = &p->tag;
+ */
+
+#define KERNEL_MODULE_TAG_ID	0
+
+enum {
+	KERNEL_TAG_TYPE_NONE			= 0,
+	KERNEL_TAG_TYPE_DUMMYNET		= 1,
+	KERNEL_TAG_TYPE_DIVERT			= 2,
+	KERNEL_TAG_TYPE_IPFORWARD		= 3,
+	KERNEL_TAG_TYPE_IPFILT			= 4
+};
+
+/*
+ * As a temporary and low impact solution to replace the even uglier
+ * approach used so far in some parts of the network stack (which relies
+ * on global variables), packet tag-like annotations are stored in MT_TAG
+ * mbufs (or lookalikes) prepended to the actual mbuf chain.
+ *
+ *      m_type  = MT_TAG
+ *      m_flags = m_tag_id
+ *      m_next  = next buffer in chain.
+ *
+ * BE VERY CAREFUL not to pass these blocks to the mbuf handling routines.
+ */
+#define _m_tag_id       m_hdr.mh_flags
+
+__BEGIN_DECLS
+
+/* Packet tag routines */
+struct  m_tag   *m_tag_alloc(u_int32_t id, u_int16_t type, int len, int wait);
+void             m_tag_free(struct m_tag *);
+void             m_tag_prepend(struct mbuf *, struct m_tag *);
+void             m_tag_unlink(struct mbuf *, struct m_tag *);
+void             m_tag_delete(struct mbuf *, struct m_tag *);
+void             m_tag_delete_chain(struct mbuf *, struct m_tag *);
+struct  m_tag   *m_tag_locate(struct mbuf *,u_int32_t id, u_int16_t type,
+							  struct m_tag *);
+struct  m_tag   *m_tag_copy(struct m_tag *, int wait);
+int              m_tag_copy_chain(struct mbuf *to, struct mbuf *from, int wait);
+void             m_tag_init(struct mbuf *);
+struct  m_tag   *m_tag_first(struct mbuf *);
+struct  m_tag   *m_tag_next(struct mbuf *, struct m_tag *);
+
+__END_DECLS
+
+#endif /* KERNEL */
+
+#endif /* KERNEL_PRIVATE */
+#ifdef KERNEL
+#include <sys/kpi_mbuf.h>
 #endif
-#endif /* __APPLE_API_UNSTABLE */
 #endif	/* !_SYS_MBUF_H_ */

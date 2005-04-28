@@ -23,6 +23,7 @@
 #ifndef _IOKIT_IONVRAM_H
 #define _IOKIT_IONVRAM_H
 
+#include <IOKit/IOKitKeys.h>
 #include <IOKit/IOService.h>
 #include <IOKit/IODeviceTreeSupport.h>
 #include <IOKit/nvram/IONVRAMController.h>
@@ -32,8 +33,6 @@
 #define kIODTNVRAMXPRAMPartitionName    "APL,MacOS75"
 #define kIODTNVRAMPanicInfoPartitonName "APL,OSXPanic"
 #define kIODTNVRAMFreePartitionName     "wwwwwwwwwwww"
-
-#define kIODTNVRAMPanicInfoKey "aapl,panic-info"
 
 enum {
   kIODTNVRAMImageSize        = 0x2000,
@@ -83,7 +82,9 @@ private:
   
   virtual UInt8 calculatePartitionChecksum(UInt8 *partitionHeader);
   virtual IOReturn initOFVariables(void);
+public:
   virtual IOReturn syncOFVariables(void);
+private:
   virtual UInt32 getOFVariableType(const OSSymbol *propSymbol) const;
   virtual UInt32 getOFVariablePerm(const OSSymbol *propSymbol) const;
   virtual bool getOWVariableInfo(UInt32 variableNumber, const OSSymbol **propSymbol,
@@ -107,7 +108,7 @@ private:
 					   const OSSymbol *name,
 					   OSData * value);
   
-  virtual OSData *unescapeBytesToData(UInt8 *bytes, UInt32 length);
+  virtual OSData *unescapeBytesToData(const UInt8 *bytes, UInt32 length);
   virtual OSData *escapeDataToData(OSData * value);
 
   virtual IOReturn readNVRAMPropertyType1(IORegistryEntry *entry,
@@ -124,10 +125,11 @@ public:
   
   virtual void sync(void);
   
-  virtual bool serializeProperties(OSSerialize * serialize) const;
+  virtual bool serializeProperties(OSSerialize *s) const;
   virtual OSObject *getProperty(const OSSymbol *aKey) const;
   virtual OSObject *getProperty(const char *aKey) const;
   virtual bool setProperty(const OSSymbol *aKey, OSObject *anObject);
+  virtual void removeProperty(const OSSymbol *aKey);
   virtual IOReturn setProperties(OSObject *properties);
   
   virtual IOReturn readXPRAM(IOByteCount offset, UInt8 *buffer,

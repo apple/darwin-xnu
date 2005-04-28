@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -31,9 +31,11 @@
  */
 
 #include <mach/mach_types.h>
+#include <mach/mach_traps.h>
 #include <mach/kern_return.h>
 #include <mach/semaphore.h>
 #include <mach/sync_policy.h>
+#include <mach/task.h>
 
 #include <kern/misc_protos.h>
 #include <kern/sync_sema.h>
@@ -55,6 +57,56 @@ static unsigned int semaphore_event;
 
 zone_t semaphore_zone;
 unsigned int semaphore_max = SEMAPHORE_MAX;
+
+/* Forward declarations */
+
+
+kern_return_t 
+semaphore_wait_trap_internal(
+				mach_port_name_t name,
+				void (*caller_cont)(kern_return_t));
+
+kern_return_t 
+semaphore_wait_signal_trap_internal(
+				mach_port_name_t wait_name,
+				mach_port_name_t signal_name,
+				void (*caller_cont)(kern_return_t));
+
+kern_return_t 
+semaphore_timedwait_trap_internal(
+				mach_port_name_t name,
+				unsigned int sec,
+				clock_res_t nsec,
+				void (*caller_cont)(kern_return_t));
+
+kern_return_t 
+semaphore_timedwait_signal_trap_internal(
+				mach_port_name_t wait_name,
+				mach_port_name_t signal_name,
+				unsigned int sec,
+				clock_res_t nsec,
+				void (*caller_cont)(kern_return_t));
+
+
+kern_return_t
+semaphore_signal_internal(
+			semaphore_t		semaphore,
+			thread_t			thread,
+			int				options);
+
+kern_return_t
+semaphore_convert_wait_result(
+			int				wait_result);
+
+void
+semaphore_wait_continue(void);
+
+kern_return_t
+semaphore_wait_internal(
+			semaphore_t		wait_semaphore,
+			semaphore_t		signal_semaphore,
+			mach_timespec_t	*wait_timep,
+			void (*caller_cont)(kern_return_t));
 
 /*
  *	ROUTINE:	semaphore_init		[private]
@@ -152,7 +204,6 @@ semaphore_destroy(
 	semaphore_t		semaphore)
 {
 	int				old_count;
-	thread_t		thread;
 	spl_t			spl_level;
 
 
@@ -218,8 +269,8 @@ semaphore_destroy(
 kern_return_t
 semaphore_signal_internal(
 	semaphore_t		semaphore,
-	thread_act_t		thread_act,
-	int			options)
+	thread_t		thread,
+	int				options)
 {
 	kern_return_t kr;
 	spl_t  spl_level;
@@ -233,12 +284,12 @@ semaphore_signal_internal(
 		return KERN_TERMINATED;
 	}
 
-	if (thread_act != THR_ACT_NULL) {
+	if (thread != THREAD_NULL) {
 		if (semaphore->count < 0) {
 			kr = wait_queue_wakeup64_thread_locked(
 			        	&semaphore->wait_queue,
 					SEMAPHORE_EVENT,
-					thread_act->thread,
+					thread,
 					THREAD_AWAKENED,
 					TRUE);  /* unlock? */
 		} else {
@@ -294,15 +345,15 @@ semaphore_signal_internal(
 /*
  *	Routine:	semaphore_signal_thread
  *
- *	If the specified thread_act is blocked on the semaphore, it is
- *	woken up.  If a NULL thread_act was supplied, then any one
+ *	If the specified thread is blocked on the semaphore, it is
+ *	woken up.  If a NULL thread was supplied, then any one
  *	thread is woken up.  Otherwise the caller gets KERN_NOT_WAITING
  *	and the	semaphore is unchanged.
  */
 kern_return_t
 semaphore_signal_thread(
 	semaphore_t	semaphore,
-	thread_act_t	thread_act)
+	thread_t	thread)
 {
 	kern_return_t		ret;
 
@@ -310,7 +361,7 @@ semaphore_signal_thread(
 		return KERN_INVALID_ARGUMENT;
 
 	ret = semaphore_signal_internal(semaphore,
-					thread_act,
+					thread,
 					SEMAPHORE_OPTION_NONE);
 	return ret;
 }	
@@ -322,12 +373,12 @@ semaphore_signal_thread(
  */
 kern_return_t
 semaphore_signal_thread_trap(
-	mach_port_name_t sema_name,
-	mach_port_name_t thread_name)
+	struct semaphore_signal_thread_trap_args *args)
 {
-	
+	mach_port_name_t sema_name = args->signal_name;
+	mach_port_name_t thread_name = args->thread_name;
 	semaphore_t	semaphore;
-	thread_act_t	thread_act;
+	thread_t	thread;
 	kern_return_t	kr;
 
 	/* 
@@ -336,22 +387,22 @@ semaphore_signal_thread_trap(
 	 * pre-post the semaphore.
 	 */
 	if (thread_name != MACH_PORT_NULL) {
-		thread_act = port_name_to_act(thread_name);
-		if (thread_act == THR_ACT_NULL)
+		thread = port_name_to_thread(thread_name);
+		if (thread == THREAD_NULL)
 			return KERN_INVALID_ARGUMENT;
 	} else
-		thread_act = THR_ACT_NULL;
+		thread = THREAD_NULL;
 
 	kr = port_name_to_semaphore(sema_name, &semaphore);
-	if (kr != KERN_SUCCESS) {
-		act_deallocate(thread_act);
-		return kr;
+	if (kr == KERN_SUCCESS) {
+		kr = semaphore_signal_internal(semaphore,
+				thread,
+				SEMAPHORE_OPTION_NONE);
+		semaphore_dereference(semaphore);
 	}
-	kr = semaphore_signal_internal(semaphore,
-				       thread_act,
-				       SEMAPHORE_OPTION_NONE);
-	semaphore_dereference(semaphore);
-	act_deallocate(thread_act);
+	if (thread != THREAD_NULL) {
+		thread_deallocate(thread);
+	}
 	return kr;
 }
 
@@ -378,7 +429,7 @@ semaphore_signal(
 		return KERN_INVALID_ARGUMENT;
 
 	kr = semaphore_signal_internal(semaphore,
-				       THR_ACT_NULL, 
+				       THREAD_NULL, 
 				       SEMAPHORE_SIGNAL_PREPOST);
 	if (kr == KERN_NOT_WAITING)
 		return KERN_SUCCESS;
@@ -392,22 +443,21 @@ semaphore_signal(
  */
 kern_return_t
 semaphore_signal_trap(
-	mach_port_name_t sema_name)
+	struct semaphore_signal_trap_args *args)
 {
-	
+	mach_port_name_t sema_name = args->signal_name;
 	semaphore_t	semaphore;
 	kern_return_t kr;
 
 	kr = port_name_to_semaphore(sema_name, &semaphore);
-	if (kr != KERN_SUCCESS) {
-		return kr;
+	if (kr == KERN_SUCCESS) {
+		kr = semaphore_signal_internal(semaphore, 
+				THREAD_NULL, 
+				SEMAPHORE_SIGNAL_PREPOST);
+		semaphore_dereference(semaphore);
+		if (kr == KERN_NOT_WAITING)
+			kr = KERN_SUCCESS;
 	}
-	kr = semaphore_signal_internal(semaphore, 
-				       THR_ACT_NULL, 
-				       SEMAPHORE_SIGNAL_PREPOST);
-	semaphore_dereference(semaphore);
-	if (kr == KERN_NOT_WAITING)
-		return KERN_SUCCESS;
 	return kr;
 }
 
@@ -427,7 +477,7 @@ semaphore_signal_all(
 		return KERN_INVALID_ARGUMENT;
 
 	kr = semaphore_signal_internal(semaphore,
-				       THR_ACT_NULL, 
+				       THREAD_NULL, 
 				       SEMAPHORE_SIGNAL_ALL);
 	if (kr == KERN_NOT_WAITING)
 		return KERN_SUCCESS;
@@ -441,22 +491,21 @@ semaphore_signal_all(
  */
 kern_return_t
 semaphore_signal_all_trap(
-	mach_port_name_t sema_name)
+	struct semaphore_signal_all_trap_args *args)
 {
-	
+	mach_port_name_t sema_name = args->signal_name;
 	semaphore_t	semaphore;
 	kern_return_t kr;
 
 	kr = port_name_to_semaphore(sema_name, &semaphore);
-	if (kr != KERN_SUCCESS) {
-		return kr;
+	if (kr == KERN_SUCCESS) {
+		kr = semaphore_signal_internal(semaphore,
+				THREAD_NULL, 
+				SEMAPHORE_SIGNAL_ALL);
+		semaphore_dereference(semaphore);
+		if (kr == KERN_NOT_WAITING)
+			kr = KERN_SUCCESS;
 	}
-	kr = semaphore_signal_internal(semaphore,
-				       THR_ACT_NULL, 
-				       SEMAPHORE_SIGNAL_ALL);
-	semaphore_dereference(semaphore);
-	if (kr == KERN_NOT_WAITING)
-		return KERN_SUCCESS;
 	return kr;
 }
 
@@ -512,33 +561,6 @@ semaphore_wait_continue(void)
 }
 
 /*
- *	Routine:	semaphore_timedwait_continue
- *
- *	Common continuation routine after doing a timed wait on a
- *	semaphore.  It clears the timer before calling the semaphore
- *	routine saved in the thread struct.
- */
-void
-semaphore_timedwait_continue(void)
-{
-	thread_t self = current_thread();
-	int wait_result = self->wait_result;
-	void (*caller_cont)(kern_return_t) = self->sth_continuation;
-
-	if (wait_result != THREAD_TIMED_OUT)
-		thread_cancel_timer();
-
-	assert(self->sth_waitsemaphore != SEMAPHORE_NULL);
-	semaphore_dereference(self->sth_waitsemaphore);
-	if (self->sth_signalsemaphore != SEMAPHORE_NULL)
-		semaphore_dereference(self->sth_signalsemaphore);
-
-	assert(caller_cont != (void (*)(kern_return_t))0);
-	(*caller_cont)(semaphore_convert_wait_result(wait_result));
-}
-
-
-/*
  *	Routine:	semaphore_wait_internal
  *
  *		Decrements the semaphore count by one.  If the count is
@@ -556,11 +578,9 @@ semaphore_wait_internal(
 	mach_timespec_t		*wait_timep,
 	void 			(*caller_cont)(kern_return_t))
 {
-	void			(*continuation)(void);
-	uint64_t		abstime;
-	boolean_t		nonblocking;
-	int			wait_result;
-	spl_t			spl_level;
+	boolean_t			nonblocking;
+	int					wait_result;
+	spl_t				spl_level;
 	kern_return_t		kr = KERN_ALREADY_WAITING;
 
 	spl_level = splsched();
@@ -581,14 +601,27 @@ semaphore_wait_internal(
 	} else if (nonblocking) {
 		kr = KERN_OPERATION_TIMED_OUT;
 	} else {
-		thread_t self = current_thread();
+		uint64_t	abstime;
+		thread_t	self = current_thread();
 
 		wait_semaphore->count = -1;  /* we don't keep an actual count */
 		thread_lock(self);
+		
+		/*
+		 * If it is a timed wait, calculate the wake up deadline.
+		 */
+		if (wait_timep != (mach_timespec_t *)0) {
+			nanoseconds_to_absolutetime((uint64_t)wait_timep->tv_sec *
+											NSEC_PER_SEC + wait_timep->tv_nsec, &abstime);
+			clock_absolutetime_interval_to_deadline(abstime, &abstime);
+		}
+		else
+			abstime = 0;
+
 		(void)wait_queue_assert_wait64_locked(
 					&wait_semaphore->wait_queue,
 					SEMAPHORE_EVENT,
-					THREAD_ABORTSAFE,
+					THREAD_ABORTSAFE, abstime,
 					self);
 		thread_unlock(self);
 	}
@@ -608,7 +641,7 @@ semaphore_wait_internal(
 		 * our intention to wait above).
 		 */
 		signal_kr = semaphore_signal_internal(signal_semaphore,
-						      THR_ACT_NULL,
+						      THREAD_NULL,
 						      SEMAPHORE_SIGNAL_PREPOST);
 
 		if (signal_kr == KERN_NOT_WAITING)
@@ -642,19 +675,6 @@ semaphore_wait_internal(
 	 */
 	if (kr != KERN_ALREADY_WAITING)
 		return kr;
-		
-	/*
-	 * If it is a timed wait, go ahead and set up the timer.
-	 */
-	if (wait_timep != (mach_timespec_t *)0) {
-		nanoseconds_to_absolutetime((uint64_t)wait_timep->tv_sec *
-										NSEC_PER_SEC + wait_timep->tv_nsec, &abstime);
-		clock_absolutetime_interval_to_deadline(abstime, &abstime);
-		thread_set_timer_deadline(abstime);
-		continuation = semaphore_timedwait_continue;
-	} else {
-		continuation = semaphore_wait_continue;
-	}
 
 	/*
 	 * Now, we can block.  If the caller supplied a continuation
@@ -669,19 +689,11 @@ semaphore_wait_internal(
 		self->sth_continuation = caller_cont;
 		self->sth_waitsemaphore = wait_semaphore;
 		self->sth_signalsemaphore = signal_semaphore;
-		wait_result = thread_block(continuation);
-	} else {
+		wait_result = thread_block((thread_continue_t)semaphore_wait_continue);
+	}
+	else {
 		wait_result = thread_block(THREAD_CONTINUE_NULL);
 	}
-
-	/*
-	 * If we came back here (not continuation case) cancel
-	 * any pending timers, convert the wait result to an
-	 * appropriate semaphore return value, and then return
-	 * that.
-	 */
-	if (wait_timep && (wait_result != THREAD_TIMED_OUT))
-		thread_cancel_timer();
 
 	return (semaphore_convert_wait_result(wait_result));
 }
@@ -713,22 +725,32 @@ semaphore_wait(
  *	Trap version of semaphore wait.  Called on behalf of user-level
  *	clients.
  */
+
 kern_return_t
 semaphore_wait_trap(
-	mach_port_name_t	name)
+	struct semaphore_wait_trap_args *args)
+{
+	return(semaphore_wait_trap_internal(args->wait_name, thread_syscall_return));
+}
+
+
+
+kern_return_t
+semaphore_wait_trap_internal(
+	mach_port_name_t name, 
+	void (*caller_cont)(kern_return_t))
 {	
 	semaphore_t	semaphore;
 	kern_return_t kr;
 
 	kr = port_name_to_semaphore(name, &semaphore);
-	if (kr != KERN_SUCCESS)
-		return kr;
-
-	kr = semaphore_wait_internal(semaphore,
-				     SEMAPHORE_NULL,
-				     (mach_timespec_t *)0,
-				     thread_syscall_return);
-	semaphore_dereference(semaphore);
+	if (kr == KERN_SUCCESS) {
+		kr = semaphore_wait_internal(semaphore,
+				SEMAPHORE_NULL,
+				(mach_timespec_t *)0,
+				caller_cont);
+		semaphore_dereference(semaphore);
+	}
 	return kr;
 }
 
@@ -771,10 +793,21 @@ semaphore_timedwait(
  */
 kern_return_t
 semaphore_timedwait_trap(
-	mach_port_name_t	name,
-	unsigned int		sec,
-	clock_res_t		nsec)
+	struct semaphore_timedwait_trap_args *args)
 {	
+
+	return(semaphore_timedwait_trap_internal(args->wait_name, args->sec, args->nsec, thread_syscall_return));
+}
+
+
+kern_return_t
+semaphore_timedwait_trap_internal(
+	mach_port_name_t name,
+	unsigned int            sec,
+	clock_res_t             nsec,
+	void (*caller_cont)(kern_return_t))
+{
+
 	semaphore_t semaphore;
 	mach_timespec_t wait_time;
 	kern_return_t kr;
@@ -785,14 +818,13 @@ semaphore_timedwait_trap(
 		return KERN_INVALID_VALUE;
 	
 	kr = port_name_to_semaphore(name, &semaphore);
-	if (kr != KERN_SUCCESS)
-		return kr;
-
-	kr = semaphore_wait_internal(semaphore,
-				     SEMAPHORE_NULL,
-				     &wait_time,
-				     thread_syscall_return);
-	semaphore_dereference(semaphore);
+	if (kr == KERN_SUCCESS) {
+		kr = semaphore_wait_internal(semaphore,
+				SEMAPHORE_NULL,
+				&wait_time,
+				caller_cont);
+		semaphore_dereference(semaphore);
+	}
 	return kr;
 }
 
@@ -826,30 +858,33 @@ semaphore_wait_signal(
  */
 kern_return_t
 semaphore_wait_signal_trap(
-	mach_port_name_t	wait_name,
-	mach_port_name_t	signal_name)
+	struct semaphore_wait_signal_trap_args *args)
+{
+	return(semaphore_wait_signal_trap_internal(args->wait_name, args->signal_name, thread_syscall_return));
+}
+
+kern_return_t
+semaphore_wait_signal_trap_internal(
+	mach_port_name_t wait_name,
+	mach_port_name_t signal_name,
+	void (*caller_cont)(kern_return_t))
 {
 	semaphore_t wait_semaphore;
 	semaphore_t signal_semaphore;
 	kern_return_t kr;
 
 	kr = port_name_to_semaphore(signal_name, &signal_semaphore);
-	if (kr != KERN_SUCCESS)
-		return kr;
-
-	kr = port_name_to_semaphore(wait_name, &wait_semaphore);
-	if (kr != KERN_SUCCESS) {
+	if (kr == KERN_SUCCESS) {
+		kr = port_name_to_semaphore(wait_name, &wait_semaphore);
+		if (kr == KERN_SUCCESS) {
+			kr = semaphore_wait_internal(wait_semaphore,
+					signal_semaphore,
+					(mach_timespec_t *)0,
+					caller_cont);
+			semaphore_dereference(wait_semaphore);
+		}
 		semaphore_dereference(signal_semaphore);
-		return kr;
 	}
-
-	kr = semaphore_wait_internal(wait_semaphore,
-				     signal_semaphore,
-				     (mach_timespec_t *)0,
-				     thread_syscall_return);
-
-	semaphore_dereference(wait_semaphore);
-	semaphore_dereference(signal_semaphore);
 	return kr;
 }
 
@@ -889,10 +924,18 @@ semaphore_timedwait_signal(
  */
 kern_return_t
 semaphore_timedwait_signal_trap(
-	mach_port_name_t	wait_name,
-	mach_port_name_t	signal_name,
-	unsigned int		sec,
-	clock_res_t		nsec)
+	struct semaphore_timedwait_signal_trap_args *args)
+{
+	return(semaphore_timedwait_signal_trap_internal(args->wait_name, args->signal_name, args->sec, args->nsec, thread_syscall_return));
+}
+
+kern_return_t
+semaphore_timedwait_signal_trap_internal(
+	mach_port_name_t wait_name,
+	mach_port_name_t signal_name,
+	unsigned int sec,
+	clock_res_t nsec,
+	void (*caller_cont)(kern_return_t))
 {
 	semaphore_t wait_semaphore;
 	semaphore_t signal_semaphore;
@@ -905,22 +948,17 @@ semaphore_timedwait_signal_trap(
 		return KERN_INVALID_VALUE;
 	
 	kr = port_name_to_semaphore(signal_name, &signal_semaphore);
-	if (kr != KERN_SUCCESS)
-		return kr;
-
-	kr = port_name_to_semaphore(wait_name, &wait_semaphore);
-	if (kr != KERN_SUCCESS) {
+	if (kr == KERN_SUCCESS) {
+		kr = port_name_to_semaphore(wait_name, &wait_semaphore);
+		if (kr == KERN_SUCCESS) {
+			kr = semaphore_wait_internal(wait_semaphore,
+					signal_semaphore,
+					&wait_time,
+					caller_cont);
+			semaphore_dereference(wait_semaphore);
+		}
 		semaphore_dereference(signal_semaphore);
-		return kr;
 	}
-
-	kr = semaphore_wait_internal(wait_semaphore,
-				     signal_semaphore,
-				     &wait_time,
-				     thread_syscall_return);
-
-	semaphore_dereference(wait_semaphore);
-	semaphore_dereference(signal_semaphore);
 	return kr;
 }
 
@@ -970,7 +1008,7 @@ semaphore_dereference(
 
 	    if (ref_count == 0) {
 			assert(wait_queue_empty(&semaphore->wait_queue));
-			zfree(semaphore_zone, (vm_offset_t)semaphore);
+			zfree(semaphore_zone, semaphore);
 	    }
 	}
 }

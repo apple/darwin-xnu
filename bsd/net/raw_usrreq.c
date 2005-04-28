@@ -59,18 +59,38 @@
 #include <sys/systm.h>
 #include <sys/mbuf.h>
 #include <sys/proc.h>
+#include <sys/domain.h>
 #include <sys/protosw.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
+#include <kern/locks.h>
 
 #include <net/raw_cb.h>
 
+lck_mtx_t 	*raw_mtx;	/*### global raw cb mutex for now */
+lck_attr_t 	*raw_mtx_attr;
+lck_grp_t 	*raw_mtx_grp;
+lck_grp_attr_t 	*raw_mtx_grp_attr;
 /*
  * Initialize raw connection block q.
  */
 void
 raw_init()
 {
+	raw_mtx_grp_attr = lck_grp_attr_alloc_init();
+
+	lck_grp_attr_setdefault(raw_mtx_grp_attr);
+
+	raw_mtx_grp = lck_grp_alloc_init("rawcb", raw_mtx_grp_attr);
+
+	raw_mtx_attr = lck_attr_alloc_init();
+
+	lck_attr_setdefault(raw_mtx_attr);
+
+	if ((raw_mtx = lck_mtx_alloc_init(raw_mtx_grp, raw_mtx_attr)) == NULL) {
+		printf("raw_init: can't alloc raw_mtx\n");
+		return;
+	}
 	LIST_INIT(&rawcb_list);
 }
 
@@ -93,8 +113,14 @@ raw_input(m0, proto, src, dst)
 	register struct mbuf *m = m0;
 	register int sockets = 0;
 	struct socket *last;
+	int error;
 
+//####LD raw_input is called from many places, input & output path. We have to assume the 
+//####LD socket we'll find and need to append to is unlocked.
+//####LD calls from the output (locked) path need to make sure the socket is not locked when
+//####LD we call in raw_input
 	last = 0;
+	lck_mtx_lock(raw_mtx);
 	LIST_FOREACH(rp, &rawcb_list, list) {
 		if (rp->rcb_proto.sp_family != proto->sp_family)
 			continue;
@@ -119,28 +145,28 @@ raw_input(m0, proto, src, dst)
 			struct mbuf *n;
 			n = m_copy(m, 0, (int)M_COPYALL);
 			if (n) {
+				socket_lock(last, 1);
 				if (sbappendaddr(&last->so_rcv, src,
-				    n, (struct mbuf *)0) == 0)
-					/* should notify about lost packet */
-					m_freem(n);
-				else {
+				    n, (struct mbuf *)0, &error) != 0) {
 					sorwakeup(last);
 					sockets++;
 				}
+				socket_unlock(last, 1);
 			}
 		}
 		last = rp->rcb_socket;
 	}
 	if (last) {
+		socket_lock(last, 1);
 		if (sbappendaddr(&last->so_rcv, src,
-		    m, (struct mbuf *)0) == 0)
-			m_freem(m);
-		else {
+		    m, (struct mbuf *)0, &error) != 0) {
 			sorwakeup(last);
 			sockets++;
 		}
+		socket_unlock(last, 1);
 	} else
 		m_freem(m);
+	lck_mtx_unlock(raw_mtx);
 }
 
 /*ARGSUSED*/
@@ -161,6 +187,13 @@ raw_uabort(struct socket *so)
 {
 	struct rawcb *rp = sotorawcb(so);
 
+	lck_mtx_t * mutex_held;
+	if (so->so_proto->pr_getlock != NULL)
+		mutex_held = (*so->so_proto->pr_getlock)(so, 0);
+	else
+		mutex_held = so->so_proto->pr_domain->dom_mtx;
+	lck_mtx_assert(mutex_held, LCK_MTX_ASSERT_OWNED);
+
 	if (rp == 0)
 		return EINVAL;
 	raw_disconnect(rp);
@@ -175,7 +208,9 @@ static int
 raw_uattach(struct socket *so, int proto, struct proc *p)
 {
 	struct rawcb *rp = sotorawcb(so);
+#ifndef __APPLE__
 	int error;
+#endif
 
 	if (rp == 0)
 		return EINVAL;
@@ -209,6 +244,12 @@ raw_udetach(struct socket *so)
 {
 	struct rawcb *rp = sotorawcb(so);
 
+	lck_mtx_t * mutex_held;
+	if (so->so_proto->pr_getlock != NULL)
+		mutex_held = (*so->so_proto->pr_getlock)(so, 0);
+	else
+		mutex_held = so->so_proto->pr_domain->dom_mtx;
+	lck_mtx_assert(mutex_held, LCK_MTX_ASSERT_OWNED);
 	if (rp == 0)
 		return EINVAL;
 
@@ -257,6 +298,13 @@ raw_usend(struct socket *so, int flags, struct mbuf *m,
 	int error;
 	struct rawcb *rp = sotorawcb(so);
 
+	lck_mtx_t * mutex_held;
+	if (so->so_proto->pr_getlock != NULL)
+		mutex_held = (*so->so_proto->pr_getlock)(so, 0);
+	else
+		mutex_held = so->so_proto->pr_domain->dom_mtx;
+	lck_mtx_assert(mutex_held, LCK_MTX_ASSERT_OWNED);
+
 	if (rp == 0) {
 		error = EINVAL;
 		goto release;
@@ -297,6 +345,12 @@ static int
 raw_ushutdown(struct socket *so)
 {
 	struct rawcb *rp = sotorawcb(so);
+	lck_mtx_t * mutex_held;
+	if (so->so_proto->pr_getlock != NULL)
+		mutex_held = (*so->so_proto->pr_getlock)(so, 0);
+	else
+		mutex_held = so->so_proto->pr_domain->dom_mtx;
+	lck_mtx_assert(mutex_held, LCK_MTX_ASSERT_OWNED);
 
 	if (rp == 0)
 		return EINVAL;
@@ -322,5 +376,5 @@ struct pr_usrreqs raw_usrreqs = {
 	pru_connect2_notsupp, pru_control_notsupp, raw_udetach, 
 	raw_udisconnect, pru_listen_notsupp, raw_upeeraddr, pru_rcvd_notsupp,
 	pru_rcvoob_notsupp, raw_usend, pru_sense_null, raw_ushutdown,
-	raw_usockaddr, sosend, soreceive, sopoll
+	raw_usockaddr, sosend, soreceive, pru_sopoll_notsupp
 };

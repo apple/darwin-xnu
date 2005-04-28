@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -60,6 +60,8 @@
 #ifndef	_VM_VM_PAGE_H_
 #define _VM_VM_PAGE_H_
 
+#include <debug.h>
+
 #include <mach/boolean.h>
 #include <mach/vm_prot.h>
 #include <mach/vm_param.h>
@@ -81,8 +83,8 @@
  */
 
 
-extern int	vm_page_ticket_roll;
-extern int	vm_page_ticket;
+extern unsigned int	vm_page_ticket_roll;
+extern unsigned int	vm_page_ticket;
 
 
 #define VM_PAGE_TICKETS_IN_ROLL  512
@@ -123,21 +125,30 @@ struct vm_page {
 	vm_object_t	object;		/* which object am I in (O&P) */
 	vm_object_offset_t offset;	/* offset into that object (O,P) */
 
+	/*
+	 * The following word of flags is protected
+	 * by the "page queues" lock.
+	 */
 	unsigned int	wire_count:16,	/* how many wired down maps use me? (O&P) */
 			page_ticket:4,	/* age of the page on the       */
 					/* inactive queue.		    */
 	/* boolean_t */	inactive:1,	/* page is in inactive list (P) */
 			active:1,	/* page is in active list (P) */
+			pageout_queue:1,/* page is on queue for pageout (P) */
 			laundry:1,	/* page is being cleaned now (P)*/
 			free:1,		/* page is on free list (P) */
 			reference:1,	/* page has been used (P) */
 			pageout:1,	/* page wired & busy for pageout (P) */
 			gobbled:1,      /* page used internally (P) */
 			private:1,	/* Page should not be returned to
-					 *  the free list (O) */
+					 *  the free list (P) */
 			zero_fill:1,
 			:0;
 
+	/*
+	 * The following word of flags is protected
+	 * by the "VM object" lock.
+	 */
 	unsigned int
 	                page_error:8,   /* error from I/O operations */
 	/* boolean_t */	busy:1,		/* page is in transit (O) */
@@ -165,8 +176,7 @@ struct vm_page {
 	/* vm_prot_t */	unlock_request:3,/* Outstanding unlock request (O) */
 			unusual:1,	/* Page is absent, error, restart or
 					   page locked */
-	  		discard_request:1,/* a memory_object_discard_request()
-					   * has been sent */
+			encrypted:1,	/* encrypted for secure swap (O) */
 			list_req_pending:1, /* pagein/pageout alt mechanism */
 					    /* allows creation of list      */
 					    /* requests on pages that are   */
@@ -177,14 +187,27 @@ struct vm_page {
 					   /* a pageout candidate           */
         /* we've used up all 32 bits */
 
-	vm_offset_t	phys_page;	/* Physical address of page, passed
+	ppnum_t		phys_page;	/* Physical address of page, passed
 					 *  to pmap_enter (read-only) */
 };
+
+#define DEBUG_ENCRYPTED_SWAP	1
+#if DEBUG_ENCRYPTED_SWAP
+#define ASSERT_PAGE_DECRYPTED(page) 					\
+	MACRO_BEGIN							\
+	if ((page)->encrypted) {					\
+		panic("VM page %p should not be encrypted here\n",	\
+		      (page));						\
+	}								\
+	MACRO_END
+#else	/* DEBUG_ENCRYPTED_SWAP */
+#define ASSERT_PAGE_DECRYPTED(page) assert(!(page)->encrypted)
+#endif	/* DEBUG_ENCRYPTED_SWAP */
 
 typedef struct vm_page	*vm_page_t;
 
 #define VM_PAGE_NULL		((vm_page_t) 0)
-#define NEXT_PAGE(m)    	((vm_page_t) (m)->pageq.next)
+#define NEXT_PAGE(m)		((vm_page_t) (m)->pageq.next)
 #define NEXT_PAGE_PTR(m)	((vm_page_t *) &(m)->pageq.next)
 
 /*
@@ -231,42 +254,45 @@ extern
 vm_offset_t	last_phys_addr;		/* physical address for last_page */
 
 extern
-int	vm_page_free_count;	/* How many pages are free? */
+unsigned int	vm_page_free_count;	/* How many pages are free? */
 extern
-int	vm_page_fictitious_count;/* How many fictitious pages are free? */
+unsigned int	vm_page_fictitious_count;/* How many fictitious pages are free? */
 extern
-int	vm_page_active_count;	/* How many pages are active? */
+unsigned int	vm_page_active_count;	/* How many pages are active? */
 extern
-int	vm_page_inactive_count;	/* How many pages are inactive? */
+unsigned int	vm_page_inactive_count;	/* How many pages are inactive? */
 extern
-int	vm_page_wire_count;	/* How many pages are wired? */
+unsigned int	vm_page_wire_count;	/* How many pages are wired? */
 extern
-int	vm_page_free_target;	/* How many do we want free? */
+unsigned int	vm_page_free_target;	/* How many do we want free? */
 extern
-int	vm_page_free_min;	/* When to wakeup pageout */
+unsigned int	vm_page_free_min;	/* When to wakeup pageout */
 extern
-int	vm_page_inactive_target;/* How many do we want inactive? */
+unsigned int	vm_page_inactive_target;/* How many do we want inactive? */
 extern
-int	vm_page_free_reserved;	/* How many pages reserved to do pageout */
+unsigned int	vm_page_free_reserved;	/* How many pages reserved to do pageout */
 extern
-int	vm_page_laundry_count;	/* How many pages being laundered? */
+unsigned int	vm_page_throttled_count;/* Count of zero-fill allocations throttled */
 extern
-int	vm_page_burst_count;	/* How many pages being laundered to EMM? */
+unsigned int	vm_page_gobble_count;
+
 extern
-int	vm_page_throttled_count;/* Count of zero-fill allocations throttled */
+unsigned int	vm_page_purgeable_count;/* How many pages are purgeable now ? */
+extern
+uint64_t	vm_page_purged_count;	/* How many pages got purged so far ? */
 
 decl_mutex_data(,vm_page_queue_lock)
 				/* lock on active and inactive page queues */
 decl_mutex_data(,vm_page_queue_free_lock)
 				/* lock on free page queue */
-decl_simple_lock_data(extern,vm_page_preppin_lock)	/* lock for prep/pin */
-decl_mutex_data(,vm_page_zero_fill_lock)
 
 extern unsigned int	vm_page_free_wanted;
 				/* how many threads are waiting for memory */
 
 extern vm_offset_t	vm_page_fictitious_addr;
 				/* (fake) phys_addr of fictitious pages */
+
+extern boolean_t	vm_page_deactivate_hint;
 
 /*
  * Prototypes for functions exported by this module.
@@ -301,13 +327,6 @@ extern vm_page_t	vm_page_grab(void);
 
 extern void		vm_page_release(
 					vm_page_t	page);
-
-extern void		vm_page_release_limbo(
-					vm_page_t	page);
-
-extern void		vm_page_limbo_exchange(
-					vm_page_t	limbo_m,
-					vm_page_t	new_m);
 
 extern boolean_t	vm_page_wait(
 					int		interruptible );
@@ -422,28 +441,31 @@ extern void		vm_page_gobble(
 
 #define VM_PAGE_THROTTLED()						\
 		(vm_page_free_count < vm_page_free_min &&		\
-		 !current_thread()->vm_privilege && 			\
+		 !(current_thread()->options & TH_OPT_VMPRIV) && 			\
 		 ++vm_page_throttled_count)
 
 #define	VM_PAGE_WAIT()		((void)vm_page_wait(THREAD_UNINT))
 
 #define vm_page_lock_queues()	mutex_lock(&vm_page_queue_lock)
 #define vm_page_unlock_queues()	mutex_unlock(&vm_page_queue_lock)
-#define vm_page_pin_lock()	simple_lock(&vm_page_preppin_lock)
-#define vm_page_pin_unlock()	simple_unlock(&vm_page_preppin_lock)
 
 #define VM_PAGE_QUEUES_REMOVE(mem)				\
 	MACRO_BEGIN						\
+	assert(!mem->laundry);					\
 	if (mem->active) {					\
+		assert(mem->object != kernel_object);		\
 		assert(!mem->inactive);				\
 		queue_remove(&vm_page_queue_active,		\
 			mem, vm_page_t, pageq);			\
+		mem->pageq.next = NULL;				\
+		mem->pageq.prev = NULL;			       	\
 		mem->active = FALSE;				\
 		if (!mem->fictitious)				\
 			vm_page_active_count--;			\
 	}							\
 								\
 	if (mem->inactive) {					\
+		assert(mem->object != kernel_object);		\
 		assert(!mem->active);				\
 		if (mem->zero_fill) {				\
 			queue_remove(&vm_page_queue_zf,		\
@@ -452,6 +474,8 @@ extern void		vm_page_gobble(
 			queue_remove(&vm_page_queue_inactive,	\
 			mem, vm_page_t, pageq);			\
 		}						\
+		mem->pageq.next = NULL;				\
+		mem->pageq.prev = NULL;			       	\
 		mem->inactive = FALSE;				\
 		if (!mem->fictitious)				\
 			vm_page_inactive_count--;		\

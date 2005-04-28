@@ -1,0 +1,19 @@
+8.0.0
+
+# The first line of this file contains the master version number for the kernel.
+# All other instances of the kernel version in xnu are derived from this file.
+#
+# The format of the version number must conform to the version resource format
+# as described in TN1132: http://developer.apple.com/technotes/tn/tn1132.html
+#
+# In particular, the string is formatted as: J[.N[.R[S[L]]]], where:
+#  J represents the kernel major version number (integer)
+#  N represents the kernel minor version number (integer)
+#  R represents the kernel revision number (integer)
+#  S represents the kernel build stage (one of "d", "a", "b", or "r")
+#  L represents the kernel pre-release level (integer)
+#
+# The correct way to make use of the kernel version within kernel code or a
+# kext is to include libkern/verison.h.  version.h contains defines that can
+# be used for build-time version logic and prototypes for variables that can
+# be used for run-time version logic.

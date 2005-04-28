@@ -36,9 +36,10 @@
 
 typedef UInt32 IORangeScalar;
 
-/*! @class IORangeAllocator : public OSObject
+/*! @class IORangeAllocator
     @abstract A utility class to manage allocations from a range.
-    @discussion The IORangeAllocator class provides functions for allocating ranges, at a fixed or any offset, and freeing them back to a free list. It is useful for describing ranges of memory or address space without requiring storage in the memory - information describing the free elements is kept elsewhere. Ranges are described by a start offset and a size. IORangeAllocator is optionally protected against multithreaded access. */
+    @discussion The IORangeAllocator class provides functions for allocating ranges, at a fixed or any offset, and freeing them back to a free list. It is useful for describing ranges of memory or address space without requiring storage in the memory - information describing the free elements is kept elsewhere. Ranges are described by a start offset and a size. IORangeAllocator is optionally protected against multithreaded access. 
+*/
 
 class IORangeAllocator : public OSObject {
 
@@ -66,11 +67,11 @@ public:
 /*! @function init
     @abstract Standard initializer for IORangeAllocator.
     @discussion This method initializes an IORangeAllocator and optionally sets the free list to contain one fragment, from zero to an endOfRange parameter. The capacity in terms of free fragments and locking options are set for the instance.
-    @param endOfRange If the free list is to contain an initial fragment, set endOfRange to the last offset in the range, ie. size - 1, to create a free fragment for the range zero to endOfRange inclusive. If zero is passed the free list will be initialized empty, and can be populated with calls to the deallocate method.
+    @param endOfRange If the free list is to contain an initial fragment, set endOfRange to the last offset in the range, ie. size - 1, to create a free fragment for the range zero to endOfRange inclusive. If zero is passed, the free list will be initialized empty, and can be populated with calls to the deallocate method.
     @param defaultAlignment If this parameter is non-zero it specifies a required alignment for all allocations, for example pass 256 to align allocations on 256 byte boundaries. Zero or one specify unaligned allocations.
-    @param capacity Sets the initial size of the free list in number of non-contiguous fragments. This value is also used for the capacityIncrement.
+    @param capacity Sets the initial size of the free list in number of noncontiguous fragments. This value is also used for the capacityIncrement.
     @param options Pass kLocking if the instance can be used by multiple threads.
-    @result Returns true if the instance is successfully initialize, false on failure. */
+    @result Returns true if the instance is successfully initialized, false on failure. */
 
     virtual bool init( IORangeScalar endOfRange,
 			IORangeScalar defaultAlignment,
@@ -96,58 +97,65 @@ public:
 /*! @function getFragmentCount
     @abstract Accessor to return the number of free fragments in the range.
     @discussion This method returns a count of free fragments. Each fragment describes a non-contiguous free range - deallocations will merge contiguous fragments together.
-    @result The count of free fragments. */
+    @result Returns the count of free fragments. 
+*/
 
     virtual UInt32 getFragmentCount( void );
 
 /*! @function getFragmentCapacity
     @abstract Accessor to return the number of free fragments in the range.
     @discussion This method returns the current capacity of the free fragment list.
-    @result The current capacity of free fragment list. */
+    @result Returns the current capacity of free fragment list. 
+*/
 
     virtual UInt32 getFragmentCapacity( void );
 
 /*! @function setFragmentCapacityIncrement
     @abstract Sets the count of fragments the free list will increase by when full.
-    @discussion This method sets the number of extra fragments the free  list will expand to when full. It defaults to the initial capacity.
-    @param count The number of fragments to increment the capacity by when the free list is full. */
+    @discussion This method sets the number of extra fragments the free list will expand to when full. It defaults to the initial capacity.
+    @param count The number of fragments to increment the capacity by when the free list is full. 
+*/
 
     virtual void setFragmentCapacityIncrement( UInt32 count );
 
 /*! @function getFreeCount
     @abstract Totals the sizes of the free fragments.
     @discussion This method returns the total of the sizes of the fragments on the free list.
-    @result The total of the free fragments sizes. */
+    @result Returns the total of the free fragments sizes. 
+*/
 
     virtual IORangeScalar getFreeCount( void );
 
 /*! @function allocate
-    @abstract Allocate from the free list, at any offset.
+    @abstract Allocates from the free list, at any offset.
     @discussion This method allocates a range from the free list. The alignment will default to the alignment set when the allocator was created or may be set here. 
     @param size The size of the range requested.
     @param result The beginning of the range allocated is returned here on success.
     @param alignment If zero is passed, default to the allocators alignment, otherwise pass an alignment required for the allocation, for example 4096 to page align.
-    @result True if the allocation was successful, else false. */
+    @result Returns true if the allocation was successful, else false. 
+*/
 
     virtual bool allocate( IORangeScalar size,
 				 	    IORangeScalar * result,
 				 	    IORangeScalar alignment = 0 );
 
 /*! @function allocateRange
-    @abstract Allocate from the free list, at a set offset.
+    @abstract Allocates from the free list, at a set offset.
     @discussion This method allocates a range from the free list, given a set offset passed in. 
     @param start The beginning of the range requested.
     @param size The size of the range requested.
-    @result True if the allocation was successful, else false. */
+    @result Returns true if the allocation was successful, else false.
+*/
 
     virtual bool allocateRange( IORangeScalar start,
 						    IORangeScalar size );
 
 /*! @function deallocate
-    @abstract Deallocate a range to the free list.
+    @abstract Deallocates a range to the free list.
     @discussion This method deallocates a range to the free list, given a the start offset and length passed in. 
     @param start The beginning of the range requested.
-    @param size The size of the range requested. */
+    @param size Returns the size of the range requested. 
+*/
 
     virtual void deallocate( IORangeScalar start,
 			     		 IORangeScalar size );

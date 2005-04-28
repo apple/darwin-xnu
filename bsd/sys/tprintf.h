@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -59,15 +59,18 @@
 #define	_SYS_TPRINTF_H_
 
 #include <sys/appleapiopts.h>
+#include <sys/cdefs.h>
 
 #ifdef __APPLE_API_UNSTABLE
 
 typedef struct session *tpr_t;
 
-tpr_t	tprintf_open __P((struct proc *));
-void	tprintf_close __P((tpr_t));
+__BEGIN_DECLS
+tpr_t	tprintf_open(struct proc *);
+void	tprintf_close(tpr_t);
+void	tprintf(tpr_t, const char *fmt, ...);
+__END_DECLS
 
-void	tprintf __P((tpr_t, const char *fmt, ...));
 #endif /* __APPLE_API_UNSTABLE */
 
 #endif /* !_SYS_TPRINTF_H_ */

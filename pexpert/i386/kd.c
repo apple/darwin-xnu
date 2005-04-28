@@ -79,6 +79,12 @@
 
 #include <pexpert/pexpert.h>
 
+extern void cpu_shutdown(void);
+
+int	cngetc(void);
+int	cnmaygetc(void);
+void	kdreboot(void);
+
 /*
  * Common I/O ports.
  */
@@ -165,8 +171,6 @@ kd_sendcmd(unsigned char ch)
 void
 kdreboot(void)
 {
-    extern void cpu_shutdown(void);
-
     kd_sendcmd( K_CMD_RESET );
 
     /*

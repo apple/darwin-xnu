@@ -198,7 +198,7 @@ void db_set_breakpoint(
 	task_t		task,
 	db_addr_t	addr,
 	int		count,
-	thread_act_t	thr_act,
+	thread_t	thr_act,
 	boolean_t	task_bpt);
 
 db_breakpoint_t db_find_breakpoint(

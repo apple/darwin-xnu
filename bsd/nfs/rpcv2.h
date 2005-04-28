@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -79,7 +79,6 @@
 #define	RPCAUTH_UNIX	1
 #define	RPCAUTH_SHORT	2
 #define RPCAUTH_KERB4	4
-#define	RPCAUTH_NQNFS	300000
 #define	RPCAUTH_MAXSIZ	400
 #define	RPCVERF_MAXSIZ	12	/* For Kerb, can actually be 400 */
 #define	RPCAUTH_UNIXGIDS 16

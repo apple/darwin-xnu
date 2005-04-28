@@ -72,40 +72,38 @@
 #ifndef NeXT
 static l_open_t		l_noopen;
 static l_close_t	l_noclose;
-static l_ioctl_t	l_nullioctl;
 static l_rint_t		l_norint;
-static l_start_t	l_nostart;
 #else /* NeXT */
-#define	l_noopen	((int (*) __P((dev_t, struct tty *)))enodev)
-#define	l_noclose	((int (*) __P((struct tty *, int flags)))enodev)
-#define	l_noread	((int (*) __P((struct tty *, struct uio *, int)))enodev)
-#define	l_nowrite	l_noread
-#define	l_norint	((int (*) __P((int c, struct tty *)))enodev)
-#define	l_nostart	((int (*) __P((struct tty *)))enodev)
-static	int
-l_nullioctl(struct tty *tp, u_long cmd, caddr_t data, int flag, struct proc *p);
+#define	l_noopen	((l_open_t *)  &enodev)
+#define	l_noclose	((l_close_t *) &enodev)
+#define	l_noread	((l_read_t *)  &enodev)
+#define	l_nowrite	((l_write_t *) &enodev)
+#define	l_norint	((l_rint_t *)  &enodev)
 #endif /* !NeXT */
+
+static l_ioctl_t	l_noioctl;
+static l_start_t	l_nostart;
 
 /*
  * XXX it probably doesn't matter what the entries other than the l_open
- * entry are here.  The l_nullioctl and ttymodem entries still look fishy.
+ * entry are here.  The l_noioctl and ttymodem entries still look fishy.
  * Reconsider the removal of nullmodem anyway.  It was too much like
  * ttymodem, but a completely null version might be useful.
  */
 #define NODISC(n) \
 	{ l_noopen,	l_noclose,	l_noread,	l_nowrite, \
-	  l_nullioctl,	l_norint,	l_nostart,	ttymodem }
+	  l_noioctl,	l_norint,	l_nostart,	ttymodem }
 
 struct	linesw linesw[MAXLDISC] =
 {
 				/* 0- termios */
 	{ ttyopen,	ttylclose,	ttread,		ttwrite,
-	  l_nullioctl,	ttyinput,	ttstart,	ttymodem },
+	  l_noioctl,	ttyinput,	ttwwakeup,	ttymodem },
 	NODISC(1),		/* 1- defunct */
 	  			/* 2- NTTYDISC */
-#ifdef COMPAT_43
+#if COMPAT_43_TTY
 	{ ttyopen,	ttylclose,	ttread,		ttwrite,
-	  l_nullioctl,	ttyinput,	ttstart,	ttymodem },
+	  l_noioctl,	ttyinput,	ttwwakeup,	ttymodem },
 #else
 	NODISC(2),
 #endif
@@ -215,14 +213,6 @@ l_norint(c, tp)
 
 	return (ENODEV);
 }
-
-static int
-l_nostart(tp)
-	struct tty *tp;
-{
-
-	return (ENODEV);
-}
 #endif /* !NeXT */
 
 /*
@@ -230,13 +220,13 @@ l_nostart(tp)
  * discipline specific ioctl command.
  */
 static int
-l_nullioctl(tp, cmd, data, flags, p)
-	struct tty *tp;
-	u_long cmd;
-	caddr_t data;
-	int flags;
-	struct proc *p;
+l_noioctl(__unused struct tty *tp, __unused u_long cmd, __unused caddr_t data,
+	  __unused int flags, __unused struct proc *p)
 {
 
-	return (-1);
+	return ENOTTY;
 }
+
+static void
+l_nostart(__unused struct tty *tp)
+    { }

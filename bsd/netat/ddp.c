@@ -381,10 +381,10 @@ void  ddp_rem_if(ifID)
 
 	/* un-do processing done in SIOCSIFADDR */
 	if (ifa->ifa_addr) {
-		int s = splnet();
-		TAILQ_REMOVE(&ifID->aa_ifp->if_addrhead, ifa, ifa_link);
+		ifnet_lock_exclusive(ifID->aa_ifp);
+		if_detach_ifa(ifID->aa_ifp, ifa);
 		ifa->ifa_addr = NULL;
-		splx(s);
+		ifnet_lock_done(ifID->aa_ifp);
 	}
 	if (ifID->at_dl_tag) {
 /*		dlil_detach_protocol(ifID->at_dl_tag); */
@@ -1080,10 +1080,9 @@ void ddp_input(mp, ifID)
 
 				if (sbappendaddr(&((gref->atpcb_socket)->so_rcv), 
 						 (struct sockaddr *)&ddp_in,
-						 mp, 0) == 0)
-					gbuf_freem(mp);
-				else
+						 mp, 0, NULL) != 0) {
 				 	sorwakeup(gref->atpcb_socket);
+				 }
 			} else {
 				atalk_putnext(gref, mp);
 			}

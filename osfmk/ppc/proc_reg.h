@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -163,8 +163,8 @@
 #define dsiAC				0x00400000
 #define dsiSeg				0x00200000
 #define dsiValid			0x5E600000
-#define dsiSpcNest			0x00010000	/* Special nest - software flag */
-#define dsiSpcNestb			15			/* Special nest - software flag */
+#define dsiLinkage			0x00010000	/* Linkage mapping type - software flag */
+#define dsiLinkageb			15			/* Linkage mapping type - software flag */
 #define dsiSoftware			0x0000FFFF
 
 /* SRR1 bits on data/instruction translation exceptions */

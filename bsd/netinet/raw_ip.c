@@ -60,6 +60,7 @@
 #include <sys/malloc.h>
 #include <sys/mbuf.h>
 #include <sys/proc.h>
+#include <sys/domain.h>
 #include <sys/protosw.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
@@ -93,10 +94,18 @@
 
 #if IPSEC
 extern int ipsec_bypass;
+extern lck_mtx_t *sadb_mutex;
 #endif
 
+extern u_long  route_generation;
 struct	inpcbhead ripcb;
 struct	inpcbinfo ripcbinfo;
+
+/* control hooks for ipfw and dummynet */
+ip_fw_ctl_t *ip_fw_ctl_ptr;
+#if DUMMYNET
+ip_dn_ctl_t *ip_dn_ctl_ptr;
+#endif /* DUMMYNET */
 
 /*
  * Nominal space allocated to a raw ip socket.
@@ -114,6 +123,8 @@ struct	inpcbinfo ripcbinfo;
 void
 rip_init()
 {
+    	struct inpcbinfo *pcbinfo;
+
 	LIST_INIT(&ripcb);
 	ripcbinfo.listhead = &ripcb;
 	/*
@@ -127,6 +138,24 @@ rip_init()
 	ripcbinfo.ipi_zone = (void *) zinit(sizeof(struct inpcb),
 					    (4096 * sizeof(struct inpcb)), 
 					    4096, "ripzone");
+
+	pcbinfo = &ripcbinfo;
+        /*
+	 * allocate lock group attribute and group for udp pcb mutexes
+	 */
+	pcbinfo->mtx_grp_attr = lck_grp_attr_alloc_init();
+	lck_grp_attr_setdefault(pcbinfo->mtx_grp_attr);
+
+	pcbinfo->mtx_grp = lck_grp_alloc_init("ripcb", pcbinfo->mtx_grp_attr);
+		
+	/*
+	 * allocate the lock attribute for udp pcb mutexes
+	 */
+	pcbinfo->mtx_attr = lck_attr_alloc_init();
+	lck_attr_setdefault(pcbinfo->mtx_attr);
+
+	if ((pcbinfo->mtx = lck_rw_alloc_init(pcbinfo->mtx_grp, pcbinfo->mtx_attr)) == NULL)
+		return;	/* pretty much dead if this fails... */
 
 }
 
@@ -145,8 +174,10 @@ rip_input(m, iphlen)
 	register struct inpcb *inp;
 	struct inpcb *last = 0;
 	struct mbuf *opts = 0;
+	int skipit;
 
 	ripsrc.sin_addr = ip->ip_src;
+	lck_rw_lock_shared(ripcbinfo.mtx);
 	LIST_FOREACH(inp, &ripcb, inp_list) {
 #if INET6
 		if ((inp->inp_vflag & INP_IPV4) == 0)
@@ -162,16 +193,23 @@ rip_input(m, iphlen)
 			continue;
 		if (last) {
 			struct mbuf *n = m_copy(m, 0, (int)M_COPYALL);
-
+		
 #if IPSEC
 			/* check AH/ESP integrity. */
-			if (ipsec_bypass == 0 && n && ipsec4_in_reject_so(n, last->inp_socket)) {
-				m_freem(n);
-				ipsecstat.in_polvio++;
-				/* do not inject data to pcb */
-			} else
+			skipit = 0;
+			if (ipsec_bypass == 0 && n) {
+				lck_mtx_lock(sadb_mutex);
+				if (ipsec4_in_reject_so(n, last->inp_socket)) {
+					m_freem(n);
+					ipsecstat.in_polvio++;
+					/* do not inject data to pcb */
+					skipit = 1;
+				}
+				lck_mtx_unlock(sadb_mutex);
+			} 
 #endif /*IPSEC*/
-			if (n) {
+			if (n && skipit == 0) {
+				int error = 0;
 				if (last->inp_flags & INP_CONTROLOPTS ||
 				    last->inp_socket->so_options & SO_TIMESTAMP)
 				    ip_savecontrol(last, &opts, ip, n);
@@ -180,51 +218,60 @@ rip_input(m, iphlen)
 					n->m_pkthdr.len -= iphlen;
 					n->m_data += iphlen;
 				}
+// ###LOCK need to lock that socket?
 				if (sbappendaddr(&last->inp_socket->so_rcv,
 				    (struct sockaddr *)&ripsrc, n,
-				    opts) == 0) {
-					/* should notify about lost packet */
-				    kprintf("rip_input can't append to socket\n");
-					m_freem(n);
-					if (opts)
-					    m_freem(opts);
-				} else
+				    opts, &error) != 0) {
 					sorwakeup(last->inp_socket);
+				}
+				else {
+					if (error) {
+						/* should notify about lost packet */
+						kprintf("rip_input can't append to socket\n");
+					}
+				}
 				opts = 0;
 			}
 		}
 		last = inp;
 	}
+	lck_rw_done(ripcbinfo.mtx);
 #if IPSEC
 	/* check AH/ESP integrity. */
-	if (ipsec_bypass == 0 && last && ipsec4_in_reject_so(m, last->inp_socket)) {
-		m_freem(m);
-		ipsecstat.in_polvio++;
-		ipstat.ips_delivered--;
-		/* do not inject data to pcb */
-	} else
-#endif /*IPSEC*/
-	if (last) {
-		if (last->inp_flags & INP_CONTROLOPTS ||
-		    last->inp_socket->so_options & SO_TIMESTAMP)
-			ip_savecontrol(last, &opts, ip, m);
-        if (last->inp_flags & INP_STRIPHDR) {
-            m->m_len -= iphlen;
-            m->m_pkthdr.len -= iphlen;
-            m->m_data += iphlen;
-        }
-		if (sbappendaddr(&last->inp_socket->so_rcv,
-		    (struct sockaddr *)&ripsrc, m, opts) == 0) {
-		    kprintf("rip_input(2) can't append to socket\n");
+	skipit = 0;
+	if (ipsec_bypass == 0 && last) {
+		lck_mtx_lock(sadb_mutex);
+		if (ipsec4_in_reject_so(m, last->inp_socket)) {
 			m_freem(m);
-			if (opts)
-			    m_freem(opts);
-		} else
-			sorwakeup(last->inp_socket);
-	} else {
-		m_freem(m);
-		ipstat.ips_noproto++;
-		ipstat.ips_delivered--;
+			ipsecstat.in_polvio++;
+			ipstat.ips_delivered--;
+			/* do not inject data to pcb */
+			skipit = 1;
+		}
+		lck_mtx_unlock(sadb_mutex);
+	} 
+#endif /*IPSEC*/
+	if (skipit == 0) {
+		if (last) {
+			if (last->inp_flags & INP_CONTROLOPTS ||
+				last->inp_socket->so_options & SO_TIMESTAMP)
+				ip_savecontrol(last, &opts, ip, m);
+			if (last->inp_flags & INP_STRIPHDR) {
+				m->m_len -= iphlen;
+				m->m_pkthdr.len -= iphlen;
+				m->m_data += iphlen;
+			}
+			if (sbappendaddr(&last->inp_socket->so_rcv,
+				(struct sockaddr *)&ripsrc, m, opts, NULL) != 0) {
+				sorwakeup(last->inp_socket);
+			} else {
+				kprintf("rip_input(2) can't append to socket\n");
+			}
+		} else {
+			m_freem(m);
+			ipstat.ips_noproto++;
+			ipstat.ips_delivered--;
+		}
 	}
 }
 
@@ -293,23 +340,27 @@ rip_output(m, so, dst)
 	}
 #endif /*IPSEC*/
 
-	return (ip_output(m, inp->inp_options, &inp->inp_route, flags,
+	if (inp->inp_route.ro_rt && inp->inp_route.ro_rt->generation_id != route_generation) {
+		rtfree(inp->inp_route.ro_rt);
+		inp->inp_route.ro_rt = (struct rtentry *)0;
+	}
+
+	return (ip_output_list(m, 0, inp->inp_options, &inp->inp_route, flags,
 			  inp->inp_moptions));
 }
 
-int
+extern int
 load_ipfw()
 {
 	kern_return_t	err;
 	
-	/* Load the kext by the identifier */
-	err = kmod_load_extension("com.apple.nke.IPFirewall");
-	if (err) return err;
+	ipfw_init();
 	
-	if (ip_fw_ctl_ptr == NULL) {
-		/* Wait for the kext to finish loading */
-		err = tsleep(&ip_fw_ctl_ptr, PWAIT | PCATCH, "load_ipfw_kext", 5 * 60 /* 5 seconds */);
-	}
+#if DUMMYNET
+	if (!DUMMYNET_LOADED)
+		ip_dn_init();
+#endif /* DUMMYNET */
+	err = 0;
 	
 	return err == 0 && ip_fw_ctl_ptr == NULL ? -1 : err;
 }
@@ -357,10 +408,10 @@ rip_ctloutput(so, sopt)
 
 #if DUMMYNET
 		case IP_DUMMYNET_GET:
-			if (ip_dn_ctl_ptr == NULL)
-				error = ENOPROTOOPT ;
-			else
+			if (DUMMYNET_LOADED)
 				error = ip_dn_ctl_ptr(sopt);
+			else
+				error = ENOPROTOOPT;
 			break ;
 #endif /* DUMMYNET */
 
@@ -428,10 +479,10 @@ rip_ctloutput(so, sopt)
 		case IP_DUMMYNET_CONFIGURE:
 		case IP_DUMMYNET_DEL:
 		case IP_DUMMYNET_FLUSH:
-			if (ip_dn_ctl_ptr == NULL)
-				error = ENOPROTOOPT ;
-			else
+			if (DUMMYNET_LOADED)
 				error = ip_dn_ctl_ptr(sopt);
+			else
+				error = ENOPROTOOPT ;
 			break ;
 #endif
 
@@ -493,6 +544,7 @@ rip_ctlinput(cmd, sa, vip)
 
 	switch (cmd) {
 	case PRC_IFDOWN:
+		lck_mtx_lock(rt_mtx);
 		for (ia = in_ifaddrhead.tqh_first; ia;
 		     ia = ia->ia_link.tqe_next) {
 			if (ia->ia_ifa.ifa_addr == sa
@@ -500,7 +552,7 @@ rip_ctlinput(cmd, sa, vip)
 				/*
 				 * in_ifscrub kills the interface route.
 				 */
-				in_ifscrub(ia->ia_ifp, ia);
+				in_ifscrub(ia->ia_ifp, ia, 1);
 				/*
 				 * in_ifadown gets rid of all the rest of
 				 * the routes.  This is not quite the right
@@ -511,16 +563,20 @@ rip_ctlinput(cmd, sa, vip)
 				break;
 			}
 		}
+		lck_mtx_unlock(rt_mtx);
 		break;
 
 	case PRC_IFUP:
+		lck_mtx_lock(rt_mtx);
 		for (ia = in_ifaddrhead.tqh_first; ia;
 		     ia = ia->ia_link.tqe_next) {
 			if (ia->ia_ifa.ifa_addr == sa)
 				break;
 		}
-		if (ia == 0 || (ia->ia_flags & IFA_ROUTE))
+		if (ia == 0 || (ia->ia_flags & IFA_ROUTE)) {
+			lck_mtx_unlock(rt_mtx);
 			return;
+		}
 		flags = RTF_UP;
 		ifp = ia->ia_ifa.ifa_ifp;
 
@@ -528,7 +584,8 @@ rip_ctlinput(cmd, sa, vip)
 		    || (ifp->if_flags & IFF_POINTOPOINT))
 			flags |= RTF_HOST;
 
-		err = rtinit(&ia->ia_ifa, RTM_ADD, flags);
+		err = rtinit_locked(&ia->ia_ifa, RTM_ADD, flags);
+		lck_mtx_unlock(rt_mtx);
 		if (err == 0)
 			ia->ia_flags |= IFA_ROUTE;
 		break;
@@ -612,15 +669,21 @@ rip_bind(struct socket *so, struct sockaddr *nam, struct proc *p)
 {
 	struct inpcb *inp = sotoinpcb(so);
 	struct sockaddr_in *addr = (struct sockaddr_in *)nam;
+	struct ifaddr *ifa = NULL;
 
 	if (nam->sa_len != sizeof(*addr))
 		return EINVAL;
 
-	if (TAILQ_EMPTY(&ifnet) || ((addr->sin_family != AF_INET) &&
+	if (TAILQ_EMPTY(&ifnet_head) || ((addr->sin_family != AF_INET) &&
 				    (addr->sin_family != AF_IMPLINK)) ||
 	    (addr->sin_addr.s_addr &&
-	     ifa_ifwithaddr((struct sockaddr *)addr) == 0))
+	     (ifa = ifa_ifwithaddr((struct sockaddr *)addr)) == 0)) {
 		return EADDRNOTAVAIL;
+	}
+	else if (ifa) {
+		ifafree(ifa);
+		ifa = NULL;
+	}
 	inp->inp_laddr = addr->sin_addr;
 	return 0;
 }
@@ -633,7 +696,7 @@ rip_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 
 	if (nam->sa_len != sizeof(*addr))
 		return EINVAL;
-	if (TAILQ_EMPTY(&ifnet))
+	if (TAILQ_EMPTY(&ifnet_head))
 		return EADDRNOTAVAIL;
 	if ((addr->sin_family != AF_INET) &&
 	    (addr->sin_family != AF_IMPLINK))
@@ -673,6 +736,33 @@ rip_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *nam,
 	return rip_output(m, so, dst);
 }
 
+int
+rip_unlock(struct socket *so, int refcount, int debug)
+{
+	int lr_saved;
+	struct inpcb *inp = sotoinpcb(so);
+#ifdef __ppc__
+	if (debug == 0) {
+		__asm__ volatile("mflr %0" : "=r" (lr_saved));
+	}
+	else lr_saved = debug;
+#endif
+	if (refcount) {
+		if (so->so_usecount <= 0)
+			panic("rip_unlock: bad refoucnt so=%x val=%x\n", so, so->so_usecount);
+		so->so_usecount--;
+		if (so->so_usecount == 0 && (inp->inp_wantcnt == WNT_STOPUSING)) {
+			lck_mtx_unlock(so->so_proto->pr_domain->dom_mtx);
+			lck_rw_lock_exclusive(ripcbinfo.mtx);
+			in_pcbdispose(inp);
+			lck_rw_done(ripcbinfo.mtx);
+			return(0);
+		}
+	}
+	lck_mtx_unlock(so->so_proto->pr_domain->dom_mtx);
+	return(0);
+}
+
 static int
 rip_pcblist SYSCTL_HANDLER_ARGS
 {
@@ -685,58 +775,64 @@ rip_pcblist SYSCTL_HANDLER_ARGS
 	 * The process of preparing the TCB list is too time-consuming and
 	 * resource-intensive to repeat twice on every request.
 	 */
-	if (req->oldptr == 0) {
+	lck_rw_lock_exclusive(ripcbinfo.mtx);
+	if (req->oldptr == USER_ADDR_NULL) {
 		n = ripcbinfo.ipi_count;
 		req->oldidx = 2 * (sizeof xig)
 			+ (n + n/8) * sizeof(struct xinpcb);
+		lck_rw_done(ripcbinfo.mtx);
 		return 0;
 	}
 
-	if (req->newptr != 0)
+	if (req->newptr != USER_ADDR_NULL) {
+		lck_rw_done(ripcbinfo.mtx);
 		return EPERM;
+	}
 
 	/*
 	 * OK, now we're committed to doing something.
 	 */
-	s = splnet();
 	gencnt = ripcbinfo.ipi_gencnt;
 	n = ripcbinfo.ipi_count;
-	splx(s);
 
 	xig.xig_len = sizeof xig;
 	xig.xig_count = n;
 	xig.xig_gen = gencnt;
 	xig.xig_sogen = so_gencnt;
 	error = SYSCTL_OUT(req, &xig, sizeof xig);
-	if (error)
+	if (error) {
+		lck_rw_done(ripcbinfo.mtx);
 		return error;
+	}
     /*
      * We are done if there is no pcb
      */
-    if (n == 0)  
+    if (n == 0) {
+	lck_rw_done(ripcbinfo.mtx);
         return 0; 
+    }
 
 	inp_list = _MALLOC(n * sizeof *inp_list, M_TEMP, M_WAITOK);
-	if (inp_list == 0)
+	if (inp_list == 0) {
+		lck_rw_done(ripcbinfo.mtx);
 		return ENOMEM;
+	}
 	
-	s = splnet();
 	for (inp = ripcbinfo.listhead->lh_first, i = 0; inp && i < n;
 	     inp = inp->inp_list.le_next) {
-		if (inp->inp_gencnt <= gencnt)
+		if (inp->inp_gencnt <= gencnt && inp->inp_state != INPCB_STATE_DEAD)
 			inp_list[i++] = inp;
 	}
-	splx(s);
 	n = i;
 
 	error = 0;
 	for (i = 0; i < n; i++) {
 		inp = inp_list[i];
-		if (inp->inp_gencnt <= gencnt) {
+		if (inp->inp_gencnt <= gencnt && inp->inp_state != INPCB_STATE_DEAD) {
 			struct xinpcb xi;
 			xi.xi_len = sizeof xi;
 			/* XXX should avoid extra copy */
-			bcopy(inp, &xi.xi_inp, sizeof *inp);
+			inpcb_to_compat(inp, &xi.xi_inp);
 			if (inp->inp_socket)
 				sotoxsocket(inp->inp_socket, &xi.xi_socket);
 			error = SYSCTL_OUT(req, &xi, sizeof xi);
@@ -750,14 +846,13 @@ rip_pcblist SYSCTL_HANDLER_ARGS
 		 * while we were processing this request, and it
 		 * might be necessary to retry.
 		 */
-		s = splnet();
 		xig.xig_gen = ripcbinfo.ipi_gencnt;
 		xig.xig_sogen = so_gencnt;
 		xig.xig_count = ripcbinfo.ipi_count;
-		splx(s);
 		error = SYSCTL_OUT(req, &xig, sizeof xig);
 	}
 	FREE(inp_list, M_TEMP);
+	lck_rw_done(ripcbinfo.mtx);
 	return error;
 }
 
@@ -769,5 +864,5 @@ struct pr_usrreqs rip_usrreqs = {
 	pru_connect2_notsupp, in_control, rip_detach, rip_disconnect,
 	pru_listen_notsupp, in_setpeeraddr, pru_rcvd_notsupp,
 	pru_rcvoob_notsupp, rip_send, pru_sense_null, rip_shutdown,
-	in_setsockaddr, sosend, soreceive, sopoll
+	in_setsockaddr, sosend, soreceive, pru_sopoll_notsupp
 };

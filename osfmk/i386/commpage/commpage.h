@@ -63,6 +63,15 @@ extern	char	*commPagePtr;				// virt address of commpage in kernel map
 
 extern	void	commpage_set_timestamp(uint64_t tbr,uint32_t secs,uint32_t usecs,uint32_t ticks_per_sec);
 
+typedef struct {
+	uint64_t	nt_base_tsc;
+	uint64_t	nt_base_ns; 
+	uint32_t	nt_scale;
+	uint32_t	nt_shift;
+	uint64_t	nt_check_tsc;
+} commpage_nanotime_t;
+extern  void	commpage_set_nanotime(commpage_nanotime_t *new_nanotime);
+
 #endif	/* __ASSEMBLER__ */
 
 #endif /* _I386_COMMPAGE_H */

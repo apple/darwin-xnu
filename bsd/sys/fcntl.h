@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -69,9 +69,28 @@
  * described by POSIX for <fcntl.h>; it also includes
  * related kernel definitions.
  */
+#include <sys/_types.h>
+#include <sys/cdefs.h>
 
-#ifndef KERNEL
-#include <sys/types.h>
+/* We should not be exporting size_t here.  Temporary for gcc bootstrapping. */
+#ifndef _SIZE_T
+#define _SIZE_T
+typedef __darwin_size_t	size_t;
+#endif
+
+#ifndef	_MODE_T
+typedef	__darwin_mode_t	mode_t;
+#define _MODE_T
+#endif
+
+#ifndef _OFF_T
+typedef __darwin_off_t	off_t;
+#define _OFF_T
+#endif
+
+#ifndef _PID_T
+typedef __darwin_pid_t	pid_t;
+#define _PID_T
 #endif
 
 /*
@@ -95,19 +114,20 @@
  * FREAD and FWRITE are excluded from the #ifdef KERNEL so that TIOCFLUSH,
  * which was documented to use FREAD/FWRITE, continues to work.
  */
-#ifndef _POSIX_SOURCE
+#ifndef _POSIX_C_SOURCE
 #define	FREAD		0x0001
 #define	FWRITE		0x0002
 #endif
 #define	O_NONBLOCK	0x0004		/* no delay */
 #define	O_APPEND	0x0008		/* set append mode */
-#ifndef _POSIX_SOURCE
+#define	O_SYNC		0x0080		/* synchronous writes */
+#ifndef _POSIX_C_SOURCE
 #define	O_SHLOCK	0x0010		/* open with shared file lock */
 #define	O_EXLOCK	0x0020		/* open with exclusive file lock */
 #define	O_ASYNC		0x0040		/* signal pgrp when data ready */
-#define	O_FSYNC		0x0080		/* synchronous writes */
+#define	O_FSYNC		O_SYNC		/* source compatibility: do not use */
 #define O_NOFOLLOW  0x0100      /* don't follow symlinks */
-#endif
+#endif /* _POSIX_C_SOURCE */
 #define	O_CREAT		0x0200		/* create if nonexistant */
 #define	O_TRUNC		0x0400		/* truncate to zero length */
 #define	O_EXCL		0x0800		/* error if already exists */
@@ -116,12 +136,17 @@
 #define	FDEFER		0x2000		/* defer for next gc pass */
 #define	FHASLOCK	0x4000		/* descriptor holds advisory lock */
 #endif
-#ifndef _POSIX_SOURCE
+#ifndef _POSIX_C_SOURCE
 #define	O_EVTONLY	0x8000		/* descriptor requested for event notifications only */
+#endif
+
+#ifdef KERNEL
+#define	FWASWRITTEN	0x10000		/* descriptor was written */
 #endif
 
 /* defined by POSIX 1003.1; BSD default, so no bit required */
 #define	O_NOCTTY	0		/* don't assign controlling terminal */
+//#define	O_SYNC  /* ??? POSIX: Write according to synchronized I/O file integrity completion */
 
 #ifdef KERNEL
 /* convert from open() flags to/from fflags; convert O_RD/WR to FREAD/FWRITE */
@@ -139,7 +164,7 @@
  * and by fcntl.  We retain the F* names for the kernel f_flags field
  * and for backward compatibility for fcntl.
  */
-#ifndef _POSIX_SOURCE
+#ifndef _POSIX_C_SOURCE
 #define	FAPPEND		O_APPEND	/* kernel/compat */
 #define	FASYNC		O_ASYNC		/* kernel/compat */
 #define	FFSYNC		O_FSYNC		/* kernel */
@@ -152,7 +177,7 @@
  * Flags used for copyfile(2)
  */
 
-#ifndef _POSIX_SOURCE
+#ifndef _POSIX_C_SOURCE
 #define CPF_OVERWRITE 1
 #define CPF_IGNORE_MODE 2
 #define CPF_MASK (CPF_OVERWRITE|CPF_IGNORE_MODE)
@@ -168,13 +193,12 @@
 #define	F_SETFD		2		/* set file descriptor flags */
 #define	F_GETFL		3		/* get file status flags */
 #define	F_SETFL		4		/* set file status flags */
-#ifndef _POSIX_SOURCE
 #define	F_GETOWN	5		/* get SIGIO/SIGURG proc/pgrp */
 #define F_SETOWN	6		/* set SIGIO/SIGURG proc/pgrp */
-#endif
 #define	F_GETLK		7		/* get record locking information */
 #define	F_SETLK		8		/* set record locking information */
 #define	F_SETLKW	9		/* F_SETLK; wait if blocked */
+#ifndef _POSIX_C_SOURCE
 #define F_CHKCLEAN      41              /* Used for regression test */
 #define F_PREALLOCATE   42		/* Preallocate storage */
 #define F_SETSIZE       43		/* Truncate a file without zeroing space */	
@@ -186,6 +210,13 @@
 #define F_LOG2PHYS	49		/* file offset to device offset */
 #define F_GETPATH       50              /* return the full path of the fd */
 #define F_FULLFSYNC     51		/* fsync + ask the drive to flush to the media */
+#define F_PATHPKG_CHECK 52              /* find which component (if any) is a package */
+#define F_FREEZE_FS     53              /* "freeze" all fs operations */
+#define F_THAW_FS       54              /* "thaw" all fs operations */
+
+// FS-specific fcntl()'s numbers begin at 0x00010000 and go up
+#define FCNTL_FS_SPECIFIC_BASE  0x00010000
+#endif /* _POSIX_C_SOURCE */
 
 /* file descriptor flags (F_GETFD, F_SETFD) */
 #define	FD_CLOEXEC	1		/* close-on-exec flag */
@@ -200,6 +231,65 @@
 #define	F_POSIX		0x040	 	/* Use POSIX semantics for lock */
 #endif
 
+/*
+ * [XSI] The values used for l_whence shall be defined as described
+ * in <unistd.h>
+ */
+#ifndef SEEK_SET
+#define	SEEK_SET	0	/* set file offset to offset */
+#define	SEEK_CUR	1	/* set file offset to current plus offset */
+#define	SEEK_END	2	/* set file offset to EOF plus offset */
+#endif	/* !SEEK_SET */
+
+/*
+ * [XSI] The symbolic names for file modes for use as values of mode_t
+ * shall be defined as described in <sys/stat.h>
+ */
+#ifndef S_IFMT
+/* File type */
+#define	S_IFMT		0170000		/* [XSI] type of file mask */
+#define	S_IFIFO		0010000		/* [XSI] named pipe (fifo) */
+#define	S_IFCHR		0020000		/* [XSI] character special */
+#define	S_IFDIR		0040000		/* [XSI] directory */
+#define	S_IFBLK		0060000		/* [XSI] block special */
+#define	S_IFREG		0100000		/* [XSI] regular */
+#define	S_IFLNK		0120000		/* [XSI] symbolic link */
+#define	S_IFSOCK	0140000		/* [XSI] socket */
+#ifndef _POSIX_C_SOURCE
+#define	S_IFWHT		0160000		/* whiteout */
+#define S_IFXATTR	0200000		/* extended attribute */
+#endif
+
+/* File mode */
+/* Read, write, execute/search by owner */
+#define	S_IRWXU		0000700		/* [XSI] RWX mask for owner */
+#define	S_IRUSR		0000400		/* [XSI] R for owner */
+#define	S_IWUSR		0000200		/* [XSI] W for owner */
+#define	S_IXUSR		0000100		/* [XSI] X for owner */
+/* Read, write, execute/search by group */
+#define	S_IRWXG		0000070		/* [XSI] RWX mask for group */
+#define	S_IRGRP		0000040		/* [XSI] R for group */
+#define	S_IWGRP		0000020		/* [XSI] W for group */
+#define	S_IXGRP		0000010		/* [XSI] X for group */
+/* Read, write, execute/search by others */
+#define	S_IRWXO		0000007		/* [XSI] RWX mask for other */
+#define	S_IROTH		0000004		/* [XSI] R for other */
+#define	S_IWOTH		0000002		/* [XSI] W for other */
+#define	S_IXOTH		0000001		/* [XSI] X for other */
+
+#define	S_ISUID		0004000		/* [XSI] set user id on execution */
+#define	S_ISGID		0002000		/* [XSI] set group id on execution */
+#define	S_ISVTX		0001000		/* [XSI] directory restrcted delete */
+
+#ifndef _POSIX_C_SOURCE
+#define	S_ISTXT		S_ISVTX		/* sticky bit: not supported */
+#define	S_IREAD		S_IRUSR		/* backward compatability */
+#define	S_IWRITE	S_IWUSR		/* backward compatability */
+#define	S_IEXEC		S_IXUSR		/* backward compatability */
+#endif
+#endif	/* !S_IFMT */
+
+#ifndef _POSIX_C_SOURCE
 /* allocate flags (F_PREALLOCATE) */
 
 #define F_ALLOCATECONTIG  0x00000002    /* allocate contigious space */
@@ -210,6 +300,7 @@
 #define F_PEOFPOSMODE 3			/* Make it past all of the SEEK pos modes so that */
 					/* we can keep them in sync should we desire */	
 #define F_VOLPOSMODE	4		/* specify volume starting postion */
+#endif /* _POSIX_C_SOURCE */
 
 /*
  * Advisory file segment locking data type -
@@ -224,6 +315,7 @@ struct flock {
 };
 
 
+#ifndef _POSIX_C_SOURCE
 /*
  * advisory file read data type -
  * information passed by user to system
@@ -234,18 +326,16 @@ struct radvisory {
 };
 
 
-#ifndef _POSIX_SOURCE
 /* lock operations for flock(2) */
 #define	LOCK_SH		0x01		/* shared file lock */
 #define	LOCK_EX		0x02		/* exclusive file lock */
 #define	LOCK_NB		0x04		/* don't block when locking */
 #define	LOCK_UN		0x08		/* unlock file */
-#endif
 
 /*  fstore_t type used by F_DEALLOCATE and F_PREALLOCATE commands */
 
 typedef struct fstore {
-	u_int32_t fst_flags;	/* IN: flags word */
+	unsigned int fst_flags;	/* IN: flags word */
 	int 	fst_posmode;	/* IN: indicates use of offset field */
 	off_t	fst_offset;	/* IN: start of the region */
 	off_t	fst_length;	/* IN: size of the region */
@@ -256,9 +346,33 @@ typedef struct fstore {
 
 typedef struct fbootstraptransfer {
   off_t fbt_offset;             /* IN: offset to start read/write */
-  size_t fbt_length;            /* IN: number of bytes to transfer */
+  size_t fbt_length;          /* IN: number of bytes to transfer */
   void *fbt_buffer;             /* IN: buffer to be read/written */
 } fbootstraptransfer_t;
+
+
+// LP64todo - should this move?
+#ifdef KERNEL
+/* LP64 version of fbootstraptransfer.  all pointers 
+ * grow when we're dealing with a 64-bit process.
+ * WARNING - keep in sync with fbootstraptransfer
+ */
+
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=natural
+#endif
+
+typedef struct user_fbootstraptransfer {
+  off_t fbt_offset;             /* IN: offset to start read/write */
+  user_size_t fbt_length;		/* IN: number of bytes to transfer */
+  user_addr_t fbt_buffer;		/* IN: buffer to be read/written */
+} user_fbootstraptransfer_t;
+
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=reset
+#endif
+
+#endif // KERNEL
 
 /*
  * For F_LOG2PHYS this information is passed back to user
@@ -276,27 +390,66 @@ typedef struct fbootstraptransfer {
  * and a per filesystem type flag will be needed to interpret the
  * contiguous bytes count result from CMAP.
  */
+#if __DARWIN_ALIGN_POWER
+#pragma options align=power
+#endif
+
 struct log2phys {
-	u_int32_t	l2p_flags;		/* unused so far */
+	unsigned int	l2p_flags;		/* unused so far */
 	off_t		l2p_contigbytes;	/* unused so far */
 	off_t		l2p_devoffset;	/* bytes into device */
 };
 
-#ifndef _POSIX_SOURCE
-#define	O_POPUP	   0x80000000   /* force window to popup on open */
-#define	O_ALERT	   0x20000000	/* small, clean popup window */
+#if __DARWIN_ALIGN_POWER
+#pragma options align=reset
 #endif
 
+#define	O_POPUP	   0x80000000   /* force window to popup on open */
+#define	O_ALERT	   0x20000000	/* small, clean popup window */
+#endif /* _POSIX_C_SOURCE */
+
 #ifndef KERNEL
-#include <sys/cdefs.h>
+
+#ifndef _POSIX_C_SOURCE
+#ifndef _FILESEC_T
+struct _filesec;
+typedef struct _filesec	*filesec_t;
+#define _FILESEC_T
+#endif
+typedef enum {
+	FILESEC_OWNER = 1,
+	FILESEC_GROUP = 2,
+	FILESEC_UUID = 3,
+	FILESEC_MODE = 4,
+	FILESEC_ACL = 5,
+	FILESEC_GRPUUID = 6,
+
+/* XXX these are private to the implementation */
+	FILESEC_ACL_RAW = 100,
+	FILESEC_ACL_ALLOCSIZE = 101
+} filesec_property_t;
+
+/* XXX backwards compatibility */
+#define FILESEC_GUID FILESEC_UUID
+#endif /* _POSIX_C_SOURCE */
 
 __BEGIN_DECLS
-int	open __P((const char *, int, ...));
-int	creat __P((const char *, mode_t));
-int	fcntl __P((int, int, ...));
-#ifndef _POSIX_SOURCE
-int	flock __P((int, int));
-#endif /* !_POSIX_SOURCE */
+int	open(const char *, int, ...);
+int	creat(const char *, mode_t);
+int	fcntl(int, int, ...);
+#ifndef _POSIX_C_SOURCE
+int	openx_np(const char *, int, filesec_t);
+int	flock(int, int);
+filesec_t filesec_init(void);
+filesec_t filesec_dup(filesec_t);
+void	filesec_free(filesec_t);
+int	filesec_get_property(filesec_t, filesec_property_t, void *);
+int	filesec_set_property(filesec_t, filesec_property_t, const void *);
+int	filesec_unset_property(filesec_t, filesec_property_t);
+int	filesec_query_property(filesec_t, filesec_property_t, int *);
+#define _FILESEC_UNSET_PROPERTY	((void *)0)
+#define _FILESEC_REMOVE_ACL	((void *)1)
+#endif /* !_POSIX_C_SOURCE */
 __END_DECLS
 #endif
 

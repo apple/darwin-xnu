@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -69,6 +69,7 @@
 #include <mach/std_types.h>
 #include <types.h>
 #include <sys/syslog.h>
+#include <kern/thread.h>
 #include <ppc/misc_protos.h>
 #include <ppc/proc_reg.h>
 #include <ppc/exception.h>
@@ -190,7 +191,7 @@ decl_simple_lock_data(,scc_stomp)			/* (TEST/DEBUG) */
  */
 
 void
-initialize_serial( caddr_t scc_phys_base )
+initialize_serial( caddr_t scc_phys_base, int32_t serial_baud )
 {
 	int i, chan, bits;
 	scc_regmap_t	regs;
@@ -211,6 +212,8 @@ initialize_serial( caddr_t scc_phys_base )
 
 	simple_lock_init(&scc_stomp, FALSE);				/* (TEST/DEBUG) */
 	
+	if (serial_baud == -1) serial_baud = DEFAULT_SPEED;
+	
 	scc_softc[0].full_modem = TRUE;
 
         scc_std[0] = scc_phys_base;
@@ -229,7 +232,7 @@ initialize_serial( caddr_t scc_phys_base )
 
 	/* Call probe so we are ready very early for remote gdb and for serial
 	   console output if appropriate.  */
-	if (scc_probe()) {
+	if (scc_probe(serial_baud)) {
 		for (i = 0; i < NSCC_LINE; i++) {
 			scc_softc[0].softr[i].wr5 = SCC_WR5_DTR | SCC_WR5_RTS;
 			scc_param(scc_tty_for(i));
@@ -248,7 +251,7 @@ initialize_serial( caddr_t scc_phys_base )
 }
 
 int
-scc_probe(void)
+scc_probe(int32_t serial_baud)
 {
 	scc_softc_t     scc;
 	register int	val, i;
@@ -290,8 +293,8 @@ scc_probe(void)
 		  tp->t_ispeed = DEFAULT_PORT0_SPEED;
 		  tp->t_ospeed = DEFAULT_PORT0_SPEED;
 		} else {
-		  tp->t_ispeed = DEFAULT_SPEED;
-		  tp->t_ospeed = DEFAULT_SPEED;
+		  tp->t_ispeed = serial_baud;
+		  tp->t_ospeed = serial_baud;
 		}
 		tp->t_flags = DEFAULT_FLAGS;
 		scc->softr[i].speed = -1;
@@ -648,21 +651,22 @@ scc_param(struct scc_tty *tp)
 void
 serial_keyboard_init(void)
 {
+	kern_return_t	result;
+	thread_t		thread;
 
 	if(!(serialmode & 2)) return;		/* Leave if we do not want a serial console */
 
 	kprintf("Serial keyboard started\n");
-	kernel_thread_with_priority(serial_keyboard_start, MAXPRI_STANDARD);
-	return;
+	result = kernel_thread_start_priority((thread_continue_t)serial_keyboard_start, NULL, MAXPRI_KERNEL, &thread);
+	if (result != KERN_SUCCESS)
+		panic("serial_keyboard_init");
+
+	thread_deallocate(thread);
 }
 
 void
 serial_keyboard_start(void)
 {
-	thread_t cthread;
-
-	cthread = current_thread();		/* Just who the heck are we anyway? */
-	stack_privilege(cthread);		/* Make sure we don't lose our stack */
 	serial_keyboard_poll();			/* Go see if there are any characters pending now */
 	panic("serial_keyboard_start: we can't get back here\n");
 }
@@ -682,9 +686,8 @@ serial_keyboard_poll(void)
 
 	clock_interval_to_deadline(16, 1000000, &next);	/* Get time of pop */
 
-	assert_wait((event_t)serial_keyboard_poll, THREAD_INTERRUPTIBLE);	/* Show we are "waiting" */
-	thread_set_timer_deadline(next);	/* Set the next time to check */
-	thread_block(serial_keyboard_poll);	/* Wait for it */
+	assert_wait_deadline((event_t)serial_keyboard_poll, THREAD_UNINT, next);	/* Show we are "waiting" */
+	thread_block((thread_continue_t)serial_keyboard_poll);	/* Wait for it */
 	panic("serial_keyboard_poll: Shouldn't never ever get here...\n");
 }
 

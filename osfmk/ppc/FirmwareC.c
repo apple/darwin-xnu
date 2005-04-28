@@ -24,7 +24,6 @@
  *
  */
 
-#include <cpus.h>
 #include <debug.h>
 #include <mach_vm_debug.h>
 #include <db_machine_commands.h>

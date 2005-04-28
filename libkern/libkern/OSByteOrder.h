@@ -104,17 +104,17 @@ OSHostByteOrder(void) {
 OS_INLINE
 uint16_t
 OSReadBigInt16(
-    volatile void               * base,
+    const volatile void               * base,
     uintptr_t                     offset
 )
 {
-    return *(volatile uint16_t *)((int8_t *)base + offset);
+    return *(volatile uint16_t *)((uintptr_t)base + offset);
 }
 
 OS_INLINE
 uint32_t
 OSReadBigInt32(
-    volatile void               * base,
+    const volatile void               * base,
     uintptr_t                     offset
 )
 {
@@ -124,7 +124,7 @@ OSReadBigInt32(
 OS_INLINE
 uint64_t
 OSReadBigInt64(
-    volatile void               * base,
+    const volatile void               * base,
     uintptr_t                     offset
 )
 {
@@ -334,7 +334,7 @@ OSSwapBigToHostInt64(
 OS_INLINE
 uint16_t
 OSReadBigInt16(
-    volatile void               * base,
+    const volatile void               * base,
     uintptr_t                     offset
 )
 {
@@ -344,7 +344,7 @@ OSReadBigInt16(
 OS_INLINE
 uint32_t
 OSReadBigInt32(
-    volatile void               * base,
+    const volatile void               * base,
     uintptr_t                     offset
 )
 {
@@ -354,7 +354,7 @@ OSReadBigInt32(
 OS_INLINE
 uint64_t
 OSReadBigInt64(
-    volatile void               * base,
+    const volatile void               * base,
     uintptr_t                     offset
 )
 {
@@ -401,7 +401,7 @@ OSWriteBigInt64(
 OS_INLINE
 uint16_t
 OSReadLittleInt16(
-    volatile void               * base,
+    const volatile void               * base,
     uintptr_t                     offset
 )
 {
@@ -411,7 +411,7 @@ OSReadLittleInt16(
 OS_INLINE
 uint32_t
 OSReadLittleInt32(
-    volatile void               * base,
+    const volatile void               * base,
     uintptr_t                     offset
 )
 {
@@ -421,7 +421,7 @@ OSReadLittleInt32(
 OS_INLINE
 uint64_t
 OSReadLittleInt64(
-    volatile void               * base,
+    const volatile void               * base,
     uintptr_t                     offset
 )
 {

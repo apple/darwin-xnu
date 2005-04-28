@@ -33,7 +33,7 @@
 #include <IOKit/IOCommand.h>
 
 #define super OSObject
-OSDefineMetaClassAndAbstractStructors(IOCommand, OSObject);
+OSDefineMetaClassAndStructors(IOCommand, OSObject);
 
 
 //--------------------------------------------------------------------------

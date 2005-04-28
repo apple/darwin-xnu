@@ -25,9 +25,8 @@
 #define	_BSM_AUDIT_H
 
 #include <sys/queue.h>
-#include <sys/ucred.h>
+#include <sys/types.h>
 #include <sys/param.h>
-#include <sys/ipc.h>
 #include <sys/socket.h>
 #include <sys/cdefs.h>
 
@@ -45,7 +44,7 @@
 /*
  * Pre-defined audit IDs
  */
-#define AU_DEFAUDITID	-1
+#define AU_DEFAUDITID	((uid_t)-1)
 
 /*
  * Define the masks for the classes of audit events.

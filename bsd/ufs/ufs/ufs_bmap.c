@@ -67,9 +67,9 @@
 #include <rev_endian_fs.h>
 #include <sys/param.h>
 #include <sys/buf.h>
-#include <sys/proc.h>
-#include <sys/vnode.h>
-#include <sys/mount.h>
+#include <sys/proc_internal.h>	/* for p_stats */
+#include <sys/vnode_internal.h>
+#include <sys/mount_internal.h>
 #include <sys/resourcevar.h>
 #include <sys/trace.h>
 #include <sys/quota.h>
@@ -85,33 +85,6 @@
 #include <architecture/byte_order.h>
 #endif /* REV_ENDIAN_FS */
 
-/*
- * Bmap converts a the logical block number of a file to its physical block
- * number on the disk. The conversion is done by using the logical block
- * number to index into the array of block pointers described by the dinode.
- */
-int
-ufs_bmap(ap)
-	struct vop_bmap_args /* {
-		struct vnode *a_vp;
-		ufs_daddr_t a_bn;
-		struct vnode **a_vpp;
-		ufs_daddr_t *a_bnp;
-		int *a_runp;
-	} */ *ap;
-{
-	/*
-	 * Check for underlying vnode requests and ensure that logical
-	 * to physical mapping is requested.
-	 */
-	if (ap->a_vpp != NULL)
-		*ap->a_vpp = VTOI(ap->a_vp)->i_devvp;
-	if (ap->a_bnp == NULL)
-		return (0);
-
-	return (ufs_bmaparray(ap->a_vp, ap->a_bn, ap->a_bnp, NULL, NULL,
-	    ap->a_runp));
-}
 
 /*
  * Indirect blocks are now on the vnode for the file.  They are given negative
@@ -129,7 +102,7 @@ ufs_bmap(ap)
 
 int
 ufs_bmaparray(vp, bn, bnp, ap, nump, runp)
-	struct vnode *vp;
+	vnode_t	    vp;
 	ufs_daddr_t bn;
 	ufs_daddr_t *bnp;
 	struct indir *ap;
@@ -170,7 +143,7 @@ ufs_bmaparray(vp, bn, bnp, ap, nump, runp)
 		 * don't create a block larger than the device can handle.
 		 */
 		*runp = 0;
-		maxrun = MAXPHYSIO / mp->mnt_stat.f_iosize - 1;
+		maxrun = MAXPHYSIO / mp->mnt_vfsstat.f_iosize - 1;
 	}
 
 	xap = ap == NULL ? a : ap;
@@ -197,44 +170,54 @@ ufs_bmaparray(vp, bn, bnp, ap, nump, runp)
 
 	devvp = VFSTOUFS(vp->v_mount)->um_devvp;
 	for (bp = NULL, ++xap; --num; ++xap) {
-		/* 
-		 * Exit the loop if there is no disk address assigned yet and
-		 * the indirect block isn't in the cache, or if we were
-		 * looking for an indirect block and we've found it.
-		 */
+	        ufs_daddr_t *dataptr;
+		int bop;
 
-		metalbn = xap->in_lbn;
-		if (daddr == 0 && !incore(vp, metalbn) || metalbn == bn)
+	        if ((metalbn = xap->in_lbn) == bn)
+		       /*	
+			* found the indirect block we were
+			* looking for... exit the loop
+			*/
+		       break;
+		
+		if (daddr == 0)
+		        bop = BLK_ONLYVALID | BLK_META;
+		else
+		        bop = BLK_META;
+
+		if (bp)
+			buf_brelse(bp);
+		bp = buf_getblk(vp, (daddr64_t)((unsigned)metalbn), mp->mnt_vfsstat.f_iosize, 0, 0, bop);
+
+		if (bp == 0) {
+		        /* 
+			 * Exit the loop if there is no disk address assigned yet and
+			 * the indirect block isn't in the cache
+			 */
 			break;
+		}
 		/*
 		 * If we get here, we've either got the block in the cache
 		 * or we have a disk address for it, go fetch it.
 		 */
-		if (bp)
-			brelse(bp);
-
 		xap->in_exists = 1;
-		bp = getblk(vp, metalbn, mp->mnt_stat.f_iosize, 0, 0, BLK_META);
-		if (bp->b_flags & (B_DONE | B_DELWRI)) {
-			trace(TR_BREADHIT, pack(vp, mp->mnt_stat.f_iosize), metalbn);
+
+		if (buf_valid(bp)) {
+			trace(TR_BREADHIT, pack(vp, mp->mnt_vfsstat.f_iosize), metalbn);
 		}
-#if DIAGNOSTIC
-		else if (!daddr)
-			panic("ufs_bmaparry: indirect block not in cache");
-#endif
 		else {
-			trace(TR_BREADMISS, pack(vp, mp->mnt_stat.f_iosize), metalbn);
-			bp->b_blkno = blkptrtodb(ump, daddr);
-			bp->b_flags |= B_READ;
-			VOP_STRATEGY(bp);
+			trace(TR_BREADMISS, pack(vp, mp->mnt_vfsstat.f_iosize), metalbn);
+			buf_setblkno(bp, blkptrtodb(ump, (daddr64_t)((unsigned)daddr)));
+			buf_setflags(bp, B_READ);
+			VNOP_STRATEGY(bp);
 			current_proc()->p_stats->p_ru.ru_inblock++;	/* XXX */
-			if (error = biowait(bp)) {
-				brelse(bp);
+			if (error = (int)buf_biowait(bp)) {
+				buf_brelse(bp);
 				return (error);
 			}
 		}
-
-		daddr = ((ufs_daddr_t *)bp->b_data)[xap->in_off];
+		dataptr = (ufs_daddr_t *)buf_dataptr(bp);
+		daddr = dataptr[xap->in_off];
 #if REV_ENDIAN_FS
 		if (rev_endian)
 			daddr = NXSwapLong(daddr);
@@ -245,16 +228,16 @@ ufs_bmaparray(vp, bn, bnp, ap, nump, runp)
 			for (bn = xap->in_off + 1;
 			    bn < MNINDIR(ump) && *runp < maxrun &&
 			    is_sequential(ump,
-			    NXSwapLong(((ufs_daddr_t *)bp->b_data)[bn - 1]),
-			    NXSwapLong(((ufs_daddr_t *)bp->b_data)[bn]));
+			    NXSwapLong(dataptr[bn - 1]),
+			    NXSwapLong(dataptr[bn]));
 			    ++bn, ++*runp);
 		 } else {
 #endif /* REV_ENDIAN_FS */
 			for (bn = xap->in_off + 1;
 			    bn < MNINDIR(ump) && *runp < maxrun &&
 			    is_sequential(ump,
-			    ((ufs_daddr_t *)bp->b_data)[bn - 1],
-			    ((ufs_daddr_t *)bp->b_data)[bn]);
+			    dataptr[bn - 1],
+			    dataptr[bn]);
 			    ++bn, ++*runp);
 #if REV_ENDIAN_FS
 		}
@@ -262,7 +245,7 @@ ufs_bmaparray(vp, bn, bnp, ap, nump, runp)
 		}
 	}
 	if (bp)
-		brelse(bp);
+		buf_brelse(bp);
 
 	daddr = blkptrtodb(ump, daddr);
 	*bnp = daddr == 0 ? -1 : daddr;
@@ -352,332 +335,91 @@ ufs_getlbns(vp, bn, ap, nump)
 	return (0);
 }
 /*
- * Cmap converts a the file offset of a file to its physical block
- * number on the disk And returns  contiguous size for transfer.
+ * blockmap converts a file offsetto its physical block
+ * number on the disk... it optionally returns the physically
+ * contiguous size.
  */
 int
-ufs_cmap(ap)
-	struct vop_cmap_args /* {
+ufs_blockmap(ap)
+	struct vnop_blockmap_args /* {
 		struct vnode *a_vp;
 		off_t a_foffset;    
 		size_t a_size;
-		daddr_t *a_bpn;
+		daddr64_t *a_bpn;
 		size_t *a_run;
 		void *a_poff;
+		int a_flags;
 	} */ *ap;
 {
-	struct vnode * vp = ap->a_vp;
-	ufs_daddr_t *bnp = ap->a_bpn;
-	size_t *runp = ap->a_run;
-	int size = ap->a_size;
-	daddr_t bn;
-	int nblks;
-	register struct inode *ip;
+	vnode_t	    vp   = ap->a_vp;
+	daddr64_t * bnp  = ap->a_bpn;
+	size_t    * runp = ap->a_run;
+	int	    size = ap->a_size;
+	struct fs * fs;
+	struct inode *ip;
+	ufs_daddr_t lbn;
 	ufs_daddr_t daddr = 0;
-	int devBlockSize=0;
-	struct fs *fs;
-	int retsize=0;
-	int error=0;
+	int	devBlockSize = 0;
+	int	retsize = 0;
+	int	error = 0;
+	int	nblks;
 
 	ip = VTOI(vp);
 	fs = ip->i_fs;
 	
+	lbn = (ufs_daddr_t)lblkno(fs, ap->a_foffset);
+	devBlockSize = vfs_devblocksize(vnode_mount(vp));
 
-	if (blkoff(fs, ap->a_foffset)) {
-		panic("ufs_cmap; allocation requested inside a block");
-	}
+	if (blkoff(fs, ap->a_foffset))
+		panic("ufs_blockmap; allocation requested inside a block");
 
-	bn = (daddr_t)lblkno(fs, ap->a_foffset);
-	VOP_DEVBLOCKSIZE(ip->i_devvp, &devBlockSize);
+	if (size % devBlockSize)
+		panic("ufs_blockmap: size is not multiple of device block size\n");
 
-	if (size % devBlockSize) {
-		panic("ufs_cmap: size is not multiple of device block size\n");
-	}
-
-	if (error =  VOP_BMAP(vp, bn, (struct vnode **) 0, &daddr, &nblks)) {
-			return(error);
-	}
-
-	retsize = nblks * fs->fs_bsize;
+	if ((error = ufs_bmaparray(vp, lbn, &daddr, NULL, NULL, &nblks)))
+	        return (error);
 
 	if (bnp)
-		*bnp = daddr;
+		*bnp = (daddr64_t)daddr;
 
 	if (ap->a_poff) 
 		*(int *)ap->a_poff = 0;
 
-	if (daddr == -1) {
-		if (size < fs->fs_bsize) {
-			retsize = fragroundup(fs, size);
-			if(size >= retsize)
-				*runp = retsize;
-			else
-				*runp = size;
-		} else {
-			*runp = fs->fs_bsize;
-		}
-		return(0);
-	}
-
 	if (runp) {
-		if ((size < fs->fs_bsize)) {
-			*runp = size;
-			return(0);
-		}
-		if (retsize) {
-			retsize += fs->fs_bsize;
-			if(size >= retsize)
-				*runp = retsize;
-			else
-				*runp = size;
+	        if (lbn < 0) {
+		        /*
+			 * we're dealing with the indirect blocks
+			 * which are always fs_bsize in size
+			 */
+		        retsize = (nblks + 1) * fs->fs_bsize;
+		} else if (daddr == -1 || nblks == 0) {
+		        /*
+			 * we're dealing with a 'hole'... UFS doesn't
+			 * have a clean way to determine it's size
+			 * or
+			 * there's are no physically contiguous blocks
+			 * so
+			 * just return the size of the lbn we started with
+			 */
+		        retsize = blksize(fs, ip, lbn);
 		} else {
-			if (size < fs->fs_bsize) {
-				retsize = fragroundup(fs, size);
-				if(size >= retsize)
-					*runp = retsize;
-				else
-					*runp = size;
-			} else {
-				*runp = fs->fs_bsize;
-			}
+		        /*
+			 * we have 1 or more blocks that are physically contiguous
+			 * to our starting block number... the orignal block + (nblks - 1)
+			 * blocks must be full sized since only the last block can be 
+			 * composed of fragments...
+			 */
+			 retsize = nblks * fs->fs_bsize;
+
+			 /*
+			  * now compute the size of the last block and add it in
+			  */
+			 retsize += blksize(fs, ip, (lbn + nblks));
 		}
+		if (retsize < size)
+		        *runp = retsize;
+		else
+		        *runp = size;
 	}
 	return (0);
 }
-
-
-#if NOTTOBEUSED
-/*
- * Cmap converts a the file offset of a file to its physical block
- * number on the disk And returns  contiguous size for transfer.
- */
-int
-ufs_cmap(ap)
-	struct vop_cmap_args /* {
-		struct vnode *a_vp;
-		off_t a_foffset;    
-		size_t a_size;
-		daddr_t *a_bpn;
-		size_t *a_run;
-		void *a_poff;
-	} */ *ap;
-{
-	struct vnode * vp = ap->a_vp;
-	ufs_daddr_t *bnp = ap->a_bpn;
-	size_t *runp = ap->a_run;
-	daddr_t bn;
-	int nblks, blks;
-	int *nump;
-	register struct inode *ip;
-	struct buf *bp;
-	struct ufsmount *ump;
-	struct mount *mp;
-	struct vnode *devvp;
-	struct indir a[NIADDR], *xap;
-	ufs_daddr_t daddr;
-	long metalbn;
-	int error, maxrun, num;
-	int devBlockSize=0;
-	struct fs *fs;
-	int size = ap->a_size;
-	int block_offset=0;
-	int retsize=0;
-#if 1
-	daddr_t orig_blkno;
-	daddr_t orig_bblkno;
-#endif /* 1 */	
-#if REV_ENDIAN_FS
-	int rev_endian=0;
-#endif /* REV_ENDIAN_FS */
-
-	ip = VTOI(vp);
-	fs = ip->i_fs;
-	
-	mp = vp->v_mount;
-	ump = VFSTOUFS(mp);
-
-	VOP_DEVBLOCKSIZE(ip->i_devvp, &devBlockSize);
-	bn = (daddr_t)lblkno(fs, ap->a_foffset);
-
-	if (size % devBlockSize) {
-		panic("ufs_cmap: size is not multiple of device block size\n");
-	}
-
-	block_offset = blkoff(fs, ap->a_foffset);
-	if (block_offset) {
-		panic("ufs_cmap; allocation requested inside a block");
-	}
-
-#if 1
-	VOP_OFFTOBLK(vp, ap->a_foffset, & orig_blkno);
-#endif /* 1 */
-	/* less than block size and not block offset aligned */
-	if ( (size < fs->fs_bsize) && fragoff(fs, size) && block_offset ) {
-		panic("ffs_cmap: size not a mult of fragment\n");
-	}
-#if 0
-	if (size > fs->fs_bsize && fragoff(fs, size))  {
-		panic("ffs_cmap: more than bsize  & not a multiple of fragment\n");
-	}
-#endif /* 0 */
-#if REV_ENDIAN_FS
-	rev_endian=(mp->mnt_flag & MNT_REVEND);
-#endif /* REV_ENDIAN_FS */
-
-	if(runp)
-		*runp = 0;
-
-	if ( size > MAXPHYSIO)
-		size = MAXPHYSIO;
-	nblks = (blkroundup(fs, size))/fs->fs_bsize;
-
-	xap = a;
-	num = 0;
-	if (error = ufs_getlbns(vp, bn, xap, &num))
-		return (error);
-
-	blks = 0;
-	if (num == 0) {
-		daddr = blkptrtodb(ump, ip->i_db[bn]);
-		*bnp = ((daddr == 0) ? -1 : daddr);
-		if (daddr && runp) {
-			for (++bn; bn < NDADDR && blks < nblks &&
-			    ip->i_db[bn] &&
-			    is_sequential(ump, ip->i_db[bn - 1], ip->i_db[bn]);
-			    ++bn, ++blks);
-
-			if (blks) {
-				retsize = lblktosize(fs, blks);
-				if(size >= retsize)
-					*runp = retsize;
-				else
-					*runp = size;
-			} else {
-				if (size < fs->fs_bsize) {
-					retsize = fragroundup(fs, size);
-					if(size >= retsize)
-						*runp = retsize;
-					else
-						*runp = size;
-				} else {
-					*runp = fs->fs_bsize;
-				}
-			}
-			if (ap->a_poff) 
-				*(int *)ap->a_poff = 0;
-		}
-#if 1
-		if (VOP_BMAP(vp, orig_blkno, NULL, &orig_bblkno, NULL)) {
-			panic("vop_bmap failed\n");
-		}
-		if(daddr != orig_bblkno) {
-			panic("vop_bmap and vop_cmap differ\n");
-		}
-#endif /* 1 */
-		return (0);
-	}
-
-
-	/* Get disk address out of indirect block array */
-	daddr = ip->i_ib[xap->in_off];
-
-	devvp = VFSTOUFS(vp->v_mount)->um_devvp;
-	for (bp = NULL, ++xap; --num; ++xap) {
-		/* 
-		 * Exit the loop if there is no disk address assigned yet
-		 * or if we were looking for an indirect block and we've 
-		 * found it.
-		 */
-
-		metalbn = xap->in_lbn;
-		if (daddr == 0  || metalbn == bn)
-			break;
-		/*
-		 * We have a disk address for it, go fetch it.
-		 */
-		if (bp)
-			brelse(bp);
-
-		xap->in_exists = 1;
-		bp = getblk(vp, metalbn, mp->mnt_stat.f_iosize, 0, 0, BLK_META);
-		if (bp->b_flags & (B_DONE | B_DELWRI)) {
-			trace(TR_BREADHIT, pack(vp, mp->mnt_stat.f_iosize), metalbn);
-		}
-		else {
-			trace(TR_BREADMISS, pack(vp, mp->mnt_stat.f_iosize), metalbn);
-			bp->b_blkno = blkptrtodb(ump, daddr);
-			bp->b_flags |= B_READ;
-			VOP_STRATEGY(bp);
-			current_proc()->p_stats->p_ru.ru_inblock++;	/* XXX */
-			if (error = biowait(bp)) {
-				brelse(bp);
-				return (error);
-			}
-		}
-
-		daddr = ((ufs_daddr_t *)bp->b_data)[xap->in_off];
-#if REV_ENDIAN_FS
-		if (rev_endian)
-			daddr = NXSwapLong(daddr);
-#endif /* REV_ENDIAN_FS */
-		if (num == 1 && daddr && runp) {
-			blks = 0;
-#if REV_ENDIAN_FS
-		if (rev_endian) {
-			for (bn = xap->in_off + 1;
-			    bn < MNINDIR(ump) && blks < maxrun &&
-			    is_sequential(ump,
-			    NXSwapLong(((ufs_daddr_t *)bp->b_data)[bn - 1]),
-			    NXSwapLong(((ufs_daddr_t *)bp->b_data)[bn]));
-			    ++bn, ++blks);
-		 } else {
-#endif /* REV_ENDIAN_FS */
-			for (bn = xap->in_off + 1;
-			    bn < MNINDIR(ump) && blks < maxrun &&
-			    is_sequential(ump,
-			    ((ufs_daddr_t *)bp->b_data)[bn - 1],
-			    ((ufs_daddr_t *)bp->b_data)[bn]);
-			    ++bn, ++blks);
-#if REV_ENDIAN_FS
-		}
-#endif /* REV_ENDIAN_FS */
-		}
-	}
-	if (bp)
-		brelse(bp);
-
-	daddr = blkptrtodb(ump, daddr);
-	*bnp = ((daddr == 0) ? -1 : daddr);
-	if (daddr && runp) {
-		if (blks) {
-			retsize = lblktosize(fs, blks);
-			if(size >= retsize)
-				*runp = retsize;
-			else
-				*runp = size;
-		} else {
-				if (size < fs->fs_bsize) {
-					retsize = fragroundup(fs, size);
-					if(size >= retsize)
-						*runp = retsize;
-					else
-						*runp = size;
-				} else {
-					*runp = fs->fs_bsize;
-				}
-			}
-
-	}
-	if (daddr &&  ap->a_poff) 
-		*(int *)ap->a_poff = 0;
-#if 1
-		if (VOP_BMAP(vp, orig_blkno, (struct vnode **) 0, &orig_bblkno, 0)) {
-			panic("vop_bmap failed\n");
-		}
-		if(daddr != orig_bblkno) {
-			panic("vop_bmap and vop_cmap differ\n");
-		}
-#endif /* 1 */
-	return (0);
-}
-#endif /* NOTTOBEUSED */

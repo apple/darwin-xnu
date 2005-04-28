@@ -46,7 +46,7 @@
 .Fn shmget
 returns the shared memory identifier associated with the key
 .Fa key .
-
+.Pp
 A shared memory segment is created if either
 .Fa key
 is equal to IPC_PRIVATE, or
@@ -54,7 +54,7 @@ is equal to IPC_PRIVATE, or
 does not have a shared memory segment identifier associated with it, and the IPC_CREAT
 bit is set in
 .Fa shmflg.
-
+.Pp
 If a new shared memory segment is created, the data structure associated with it (the
 .Va shmid_ds
 structure, see

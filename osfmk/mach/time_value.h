@@ -48,10 +48,8 @@
  * the rights to redistribute these changes.
  */
 
-#ifndef	TIME_VALUE_H_
-#define	TIME_VALUE_H_
-
-#include <sys/appleapiopts.h>
+#ifndef	_MACH_TIME_VALUE_H_
+#define	_MACH_TIME_VALUE_H_
 
 #include <mach/machine/vm_types.h>
 
@@ -63,9 +61,8 @@ struct time_value {
 	integer_t seconds;
 	integer_t microseconds;
 };
-typedef	struct time_value	time_value_t;
 
-#ifdef	__APPLE_API_UNSTABLE
+typedef	struct time_value	time_value_t;
 
 /*
  *	Macros to manipulate time values.  Assume that time values
@@ -90,25 +87,4 @@ typedef	struct time_value	time_value_t;
 	}							\
 }
 
-#endif	/* __APPLE_API_UNSTABLE */
-
-#ifdef	__APPLE_API_OBSOLETE
-
-/*
- *	Time value available through the mapped-time interface.
- *	Read this mapped value with
- *		do {
- *			secs = mtime->seconds;
- *			usecs = mtime->microseconds;
- *		} while (secs != mtime->check_seconds);
- */
-
-typedef struct mapped_time_value {
-	integer_t seconds;
-	integer_t microseconds;
-	integer_t check_seconds;
-} mapped_time_value_t;
-
-#endif	/* __APPLE_API_OBSOLETE */
-
-#endif	/* TIME_VALUE_H_ */
+#endif	/* _MACH_TIME_VALUE_H_ */

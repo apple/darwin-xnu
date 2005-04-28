@@ -1,4 +1,25 @@
 /*
+ * Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
+ *
+ * @APPLE_LICENSE_HEADER_START@
+ * 
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
+ * 
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
+ * 
+ * @APPLE_LICENSE_HEADER_END@
+ */
+/*
  * Copyright (c) 1988 University of Utah.
  * Copyright (c) 1990, 1993
  *	The Regents of the University of California.  All rights reserved.
@@ -48,9 +69,7 @@
  *
  */
 
-
 #include <sys/param.h>
-#include <sys/systm.h>
 #include <sys/kernel.h>
 #include <sys/mount.h>
 #include <sys/namei.h>
@@ -58,30 +77,38 @@
 #include <sys/buf.h>
 #include <sys/malloc.h>
 #include <sys/mount.h>
-#include <sys/vnode.h>
 #include <sys/fcntl.h>
 #include <sys/conf.h>
 #include <sys/disk.h>
 #include <sys/stat.h>
-
 #include <sys/vm.h>
+#include <sys/uio_internal.h>
+#include <libkern/libkern.h>
 
+#include <vm/pmap.h>
 #include <vm/vm_pager.h>
-#include <vm/vm_pageout.h>
 #include <mach/memory_object_types.h>
 
 #include <miscfs/devfs/devfs.h>
 
-static open_close_fcn_t		mdevopen;
-static open_close_fcn_t		mdevclose;
+
+void 		mdevinit(int the_cnt);
+
+static open_close_fcn_t	mdevopen;
+static open_close_fcn_t	mdevclose;
 static psize_fcn_t		mdevsize;
-static strategy_fcn_t		mdevstrategy;
-static int mdevbioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p);
-static int mdevcioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p);
-static int mdevrw(dev_t dev, struct uio *uio, int ioflag);
-static char *nonspace(char *pos, char *end);
-static char *getspace(char *pos, char *end);
-static char *cvtnum(char *pos, char *end, unsigned int *num);
+static strategy_fcn_t	mdevstrategy;
+static int				mdevbioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p);
+static int				mdevcioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p);
+static int 				mdevrw(dev_t dev, struct uio *uio, int ioflag);
+static char *			nonspace(char *pos, char *end);
+static char *			getspace(char *pos, char *end);
+static char *			cvtnum(char *pos, char *end, unsigned int *num);
+
+extern void		bcopy_phys(addr64_t from, addr64_t to, vm_size_t bytes);
+extern void		mapping_set_mod(ppnum_t pn);
+extern ppnum_t 	pmap_find_phys(pmap_t pmap, addr64_t va);
+
 
 /*
  * cdevsw
@@ -139,11 +166,13 @@ static int mdevioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc 
 dev_t mdevadd(int devid, ppnum_t base, unsigned int size, int phys);
 dev_t mdevlookup(int devid);
 
-static	int mdevclose(dev_t dev, int flags, int devtype, struct proc *p) {
+static	int mdevclose(__unused dev_t dev, __unused int flags, 
+					  __unused int devtype, __unused struct proc *p) {
+
 	return (0);
 }
 
-static	int mdevopen(dev_t dev, int flags, int devtype, struct proc *p) {
+static	int mdevopen(dev_t dev, int flags, __unused int devtype, __unused struct proc *p) {
 	
 	int devid;
 
@@ -156,12 +185,11 @@ static	int mdevopen(dev_t dev, int flags, int devtype, struct proc *p) {
 	return(0);
 }
 
-static int mdevrw(dev_t dev, struct uio *uio, int ioflag) {
+static int mdevrw(dev_t dev, struct uio *uio, __unused int ioflag) {
 	int 			status;
-	int 			unit;
 	addr64_t		mdata;
-	int devid;
-	enum uio_seg saveflag;
+	int 			devid;
+	enum uio_seg 	saveflag;
 
 	devid = minor(dev);									/* Get minor device number */
 
@@ -171,82 +199,77 @@ static int mdevrw(dev_t dev, struct uio *uio, int ioflag) {
 	mdata = ((addr64_t)mdev[devid].mdBase << 12) + uio->uio_offset;	/* Point to the area in "file" */
 	
 	saveflag = uio->uio_segflg;							/* Remember what the request is */
-	if (mdev[devid].mdFlags & mdPhys) uio->uio_segflg = UIO_PHYS_USERSPACE;	/* Make sure we are moving from physical ram if physical device */
-	status = uiomove64(mdata, uio->uio_resid, uio);		/* Move the data */
+#if LP64_DEBUG
+	if (IS_VALID_UIO_SEGFLG(uio->uio_segflg) == 0) {
+	  panic("mdevrw - invalid uio_segflg\n"); 
+	}
+#endif /* LP64_DEBUG */
+	/* Make sure we are moving from physical ram if physical device */
+	if (mdev[devid].mdFlags & mdPhys) {
+		if (uio->uio_segflg == UIO_USERSPACE64) 
+			uio->uio_segflg = UIO_PHYS_USERSPACE64;	
+		else if (uio->uio_segflg == UIO_USERSPACE32)
+			uio->uio_segflg = UIO_PHYS_USERSPACE32;	
+		else
+			uio->uio_segflg = UIO_PHYS_USERSPACE;	
+	}
+	status = uiomove64(mdata, uio_resid(uio), uio);		/* Move the data */
 	uio->uio_segflg = saveflag;							/* Restore the flag */
 
 	return (status);
 }
 
 static void mdevstrategy(struct buf *bp) {
-	int unmap;
-	unsigned int sz, left, lop, csize;
-	kern_return_t ret;
+	unsigned int left, lop, csize;
 	vm_offset_t vaddr, blkoff;
-	struct buf *tbuf;
 	int devid;
 	addr64_t paddr, fvaddr;
 	ppnum_t pp;
 
-	devid = minor(bp->b_dev);							/* Get minor device number */
+	devid = minor(buf_device(bp));							/* Get minor device number */
 
 	if ((mdev[devid].mdFlags & mdInited) == 0) {		/* Have we actually been defined yet? */
-		bp->b_error = ENXIO;
-		bp->b_flags |= B_ERROR;
-		biodone(bp);
+	        buf_seterror(bp, ENXIO);
+		buf_biodone(bp);
 		return;
 	}
 
-	bp->b_resid = bp->b_bcount;							/* Set byte count */
+	buf_setresid(bp, buf_count(bp));						/* Set byte count */
 	
-	blkoff = bp->b_blkno * mdev[devid].mdSecsize;		/* Get offset into file */
+	blkoff = buf_blkno(bp) * mdev[devid].mdSecsize;		/* Get offset into file */
 
 /*
  *	Note that reading past end is an error, but reading at end is an EOF.  For these
- *	we just return with b_resid == b_bcount.
+ *	we just return with resid == count.
  */
 
 	if (blkoff >= (mdev[devid].mdSize << 12)) {			/* Are they trying to read/write at/after end? */
 		if(blkoff != (mdev[devid].mdSize << 12)) {		/* Are we trying to read after EOF? */
-			bp->b_error = EINVAL;						/* Yeah, this is an error */
-			bp->b_flags |= B_ERROR | B_INVAL;
+		        buf_seterror(bp, EINVAL);						/* Yeah, this is an error */
 		}
-		biodone(bp);									/* Return */
+		buf_biodone(bp);								/* Return */
 		return;
 	}
 
-	if ((blkoff + bp->b_bcount) > (mdev[devid].mdSize << 12)) {		/* Will this read go past end? */
-		bp->b_bcount = ((mdev[devid].mdSize << 12) - blkoff);	/* Yes, trim to max */
+	if ((blkoff + buf_count(bp)) > (mdev[devid].mdSize << 12)) {		/* Will this read go past end? */
+		buf_setcount(bp, ((mdev[devid].mdSize << 12) - blkoff));	/* Yes, trim to max */
 	}
+	/*
+	 * make sure the buffer's data area is
+	 * accessible
+	 */
+	if (buf_map(bp, (caddr_t *)&vaddr))
+	        panic("ramstrategy: buf_map failed\n");
 
-	vaddr = 0;											/* Assume not mapped yet */
-	unmap = 0;
-
-	if (bp->b_flags & B_VECTORLIST) {					/* Do we have a list of UPLs? */
-		tbuf = (struct buf *)bp->b_real_bp;				/* Get this for C's inadequacies */
-		if((bp->b_flags & B_NEED_IODONE) &&				/* If we have a UPL, is it already mapped? */
-		  tbuf && 
-		  tbuf->b_data) {
-			vaddr = (vm_offset_t)tbuf->b_data;						/* We already have this mapped in, get base address */
-		}
-		else {											/* Not mapped yet */										
-			ret = ubc_upl_map(bp->b_pagelist, &vaddr);	/* Map it in */
-			if(ret != KERN_SUCCESS) panic("ramstrategy: ubc_upl_map failed, rc = %08X\n", ret);
-			unmap = 1;									/* Remember to unmap later */
-		}
-		vaddr = vaddr += bp->b_uploffset;				/* Calculate actual vaddr */
-	}
-	else vaddr = (vm_offset_t)bp->b_data;							/* No UPL, we already have address */
-	
 	fvaddr = (mdev[devid].mdBase << 12) + blkoff;		/* Point to offset into ram disk */
 	
-	if(bp->b_flags & B_READ) {							/* Is this a read? */
+	if (buf_flags(bp) & B_READ) {					/* Is this a read? */
 		if(!(mdev[devid].mdFlags & mdPhys)) {			/* Physical mapped disk? */
 			bcopy((void *)((uintptr_t)fvaddr),
-				(void *)vaddr, (size_t)bp->b_bcount);	/* This is virtual, just get the data */
+				(void *)vaddr, (size_t)buf_count(bp));	/* This is virtual, just get the data */
 		}
 		else {
-			left = bp->b_bcount;						/* Init the amount left to copy */
+			left = buf_count(bp);						/* Init the amount left to copy */
 			while(left) {								/* Go until it is all copied */
 				
 				lop = min((4096 - (vaddr & 4095)), (4096 - (fvaddr & 4095)));	/* Get smallest amount left on sink and source */
@@ -269,10 +292,10 @@ static void mdevstrategy(struct buf *bp) {
 	else {												/* This is a write */
 		if(!(mdev[devid].mdFlags & mdPhys)) {			/* Physical mapped disk? */
 			bcopy((void *)vaddr, (void *)((uintptr_t)fvaddr),
-				(size_t)bp->b_bcount);	/* This is virtual, just put the data */
+				(size_t)buf_count(bp));		/* This is virtual, just put the data */
 		}
 		else {
-			left = bp->b_bcount;						/* Init the amount left to copy */
+			left = buf_count(bp);						/* Init the amount left to copy */
 			while(left) {								/* Go until it is all copied */
 				
 				lop = min((4096 - (vaddr & 4095)), (4096 - (fvaddr & 4095)));	/* Get smallest amount left on sink and source */
@@ -292,13 +315,16 @@ static void mdevstrategy(struct buf *bp) {
 			}
 		}
 	}
-	
-	if (unmap) {										/* Do we need to unmap this? */
-		ubc_upl_unmap(bp->b_pagelist);					/* Yes, unmap it */
-	}
+	/*
+	 * buf_unmap takes care of all the cases
+	 * it will unmap the buffer from kernel
+	 * virtual space if that was the state
+	 * when we mapped it.
+	 */
+	buf_unmap(bp);
 
-	bp->b_resid = 0;									/* Nothing more to do */	
-	biodone(bp);										/* Say we've finished */
+	buf_setresid(bp, 0);									/* Nothing more to do */	
+	buf_biodone(bp);									/* Say we've finished */
 }
 
 static int mdevbioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p) {
@@ -309,8 +335,8 @@ static int mdevcioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc
 	return (mdevioctl(dev, cmd, data, flag, p, 1));
 }
 
-static int mdevioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p, int is_char) {
-
+static int mdevioctl(dev_t dev, u_long cmd, caddr_t data, __unused int flag, 
+					 struct proc *p, int is_char) {
 	int error;
 	u_long *f;
 	u_int64_t *o;
@@ -320,7 +346,7 @@ static int mdevioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc 
 
 	if (devid > 16) return (ENXIO);						/* Not valid */
 
-	error = suser(p->p_ucred, &p->p_acflag);			/* Are we superman? */
+	error = proc_suser(p);			/* Are we superman? */
 	if (error) return (error);							/* Nope... */
 
 	f = (u_long*)data;
@@ -392,7 +418,7 @@ static	int mdevsize(dev_t dev) {
 
 #include <pexpert/pexpert.h>
 
-void mdevinit(int cnt) {
+void mdevinit(__unused int the_cnt) {
 
 	int devid, phys;
 	ppnum_t base;

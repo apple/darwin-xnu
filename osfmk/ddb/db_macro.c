@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -201,12 +201,12 @@ db_arg_variable(
 
 	if (flag == DB_VAR_SHOW) {
 	    value = db_macro_args[ap->hidden_level][ap->suffix[0]-1];
-	    db_printf("%#lln", value);
+	    db_printf("%#lln", (unsigned long long)value);
 	    db_find_xtrn_task_sym_and_offset(value, &name, &offset, TASK_NULL);
 	    if (name != (char *)0 && offset <= db_maxoff && offset != value) {
 		db_printf("\t%s", name);
 		if (offset != 0)
-		    db_printf("+%#r", offset);
+		    db_printf("+%#llr", (unsigned long long)offset);
 	    }
 	    return(0);
 	}

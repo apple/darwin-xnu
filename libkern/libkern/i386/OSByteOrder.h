@@ -75,43 +75,43 @@ _OSSwapInt64(
 OS_INLINE
 uint16_t
 OSReadSwapInt16(
-    volatile void   * base,
+    const volatile void   * base,
     uintptr_t       offset
 )
 {
     uint16_t result;
 
-    result = *(uint16_t *)((uintptr_t)base + offset);
+    result = *(volatile uint16_t *)((uintptr_t)base + offset);
     return _OSSwapInt16(result);
 }
 
 OS_INLINE
 uint32_t
 OSReadSwapInt32(
-    volatile void   * base,
+    const volatile void   * base,
     uintptr_t       offset
 )
 {
     uint32_t result;
 
-    result = *(uint32_t *)((uintptr_t)base + offset);
+    result = *(volatile uint32_t *)((uintptr_t)base + offset);
     return _OSSwapInt32(result);
 }
 
 OS_INLINE
 uint64_t
 OSReadSwapInt64(
-    volatile void   * base,
+    const volatile void   * base,
     uintptr_t       offset
 )
 {
-    uint32_t * inp;
+    const volatile uint32_t * inp;
     union ullc {
         uint64_t     ull;
         uint32_t     ul[2];
     } outv;
 
-    inp = (uint32_t *)((uintptr_t)base + offset);
+    inp = (const volatile uint32_t *)((uintptr_t)base + offset);
     outv.ul[0] = inp[1];
     outv.ul[1] = inp[0];
     outv.ul[0] = _OSSwapInt32(outv.ul[0]);
@@ -129,7 +129,7 @@ OSWriteSwapInt16(
     uint16_t        data
 )
 {
-    *(uint16_t *)((uintptr_t)base + offset) = _OSSwapInt16(data);
+    *(volatile uint16_t *)((uintptr_t)base + offset) = _OSSwapInt16(data);
 }
 
 OS_INLINE
@@ -140,7 +140,7 @@ OSWriteSwapInt32(
     uint32_t        data
 )
 {
-    *(uint32_t *)((uintptr_t)base + offset) = _OSSwapInt32(data);
+    *(volatile uint32_t *)((uintptr_t)base + offset) = _OSSwapInt32(data);
 }
 
 OS_INLINE
@@ -151,7 +151,7 @@ OSWriteSwapInt64(
     uint64_t         data
 )
 {
-    *(uint64_t *)((uintptr_t)base + offset) = _OSSwapInt64(data);
+    *(volatile uint64_t *)((uintptr_t)base + offset) = _OSSwapInt64(data);
 }
 
 #endif /* ! _OS_OSBYTEORDERI386_H */

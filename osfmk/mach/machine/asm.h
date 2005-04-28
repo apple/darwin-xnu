@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -19,17 +19,16 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
+
 #ifndef _MACH_MACHINE_ASM_H
 #define _MACH_MACHINE_ASM_H
 
-
-#if defined (__ppc__)
+#if defined (__ppc__) || defined (__ppc64__)
 #include "mach/ppc/asm.h"
 #elif defined (__i386__)
 #include "mach/i386/asm.h"
 #else
 #error architecture not supported
 #endif
-
 
 #endif /* _MACH_MACHINE_ASM_H */

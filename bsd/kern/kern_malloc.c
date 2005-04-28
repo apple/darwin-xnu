@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -71,14 +71,16 @@
 #include <sys/event.h>
 #include <sys/eventvar.h>
 
-#include <sys/proc.h>
-#include <sys/mount.h>
-#include <sys/vnode.h>
+#include <sys/proc_internal.h>
+#include <sys/mount_internal.h>
+#include <sys/vnode_internal.h>
+#include <sys/ubc_internal.h>
 #include <sys/namei.h>
-#include <sys/file.h>
+#include <sys/file_internal.h>
 #include <sys/filedesc.h>
 #include <sys/tty.h>
 #include <sys/quota.h>
+#include <sys/uio_internal.h>
 
 #include <ufs/ufs/inode.h>
 
@@ -92,7 +94,6 @@
 #include <nfs/nfsproto.h>
 #include <nfs/nfsnode.h>
 #include <nfs/nfsmount.h>
-#include <nfs/nqnfs.h>
 
 #include <vfs/vfs_journal.h>
 
@@ -133,7 +134,7 @@ struct kmzones {
 	SOS(ucred),	KMZ_CREATEZONE,		/* 16 M_CRED */
 	SOS(pgrp),	KMZ_CREATEZONE,		/* 17 M_PGRP */
 	SOS(session),	KMZ_CREATEZONE,		/* 18 M_SESSION */
-	SOS(iovec),	KMZ_LOOKUPZONE,		/* 19 M_IOV */
+	SOS(iovec_32),	KMZ_LOOKUPZONE,		/* 19 M_IOV32 */
 	SOS(mount),	KMZ_CREATEZONE,		/* 20 M_MOUNT */
 	0,		KMZ_MALLOC,		/* 21 M_FHANDLE */
 	SOS(nfsreq),	KMZ_CREATEZONE,		/* 22 M_NFSREQ */
@@ -152,17 +153,17 @@ struct kmzones {
 	0,		KMZ_MALLOC,		/* 35 M_VMPVENT */
 	0,		KMZ_MALLOC,		/* 36 M_VMPAGER */
 	0,		KMZ_MALLOC,		/* 37 M_VMPGDATA */
-	SOS(file),	KMZ_CREATEZONE,		/* 38 M_FILE */
+	SOS(fileproc),	KMZ_CREATEZONE,		/* 38 M_FILEPROC */
 	SOS(filedesc),	KMZ_CREATEZONE,		/* 39 M_FILEDESC */
 	SOX(lockf),	KMZ_CREATEZONE,		/* 40 M_LOCKF */
 	SOS(proc),	KMZ_CREATEZONE,		/* 41 M_PROC */
-	SOS(pcred),	KMZ_CREATEZONE,		/* 42 M_SUBPROC */
+	SOS(pstats),	KMZ_CREATEZONE,		/* 42 M_SUBPROC */
 	0,		KMZ_MALLOC,		/* 43 M_SEGMENT */
 	M_FFSNODE,	KMZ_SHAREZONE,		/* 44 M_LFSNODE */
 	SOS(inode),	KMZ_CREATEZONE,		/* 45 M_FFSNODE */
 	M_FFSNODE,	KMZ_SHAREZONE,		/* 46 M_MFSNODE */
-	SOS(nqlease),	KMZ_CREATEZONE,		/* 47 M_NQLEASE */
-	SOS(nqm),	KMZ_CREATEZONE,		/* 48 M_NQMHOST */
+	0,		KMZ_MALLOC,		/* 47 M_NQLEASE */
+	0,		KMZ_MALLOC,		/* 48 M_NQMHOST */
 	0,		KMZ_MALLOC,		/* 49 M_NETADDR */
 	SOX(nfssvc_sock),
 			KMZ_CREATEZONE,		/* 50 M_NFSSVC */
@@ -215,6 +216,14 @@ struct kmzones {
 	SOS(transaction), KMZ_CREATEZONE,     /* 92 M_JNL_TR */
 	SOS(specinfo), KMZ_CREATEZONE,		/* 93 M_SPECINFO */
 	SOS(kqueue), KMZ_CREATEZONE,		/* 94 M_KQUEUE */
+	SOS(directoryhint), KMZ_CREATEZONE,	/* 95 M_HFSDIRHINT */
+	SOS(cl_readahead),  KMZ_CREATEZONE,	/* 96 M_CLRDAHEAD */
+	SOS(cl_writebehind),KMZ_CREATEZONE,	/* 97 M_CLWRBEHIND */
+	SOS(iovec_64),	KMZ_LOOKUPZONE,		/* 98 M_IOV64 */
+	SOS(fileglob),	KMZ_CREATEZONE,		/* 99 M_FILEGLOB */
+	0,		KMZ_MALLOC,		/* 100 M_KAUTH */
+	0,		KMZ_MALLOC,		/* 101 M_DUMMYNET */
+	SOS(unsafe_fsnode),KMZ_CREATEZONE,	/* 102 M_UNSAFEFS */
 #undef	SOS
 #undef	SOX
 };
@@ -283,7 +292,8 @@ struct _mhead {
 
 #define ZEROSIZETOKEN (void *)0xFADEDFAD
 
-void *_MALLOC(
+void *
+_MALLOC(
 	size_t		size,
 	int		type,
 	int		flags)
@@ -317,7 +327,8 @@ void *_MALLOC(
 	return  (mem->hdr.dat);
 }
 
-void _FREE(
+void
+_FREE(
 	void		*addr,
 	int		type)
 {
@@ -332,10 +343,11 @@ void _FREE(
 		return; /* correct (convenient bsd kernel legacy) */
 
 	hdr = addr; hdr--;
-	kfree((vm_offset_t)hdr, hdr->mlen);
+	kfree(hdr, hdr->mlen);
 }
 
-void *_MALLOC_ZONE(
+void *
+_MALLOC_ZONE(
 	size_t		size,
 	int		type,
 	int		flags)
@@ -348,7 +360,7 @@ void *_MALLOC_ZONE(
 
 	kmz = &kmzones[type];
 	if (kmz->kz_zalloczone == KMZ_MALLOC)
-		panic("_malloc_zone ZONE");
+		panic("_malloc_zone ZONE: type = %d", type);
 
 /* XXX */
 	if (kmz->kz_elemsize == -1)
@@ -370,7 +382,8 @@ void *_MALLOC_ZONE(
 	return (elem);
 }
 
-void _FREE_ZONE(
+void
+_FREE_ZONE(
 	void		*elem,
 	size_t		size,
 	int		type)
@@ -389,7 +402,7 @@ void _FREE_ZONE(
 		panic("FREE_SIZE XXX");
 /* XXX */
 	if (size == kmz->kz_elemsize)
-		zfree(kmz->kz_zalloczone, (vm_offset_t)elem);
+		zfree(kmz->kz_zalloczone, elem);
 	else
-		kfree((vm_offset_t)elem, size);
+		kfree(elem, size);
 }

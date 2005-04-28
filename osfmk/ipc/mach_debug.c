@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -71,6 +71,8 @@
 #include <kern/misc_protos.h>
 #include <vm/vm_map.h>
 #include <vm/vm_kern.h>
+#include <ipc/port.h>
+#include <ipc/ipc_types.h>
 #include <ipc/ipc_space.h>
 #include <ipc/ipc_port.h>
 #include <ipc/ipc_hash.h>
@@ -93,15 +95,22 @@
  *		KERN_INVALID_RIGHT	Name doesn't denote receive rights.
  */
 
+#if !MACH_IPC_DEBUG
+kern_return_t
+mach_port_get_srights(
+	__unused ipc_space_t		space,
+	__unused mach_port_name_t	name,
+	__unused mach_port_rights_t	*srightsp)
+{
+        return KERN_FAILURE;
+}
+#else
 kern_return_t
 mach_port_get_srights(
 	ipc_space_t		space,
 	mach_port_name_t	name,
 	mach_port_rights_t	*srightsp)
 {
-#if !MACH_IPC_DEBUG
-        return KERN_FAILURE;
-#else
 	ipc_port_t port;
 	kern_return_t kr;
 	mach_port_rights_t srights;
@@ -119,8 +128,8 @@ mach_port_get_srights(
 
 	*srightsp = srights;
 	return KERN_SUCCESS;
-#endif /* MACH_IPC_DEBUG */
 }
+#endif /* MACH_IPC_DEBUG */
 
 /*
  *	Routine:	host_ipc_hash_info
@@ -134,17 +143,24 @@ mach_port_get_srights(
  *		KERN_RESOURCE_SHORTAGE	Couldn't allocate memory.
  */
 
+#if !MACH_IPC_DEBUG
 kern_return_t
 host_ipc_hash_info(
-	host_t				host,
-	hash_info_bucket_array_t	*infop,
+	__unused host_t			host,
+	__unused hash_info_bucket_array_t	*infop,
+	__unused mach_msg_type_number_t 	*countp)
+{
+        return KERN_FAILURE;
+}
+#else
+kern_return_t
+host_ipc_hash_info(
+	host_t					host,
+	hash_info_bucket_array_t		*infop,
 	mach_msg_type_number_t 		*countp)
 {
-#if !MACH_IPC_DEBUG
-        return KERN_FAILURE;
-#else
 	vm_offset_t addr;
-	vm_size_t size;
+	vm_size_t size = 0;
 	hash_info_bucket_t *info;
 	unsigned int potential, actual;
 	kern_return_t kr;
@@ -167,7 +183,7 @@ host_ipc_hash_info(
 		if (info != *infop)
 			kmem_free(ipc_kernel_map, addr, size);
 
-		size = round_page_32(actual * sizeof *info);
+		size = round_page(actual * sizeof *info);
 		kr = kmem_alloc_pageable(ipc_kernel_map, &addr, size);
 		if (kr != KERN_SUCCESS)
 			return KERN_RESOURCE_SHORTAGE;
@@ -188,13 +204,13 @@ host_ipc_hash_info(
 		vm_map_copy_t copy;
 		vm_size_t used;
 
-		used = round_page_32(actual * sizeof *info);
+		used = round_page(actual * sizeof *info);
 
 		if (used != size)
 			kmem_free(ipc_kernel_map, addr + used, size - used);
 
-		kr = vm_map_copyin(ipc_kernel_map, addr, used,
-				   TRUE, &copy);
+		kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)addr, 
+				   (vm_map_size_t)used, TRUE, &copy);
 		assert(kr == KERN_SUCCESS);
 
 		*infop = (hash_info_bucket_t *) copy;
@@ -202,8 +218,8 @@ host_ipc_hash_info(
 	}
 
 	return KERN_SUCCESS;
-#endif /* MACH_IPC_DEBUG */
 }
+#endif /* MACH_IPC_DEBUG */
 
 /*
  *	Routine:	mach_port_space_info
@@ -218,18 +234,28 @@ host_ipc_hash_info(
  *		KERN_RESOURCE_SHORTAGE	Couldn't allocate memory.
  */
 
+#if !MACH_IPC_DEBUG
 kern_return_t
 mach_port_space_info(
-	ipc_space_t			space,
-	ipc_info_space_t		*infop,
+	__unused ipc_space_t			space,
+	__unused ipc_info_space_t		*infop,
+	__unused ipc_info_name_array_t	*tablep,
+	__unused mach_msg_type_number_t 	*tableCntp,
+	__unused ipc_info_tree_name_array_t *treep,
+	__unused mach_msg_type_number_t 	*treeCntp)
+{
+        return KERN_FAILURE;
+}
+#else
+kern_return_t
+mach_port_space_info(
+	ipc_space_t				space,
+	ipc_info_space_t			*infop,
 	ipc_info_name_array_t		*tablep,
 	mach_msg_type_number_t 		*tableCntp,
-	ipc_info_tree_name_array_t	*treep,
+	ipc_info_tree_name_array_t		*treep,
 	mach_msg_type_number_t 		*treeCntp)
 {
-#if !MACH_IPC_DEBUG
-        return KERN_FAILURE;
-#else
 	ipc_info_name_t *table_info;
 	unsigned int table_potential, table_actual;
 	vm_offset_t table_addr;
@@ -243,15 +269,16 @@ mach_port_space_info(
 	ipc_entry_num_t tsize;
 	mach_port_index_t index;
 	kern_return_t kr;
-	ipc_entry_bits_t *capability;
 
 	if (space == IS_NULL)
 		return KERN_INVALID_TASK;
 
 	/* start with in-line memory */
 
+	table_size = 0;
 	table_info = *tablep;
 	table_potential = *tableCntp;
+	tree_size = 0;
 	tree_info = *treep;
 	tree_potential = *treeCntp;
 
@@ -282,7 +309,7 @@ mach_port_space_info(
 				kmem_free(ipc_kernel_map,
 					  table_addr, table_size);
 
-			table_size = round_page_32(table_actual *
+			table_size = round_page(table_actual *
 						sizeof *table_info);
 			kr = kmem_alloc(ipc_kernel_map,
 					&table_addr, table_size);
@@ -303,7 +330,7 @@ mach_port_space_info(
 				kmem_free(ipc_kernel_map,
 					  tree_addr, tree_size);
 
-			tree_size = round_page_32(tree_actual *
+			tree_size = round_page(tree_actual *
 					       sizeof *tree_info);
 			kr = kmem_alloc(ipc_kernel_map,
 					&tree_addr, tree_size);
@@ -393,7 +420,7 @@ mach_port_space_info(
 		/* kmem_alloc doesn't zero memory */
 
 		size_used = table_actual * sizeof *table_info;
-		rsize_used = round_page_32(size_used);
+		rsize_used = round_page(size_used);
 
 		if (rsize_used != table_size)
 			kmem_free(ipc_kernel_map,
@@ -404,12 +431,12 @@ mach_port_space_info(
 			bzero((char *) (table_addr + size_used),
 			      rsize_used - size_used);
 
-		kr = vm_map_unwire(ipc_kernel_map, table_addr,
-				   table_addr + rsize_used, FALSE);
+		kr = vm_map_unwire(ipc_kernel_map, vm_map_trunc_page(table_addr),
+				   vm_map_round_page(table_addr + rsize_used), FALSE);
 		assert(kr == KERN_SUCCESS);
 
-		kr = vm_map_copyin(ipc_kernel_map, table_addr, rsize_used,
-				   TRUE, &copy);
+		kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)table_addr, 
+				   (vm_map_size_t)rsize_used, TRUE, &copy);
 		assert(kr == KERN_SUCCESS);
 
 		*tablep = (ipc_info_name_t *) copy;
@@ -431,7 +458,7 @@ mach_port_space_info(
 		/* kmem_alloc doesn't zero memory */
 
 		size_used = tree_actual * sizeof *tree_info;
-		rsize_used = round_page_32(size_used);
+		rsize_used = round_page(size_used);
 
 		if (rsize_used != tree_size)
 			kmem_free(ipc_kernel_map,
@@ -442,12 +469,12 @@ mach_port_space_info(
 			bzero((char *) (tree_addr + size_used),
 			      rsize_used - size_used);
 
-		kr = vm_map_unwire(ipc_kernel_map, tree_addr,
-				   tree_addr + rsize_used, FALSE);
+		kr = vm_map_unwire(ipc_kernel_map, vm_map_trunc_page(tree_addr),
+				   vm_map_round_page(tree_addr + rsize_used), FALSE);
 		assert(kr == KERN_SUCCESS);
 
-		kr = vm_map_copyin(ipc_kernel_map, tree_addr, rsize_used,
-				   TRUE, &copy);
+		kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)tree_addr,
+				   (vm_map_size_t)rsize_used, TRUE, &copy);
 		assert(kr == KERN_SUCCESS);
 
 		*treep = (ipc_info_tree_name_t *) copy;
@@ -455,8 +482,8 @@ mach_port_space_info(
 	}
 
 	return KERN_SUCCESS;
-#endif /* MACH_IPC_DEBUG */
 }
+#endif /* MACH_IPC_DEBUG */
 
 /*
  *	Routine:	mach_port_dnrequest_info
@@ -473,16 +500,24 @@ mach_port_space_info(
  *		KERN_INVALID_RIGHT	Name doesn't denote receive rights.
  */
 
+#if !MACH_IPC_DEBUG
 kern_return_t
 mach_port_dnrequest_info(
-	ipc_space_t		space,
-	mach_port_name_t	name,
-	unsigned int		*totalp,
-	unsigned int		*usedp)
+	__unused ipc_space_t		space,
+	__unused mach_port_name_t	name,
+	__unused unsigned int	*totalp,
+	__unused unsigned int	*usedp)
 {
-#if !MACH_IPC_DEBUG
         return KERN_FAILURE;
+}
 #else
+kern_return_t
+mach_port_dnrequest_info(
+	ipc_space_t			space,
+	mach_port_name_t		name,
+	unsigned int			*totalp,
+	unsigned int			*usedp)
+{
 	unsigned int total, used;
 	ipc_port_t port;
 	kern_return_t kr;
@@ -517,8 +552,8 @@ mach_port_dnrequest_info(
 	*totalp = total;
 	*usedp = used;
 	return KERN_SUCCESS;
-#endif /* MACH_IPC_DEBUG */
 }
+#endif /* MACH_IPC_DEBUG */
 
 /*
  *	Routine:	mach_port_kernel_object [kernel call]
@@ -536,16 +571,24 @@ mach_port_dnrequest_info(
  *					send or receive rights.
  */
 
+#if !MACH_IPC_DEBUG
 kern_return_t
 mach_port_kernel_object(
-	ipc_space_t		space,
-	mach_port_name_t	name,
-	unsigned int		*typep,
-	vm_offset_t		*addrp)
+	__unused ipc_space_t		space,
+	__unused mach_port_name_t	name,
+	__unused unsigned int	*typep,
+	__unused vm_offset_t		*addrp)
 {
-#if !MACH_IPC_DEBUG
         return KERN_FAILURE;
+}
 #else
+kern_return_t
+mach_port_kernel_object(
+	ipc_space_t			space,
+	mach_port_name_t		name,
+	unsigned int			*typep,
+	vm_offset_t			*addrp)
+{
 	ipc_entry_t entry;
 	ipc_port_t port;
 	kern_return_t kr;
@@ -576,5 +619,5 @@ mach_port_kernel_object(
 	ip_unlock(port);
 	return KERN_SUCCESS;
 
-#endif /* MACH_IPC_DEBUG */
 }
+#endif /* MACH_IPC_DEBUG */

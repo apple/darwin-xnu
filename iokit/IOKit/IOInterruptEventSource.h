@@ -40,7 +40,7 @@ class IOService;
     @abstract Event source for interrupt delivery to work-loop based drivers.
     @discussion The IOInterruptEventSource is a generic object that delivers calls interrupt routines in it's client in a guaranteed single-threaded manner.  IOInterruptEventSource is part of the IOKit $link IOWorkLoop infrastructure where the semantic that one and only one action method is executing within a work-loops event chain.
 <br><br>
-When the action method is called in the client member function will receive 2 arguments, (IOEventSource *) sender and (int) count, See $link IOInterruptEventSource::Action.	Where sender will be reference to the interrupt that occured and the count will be computed by the difference between the $link producerCount and $link consumerCount.  This number may not be reliable as no attempt is made to adjust for around the world type problems but is provided for general information and statistic gathering.
+When the action method is called in the client member function will receive 2 arguments, (IOEventSource *) sender and (int) count, See $link IOInterruptEventSource::Action.	Where sender will be reference to the interrupt that occurred and the count will be computed by the difference between the $link producerCount and $link consumerCount.  This number may not be reliable as no attempt is made to adjust for around the world type problems but is provided for general information and statistic gathering.
 <br><br>
 In general a client will use the factory member function to create and initialise the event source and then add it to their work-loop.  It is the work loop's responsiblity to maintain the new event source in it's event chain.  See $link IOWorkLoop.
 <br><br>

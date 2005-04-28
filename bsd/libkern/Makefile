@@ -11,9 +11,6 @@ include $(MakeInc_def)
 DATAFILES = \
 	libkern.h
 
-INSTALL_MI_LIST = ${DATAFILES}
-
-INSTALL_MI_DIR = libkern
 
 EXPORT_MI_LIST = ${DATAFILES}
 

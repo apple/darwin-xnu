@@ -22,26 +22,20 @@
 #ifndef DLIL_PVT_H
 #define DLIL_PVT_H
 #include <sys/appleapiopts.h>
-#ifdef __APPLE_API_PRIVATE
+#ifdef KERNEL_PRIVATE
 
 #include <net/dlil.h>
 #include <sys/queue.h>
-
-struct dlil_if_filterq_entry {
-    TAILQ_ENTRY(dlil_if_filterq_entry) que;
-    struct dlil_interface_filter_str if_filter;
-};
-
 
 struct dlil_family_mod_str {
     TAILQ_ENTRY(dlil_family_mod_str)	dl_fam_next;
     char	*interface_family;
     int (*add_if)(struct ifnet_ptr  *ifp);
     int (*del_if)(struct ifnet    *ifp);
-    int (*add_proto)(TAILQ_HEAD(ddesc_head_name, dlil_demux_desc) demux_desc_head,
-		     struct if_proto  *proto);
-    int (*del_proto)(struct if_proto  *proto);
+    int (*add_proto)(struct ifnet *ifp, u_long protocol_family,
+    				 struct ddesc_head_str *demux_desc_head);
+    int (*del_proto)(struct ifnet *ifp, u_long proto_family);
 }
 
-#endif /* __APPLE_API_PRIVATE */
+#endif /* KERNEL_PRIVATE */
 #endif

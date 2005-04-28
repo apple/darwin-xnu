@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -57,13 +57,14 @@
 #include <mach/mach_types.h>
 #include <mach/mach_traps.h>
 
-#include <kern/ast.h>
 #include <kern/ipc_tt.h>
 #include <kern/ipc_mig.h>
+#include <kern/kalloc.h>
 #include <kern/task.h>
 #include <kern/thread.h>
 #include <kern/ipc_kobject.h>
 #include <kern/misc_protos.h>
+
 #include <ipc/port.h>
 #include <ipc/ipc_kmsg.h>
 #include <ipc/ipc_entry.h>
@@ -155,8 +156,8 @@ mach_msg_rpc_from_kernel(
 	}
 
 	/* insert send-once right for the reply port */
-	kmsg->ikm_header.msgh_local_port = reply;
-	kmsg->ikm_header.msgh_bits |=
+	kmsg->ikm_header->msgh_local_port = reply;
+	kmsg->ikm_header->msgh_bits |=
 		MACH_MSGH_BITS(0, MACH_MSG_TYPE_MAKE_SEND_ONCE);
 
 	ipc_port_reference(reply);
@@ -174,7 +175,7 @@ mach_msg_rpc_from_kernel(
 			ipc_port_release(reply);
 			return MACH_RCV_PORT_DIED;
 		}
-		if (!self->top_act || !self->top_act->active) {
+		if (!self->active) {
 			ip_unlock(reply);
 			ipc_port_release(reply);
 			return MACH_RCV_INTERRUPTED;
@@ -203,7 +204,7 @@ mach_msg_rpc_from_kernel(
 
 		assert(mr == MACH_RCV_INTERRUPTED);
 
-		if (self->top_act && self->top_act->handlers) {
+		if (self->handlers) {
 			ipc_port_release(reply);
 			return(mr);
 		}
@@ -221,9 +222,9 @@ mach_msg_rpc_from_kernel(
 	}
 	 *****/
 
-	if (rcv_size < kmsg->ikm_header.msgh_size) {
+	if (rcv_size < kmsg->ikm_header->msgh_size) {
 		ipc_kmsg_copyout_dest(kmsg, ipc_space_reply);
-		ipc_kmsg_put_to_kernel(msg, kmsg, kmsg->ikm_header.msgh_size);
+		ipc_kmsg_put_to_kernel(msg, kmsg, kmsg->ikm_header->msgh_size);
 		return MACH_RCV_TOO_LARGE;
 	}
 
@@ -234,20 +235,15 @@ mach_msg_rpc_from_kernel(
 	 */
 
 	ipc_kmsg_copyout_to_kernel(kmsg, ipc_space_reply);
-	ipc_kmsg_put_to_kernel(msg, kmsg, kmsg->ikm_header.msgh_size);
+	ipc_kmsg_put_to_kernel(msg, kmsg, kmsg->ikm_header->msgh_size);
 	return MACH_MSG_SUCCESS;
 }
 
 
-/************** These Calls are set up for kernel-loaded tasks   **************/
-/************** Apple does not plan on supporting that. These    **************/
-/************** need to be reworked to deal with the kernel      **************/
-/************** proper to eliminate the kernel specific code MIG **************/
-/************** must generate.                                   **************/
-
+/************** These Calls are set up for kernel-loaded tasks/threads **************/
 
 /*
- *	Routine:	mach_msg
+ *	Routine:	mach_msg_overwrite
  *	Purpose:
  *		Like mach_msg_overwrite_trap except that message buffers
  *		live in kernel space.  Doesn't handle any options.
@@ -262,15 +258,15 @@ mach_msg_rpc_from_kernel(
 
 mach_msg_return_t
 mach_msg_overwrite(
-	mach_msg_header_t	*msg,
-	mach_msg_option_t	option,
+	mach_msg_header_t		*msg,
+	mach_msg_option_t		option,
 	mach_msg_size_t		send_size,
 	mach_msg_size_t		rcv_size,
-	mach_port_name_t	rcv_name,
-	mach_msg_timeout_t	timeout,
-	mach_port_name_t	notify,
-	mach_msg_header_t	*rcv_msg,
-        mach_msg_size_t		rcv_msg_size)
+	mach_port_name_t		rcv_name,
+	__unused mach_msg_timeout_t	msg_timeout,
+	__unused mach_port_name_t	notify,
+	__unused mach_msg_header_t	*rcv_msg,
+       __unused mach_msg_size_t	rcv_msg_size)
 {
 	ipc_space_t space = current_space();
 	vm_map_t map = current_map();
@@ -280,10 +276,35 @@ mach_msg_overwrite(
 	mach_msg_format_0_trailer_t *trailer;
 
 	if (option & MACH_SEND_MSG) {
-		mr = ipc_kmsg_get_from_kernel(msg, send_size, &kmsg);
-		if (mr != MACH_MSG_SUCCESS)
-			panic("mach_msg");
+		mach_msg_size_t	msg_and_trailer_size;
+		mach_msg_max_trailer_t	*max_trailer;
 
+		if ((send_size < sizeof(mach_msg_header_t)) || (send_size & 3))
+			return MACH_SEND_MSG_TOO_SMALL;
+
+		msg_and_trailer_size = send_size + MAX_TRAILER_SIZE;
+
+		kmsg = ipc_kmsg_alloc(msg_and_trailer_size);
+
+		if (kmsg == IKM_NULL)
+			return MACH_SEND_NO_BUFFER;
+
+		(void) memcpy((void *) kmsg->ikm_header, (const void *) msg, send_size);
+
+		kmsg->ikm_header->msgh_size = send_size;
+
+		/* 
+		 * Reserve for the trailer the largest space (MAX_TRAILER_SIZE)
+		 * However, the internal size field of the trailer (msgh_trailer_size)
+		 * is initialized to the minimum (sizeof(mach_msg_trailer_t)), to optimize
+		 * the cases where no implicit data is requested.
+		 */
+		max_trailer = (mach_msg_max_trailer_t *) ((vm_offset_t)kmsg->ikm_header + send_size);
+		max_trailer->msgh_sender = current_thread()->task->sec_token;
+		max_trailer->msgh_audit = current_thread()->task->audit_token;
+		max_trailer->msgh_trailer_type = MACH_MSG_TRAILER_FORMAT_0;
+		max_trailer->msgh_trailer_size = MACH_MSG_TRAILER_MINIMUM_SIZE;
+	
 		mr = ipc_kmsg_copyin(kmsg, space, map, MACH_PORT_NULL);
 		if (mr != MACH_MSG_SUCCESS) {
 			ipc_kmsg_free(kmsg);
@@ -327,15 +348,16 @@ mach_msg_overwrite(
 			return mr;
 
 		trailer = (mach_msg_format_0_trailer_t *) 
-		    ((vm_offset_t)&kmsg->ikm_header + kmsg->ikm_header.msgh_size);
+		    ((vm_offset_t)kmsg->ikm_header + kmsg->ikm_header->msgh_size);
 		if (option & MACH_RCV_TRAILER_MASK) {
 			trailer->msgh_seqno = seqno;
 			trailer->msgh_trailer_size = REQUESTED_TRAILER_SIZE(option);
 		}
 
-		if (rcv_size < (kmsg->ikm_header.msgh_size + trailer->msgh_trailer_size)) {
+		if (rcv_size < (kmsg->ikm_header->msgh_size + trailer->msgh_trailer_size)) {
 			ipc_kmsg_copyout_dest(kmsg, space);
-			ipc_kmsg_put_to_kernel(msg, kmsg, sizeof *msg);
+			(void) memcpy((void *) msg, (const void *) kmsg->ikm_header, sizeof *msg);
+			ipc_kmsg_free(kmsg);
 			return MACH_RCV_TOO_LARGE;
 		}
 
@@ -344,17 +366,19 @@ mach_msg_overwrite(
 		if (mr != MACH_MSG_SUCCESS) {
 			if ((mr &~ MACH_MSG_MASK) == MACH_RCV_BODY_ERROR) {
 				ipc_kmsg_put_to_kernel(msg, kmsg,
-						kmsg->ikm_header.msgh_size + trailer->msgh_trailer_size);
+						kmsg->ikm_header->msgh_size + trailer->msgh_trailer_size);
 			} else {
 				ipc_kmsg_copyout_dest(kmsg, space);
-				ipc_kmsg_put_to_kernel(msg, kmsg, sizeof *msg);
+				(void) memcpy((void *) msg, (const void *) kmsg->ikm_header, sizeof *msg);
+				ipc_kmsg_free(kmsg);
 			}
 
 			return mr;
 		}
 
-		ipc_kmsg_put_to_kernel(msg, kmsg, 
-		      kmsg->ikm_header.msgh_size + trailer->msgh_trailer_size);
+		(void) memcpy((void *) msg, (const void *) kmsg->ikm_header,
+			      kmsg->ikm_header->msgh_size + trailer->msgh_trailer_size);
+		ipc_kmsg_free(kmsg);
 	}
 
 	return MACH_MSG_SUCCESS;
@@ -364,39 +388,23 @@ mach_msg_overwrite(
  *	Routine:	mig_get_reply_port
  *	Purpose:
  *		Called by client side interfaces living in the kernel
- *		to get a reply port.  This port is used for
- *		mach_msg() calls which are kernel calls.
+ *		to get a reply port.
  */
 mach_port_t
 mig_get_reply_port(void)
 {
-	thread_t self = current_thread();
-
-	assert(self->ith_mig_reply == (mach_port_t)0);
-
-	/* 
-	 * JMM - for now we have no real clients of this under the kernel
-	 * loaded server model because we only have one of those.  In order
-	 * to avoid MIG changes, we just return null here - and return]
-	 * references to ipc_port_t's instead of names.
-	 *
-	 * if (self->ith_mig_reply == MACH_PORT_NULL)
-	 *	self->ith_mig_reply = mach_reply_port();
-	 */
-	return self->ith_mig_reply;
+	return (MACH_PORT_NULL);
 }
 
 /*
  *	Routine:	mig_dealloc_reply_port
  *	Purpose:
  *		Called by client side interfaces to get rid of a reply port.
- *		Shouldn't ever be called inside the kernel, because
- *		kernel calls shouldn't prompt Mig to call it.
  */
 
 void
 mig_dealloc_reply_port(
-	mach_port_t reply_port)
+	__unused mach_port_t reply_port)
 {
 	panic("mig_dealloc_reply_port");
 }
@@ -409,7 +417,7 @@ mig_dealloc_reply_port(
  */
 void
 mig_put_reply_port(
-	mach_port_t reply_port)
+	__unused mach_port_t reply_port)
 {
 }
 
@@ -460,7 +468,7 @@ mig_user_deallocate(
 	char		*data,
 	vm_size_t	size)
 {
-	kfree((vm_offset_t)data, size);
+	kfree(data, size);
 }
 
 /*
@@ -474,9 +482,11 @@ mig_object_init(
 	mig_object_t		mig_object,
 	const IMIGObject	*interface)
 {
-	assert(mig_object != MIG_OBJECT_NULL);
-	mig_object->pVtbl = (IMIGObjectVtbl *)interface;
+	if (mig_object == MIG_OBJECT_NULL)
+		return KERN_INVALID_ARGUMENT;
+	mig_object->pVtbl = (const IMIGObjectVtbl *)interface;
 	mig_object->port = MACH_PORT_NULL;
+	return KERN_SUCCESS;
 }
 
 /*
@@ -492,7 +502,7 @@ mig_object_init(
  */
 void
 mig_object_destroy(
-	mig_object_t	mig_object)
+	__assert_only mig_object_t	mig_object)
 {
 	assert(mig_object->port == MACH_PORT_NULL);
 	return;

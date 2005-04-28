@@ -33,66 +33,70 @@ __END_DECLS
 #include <libkern/c++/OSContainers.h>
 #include <iokit/IOLib.h>
 
-char *testBuffer = "
- <?xml version=\"1.0\" encoding=\"UTF-8\"?>
- <!DOCTYPE plist SYSTEM \"file://localhost/System/Library/DTDs/PropertyList.dtd\">
- <plist version=\"0.9\">
- <dict>
+char *testBuffer = 
+" <?xml version=\"1.0\" encoding=\"UTF-8\"?> \n"
+" <!DOCTYPE plist SYSTEM \"file://localhost/System/Library/DTDs/PropertyList.dtd\"> \n"
+" <plist version=\"1.0\"> \n"
+" <!DOCTYPE plist PUBLIC \"-//Apple Computer//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\"> \n"
+" <plist version=\"0.9\"> \n"
+" <dict> \n"
 
- <key>key true</key>	<true/>
- <key>key false</key>	<false/>
+" <key>key true</key>	<true/> \n"
+" <key>key false</key>	<false/> \n"
 
- <key>key d0</key>	<data> </data>
- <key>key d1</key>	<data>AQ==</data>
- <key>key d2</key>	<data>ASM=</data>
- <key>key d3</key>	<data>ASNF</data>
- <key>key d4</key>	<data format=\"hex\">0123 4567 89abcdef</data>
- <key>key d5</key>	<data ID=\"1\">ASNFZw==</data>
+" <key>key d0</key>	<data> </data> \n"
+" <key>key d1</key>	<data>AQ==</data> \n"
+" <key>key d2</key>	<data>ASM=</data> \n"
+" <key>key d3</key>	<data>ASNF</data> \n"
+" <key>key d4</key>	<data ID=\"1\">ASNFZw==</data> \n"
 
- <key>key i0</key>	<integer></integer>
- <key>key i1</key>	<integer>123456789</integer>
- <key>key i2</key>	<integer size=\"32\" ID=\"2\">0x12345678</integer>
+" <key>key i0</key>	<integer></integer> \n"
+" <key>key i1</key>	<integer>123456789</integer> \n"
+" <key>key i2</key>	<integer>-123456789</integer> \n"
+" <key>key i3</key>	<integer size=\"32\" ID=\"2\">0x12345678</integer> \n"
 
- <key>key s0</key>	<string></string>
- <key>key s1</key>	<string>string 1</string>
- <key>key s2</key>	<string ID=\"3\">string 2</string>
- <key>key &lt;&amp;&gt;</key>	<string>&lt;&amp;&gt;</string>
+" <key>key s0</key>	<string></string> \n"
+" <key>key s1</key>	<string>string 1</string> \n"
+" <key>key s2</key>	<string ID=\"3\">string 2</string> \n"
+" <key>key mr ©</key>	<string>mac roman copyright ©</string> \n"
+" <key>key uft8 \xc2\xa9</key>	<string>utf-8 copyright \xc2\xa9</string> \n"
+" <key>key &lt;&amp;&gt;</key>	<string>&lt;&amp;&gt;</string> \n"
 
- <key>key c0</key>	<dict ID=\"4\">
-                        </dict>
+" <key>key D0</key>	<dict ID=\"4\"> \n"
+"                        </dict> \n"
 
- <key>key a0</key>	<array>
-                        </array>
+" <key>key a0</key>	<array> \n"
+"                        </array> \n"
 
- <key>key a1</key>	<array ID=\"5\">
-                            <string>array string 1</string>
-                            <string>array string 2</string>
-                        </array>
+" <key>key a1</key>	<array ID=\"5\"> \n"
+"                            <string>array string 1</string> \n"
+"                            <string>array string 2</string> \n"
+"                        </array> \n"
 
- <key>key t0</key>	<set>
-                        </set>
- <key>key t1</key>	<set ID=\"6\">
-                             <string>set string 1</string>
-                             <string>set string 2</string>
-                         </set>
+" <key>key r1</key>	<ref IDREF=\"1\"/> \n"
+" <key>key r2</key>	<ref IDREF=\"2\"/> \n"
+" <key>key r3</key>	<ref IDREF=\"3\"/> \n"
+" <key>key r4</key>	<ref IDREF=\"4\"/> \n"
+" <key>key r5</key>	<ref IDREF=\"5\"/> \n"
 
- <key>key r1</key>	<ref IDREF=\"1\"/>
- <key>key r2</key>	<ref IDREF=\"2\"/>
- <key>key r3</key>	<ref IDREF=\"3\"/>
- <key>key r4</key>	<ref IDREF=\"4\"/>
- <key>key r5</key>	<ref IDREF=\"5\"/>
- <key>key r6</key>	<ref IDREF=\"6\"/>
+" <key>key e1</key>	<array/> \n"
+" <key>key e2</key>	<dict/> \n"
+" <key>key e4</key>	<integer/> \n"
+" <key>key e5</key>	<string/> \n"
+" <key>key e6</key>	<data/> \n"
 
- <key>key e1</key>	<array/>
- <key>key e2</key>	<dict/>
- <key>key e3</key>	<set/>
- <key>key e4</key>	<integer/>
- <key>key e5</key>	<string/>
- <key>key e6</key>	<data/>
+" <key>key S0</key>	<set> \n"
+"                        </set> \n"
+" <key>key S1</key>	<set ID=\"6\"> \n"
+"                             <string>set string 1</string> \n"
+"                             <string>set string 2</string> \n"
+"                         </set> \n"
+" <key>key r6</key>	<ref IDREF=\"6\"/> \n"
+" <key>key e3</key>	<set/> \n"
 
- </dict>
- </plist>
-";
+" </dict> \n"
+" </plist> \n"
+;
 
 /*
  this causes the parser to return an empty string? it doesn't look like yyerror gets called

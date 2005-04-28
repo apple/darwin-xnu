@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -57,11 +57,9 @@
 #include <mach_kdb.h>
 #include <mach_kdp.h>
 #include <db_machine_commands.h>
-#include <cpus.h>
 
 #include <kern/thread.h>
 #include <machine/pmap.h>
-#include <machine/mach_param.h>
 #include <device/device_types.h>
 
 #include <mach/vm_param.h>
@@ -81,16 +79,16 @@
 #include <ppc/low_trace.h>
 #include <ppc/mappings.h>
 #include <ppc/FirmwareCalls.h>
-#include <ppc/setjmp.h>
+#include <ppc/cpu_internal.h>
 #include <ppc/exception.h>
 #include <ppc/hw_perfmon.h>
+#include <ppc/lowglobals.h>
 
 #include <kern/clock.h>
 #include <kern/debug.h>
 #include <machine/trap.h>
 #include <kern/spl.h>
 #include <pexpert/pexpert.h>
-#include <ppc/mp.h>
 
 #include <IOKit/IOPlatformExpert.h>
 
@@ -131,10 +129,6 @@ hw_lock_data_t pbtlock;		/* backtrace print lock */
 
 int			debugger_cpu = -1;			/* current cpu running debugger	*/
 int			debugger_debug = 0;			/* Debug debugger */
-int			debugger_is_slave[NCPUS];	/* Show that we were entered via sigp */
-int			debugger_active[NCPUS];		/* Debugger active on CPU */
-int			debugger_pending[NCPUS];	/* Debugger entry pending on CPU (this is a HACK) */
-int			debugger_holdoff[NCPUS];	/* Holdoff debugger entry on this CPU (this is a HACK) */
 int 		db_run_mode;				/* Debugger run mode */
 unsigned int debugger_sync = 0;			/* Cross processor debugger entry sync */
 extern 		unsigned int NMIss;			/* NMI debounce switch */
@@ -151,7 +145,7 @@ volatile unsigned int	cpus_holding_bkpts;	/* counter for number of cpus holding
 											   insert back breakpoints) */
 void unlock_debugger(void);
 void lock_debugger(void);
-void dump_backtrace(unsigned int stackptr, unsigned int fence);
+void dump_backtrace(savearea *sv, unsigned int stackptr, unsigned int fence);
 void dump_savearea(savearea *sv, unsigned int fence);
 
 int packAsc (unsigned char *inbuf, unsigned int length);
@@ -186,7 +180,9 @@ char *failNames[] = {
 	"No saveareas",				/* failNoSavearea */
 	"Savearea corruption",		/* failSaveareaCorr */
 	"Invalid live context",		/* failBadLiveContext */
+	"Corrupt skip lists",		/* failSkipLists */
 	"Unaligned stack",			/* failUnalignedStk */
+	"Invalid pmap",				/* failPmap */
 	"Unknown failure code"		/* Unknown failure code - must always be last */
 };
 
@@ -213,12 +209,13 @@ void
 machine_startup(boot_args *args)
 {
 	int	boot_arg;
+	unsigned int wncpu;
+	unsigned int vmm_arg;
 
 	if (PE_parse_boot_arg("cpus", &wncpu)) {
-		if (!((wncpu > 0) && (wncpu < NCPUS)))
-                        wncpu = NCPUS;
-	} else 
-		wncpu = NCPUS;
+		if ((wncpu > 0) && (wncpu < MAX_CPUS))
+                        max_ncpus = wncpu;
+	}
 
 	if( PE_get_hotkey( kPEControlKey ))
             halt_in_debugger = halt_in_debugger ? 0 : 1;
@@ -230,6 +227,8 @@ machine_startup(boot_args *args)
 		if (boot_arg & DB_NMI) panicDebugging=TRUE; 
 		if (boot_arg & DB_LOG_PI_SCRN) logPanicDataToScreen=TRUE; 
 	}
+	
+	PE_parse_boot_arg("vmmforce", &lowGlo.lgVMMforcedFeats);
 
 	hw_lock_init(&debugger_lock);				/* initialize debugger lock */
 	hw_lock_init(&pbtlock);						/* initialize print backtrace lock */
@@ -277,22 +276,14 @@ machine_startup(boot_args *args)
 
 		sched_poll_yield_shift = boot_arg;
 	}
-	if (PE_parse_boot_arg("refunn", &boot_arg)) {
-		extern int refunnel_hint_enabled;
-
-		refunnel_hint_enabled = boot_arg;
-	}
 
 	machine_conf();
 
-	ml_thrm_init();							/* Start thermal monitoring on this processor */
-
 	/*
-	 * Start the system.
+	 * Kick off the kernel bootstrap.
 	 */
-	setup_main();
-
-	/* Should never return */
+	kernel_bootstrap();
+	/*NOTREACHED*/
 }
 
 char *
@@ -306,8 +297,6 @@ machine_boot_info(
 void
 machine_conf(void)
 {
-	machine_info.max_cpus = NCPUS;
-	machine_info.avail_cpus = 1;
 	machine_info.memory_size = mem_size;	/* Note that this will be 2 GB for >= 2 GB machines */
 }
 
@@ -320,9 +309,8 @@ machine_init(void)
 
 void slave_machine_init(void)
 {
-	(void) ml_set_interrupts_enabled(FALSE);	/* Make sure we are disabled */
-	clock_init();				/* Init the clock */
 	cpu_machine_init();			/* Initialize the processor */
+	clock_init();				/* Init the clock */
 }                               
 
 void
@@ -367,7 +355,6 @@ print_backtrace(struct savearea *ssp)
 	int i, frames_cnt, skip_top_frames, frames_max;
 	unsigned int store[8];			/* Buffer for real storage reads */
 	vm_offset_t backtrace_entries[32];
-	thread_act_t *act;
 	savearea *sv, *svssp;
 	int cpu;
 	savearea *psv;
@@ -385,7 +372,7 @@ print_backtrace(struct savearea *ssp)
 
 	svssp = (savearea *)ssp;				/* Make this easier */
 	sv = 0;
-	if(current_thread()) sv = (savearea *)current_act()->mact.pcb;	/* Find most current savearea if system has started */
+	if(current_thread()) sv = (savearea *)current_thread()->machine.pcb;	/* Find most current savearea if system has started */
 
 	fence = 0xFFFFFFFF;						/* Show we go all the way */
 	if(sv) fence = (unsigned int)sv->save_r1;	/* Stop at previous exception point */
@@ -393,7 +380,7 @@ print_backtrace(struct savearea *ssp)
 	if(!svssp) {							/* Should we start from stack? */
 		kdb_printf("Latest stack backtrace for cpu %d:\n", cpu_number());
 		__asm__ volatile("mr %0,r1" : "=r" (stackptr));	/* Get current stack */
-		dump_backtrace(stackptr, fence);	/* Dump the backtrace */
+		dump_backtrace((savearea *)0,stackptr, fence);	/* Dump the backtrace */
 		if(!sv) {							/* Leave if no saveareas */
 			kdb_printf("\nKernel version:\n%s\n",version);	/* Print kernel version */
 			hw_lock_unlock(&pbtlock);		/* Allow another back trace to happen */
@@ -470,7 +457,7 @@ void dump_savearea(savearea *sv, unsigned int fence) {
 		(unsigned int)sv->save_lr, (unsigned int)sv->save_r1, sv->save_exception, xcode);
 	
 	if(!(sv->save_srr1 & MASK(MSR_PR))) {		/* Are we in the kernel? */
-		dump_backtrace((unsigned int)sv->save_r1, fence);	/* Dump the stack back trace from  here if not user state */
+		dump_backtrace(sv, (unsigned int)sv->save_r1, fence);	/* Dump the stack back trace from  here if not user state */
 	}
 	
 	return;
@@ -478,17 +465,22 @@ void dump_savearea(savearea *sv, unsigned int fence) {
 
 
 
-#define DUMPFRAMES 32
+#define DUMPFRAMES 34
 #define LRindex 2
 
-void dump_backtrace(unsigned int stackptr, unsigned int fence) {
+void dump_backtrace(savearea *sv, unsigned int stackptr, unsigned int fence) {
 
 	unsigned int bframes[DUMPFRAMES];
 	unsigned int  sframe[8], raddr, dumbo;
-	int i;
+	int i, index=0;
 	
 	kdb_printf("      Backtrace:\n");
-	for(i = 0; i < DUMPFRAMES; i++) {			/* Dump up to max frames */
+	if (sv != (savearea *)0) {
+		bframes[0] = (unsigned int)sv->save_srr0;
+		bframes[1] = (unsigned int)sv->save_lr;
+		index = 2;
+	}
+	for(i = index; i < DUMPFRAMES; i++) {			/* Dump up to max frames */
 	
 		if(!stackptr || (stackptr == fence)) break;		/* Hit stop point or end... */
 		
@@ -549,7 +541,7 @@ Debugger(const char	*message) {
 		}
 	}
 	
-	if (debug_mode && debugger_active[cpu_number()]) {	/* Are we already on debugger on this processor? */
+	if (debug_mode && getPerProc()->debugger_active) {	/* Are we already on debugger on this processor? */
 		splx(spl);
 		return;										/* Yeah, don't do it again... */
 	}
@@ -595,17 +587,17 @@ Debugger(const char	*message) {
 		  }
 			
 		if( !panicDebugging && (pi_size != 0) ) {
-			int	my_cpu, debugger_cpu;
+			int	my_cpu;
 			int	tcpu;
 
 			my_cpu = cpu_number();
 			debugger_cpu = my_cpu;
 
 			hw_atomic_add(&debug_mode, 1);
-			debugger_active[my_cpu]++;
+			PerProcTable[my_cpu].ppe_vaddr->debugger_active++;
 			lock_debugger();
 
-			for(tcpu = 0; tcpu < NCPUS; tcpu++) {
+			for(tcpu = 0; tcpu < real_ncpus; tcpu++) {
 				if(tcpu == my_cpu) continue;
 				hw_atomic_add(&debugger_sync, 1);
 				(void)cpu_signal(tcpu, SIGPdebug, 0 ,0);
@@ -692,7 +684,7 @@ int Call_DebuggerC(
 
 #if	MACH_KDB
 	if((debugger_cpu == my_cpu) && 						/* Do we already own debugger? */
-	  debugger_active[my_cpu] && 						/* and are we really active? */
+	  PerProcTable[my_cpu].ppe_vaddr->debugger_active && 						/* and are we really active? */
 	  db_recover && 									/* and have we set up recovery? */
 	  (current_debugger == KDB_CUR_DB)) {				/* and are we in KDB (only it handles recovery) */
 		kdb_trap(type, saved_state);					/* Then reenter it... */
@@ -700,7 +692,8 @@ int Call_DebuggerC(
 #endif
 	
 	hw_atomic_add(&debug_mode, 1);						/* Indicate we are in debugger */
-	debugger_active[my_cpu]++;							/* Show active on our CPU */
+	PerProcTable[my_cpu].ppe_vaddr->debugger_active++;	/* Show active on our CPU */
+	
 	lock_debugger();									/* Insure that only one CPU is in debugger */
 
 	if(db_im_stepping == my_cpu) {						/* Are we just back from a step? */
@@ -713,7 +706,7 @@ int Call_DebuggerC(
 		kprintf("Call_DebuggerC(%d): %08X %08X, debact = %d\n", my_cpu, type, saved_state, debug_mode);	/* (TEST/DEBUG) */
 #endif
 		printf("Call_Debugger: enter - cpu %d, is_slave %d, debugger_cpu %d, pc %08X\n",
-		   my_cpu, debugger_is_slave[my_cpu], debugger_cpu, saved_state->save_srr0);
+		   my_cpu, PerProcTable[my_cpu].ppe_vaddr->debugger_is_slave, debugger_cpu, saved_state->save_srr0);
 	}
 	
 	instr_pp = (vm_offset_t)pmap_find_phys(kernel_pmap, (addr64_t)(saved_state->save_srr0));
@@ -729,7 +722,7 @@ int Call_DebuggerC(
 #endif
 
 	if (db_breakpoints_inserted) cpus_holding_bkpts++;	/* Bump up the holding count */
-	if (debugger_cpu == -1 && !debugger_is_slave[my_cpu]) {
+	if (debugger_cpu == -1 && !PerProcTable[my_cpu].ppe_vaddr->debugger_is_slave) {
 #if 0
 		if (debugger_debug) kprintf("Call_DebuggerC(%d): lasttrace = %08X\n", my_cpu, lastTrace);	/* (TEST/DEBUG) */
 #endif
@@ -738,7 +731,7 @@ int Call_DebuggerC(
 
 		lastTrace = LLTraceSet(0);						/* Disable low-level tracing */
 
-		for(tcpu = 0; tcpu < NCPUS; tcpu++) {			/* Stop all the other guys */
+		for(tcpu = 0; tcpu < real_ncpus; tcpu++) {		/* Stop all the other guys */
 			if(tcpu == my_cpu) continue;				/* Don't diddle ourselves */
 			hw_atomic_add(&debugger_sync, 1);			/* Count signal sent */
 			(void)cpu_signal(tcpu, SIGPdebug, 0 ,0);	/* Tell 'em to enter debugger */
@@ -836,7 +829,7 @@ int Call_DebuggerC(
 debugger_exit:
 #if 0
 	if (debugger_debug) kprintf("Call_DebuggerC(%d): exit - inst = %08X, cpu=%d(%d), run=%d\n", my_cpu, 
-		instr, my_cpu, debugger_cpu, db_run_mode);		/* (TEST/DEBUG) */
+		instr, my_cpu, debugger_cpu, db_run_mode);	/* (TEST/DEBUG) */
 #endif
 	if ((instr == TRAP_DEBUGGER_INST) ||				/* Did we trap to enter debugger? */
 		(instr == TRAP_DIRECT_INST)) saved_state->save_srr0 += TRAP_INST_SIZE;	/* Yes, point past trap */
@@ -851,8 +844,8 @@ debugger_exit:
 	if (db_run_mode == STEP_CONTINUE) {					/* Are we going to run? */
 		wait = TRUE;									/* Yeah, remember to wait for breakpoints to clear */
 		debugger_cpu = -1;								/* Release other processor's debuggers */
-		debugger_pending[0] = 0;						/* Release request (this is a HACK) */
-		debugger_pending[1] = 0;						/* Release request (this is a HACK) */
+		for(tcpu = 0; tcpu < real_ncpus; tcpu++)
+			PerProcTable[tcpu].ppe_vaddr->debugger_pending = 0;	/* Release request (this is a HACK) */
 		NMIss = 0;										/* Let NMI bounce */
 	}
 	
@@ -862,14 +855,14 @@ debugger_exit:
 	}
 
 	if (db_breakpoints_inserted) cpus_holding_bkpts--;	/* If any breakpoints, back off count */
-	if (debugger_is_slave[my_cpu]) debugger_is_slave[my_cpu]--;	/* If we were a slove, uncount us */
+	if (PerProcTable[my_cpu].ppe_vaddr->debugger_is_slave) PerProcTable[my_cpu].ppe_vaddr->debugger_is_slave--;	/* If we were a slove, uncount us */
 	if (debugger_debug)
 		printf("Call_Debugger: exit - cpu %d, debugger_cpu %d, run_mode %d holds %d\n",
 			  my_cpu, debugger_cpu, db_run_mode,
 			  cpus_holding_bkpts);
 
 	unlock_debugger();									/* Release the lock */
-	debugger_active[my_cpu]--;							/* Say we aren't active anymore */
+	PerProcTable[my_cpu].ppe_vaddr->debugger_active--;	/* Say we aren't active anymore */
 
 	if (wait) while(cpus_holding_bkpts);				/* Wait for breakpoints to clear */
 

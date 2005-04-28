@@ -83,12 +83,12 @@
  * 	Useful for debugging newly-ported  drivers.
  */
 
-static struct ifmedia_entry *ifmedia_match __P((struct ifmedia *ifm,
-    int flags, int mask));
+static struct ifmedia_entry *ifmedia_match(struct ifmedia *ifm,
+    int flags, int mask);
 
 #ifdef IFMEDIA_DEBUG
 int	ifmedia_debug = 0;
-static	void ifmedia_printword __P((int));
+static	void ifmedia_printword(int);
 #endif
 
 /*
@@ -213,11 +213,11 @@ ifmedia_set(ifm, target)
  * Device-independent media ioctl support function.
  */
 int
-ifmedia_ioctl(ifp, ifr, ifm, cmd)
-	struct ifnet *ifp;
-	struct ifreq *ifr;
-	struct ifmedia *ifm;
-	u_long cmd;
+ifmedia_ioctl(
+	struct ifnet *ifp,
+	struct ifreq *ifr,
+	struct ifmedia *ifm,
+	u_long cmd)
 {
 	struct ifmedia_entry *match;
 	struct ifmediareq *ifmr = (struct ifmediareq *) ifr;
@@ -349,7 +349,7 @@ ifmedia_ioctl(ifp, ifr, ifm, cmd)
 		sticky = error;
 		if ((error == 0 || error == E2BIG) && ifmr->ifm_count != 0) {
 			error = copyout((caddr_t)kptr,
-			    (caddr_t)ifmr->ifm_ulist,
+			    CAST_USER_ADDR_T(ifmr->ifm_ulist),
 			    ifmr->ifm_count * sizeof(int));
 		}
 

@@ -39,7 +39,7 @@
 #define HFC_CUMULATIVE_CYCLES	 4
 #define HFC_MAXIMUM_FILE_COUNT	 5000
 #define HFC_MAXIMUM_FILESIZE	 (10 * 1024 * 1024)
-#define HFC_MINIMUM_TEMPERATURE  16
+#define HFC_MINIMUM_TEMPERATURE  24
 
 
 /*
@@ -107,14 +107,14 @@ struct vnode;
  */
 int  hfs_hotfilesync (struct hfsmount *, struct proc *);
 
-int  hfs_recording_init(struct hfsmount *, struct proc *);
-int  hfs_recording_start (struct hfsmount *, struct proc *);
-int  hfs_recording_stop (struct hfsmount *, struct proc *);
-int  hfs_recording_suspend (struct hfsmount *, struct proc *);
-int  hfs_recording_abort (struct hfsmount *, struct proc *);
+int  hfs_recording_init(struct hfsmount *);
+int  hfs_recording_suspend (struct hfsmount *);
 
 int  hfs_addhotfile (struct vnode *);
 int  hfs_removehotfile (struct vnode *);
+
+int  hfs_relocate(struct  vnode *, u_int32_t, kauth_cred_t, struct  proc *);
+
 
 #endif /* __APPLE_API_PRIVATE */
 #endif /* KERNEL */

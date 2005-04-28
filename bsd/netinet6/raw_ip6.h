@@ -48,10 +48,6 @@ struct rip6stat {
 	u_quad_t rip6s_opackets;	/* total output packets */
 };
 
-#ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
 extern struct rip6stat rip6stat;
-#endif
-#endif
 
 #endif

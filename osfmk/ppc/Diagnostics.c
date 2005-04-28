@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -42,11 +42,18 @@
 #include <mach/boolean.h>
 #include <kern/thread.h>
 #include <kern/task.h>
+#include <kern/ipc_kobject.h>
 #include <mach/vm_param.h>
+#include <ipc/port.h>
+#include <ipc/ipc_entry.h>
+#include <ipc/ipc_space.h>
+#include <ipc/ipc_object.h>
+#include <ipc/ipc_port.h>
 #include <vm/vm_kern.h>
 #include <vm/vm_map.h>
 #include <vm/vm_page.h>
 #include <vm/pmap.h>
+#include <ppc/cpu_internal.h>
 #include <ppc/exception.h>
 #include <ppc/Firmware.h>
 #include <ppc/low_trace.h>
@@ -56,7 +63,6 @@
 #include <ppc/mem.h>
 #include <ppc/savearea.h>
 #include <ppc/Diagnostics.h>
-#include <ppc/machine_cpu.h>
 #include <pexpert/pexpert.h>
 #include <console/video_console.h>
 #include <ppc/trap.h>
@@ -78,10 +84,15 @@ int diagCall(struct savearea *save) {
 	natural_t tbu, tbu2, tbl;
 	struct per_proc_info *per_proc;					/* Area for my per_proc address */
 	int cpu, ret, subc;
-	unsigned int tstrt, tend, temp, temp2, oldwar;
+	unsigned int tstrt, tend, temp, temp2, *baddr, oldwar;
 	addr64_t src, snk;
 	uint64_t scom, hid1, hid4, srrwrk, stat;
 	scomcomm sarea;
+	ipc_port_t port;
+	ipc_entry_t ientry;
+	processor_t prssr;
+	vm_address_t addrs;
+	
 
 	if(!(dgWork.dgFlags & enaDiagSCs)) return 0;	/* If not enabled, cause an exception */
 
@@ -121,7 +132,7 @@ int diagCall(struct savearea *save) {
  */
 		case dgLRA:
 		
-			save->save_r3 = pmap_find_phys(current_act()->map->pmap, save->save_r4);	/* Get read address */
+			save->save_r3 = pmap_find_phys(current_thread()->map->pmap, save->save_r4);	/* Get read address */
 			
 			return -1;								/* Return no AST checking... */
 			
@@ -190,14 +201,14 @@ int diagCall(struct savearea *save) {
 		
 			cpu = save->save_r4;					/* Get the requested CPU number */
 			
-			if(cpu >= NCPUS) {						/* Check for bogus cpu */
+			if(cpu >= MAX_CPUS) {						/* Check for bogus cpu */
 				save->save_r3 = KERN_FAILURE;		/* Set failure */
 				return 1;
 			}
 		
-			if(!machine_slot[cpu].running) return KERN_FAILURE;	/* It is not running */	
+			per_proc = PerProcTable[cpu].ppe_vaddr;		/* Point to the processor */
+			if(!per_proc->running) return KERN_FAILURE;	/* It is not running */	
 
-			per_proc = &per_proc_info[cpu];			/* Point to the processor */
 			
 			(void)PE_cpu_start(per_proc->cpu_id, 
 						per_proc->start_paddr, (vm_offset_t)per_proc);
@@ -219,8 +230,10 @@ int diagCall(struct savearea *save) {
  */
 		case dgtest:
 		
-			if(save->save_r4) perfTrapHook = testPerfTrap;
-			else perfTrapHook = 0;
+			kprintf("Trying to hang\n");
+			baddr = (unsigned int)&baddr | 1;		/* Make an odd address */
+			__asm__ volatile("lwarx r2,0,%0" : : "r" (baddr));
+			kprintf("Didn't hang\n");
 
 			return 1;								/* Return and check for ASTs... */
 			
@@ -233,7 +246,7 @@ int diagCall(struct savearea *save) {
  */
 		case dgBMphys:
 					
-			pmap_map_block(current_act()->map->pmap, (addr64_t)save->save_r4,	/* Map in the block */ 
+			pmap_map_block(current_thread()->map->pmap, (addr64_t)save->save_r4,	/* Map in the block */ 
 				save->save_r5, save->save_r6, save->save_r7, save->save_r8, 0);
 
 			return 1;								/* Return and check for ASTs... */
@@ -246,7 +259,7 @@ int diagCall(struct savearea *save) {
  */
 		case dgUnMap:
 		
-			(void)mapping_remove(current_act()->map->pmap, save->save_r4);	/* Remove mapping */
+			(void)mapping_remove(current_thread()->map->pmap, save->save_r4);	/* Remove mapping */
 			return 1;								/* Return and check for ASTs... */
 	
 			
@@ -272,7 +285,7 @@ int diagCall(struct savearea *save) {
 		case dgBootScreen:
 			
 			ml_set_interrupts_enabled(1);
-			(void)copyout((char *)&vinfo, CAST_DOWN(char *, save->save_r4), sizeof(struct vc_info));	/* Copy out the video info */ 
+			(void)copyout((char *)&vinfo, save->save_r4, sizeof(struct vc_info));	/* Copy out the video info */ 
 			ml_set_interrupts_enabled(0);
 			return 1;								/* Return and check for ASTs... */
 			
@@ -282,7 +295,7 @@ int diagCall(struct savearea *save) {
 		case dgCPNull:
 			
 			ml_set_interrupts_enabled(1);
-			(void)copyout((char *)&vinfo, CAST_DOWN(char *, save->save_r4), 0);	/* Copy out nothing */
+			(void)copyout((char *)&vinfo, save->save_r4, 0);	/* Copy out nothing */
 			ml_set_interrupts_enabled(0);
 			return 1;								/* Return and check for ASTs... */
 			
@@ -290,7 +303,7 @@ int diagCall(struct savearea *save) {
  *		Test machine check handler - only on 64-bit machines
  */
 		case dgmck:
-			if(!(per_proc_info[0].pf.Available & pf64Bit)) return 0;	/* Leave if not correct machine */
+			if(!(PerProcTable[0].ppe_vaddr->pf.Available & pf64Bit)) return 0;	/* Leave if not correct machine */
 
 			fwEmMck(save->save_r4, save->save_r5, save->save_r6, save->save_r7, save->save_r8, save->save_r9);	/* Start injecting */ 
 
@@ -300,12 +313,15 @@ int diagCall(struct savearea *save) {
  *		Set 64-bit on or off - only on 64-bit machines
  */
 		case dg64:
-			if(!(per_proc_info[0].pf.Available & pf64Bit)) return 0;	/* Leave if not correct machine */
+			if(!(PerProcTable[0].ppe_vaddr->pf.Available & pf64Bit)) return 0;	/* Leave if not correct machine */
 
 			srrwrk = save->save_srr1 >> 63;			/* Save the old 64-bit bit */
 			
 			save->save_srr1 = (save->save_srr1 & 0x7FFFFFFFFFFFFFFFULL) | (save->save_r4 << 63);	/* Set the requested mode */
 			save->save_r3 = srrwrk;					/* Return the old value */
+
+			task_clear_64BitAddr(current_thread()->task);
+			if((save->save_r4 & 1)) task_set_64BitAddr(current_thread()->task);
 
 			return -1;								/* Return and don't check for ASTs... */
 		
@@ -336,7 +352,7 @@ int diagCall(struct savearea *save) {
  */
 		case dgMapPage:
 					
-			(void)mapping_map(current_act()->map->pmap, /* Map in the page */ 
+			(void)mapping_make(current_thread()->map->pmap, /* Map in the page */ 
 				(addr64_t)(((save->save_r5 & 0xFFFFFFFF) << 32) | (save->save_r5 & 0xFFFFFFFF)), save->save_r6, 0, 1, VM_PROT_READ|VM_PROT_WRITE);
 
 			return -1;								/* Return and check for ASTs... */
@@ -347,13 +363,13 @@ int diagCall(struct savearea *save) {
  */
 		case dgScom:
 					
-			ret = copyin((unsigned int)(save->save_r4), &sarea, sizeof(scomcomm));	/* Get the data */
+			ret = copyin(save->save_r4, (void *)&sarea, sizeof(scomcomm));	/* Get the data */
 			if(ret) return 0;						/* Copyin failed - return an exception */
 			
 			sarea.scomstat = 0xFFFFFFFFFFFFFFFFULL;	/* Clear status */
 			cpu = cpu_number();						/* Get us */
 			
-			if((sarea.scomcpu < NCPUS) && machine_slot[sarea.scomcpu].running) {
+			if((sarea.scomcpu < real_ncpus) && PerProcTable[sarea.scomcpu].ppe_vaddr->running) {
 				if(sarea.scomcpu == cpu) {			/* Is it us? */
 					if(sarea.scomfunc) {			/* Are we writing */
 						sarea.scomstat = ml_scom_write(sarea.scomreg, sarea.scomdata);	/* Write scom */
@@ -368,10 +384,123 @@ int diagCall(struct savearea *save) {
 				}
 			}
 
-			ret = copyout(&sarea, (unsigned int)(save->save_r4), sizeof(scomcomm));	/* Get the data */
+			ret = copyout((void *)&sarea, save->save_r4, sizeof(scomcomm));	/* Get the data */
 			if(ret) return 0;						/* Copyin failed - return an exception */
 	
 			return -1;								/* Return and check for ASTs... */
+		
+/*
+ *		Bind current thread to a processor. Parm is processor port.  If port is 0, unbind. 
+ */
+	
+		case dgBind:
+
+			if(save->save_r4 == 0) {				/* Are we unbinding? */
+				thread_bind(current_thread(), PROCESSOR_NULL);	/* Unbind us */
+				save->save_r3 = KERN_SUCCESS;		/* Set success */
+				return -1;							/* Return and check asts */
+			}
+
+			ret = ipc_right_lookup_write(current_space(), (mach_port_name_t)save->save_r4, 
+				&ientry);							/* Look up the IPC entry */
+			
+			if(ret != KERN_SUCCESS) {				/* Couldn't find it */
+				save->save_r3 = ret;				/* Pass back return */
+				return -1;							/* Return and check asts */
+			}
+
+			port = (ipc_port_t)ientry->ie_object;	/* Get the actual port */
+
+			if (!ip_active(port) || (ip_kotype(port) != IKOT_PROCESSOR)) {	/* Active and a processor? */
+				is_write_unlock(current_space());	/* Unlock the space */
+				save->save_r3 = KERN_INVALID_ARGUMENT;	/* This port is not a processor */
+				return -1;							/* Return and check asts */
+			}
+
+			prssr = (processor_t)port->ip_kobject;	/* Extract the processor */
+			is_write_unlock(current_space());		/* All done with the space now, unlock it */
+			
+/*
+ *			The following probably isn't valid if a processor is in the processor going offline,
+ *			but who cares, this is a diagnostic interface...
+ */
+			
+			if(prssr->state == PROCESSOR_SHUTDOWN) {	/* Are we trying to bind to an offline processor? */
+				save->save_r3 = KERN_INVALID_ARGUMENT;	/* This processor is offline */
+				return -1;							/* Return and check asts */
+			}
+		
+			thread_bind(current_thread(), prssr);	/* Bind us to the processor */
+			thread_block(THREAD_CONTINUE_NULL);		/* Make it so */
+	
+			save->save_r3 = KERN_SUCCESS;			/* Set success */
+			return -1;								/* Return and check asts */
+			
+/*
+ *		Return per_proc for the named processor.  Pass in a port.  Returns per_proc or 0 if failure
+ */
+	
+		case dgPproc:
+
+			ret = ipc_right_lookup_write(current_space(), (mach_port_name_t)save->save_r4, 
+				&ientry);							/* Look up the IPC entry */
+			
+			if(ret != KERN_SUCCESS) {				/* Couldn't find it */
+				save->save_r3 = 0;					/* Pass back return */
+				return -1;							/* Return and check asts */
+			}
+
+			port = (ipc_port_t)ientry->ie_object;	/* Get the actualy port */
+
+			if (!ip_active(port) || (ip_kotype(port) != IKOT_PROCESSOR)) {	/* Active and a processor? */
+				is_write_unlock(current_space());	/* Unlock the space */
+				save->save_r3 = 0;					/* This port is not a processor */
+				return -1;							/* Return and check asts */
+			}
+
+			prssr = (processor_t)port->ip_kobject;	/* Extract the processor */
+			is_write_unlock(current_space());		/* All done with the space now, unlock it */
+			
+			save->save_r3 = (uint64_t)PerProcTable[prssr->processor_data.slot_num].ppe_vaddr;	/* Pass back ther per proc */
+			return -1;								/* Return and check asts */
+
+/*
+ *		Allocate contiguous memory in the kernel. Pass in size, pass back vaddr or 0 for error
+ *		Note that this must be explicitly released by the user.  There is an "issue"
+ *		if we try to allocate directly into the user: the contiguous area has a kernel wire
+ *		on it.   If we terminate, we will hang waiting for wire to be released.  Ain't no
+ *		way that will happen,  so we do it in the kernel and make them release it.  That way
+ *		we will leak rather than hang. 
+ *		
+ */
+		case dgAcntg:
+					
+			addrs = 0;								/* Clear just in case */
+			
+			ret = kmem_alloc_contig(kernel_map, &addrs, (vm_size_t)save->save_r4,
+				PAGE_MASK, 0);						/* That which does not make us stronger, kills us... */
+			if(ret != KERN_SUCCESS) addrs = 0;		/* Pass 0 if error */
+		
+			save->save_r3 = (uint64_t)addrs;		/* Pass back whatever */
+			return -1;								/* Return and check for ASTs... */
+		
+
+/*
+ *		Return physical address of a page in the kernel
+ */
+		case dgKlra:
+		
+			save->save_r3 = pmap_find_phys(kernel_pmap, save->save_r4);	/* Get read address */
+			return -1;								/* Return no AST checking... */
+
+/*
+ *		Release kernel memory - intent is to release congiguous memory
+ */
+		case dgKfree:
+		
+			kmem_free( kernel_map, (vm_address_t) save->save_r4, (vm_size_t)save->save_r5);
+			return -1;								/* Return no AST checking... */
+
 		
 		case dgWar:									/* Set or reset workaround flags */
 		
@@ -412,7 +541,7 @@ int diagCall(struct savearea *save) {
 
 			save->save_r3 = oldwar;					/* Pass back original */
 			return -1;				
-		
+
 
 		default:									/* Handle invalid ones */
 			return 0;								/* Return an exception */

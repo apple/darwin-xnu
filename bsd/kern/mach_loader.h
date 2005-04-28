@@ -39,11 +39,15 @@
 
 typedef int load_return_t;
 
+/*
+ * Structure describing the result from calling load_machfile(), if that
+ * function returns LOAD_SUCCESS.
+ */
 typedef struct _load_result {
-	vm_offset_t		mach_header;
-	vm_offset_t		entry_point;
-	vm_offset_t		user_stack;
-	int			thread_count;
+	user_addr_t	mach_header;
+	user_addr_t	entry_point;
+	user_addr_t	user_stack;
+	int		thread_count;
 	unsigned int
 	/* boolean_t */	unixproc	:1,
 			dynlinker	:1,
@@ -51,15 +55,14 @@ typedef struct _load_result {
 					:0;
 } load_result_t;
 
+struct image_params;
 load_return_t load_machfile(
-	struct vnode		*vp,
+	struct image_params	*imgp,
 	struct mach_header	*header,
-	unsigned long		file_offset,
-	unsigned long		macho_size,
-	load_result_t		*result,
-	thread_act_t		thr_act,
+	thread_t		thr_act,
 	vm_map_t		map,
-	boolean_t		clean_regions);
+	boolean_t		clean_regions,
+	load_result_t		*result);
 
 #define LOAD_SUCCESS		0
 #define LOAD_BADARCH		1	/* CPU type/subtype not found */

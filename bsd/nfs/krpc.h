@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -20,13 +20,7 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
-/*
- *
- * The NEXTSTEP Software License Agreement specifies the terms
- * and conditions for redistribution.
- *
- */
- 
+
 #ifndef __NFS_KRPC_H__
 #define __NFS_KRPC_H__
 
@@ -35,12 +29,12 @@
 #include <sys/cdefs.h>
 
 #ifdef __APPLE_API_PRIVATE
-int krpc_call __P((struct sockaddr_in *sin,
+int krpc_call(struct sockaddr_in *sin, u_int sotype,
 	u_int prog, u_int vers, u_int func,
-	struct mbuf **data, struct sockaddr_in **from));
+	mbuf_t *data, struct sockaddr_in *from);
 
-int krpc_portmap __P((struct sockaddr_in *sin,
-	u_int prog, u_int vers, u_int16_t *portp));
+int krpc_portmap(struct sockaddr_in *sin,
+	u_int prog, u_int vers, u_int proto, u_int16_t *portp);
 
 
 /*

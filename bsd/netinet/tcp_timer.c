@@ -64,6 +64,7 @@
 #include <sys/socket.h>
 #include <sys/socketvar.h>
 #include <sys/protosw.h>
+#include <kern/locks.h>
 
 #include <kern/cpu_number.h>	/* before tcp_seq.h, for tcp_random18() */
 
@@ -154,10 +155,15 @@ int		cur_tw_slot = 0;
 u_long		*delack_bitmask;
 
 
-void	add_to_time_wait(tp) 
+void	add_to_time_wait_locked(tp) 
 	struct tcpcb	*tp;
 {
 	int		tw_slot;
+
+	/* pcb list should be locked when we get here */	
+#if 0
+	lck_mtx_assert(tp->t_inpcb->inpcb_mtx, LCK_MTX_ASSERT_OWNED);
+#endif
 
 	LIST_REMOVE(tp->t_inpcb, inp_list);
 
@@ -172,6 +178,19 @@ void	add_to_time_wait(tp)
 	LIST_INSERT_HEAD(&time_wait_slots[tw_slot], tp->t_inpcb, inp_list);
 }
 
+void	add_to_time_wait(tp) 
+	struct tcpcb	*tp;
+{
+    	struct inpcbinfo *pcbinfo		= &tcbinfo;
+	
+	if (!lck_rw_try_lock_exclusive(pcbinfo->mtx)) {
+		tcp_unlock(tp->t_inpcb->inp_socket, 0, 0);
+		lck_rw_lock_exclusive(pcbinfo->mtx);
+		tcp_lock(tp->t_inpcb->inp_socket, 0, 0);
+	}
+	add_to_time_wait_locked(tp);
+	lck_rw_done(pcbinfo->mtx);
+}
 
 
 
@@ -182,49 +201,46 @@ void	add_to_time_wait(tp)
 void
 tcp_fasttimo()
 {
-    register struct inpcb *inp;
+    struct inpcb *inp, *inpnxt;
     register struct tcpcb *tp;
 
 
-    register u_long			i,j;
-    register u_long			temp_mask;
-    register u_long			elem_base = 0;
-    struct inpcbhead			*head;
-    int s = splnet();
+    struct inpcbinfo *pcbinfo	= &tcbinfo;
 
-    static
-    int delack_checked = 0;
+    int delack_checked = 0, delack_done = 0;
 
     KERNEL_DEBUG(DBG_FNC_TCP_FAST | DBG_FUNC_START, 0,0,0,0,0);
 
-    if (!tcp_delack_enabled) 
+    if (tcp_delack_enabled == 0) 
 	return;
 
-    for (i=0; i < (tcbinfo.hashsize / 32); i++) {
-	    if (delack_bitmask[i]) {
-		temp_mask = 1;
-		for (j=0; j < 32; j++) {
-		    if (temp_mask & delack_bitmask[i]) {
-			head = &tcbinfo.hashbase[elem_base + j];
-			for (inp=head->lh_first; inp != 0; inp = inp->inp_hash.le_next) {
-			    delack_checked++;
-			    if ((tp = (struct tcpcb *)inp->inp_ppcb) && (tp->t_flags & TF_DELACK)) {
-				tp->t_flags &= ~TF_DELACK;
-				tp->t_flags |= TF_ACKNOW;
-				tcpstat.tcps_delack++;
-				(void) tcp_output(tp);
-			    }
-			}
-		    }
-		    temp_mask <<=  1;
-		}
-		delack_bitmask[i] = 0;
-	    }
-	    elem_base += 32;
-    }
-    KERNEL_DEBUG(DBG_FNC_TCP_FAST | DBG_FUNC_END, delack_checked,tcpstat.tcps_delack,0,0,0);
-    splx(s);
+    lck_rw_lock_shared(pcbinfo->mtx);
 
+    /* Walk the list of valid tcpcbs and send ACKS on the ones with DELACK bit set */
+
+    for (inp = tcb.lh_first; inp != NULL; inp = inpnxt) {
+	inpnxt = inp->inp_list.le_next;
+	/* NOTE: it's OK to check the tp because the pcb can't be removed while we hold pcbinfo->mtx) */
+	if ((tp = (struct tcpcb *)inp->inp_ppcb) && (tp->t_flags & TF_DELACK)) {
+		if (in_pcb_checkstate(inp, WNT_ACQUIRE, 0) == WNT_STOPUSING) 
+			continue;
+		tcp_lock(inp->inp_socket, 1, 0);
+		if (in_pcb_checkstate(inp, WNT_RELEASE, 1) == WNT_STOPUSING) {
+			tcp_unlock(inp->inp_socket, 1, 0);
+			continue;
+		}
+		if (tp->t_flags & TF_DELACK) {
+			delack_done++;
+			tp->t_flags &= ~TF_DELACK;
+			tp->t_flags |= TF_ACKNOW;
+			tcpstat.tcps_delack++;
+			(void) tcp_output(tp);
+		}
+		tcp_unlock(inp->inp_socket, 1, 0);
+    	}
+    }
+    KERNEL_DEBUG(DBG_FNC_TCP_FAST | DBG_FUNC_END, delack_checked, delack_done, tcpstat.tcps_delack,0,0);
+    lck_rw_done(pcbinfo->mtx);
 }
 
 /*
@@ -235,41 +251,54 @@ tcp_fasttimo()
 void
 tcp_slowtimo()
 {
-	register struct inpcb *ip, *ipnxt;
-	register struct tcpcb *tp;
-	register int i;
-	int s;
+	struct inpcb *inp, *inpnxt;
+	struct tcpcb *tp;
+	struct socket *so;
+	int i;
 #if TCPDEBUG
 	int ostate;
 #endif
 #if KDEBUG
 	static int tws_checked;
 #endif
+	struct inpcbinfo *pcbinfo		= &tcbinfo;
 
 	KERNEL_DEBUG(DBG_FNC_TCP_SLOW | DBG_FUNC_START, 0,0,0,0,0);
-	s = splnet();
 
 	tcp_maxidle = tcp_keepcnt * tcp_keepintvl;
 
-	ip = tcb.lh_first;
-	if (ip == NULL) {
-		splx(s);
-		return;
-	}
+	lck_rw_lock_shared(pcbinfo->mtx);
+
 	/*
 	 * Search through tcb's and update active timers.
 	 */
-	for (; ip != NULL; ip = ipnxt) {
-		ipnxt = ip->inp_list.le_next;
-		tp = intotcpcb(ip);
-		if (tp == 0 || tp->t_state == TCPS_LISTEN)
+	for (inp = tcb.lh_first; inp != NULL; inp = inpnxt) {
+		inpnxt = inp->inp_list.le_next;
+
+		if (in_pcb_checkstate(inp, WNT_ACQUIRE,0) == WNT_STOPUSING) 
 			continue;
+
+		so = inp->inp_socket;
+		tcp_lock(so, 1, 0);
+
+		if ((in_pcb_checkstate(inp, WNT_RELEASE,1) == WNT_STOPUSING)  && so->so_usecount == 1) {
+			tcp_unlock(so, 1, 0);
+			continue;
+		}
+		tp = intotcpcb(inp);
+		if (tp == 0 || tp->t_state == TCPS_LISTEN) {
+			tcp_unlock(so, 1, 0);
+			continue; 
+		}
 		/*
  		 * Bogus state when port owned by SharedIP with loopback as the
 		 * only configured interface: BlueBox does not filters loopback
 		 */
-		if (tp->t_state == TCP_NSTATES)
-			continue;      
+		if (tp->t_state == TCP_NSTATES) {
+			tcp_unlock(so, 1, 0);
+			continue; 
+		}
+
 
 		for (i = 0; i < TCPT_NTIMERS; i++) {
 			if (tp->t_timer[i] && --tp->t_timer[i] == 0) {
@@ -292,9 +321,9 @@ tcp_slowtimo()
 		tp->t_rcvtime++;
 		tp->t_starttime++;
 		if (tp->t_rtttime)
-			tp->t_rtttime++;
+			tp->t_rtttime++;	
 tpgone:
-		;
+		tcp_unlock(so, 1, 0);
 	}
 
 #if KDEBUG
@@ -306,16 +335,27 @@ tpgone:
 	 * Process the items in the current time-wait slot
 	 */
 
-	for (ip = time_wait_slots[cur_tw_slot].lh_first; ip; ip = ipnxt)
+	for (inp = time_wait_slots[cur_tw_slot].lh_first; inp; inp = inpnxt)
 	{
+		inpnxt = inp->inp_list.le_next;
 #if KDEBUG
 	        tws_checked++;
 #endif
-		ipnxt = ip->inp_list.le_next;
-		tp = intotcpcb(ip);
+
+		if (in_pcb_checkstate(inp, WNT_ACQUIRE, 0) == WNT_STOPUSING) 
+			continue;
+
+		tcp_lock(inp->inp_socket, 1, 0);
+
+		if (in_pcb_checkstate(inp, WNT_RELEASE, 1) == WNT_STOPUSING) 
+			goto twunlock;
+
+		tp = intotcpcb(inp);
 		if (tp == NULL) { /* tp already closed, remove from list */
-			LIST_REMOVE(ip, inp_list);
-			continue; 
+#if TEMPDEBUG
+			printf("tcp_slowtimo: tp is null in time-wait slot!\n");
+#endif
+			goto twunlock;
 		}
 		if (tp->t_timer[TCPT_2MSL] >= N_TIME_WAIT_SLOTS) {
 		    tp->t_timer[TCPT_2MSL] -= N_TIME_WAIT_SLOTS;
@@ -324,14 +364,77 @@ tpgone:
 		else
 		    tp->t_timer[TCPT_2MSL] = 0;
 
-		if (tp->t_timer[TCPT_2MSL] == 0) 
-		    tp = tcp_timers(tp, TCPT_2MSL);
+		if (tp->t_timer[TCPT_2MSL] == 0)  
+		    tp = tcp_timers(tp, TCPT_2MSL);	/* tp can be returned null if tcp_close is called */
+twunlock:
+		tcp_unlock(inp->inp_socket, 1, 0);
 	}
 
+	if (lck_rw_lock_shared_to_exclusive(pcbinfo->mtx) != 0)
+		lck_rw_lock_exclusive(pcbinfo->mtx);	/* Upgrade failed, lost lock no take it again exclusive */
+
+
+	for (inp = tcb.lh_first; inp != NULL; inp = inpnxt) {
+		inpnxt = inp->inp_list.le_next;
+		/* Ignore nat/SharedIP dummy pcbs */
+		if (inp->inp_socket == &tcbinfo.nat_dummy_socket)
+				continue;
+
+		if (inp->inp_wantcnt != WNT_STOPUSING) 
+			continue;
+
+		so = inp->inp_socket;
+		if (!lck_mtx_try_lock(inp->inpcb_mtx)) {/* skip if in use */
+#if TEMPDEBUG
+			printf("tcp_slowtimo so=%x STOPUSING but locked...\n", so);
+#endif
+			continue;
+		}
+
+		if (so->so_usecount == 0) 
+			in_pcbdispose(inp);
+		else {
+			tp = intotcpcb(inp);
+			/* Check for embryonic socket stuck on listener queue (4023660) */
+			if ((so->so_usecount == 1) && (tp->t_state == TCPS_CLOSED) &&
+		       	    (so->so_head != NULL) && (so->so_state & SS_INCOMP)) {
+				so->so_usecount--; 
+				in_pcbdispose(inp);
+			} else
+				lck_mtx_unlock(inp->inpcb_mtx);
+		}
+	}
+
+	/* Now cleanup the time wait ones */
+	for (inp = time_wait_slots[cur_tw_slot].lh_first; inp; inp = inpnxt)
+	{
+		inpnxt = inp->inp_list.le_next;
+
+		if (inp->inp_wantcnt != WNT_STOPUSING) 
+			continue;
+
+		so = inp->inp_socket;
+		if (!lck_mtx_try_lock(inp->inpcb_mtx)) /* skip if in use */
+			continue;
+		if (so->so_usecount == 0)  
+			in_pcbdispose(inp);
+		else  {
+			tp = intotcpcb(inp);
+			/* Check for embryonic socket stuck on listener queue (4023660) */
+			if ((so->so_usecount == 1) && (tp->t_state == TCPS_CLOSED) &&
+		       	    (so->so_head != NULL) && (so->so_state & SS_INCOMP)) {
+				so->so_usecount--; 
+				in_pcbdispose(inp);
+			} else
+				lck_mtx_unlock(inp->inpcb_mtx);
+		}
+	}
+
+	tcp_now++;
 	if (++cur_tw_slot >= N_TIME_WAIT_SLOTS)
 		cur_tw_slot = 0;
-	tcp_now++;					/* for timestamps */
-	splx(s);
+	
+	lck_rw_done(pcbinfo->mtx);
 	KERNEL_DEBUG(DBG_FNC_TCP_SLOW | DBG_FUNC_END, tws_checked, cur_tw_slot,0,0,0);
 }
 
@@ -376,6 +479,7 @@ tcp_timers(tp, timer)
 	int isipv6 = (tp->t_inpcb->inp_vflag & INP_IPV4) == 0;
 #endif /* INET6 */
 
+	so_tmp = tp->t_inpcb->inp_socket;
 
 	switch (timer) {
 
@@ -388,11 +492,13 @@ tcp_timers(tp, timer)
 	case TCPT_2MSL:
 		if (tp->t_state != TCPS_TIME_WAIT &&
 		    tp->t_rcvtime <= tcp_maxidle) {
-			tp->t_timer[TCPT_2MSL] = tcp_keepintvl;
-			add_to_time_wait(tp);
+			tp->t_timer[TCPT_2MSL] = (unsigned long)tcp_keepintvl;
+			add_to_time_wait_locked(tp);
 		}
-		else
+		else {
 			tp = tcp_close(tp);
+			return(tp);
+		}
 		break;
 
 	/*
@@ -404,7 +510,6 @@ tcp_timers(tp, timer)
 		if (++tp->t_rxtshift > TCP_MAXRXTSHIFT) {
 			tp->t_rxtshift = TCP_MAXRXTSHIFT;
 			tcpstat.tcps_timeoutdrop++;
-			so_tmp = tp->t_inpcb->inp_socket;
 			tp = tcp_drop(tp, tp->t_softerror ?
 			    tp->t_softerror : ETIMEDOUT);
 			postevent(so_tmp, 0, EV_TIMEOUT);			
@@ -549,7 +654,7 @@ tcp_timers(tp, timer)
 		if ((always_keepalive ||
 		    tp->t_inpcb->inp_socket->so_options & SO_KEEPALIVE) &&
 		    tp->t_state <= TCPS_CLOSING) {
-		    	if (tp->t_rcvtime >= TCP_KEEPIDLE(tp) + tcp_maxidle)
+		    	if (tp->t_rcvtime >= TCP_KEEPIDLE(tp) + (unsigned long)tcp_maxidle)
 				goto dropit;
 			/*
 			 * Send a packet designed to force a response
@@ -583,7 +688,6 @@ tcp_timers(tp, timer)
 #endif
 	dropit:
 		tcpstat.tcps_keepdrops++;
-		so_tmp = tp->t_inpcb->inp_socket;
 		tp = tcp_drop(tp, ETIMEDOUT);
 		postevent(so_tmp, 0, EV_TIMEOUT);
 		break;

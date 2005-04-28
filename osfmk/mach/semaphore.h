@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -43,10 +43,13 @@
  *					  semaphore_t semaphore);
  */
 
+#include <sys/cdefs.h>
+__BEGIN_DECLS
+
 extern	kern_return_t	semaphore_signal     	(semaphore_t semaphore);
 extern	kern_return_t	semaphore_signal_all 	(semaphore_t semaphore);
 extern	kern_return_t	semaphore_signal_thread	(semaphore_t semaphore,
-						 thread_act_t thread_act);
+                                                 thread_t thread);
 
 extern	kern_return_t	semaphore_wait       	(semaphore_t semaphore);
 extern	kern_return_t	semaphore_timedwait    	(semaphore_t semaphore, 
@@ -58,11 +61,9 @@ extern  kern_return_t   semaphore_wait_signal   (semaphore_t wait_semaphore,
 extern  kern_return_t semaphore_timedwait_signal(semaphore_t wait_semaphore,
                                                  semaphore_t signal_semaphore,
                                                  mach_timespec_t wait_time);
+__END_DECLS
 
-#include <sys/appleapiopts.h>
-
-#ifdef  __APPLE_API_PRIVATE
-#ifdef  __APPLE_API_EVOLVING
+#ifdef	PRIVATE
 
 #define SEMAPHORE_OPTION_NONE		0x00000000
 
@@ -84,14 +85,6 @@ extern  kern_return_t semaphore_timedwait_signal(semaphore_t wait_semaphore,
 #define SEMAPHORE_USE_SAVED_RESULT	0x01000000	/* internal use only */
 #define SEMAPHORE_SIGNAL_RELEASE	0x02000000	/* internal use only */
 
-extern  kern_return_t	semaphore_operator	(int options,
-						 semaphore_t wait_semaphore,
-						 semaphore_t signal_semaphore,
-						 thread_act_t thread,
-						 mach_timespec_t wait_time);
+#endif	/* PRIVATE */
 
-#endif /* __APPLE_API_EVOLVING */
-
-#endif /* __APPLE_API_PRIVATE */
-
-#endif /* _MACH_SEMAPHORE_H_ */
+#endif	/* _MACH_SEMAPHORE_H_ */

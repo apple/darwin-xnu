@@ -38,13 +38,21 @@
 token_t *kau_to_socket(struct socket_au_info *soi);
 token_t *kau_to_attr32(struct vnode_au_info *vni);
 token_t *kau_to_attr64(struct vnode_au_info *vni);
+int auditon_command_event(int cmd);
 int au_preselect(au_event_t event, au_mask_t *mask_p, int sorf);
 au_event_t flags_and_error_to_openevent(int oflags, int error);
-void au_evclassmap_init();
+au_event_t ctlname_to_sysctlevent(int name[], uint64_t valid_arg);
+au_event_t msgctl_to_event(int cmd);
+au_event_t semctl_to_event(int cmd);
+void au_evclassmap_init(void);
 void au_evclassmap_insert(au_event_t event, au_class_t class);
 au_class_t au_event_class(au_event_t event);
 
 int canon_path(struct proc *p, char *path, char *cpath);
+
+
+
+
 /*
  * Define a system call to audit event mapping table.
  */

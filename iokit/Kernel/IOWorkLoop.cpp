@@ -57,12 +57,6 @@ static inline bool ISSETP(void *addr, unsigned int flag)
 
 #define fFlags loopRestart
 
-void IOWorkLoop::launchThreadMain(void *self)
-{
-    thread_set_cont_arg((int) self);
-    threadMainContinuation();
-}
-
 bool IOWorkLoop::init()
 {
     // The super init and gateLock allocation MUST be done first
@@ -90,7 +84,7 @@ bool IOWorkLoop::init()
     if (addEventSource(controlG) != kIOReturnSuccess)
         return false;
 
-    workThread = IOCreateThread(launchThreadMain, (void *) this);
+    workThread = IOCreateThread((thread_continue_t)threadMainContinuation, this);
     if (!workThread)
         return false;
 
@@ -246,12 +240,9 @@ do {									\
 
 #endif /* KDEBUG */
 
-void IOWorkLoop::threadMainContinuation()
+void IOWorkLoop::threadMainContinuation(IOWorkLoop *self)
 {
-  IOWorkLoop* self;
-  self = (IOWorkLoop *) thread_get_cont_arg();
-
-  self->threadMain();
+	self->threadMain();
 }
 
 void IOWorkLoop::threadMain()
@@ -294,8 +285,7 @@ void IOWorkLoop::threadMain()
 	    assert_wait((void *) &workToDo, false);
 	    IOSimpleLockUnlockEnableInterrupt(workToDoLock, is);
 
-	    thread_set_cont_arg((int) this);
-	    thread_block(&threadMainContinuation);
+	    thread_block_parameter((thread_continue_t)threadMainContinuation, this);
 	    /* NOTREACHED */
 	}
 

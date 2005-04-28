@@ -69,8 +69,7 @@
 #define _NETINET_TCP6_VAR_H_
 #include <sys/appleapiopts.h>
 
-#ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
+#ifdef KERNEL_PRIVATE
 #ifdef SYSCTL_DECL
 SYSCTL_DECL(_net_inet6_tcp6);
 #endif
@@ -78,14 +77,13 @@ SYSCTL_DECL(_net_inet6_tcp6);
 extern	int tcp_v6mssdflt;	/* XXX */
 
 struct	ip6_hdr;
-void	tcp6_ctlinput __P((int, struct sockaddr *, void *));
-void	tcp6_init __P((void));
-int	tcp6_input __P((struct mbuf **, int *));
-struct	rtentry *tcp_rtlookup6 __P((struct inpcb *));
+void	tcp6_ctlinput(int, struct sockaddr *, void *);
+void	tcp6_init(void);
+int	tcp6_input(struct mbuf **, int *);
+struct	rtentry *tcp_rtlookup6(struct inpcb *);
 
 extern struct	pr_usrreqs tcp6_usrreqs;
 
-#endif /* __APPLE_API_PRIVATE */
-#endif /* KERNEL */
+#endif KERNEL_PRIVATE
 
-#endif /* _NETINET_TCP6_VAR_H_ */
+#endif _NETINET_TCP6_VAR_H_

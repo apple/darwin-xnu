@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -21,20 +21,28 @@
  */
 
 #include <sys/errno.h>
-#include <kern/host.h>
+
 #include <mach/mach_types.h>
-#include <vm/vm_map.h>
-#include <vm/vm_kern.h>
-#include <vm/vm_pageout.h>
 #include <mach/kern_return.h>
+#include <mach/memory_object_control.h>
 #include <mach/memory_object_types.h>
 #include <mach/port.h>
 #include <mach/policy.h>
+#include <mach/upl.h>
+#include <kern/kern_types.h>
+#include <kern/ipc_kobject.h>
+#include <kern/host.h>
+#include <kern/thread.h>
 #include <ipc/ipc_port.h>
 #include <ipc/ipc_space.h>
-#include <kern/thread.h>
 #include <device/device_port.h>
+#include <vm/memory_object.h>
 #include <vm/vm_pageout.h>
+#include <vm/vm_map.h>
+#include <vm/vm_kern.h>
+#include <vm/vm_pageout.h>
+#include <vm/vm_protos.h>
+
 
 /* Device VM COMPONENT INTERFACES */
 
@@ -65,82 +73,13 @@ typedef struct device_pager {
 
 
 
-void 
-device_pager_bootstrap(
-	void);
-
-
-memory_object_t
-device_pager_setup(
-	memory_object_t,
-	int,
-	vm_size_t,
-	int);
 
 device_pager_t
-device_pager_lookup(
-	memory_object_t);
-
-kern_return_t
-device_pager_init(
-	memory_object_t, 
-	memory_object_control_t, 
-	vm_size_t);
-
-
-kern_return_t
-device_pager_data_request( 
-	memory_object_t, 
-	memory_object_offset_t,
-	vm_size_t, 
-	vm_prot_t);
-
-kern_return_t
-device_pager_data_return(
-	memory_object_t,
-	memory_object_offset_t,
-	vm_size_t,
-	boolean_t,
-	boolean_t);
-
-void
-device_pager_reference(
-	memory_object_t);
-
-void
-device_pager_deallocate(
-	memory_object_t);
-
-kern_return_t
-device_pager_data_initialize(
-	memory_object_t,
-	memory_object_offset_t,
-	vm_size_t);
-
-kern_return_t
-device_pager_data_unlock(
-	memory_object_t,
-	memory_object_offset_t,
-	vm_size_t,
-	vm_prot_t);
-
-kern_return_t
-device_pager_terminate(
-	memory_object_t);
-
-kern_return_t
-device_pager_synchronize(
-	memory_object_t,
-	memory_object_offset_t,
-	vm_offset_t,
-	vm_sync_t);
-
-kern_return_t
-device_pager_unmap(
+device_pager_lookup(		/* forward */
 	memory_object_t);
 
 device_pager_t
-device_object_create(void);
+device_object_create(void);	/* forward */
 
 zone_t	device_pager_zone;
 
@@ -174,7 +113,7 @@ device_pager_bootstrap(void)
  */
 memory_object_t
 device_pager_setup(
-	memory_object_t	device,
+	__unused memory_object_t device,
 	int		device_handle,
 	vm_size_t	size,
 	int		flags)
@@ -206,7 +145,6 @@ device_pager_populate_object(
 	vm_object_t	vm_object;
 	kern_return_t	kr;
 	upl_t		upl;
-	ipc_port_t	previous;
 
 	device_object = device_pager_lookup(device);
 	if(device_object == DEVICE_PAGER_NULL)
@@ -231,7 +169,7 @@ device_pager_populate_object(
 		if(kr != KERN_SUCCESS)
 			panic("device_pager_populate_object: list_req failed");
 
-		upl_commit(upl, NULL);
+		upl_commit(upl, NULL, 0);
 		upl_deallocate(upl);
 	}
 
@@ -257,9 +195,10 @@ device_pager_lookup(
  *
  */
 kern_return_t
-device_pager_init(memory_object_t mem_obj, 
-		memory_object_control_t control, 
-		vm_size_t pg_size)
+device_pager_init(
+	memory_object_t mem_obj, 
+	memory_object_control_t control, 
+	__unused vm_size_t pg_size)
 {
 	device_pager_t   device_object;
 	kern_return_t   kr;
@@ -312,13 +251,15 @@ device_pager_init(memory_object_t mem_obj,
 /*
  *
  */
+/*ARGSUSED6*/
 kern_return_t
 device_pager_data_return(
-        memory_object_t		mem_obj,
-        memory_object_offset_t	offset,
-        vm_size_t		data_cnt,
-        boolean_t		dirty,
-        boolean_t		kernel_copy)  
+	memory_object_t		mem_obj,
+	memory_object_offset_t	offset,
+	vm_size_t		data_cnt,
+	__unused boolean_t		dirty,
+	__unused boolean_t		kernel_copy,
+	__unused int			upl_flags)  
 {
 	device_pager_t	device_object;
 
@@ -326,8 +267,10 @@ device_pager_data_return(
 	if (device_object == DEVICE_PAGER_NULL)
 		panic("device_pager_data_return: lookup failed");
 
-	return device_data_action(device_object->device_handle, device_object,
-			VM_PROT_READ | VM_PROT_WRITE, offset, data_cnt);
+	return device_data_action(device_object->device_handle,
+				  (ipc_port_t) device_object,
+				  VM_PROT_READ | VM_PROT_WRITE,
+				  offset, data_cnt);
 }
 
 /*
@@ -338,7 +281,7 @@ device_pager_data_request(
 	memory_object_t		mem_obj,
 	memory_object_offset_t	offset,
 	vm_size_t		length,
-	vm_prot_t		protection_required)
+	__unused vm_prot_t		protection_required)
 {
 	device_pager_t	device_object;
 
@@ -347,8 +290,9 @@ device_pager_data_request(
 	if (device_object == DEVICE_PAGER_NULL)
 		panic("device_pager_data_request: lookup failed");
 
-	device_data_action(device_object->device_handle, device_object,
-					VM_PROT_READ, offset, length);
+	device_data_action(device_object->device_handle,
+			   (ipc_port_t) device_object,
+			   VM_PROT_READ, offset, length);
 	return KERN_SUCCESS;
 }
 
@@ -374,40 +318,58 @@ void
 device_pager_deallocate(
 	memory_object_t		mem_obj)
 {
-	device_pager_t	device_object;
+	device_pager_t		device_object;
+	memory_object_control_t	device_control;
 
 	device_object = device_pager_lookup(mem_obj);
 
 	if (hw_atomic_sub(&device_object->ref_count, 1) == 0) {
 		if (device_object->device_handle != (device_port_t) NULL) {
 			device_close(device_object->device_handle);
+			device_object->device_handle = (device_port_t) NULL;
 		}
-		zfree(device_pager_zone, (vm_offset_t) device_object);
+		device_control = device_object->control_handle;
+		if (device_control != MEMORY_OBJECT_CONTROL_NULL) {
+			/*
+			 * The VM object should already have been disconnected
+			 * from the pager at this point.
+			 * We still have to release the "memory object control"
+			 * handle.
+			 */
+			assert(device_control->object == VM_OBJECT_NULL);
+			memory_object_control_deallocate(device_control);
+			device_object->control_handle =
+				MEMORY_OBJECT_CONTROL_NULL;
+		}
+
+		zfree(device_pager_zone, device_object);
 	}
 	return;
 }
 
 kern_return_t
 device_pager_data_initialize(
-        memory_object_t		mem_obj,
-        memory_object_offset_t	offset,
-        vm_size_t		data_cnt)
+        __unused memory_object_t		mem_obj,
+        __unused memory_object_offset_t	offset,
+        __unused vm_size_t		data_cnt)
 {
+	panic("device_pager_data_initialize");
 	return KERN_FAILURE;
 }
 
 kern_return_t
 device_pager_data_unlock(
-	memory_object_t		mem_obj,
-	memory_object_offset_t	offset,
-	vm_size_t		size,
-	vm_prot_t		desired_access)
+	__unused memory_object_t		mem_obj,
+	__unused memory_object_offset_t	offset,
+	__unused vm_size_t		size,
+	__unused vm_prot_t		desired_access)
 {
 	return KERN_FAILURE;
 }
 
+kern_return_t
 device_pager_terminate(
-	memory_object_t	mem_obj)
+	__unused memory_object_t	mem_obj)
 {
 	return KERN_SUCCESS;
 }
@@ -422,7 +384,7 @@ device_pager_synchronize(
 	memory_object_t		mem_obj,
 	memory_object_offset_t	offset,
 	vm_offset_t		length,
-	vm_sync_t		sync_flags)
+	__unused vm_sync_t		sync_flags)
 {
 	device_pager_t	device_object;
 
@@ -439,7 +401,7 @@ device_pager_synchronize(
  */
 kern_return_t
 device_pager_unmap(
-	memory_object_t	mem_obj)
+	__unused memory_object_t	mem_obj)
 {
 	return KERN_SUCCESS;
 }

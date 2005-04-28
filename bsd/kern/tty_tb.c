@@ -38,7 +38,7 @@
 #include <sys/tablet.h>
 #include <sys/tty.h>
 #if NeXT
-#include <sys/proc.h>
+#include <sys/proc_internal.h>
 #endif
 
 /*

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -74,14 +74,13 @@
 struct	nfsmount {
 	int	nm_flag;		/* Flags for soft/hard... */
 	int	nm_state;		/* Internal state flags */
-	struct	mount *nm_mountp;	/* Vfs structure for this filesystem */
+	mount_t	nm_mountp;		/* Vfs structure for this filesystem */
 	int	nm_numgrps;		/* Max. size of groupslist */
 	struct vnode *nm_dvp;		/* root directory vnode pointer */
-	struct	socket *nm_so;		/* Rpc socket */
+	socket_t nm_so;			/* Rpc socket */
 	int	nm_sotype;		/* Type of socket */
 	int	nm_soproto;		/* and protocol */
-	int	nm_soflags;		/* pr_flags for socket protocol */
-	struct	mbuf *nm_nam;		/* Addr of server */
+	mbuf_t	nm_nam;			/* Addr of server */
 	int	nm_timeo;		/* Init timer for NFSMNT_DUMBTIMR */
 	int	nm_retry;		/* Max retries */
 	int	nm_srtt[4];		/* Timers for rpcs */
@@ -89,14 +88,14 @@ struct	nfsmount {
 	int	nm_sent;		/* Request send count */
 	int	nm_cwnd;		/* Request send window */
 	int	nm_timeouts;		/* Request timeouts */
-	int	nm_deadthresh;		/* Threshold of timeouts-->dead server*/
 	int	nm_rsize;		/* Max size of read rpc */
 	int	nm_wsize;		/* Max size of write rpc */
 	int	nm_readdirsize;		/* Size of a readdir rpc */
 	int	nm_readahead;		/* Num. of blocks to readahead */
-	int	nm_leaseterm;		/* Term (sec) for NQNFS lease */
-	CIRCLEQ_HEAD(, nfsnode) nm_timerhead; /* Head of lease timer queue */
-	struct vnode *nm_inprog;	/* Vnode in prog by nqnfs_clientd() */
+	int	nm_acregmin;		/* reg file min attr cache timeout */
+	int	nm_acregmax;		/* reg file max attr cache timeout */
+	int	nm_acdirmin;		/* dir min attr cache timeout */
+	int	nm_acdirmax;		/* dir max attr cache timeout */
 	uid_t	nm_authuid;		/* Uid for authenticator */
 	int	nm_authtype;		/* Authenticator type */
 	int	nm_authlen;		/* and length */
@@ -114,14 +113,21 @@ struct	nfsmount {
 	int	nm_bufqiods;		/* number of iods processing queue */
 	int	nm_tprintf_initial_delay;	/* delay first "server down" */
 	int	nm_tprintf_delay;	/* delay between "server down" */
+	struct {			/* fsinfo & (homogenous) pathconf info */
+		u_int64_t maxfilesize;	/* max size of a file */
+		u_long	linkmax;	/* max # hard links to an object */
+		u_long	namemax;	/* max length of filename component */
+		u_char	pcflags;	/* boolean pathconf properties */
+		u_char	fsproperties;	/* fsinfo properties */
+	} nm_fsinfo;
 };
 
 
 #if defined(KERNEL)
 /*
- * Convert mount ptr to nfsmount ptr.
+ * Convert mount_t to struct nfsmount*
  */
-#define VFSTONFS(mp)	((mp) ? ((struct nfsmount *)((mp)->mnt_data)) : NULL)
+#define VFSTONFS(mp)	((mp) ? ((struct nfsmount *)vfs_fsprivate(mp)) : NULL)
 
 #ifndef NFS_TPRINTF_INITIAL_DELAY
 #define NFS_TPRINTF_INITIAL_DELAY	12

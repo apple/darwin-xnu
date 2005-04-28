@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -59,82 +59,61 @@
 #include <sys/proc.h>
 #include <sys/time.h>
 #include <sys/namei.h>
-#include <sys/vnode.h>
+#include <sys/vnode_internal.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
 #include <sys/stat.h>
 #include <sys/systm.h>
 #include <sys/ioctl.h>
-#include <sys/file.h>
+#include <sys/file_internal.h>
 #include <sys/errno.h>
 #include <sys/malloc.h>
 #include <miscfs/fifofs/fifo.h>
 #include <vfs/vfs_support.h>
 
-/*
- * This structure is associated with the FIFO vnode and stores
- * the state associated with the FIFO.
- */
-struct fifoinfo {
-	struct socket	*fi_readsock;
-	struct socket	*fi_writesock;
-	long		fi_readers;
-	long		fi_writers;
-};
-
 #define VOPFUNC int (*)(void *)
+
+extern int	soo_ioctl(struct fileproc *fp, u_long cmd, caddr_t data, struct proc *p);
+extern int	soo_select(struct fileproc *fp, int which, void * wql, struct proc *p);
 
 int (**fifo_vnodeop_p)(void *);
 struct vnodeopv_entry_desc fifo_vnodeop_entries[] = {
-	{ &vop_default_desc, (VOPFUNC)vn_default_error },
-	{ &vop_lookup_desc, (VOPFUNC)fifo_lookup },		/* lookup */
-	{ &vop_create_desc, (VOPFUNC)err_create },		/* create */
-	{ &vop_mknod_desc, (VOPFUNC)err_mknod },		/* mknod */
-	{ &vop_open_desc, (VOPFUNC)fifo_open },			/* open */
-	{ &vop_close_desc, (VOPFUNC)fifo_close },		/* close */
-	{ &vop_access_desc, (VOPFUNC)fifo_access },		/* access */
-	{ &vop_getattr_desc, (VOPFUNC)fifo_getattr },		/* getattr */
-	{ &vop_setattr_desc, (VOPFUNC)fifo_setattr },		/* setattr */
-	{ &vop_read_desc, (VOPFUNC)fifo_read },			/* read */
-	{ &vop_write_desc, (VOPFUNC)fifo_write },		/* write */
-	{ &vop_lease_desc, (VOPFUNC)fifo_lease_check },		/* lease */
-	{ &vop_ioctl_desc, (VOPFUNC)fifo_ioctl },		/* ioctl */
-	{ &vop_select_desc, (VOPFUNC)fifo_select },		/* select */
-	{ &vop_revoke_desc, (VOPFUNC)fifo_revoke },		/* revoke */
-	{ &vop_mmap_desc, (VOPFUNC)err_mmap },			/* mmap */
-	{ &vop_fsync_desc, (VOPFUNC)fifo_fsync },		/* fsync */
-	{ &vop_seek_desc, (VOPFUNC)err_seek },			/* seek */
-	{ &vop_remove_desc, (VOPFUNC)err_remove },		/* remove */
-	{ &vop_link_desc, (VOPFUNC)err_link },			/* link */
-	{ &vop_rename_desc, (VOPFUNC)err_rename },		/* rename */
-	{ &vop_mkdir_desc, (VOPFUNC)err_mkdir },		/* mkdir */
-	{ &vop_rmdir_desc, (VOPFUNC)err_rmdir },		/* rmdir */
-	{ &vop_symlink_desc, (VOPFUNC)err_symlink },		/* symlink */
-	{ &vop_readdir_desc, (VOPFUNC)err_readdir },		/* readdir */
-	{ &vop_readlink_desc, (VOPFUNC)err_readlink },		/* readlink */
-	{ &vop_abortop_desc, (VOPFUNC)err_abortop },		/* abortop */
-	{ &vop_inactive_desc, (VOPFUNC)fifo_inactive },		/* inactive */
-	{ &vop_reclaim_desc, (VOPFUNC)fifo_reclaim },		/* reclaim */
-	{ &vop_lock_desc, (VOPFUNC)fifo_lock },			/* lock */
-	{ &vop_unlock_desc, (VOPFUNC)fifo_unlock },		/* unlock */
-	{ &vop_bmap_desc, (VOPFUNC)fifo_bmap },			/* bmap */
-	{ &vop_strategy_desc, (VOPFUNC)err_strategy },		/* strategy */
-	{ &vop_print_desc, (VOPFUNC)fifo_print },		/* print */
-	{ &vop_islocked_desc, (VOPFUNC)fifo_islocked },		/* islocked */
-	{ &vop_pathconf_desc, (VOPFUNC)fifo_pathconf },		/* pathconf */
-	{ &vop_advlock_desc, (VOPFUNC)fifo_advlock },		/* advlock */
-	{ &vop_blkatoff_desc, (VOPFUNC)err_blkatoff },		/* blkatoff */
-	{ &vop_valloc_desc, (VOPFUNC)err_valloc },		/* valloc */
-	{ &vop_vfree_desc, (VOPFUNC)err_vfree },		/* vfree */
-	{ &vop_truncate_desc, (VOPFUNC)fifo_truncate },		/* truncate */
-	{ &vop_update_desc, (VOPFUNC)fifo_update },		/* update */
-	{ &vop_bwrite_desc, (VOPFUNC)fifo_bwrite },		/* bwrite */
-	{ &vop_pagein_desc, (VOPFUNC)err_pagein },		/* Pagein */
-	{ &vop_pageout_desc, (VOPFUNC)err_pageout },		/* Pageout */
-        { &vop_copyfile_desc, (VOPFUNC)err_copyfile },		/* Copyfile */
-	{ &vop_blktooff_desc, (VOPFUNC)err_blktooff },		/* blktooff */
-	{ &vop_offtoblk_desc, (VOPFUNC)err_offtoblk },		/* offtoblk */
-	{ &vop_cmap_desc, (VOPFUNC)err_cmap },			/* cmap */
+	{ &vnop_default_desc, (VOPFUNC)vn_default_error },
+	{ &vnop_lookup_desc, (VOPFUNC)fifo_lookup },		/* lookup */
+	{ &vnop_create_desc, (VOPFUNC)err_create },		/* create */
+	{ &vnop_mknod_desc, (VOPFUNC)err_mknod },		/* mknod */
+	{ &vnop_open_desc, (VOPFUNC)fifo_open },			/* open */
+	{ &vnop_close_desc, (VOPFUNC)fifo_close },		/* close */
+	{ &vnop_access_desc, (VOPFUNC)fifo_access },		/* access */
+	{ &vnop_getattr_desc, (VOPFUNC)fifo_getattr },		/* getattr */
+	{ &vnop_setattr_desc, (VOPFUNC)fifo_setattr },		/* setattr */
+	{ &vnop_read_desc, (VOPFUNC)fifo_read },			/* read */
+	{ &vnop_write_desc, (VOPFUNC)fifo_write },		/* write */
+	{ &vnop_ioctl_desc, (VOPFUNC)fifo_ioctl },		/* ioctl */
+	{ &vnop_select_desc, (VOPFUNC)fifo_select },		/* select */
+	{ &vnop_revoke_desc, (VOPFUNC)fifo_revoke },		/* revoke */
+	{ &vnop_mmap_desc, (VOPFUNC)err_mmap },			/* mmap */
+	{ &vnop_fsync_desc, (VOPFUNC)fifo_fsync },		/* fsync */
+	{ &vnop_remove_desc, (VOPFUNC)err_remove },		/* remove */
+	{ &vnop_link_desc, (VOPFUNC)err_link },			/* link */
+	{ &vnop_rename_desc, (VOPFUNC)err_rename },		/* rename */
+	{ &vnop_mkdir_desc, (VOPFUNC)err_mkdir },		/* mkdir */
+	{ &vnop_rmdir_desc, (VOPFUNC)err_rmdir },		/* rmdir */
+	{ &vnop_symlink_desc, (VOPFUNC)err_symlink },		/* symlink */
+	{ &vnop_readdir_desc, (VOPFUNC)err_readdir },		/* readdir */
+	{ &vnop_readlink_desc, (VOPFUNC)err_readlink },		/* readlink */
+	{ &vnop_inactive_desc, (VOPFUNC)fifo_inactive },		/* inactive */
+	{ &vnop_reclaim_desc, (VOPFUNC)fifo_reclaim },		/* reclaim */
+	{ &vnop_strategy_desc, (VOPFUNC)err_strategy },		/* strategy */
+	{ &vnop_pathconf_desc, (VOPFUNC)fifo_pathconf },		/* pathconf */
+	{ &vnop_advlock_desc, (VOPFUNC)fifo_advlock },		/* advlock */
+	{ &vnop_bwrite_desc, (VOPFUNC)fifo_bwrite },		/* bwrite */
+	{ &vnop_pagein_desc, (VOPFUNC)err_pagein },		/* Pagein */
+	{ &vnop_pageout_desc, (VOPFUNC)err_pageout },		/* Pageout */
+        { &vnop_copyfile_desc, (VOPFUNC)err_copyfile },		/* Copyfile */
+	{ &vnop_blktooff_desc, (VOPFUNC)err_blktooff },		/* blktooff */
+	{ &vnop_offtoblk_desc, (VOPFUNC)err_offtoblk },		/* offtoblk */
+	{ &vnop_blockmap_desc, (VOPFUNC)err_blockmap },			/* blockmap */
 	{ (struct vnodeop_desc*)NULL, (int(*)())NULL }
 };
 struct vnodeopv_desc fifo_vnodeop_opv_desc =
@@ -144,11 +123,13 @@ struct vnodeopv_desc fifo_vnodeop_opv_desc =
  * Trivial lookup routine that always fails.
  */
 /* ARGSUSED */
+int
 fifo_lookup(ap)
-	struct vop_lookup_args /* {
+	struct vnop_lookup_args /* {
 		struct vnode * a_dvp;
 		struct vnode ** a_vpp;
 		struct componentname * a_cnp;
+		vfs_context_t a_context;
 	} */ *ap;
 {
 	
@@ -161,58 +142,94 @@ fifo_lookup(ap)
  * to find an active instance of a fifo.
  */
 /* ARGSUSED */
+int
 fifo_open(ap)
-	struct vop_open_args /* {
+	struct vnop_open_args /* {
 		struct vnode *a_vp;
 		int  a_mode;
-		struct ucred *a_cred;
-		struct proc *a_p;
+		vfs_context_t a_context;
 	} */ *ap;
 {
 	struct vnode *vp = ap->a_vp;
 	struct fifoinfo *fip;
-	struct proc *p = ap->a_p;
 	struct socket *rso, *wso;
 	int error;
 
-	if ((fip = vp->v_fifoinfo) == NULL) {
-		MALLOC(fip, struct fifoinfo *,
-				sizeof(*fip), M_TEMP, M_WAITOK);
-		vp->v_fifoinfo = fip;
-		thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
-		if (error = socreate(AF_LOCAL, &rso, SOCK_STREAM, 0)) {
-			thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
-			vp->v_fifoinfo = NULL;
-			FREE(fip, M_TEMP);
-			return (error);
+	vnode_lock(vp);
+
+retry:
+
+	fip = vp->v_fifoinfo;
+
+	if (fip == (struct fifoinfo *)0)
+		panic("fifo_open with no fifoinfo");
+
+	if ((fip->fi_flags & FIFO_CREATED) == 0) {
+		if (fip->fi_flags & FIFO_INCREATE) {
+			fip->fi_flags |= FIFO_CREATEWAIT;	
+			error = msleep(&fip->fi_flags, &vp->v_lock, PRIBIO | PCATCH, "fifocreatewait", 0);
+			if (error) {
+				vnode_unlock(vp);
+				return(error);
+			}
+			goto retry;
+		} else {
+			fip->fi_flags |= FIFO_INCREATE;	
+			vnode_unlock(vp);
+			if ( (error = socreate(AF_LOCAL, &rso, SOCK_STREAM, 0)) ) {
+			        goto bad1;
+			}
+			fip->fi_readsock = rso;
+
+			if ( (error = socreate(AF_LOCAL, &wso, SOCK_STREAM, 0)) ) {
+				(void)soclose(rso);
+			        goto bad1;
+			}
+			fip->fi_writesock = wso;
+
+			if ( (error = soconnect2(wso, rso)) ) {
+				(void)soclose(wso);
+				(void)soclose(rso);
+			        goto bad1;
+			}
+			fip->fi_readers = fip->fi_writers = 0;
+
+	        socket_lock(wso, 1);
+			wso->so_state |= SS_CANTRCVMORE;
+			wso->so_snd.sb_lowat = PIPE_BUF;
+#if 0
+			/* Because all the unp is protected by single mutex 
+			 * doing it in two step may actually cause problems
+			 * as it opens up window between the drop and acquire
+			 */
+	        socket_unlock(wso, 1);
+
+	        socket_lock(rso, 1);
+#endif
+			rso->so_state |= SS_CANTSENDMORE;
+	        socket_unlock(wso, 1);
+
+			vnode_lock(vp);
+			fip->fi_flags |= FIFO_CREATED;
+			fip->fi_flags &= ~FIFO_INCREATE;
+			
+			if ((fip->fi_flags & FIFO_CREATEWAIT)) {
+				fip->fi_flags &= ~FIFO_CREATEWAIT;
+				wakeup(&fip->fi_flags);
+			}
+			/* vnode lock is held  to process further */
 		}
-		fip->fi_readsock = rso;
-		if (error = socreate(AF_LOCAL, &wso, SOCK_STREAM, 0)) {
-			(void)soclose(rso);
-			thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
-			vp->v_fifoinfo = NULL;
-			FREE(fip, M_TEMP);
-			return (error);
-		}
-		fip->fi_writesock = wso;
-		if (error = unp_connect2(wso, rso)) {
-			(void)soclose(wso);
-			(void)soclose(rso);
-			thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
-			vp->v_fifoinfo = NULL;
-			FREE(fip, M_TEMP);
-			return (error);
-		}
-		wso->so_state |= SS_CANTRCVMORE;
-		wso->so_snd.sb_lowat = PIPE_BUF;
-		rso->so_state |= SS_CANTSENDMORE;
-		thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
-		fip->fi_readers = fip->fi_writers = 0;
 	}
+
+	/* vnode is locked at this point */
+	/* fifo in created already */
 	if (ap->a_mode & FREAD) {
 		fip->fi_readers++;
 		if (fip->fi_readers == 1) {
+			socket_lock(fip->fi_writesock, 1);
 			fip->fi_writesock->so_state &= ~SS_CANTSENDMORE;
+			socket_unlock(fip->fi_writesock, 1);
+
 			if (fip->fi_writers > 0)
 				wakeup((caddr_t)&fip->fi_writers);
 		}
@@ -220,17 +237,18 @@ fifo_open(ap)
 	if (ap->a_mode & FWRITE) {
 		fip->fi_writers++;
 		if (fip->fi_writers == 1) {
+			socket_lock(fip->fi_readsock, 1);
 			fip->fi_readsock->so_state &= ~SS_CANTRCVMORE;
+			socket_unlock(fip->fi_readsock, 1);
+	
 			if (fip->fi_readers > 0)
 				wakeup((caddr_t)&fip->fi_readers);
 		}
 	}
 	if ((ap->a_mode & FREAD) && (ap->a_mode & O_NONBLOCK) == 0) {
 		if (fip->fi_writers == 0) {
-			VOP_UNLOCK(vp, 0, p);
-			error = tsleep((caddr_t)&fip->fi_readers,
-			    PCATCH | PSOCK, "fifoor", 0);
-			vn_lock(vp, LK_EXCLUSIVE | LK_RETRY, p);
+			error = msleep((caddr_t)&fip->fi_readers, &vp->v_lock,
+					PCATCH | PSOCK, "fifoor", 0);
 			if (error)
 				goto bad;
 			if (fip->fi_readers == 1) {
@@ -242,15 +260,13 @@ fifo_open(ap)
 	if (ap->a_mode & FWRITE) {
 		if (ap->a_mode & O_NONBLOCK) {
 			if (fip->fi_readers == 0) {
-				error = ENXIO;
-				goto bad;
+					error = ENXIO;
+					goto bad;
 			}
 		} else {
 			if (fip->fi_readers == 0) {
-				VOP_UNLOCK(vp, 0, p);
-				error = tsleep((caddr_t)&fip->fi_writers,
-				    PCATCH | PSOCK, "fifoow", 0);
-				vn_lock(vp, LK_EXCLUSIVE | LK_RETRY, p);
+				error = msleep((caddr_t)&fip->fi_writers,&vp->v_lock,
+						PCATCH | PSOCK, "fifoow", 0);
 				if (error)
 					goto bad;
 				if (fip->fi_writers == 1) {
@@ -260,39 +276,57 @@ fifo_open(ap)
 			}
 		}
 	}
+
+	vnode_unlock(vp);
 	return (0);
 bad:
-	if (error)
-		VOP_CLOSE(vp, ap->a_mode, ap->a_cred, p);
+	fifo_close_internal(vp, ap->a_mode, ap->a_context, 1);
+
+	vnode_unlock(vp);
+	return (error);
+bad1:
+	vnode_lock(vp);
+
+	fip->fi_flags &= ~FIFO_INCREATE;
+			
+	if ((fip->fi_flags & FIFO_CREATEWAIT)) {
+		fip->fi_flags &= ~FIFO_CREATEWAIT;
+		wakeup(&fip->fi_flags);
+	}
+	vnode_unlock(vp);
+
 	return (error);
 }
 
 /*
  * Vnode op for read
  */
-/* ARGSUSED */
+int
 fifo_read(ap)
-	struct vop_read_args /* {
+	struct vnop_read_args /* {
 		struct vnode *a_vp;
 		struct uio *a_uio;
 		int  a_ioflag;
-		struct ucred *a_cred;
+		vfs_context_t a_context;
 	} */ *ap;
 {
 	struct uio *uio = ap->a_uio;
 	struct socket *rso = ap->a_vp->v_fifoinfo->fi_readsock;
-	struct proc *p = uio->uio_procp;
 	int error, startresid;
+	int rflags;
 
 #if DIAGNOSTIC
 	if (uio->uio_rw != UIO_READ)
 		panic("fifo_read mode");
 #endif
-	if (uio->uio_resid == 0)
+	if (uio_resid(uio) == 0)
 		return (0);
-	if (ap->a_ioflag & IO_NDELAY)
-		rso->so_state |= SS_NBIO;
-	startresid = uio->uio_resid;
+
+	rflags = (ap->a_ioflag & IO_NDELAY) ? MSG_NBIO : 0;
+
+	// LP64todo - fix this!
+	startresid = uio_resid(uio);
+
 	/* fifo conformance - if we have a reader open on the fifo but no 
 	 * writers then we need to make sure we do not block.  We do that by 
 	 * checking the receive buffer and if empty set error to EWOULDBLOCK.
@@ -300,19 +334,15 @@ fifo_read(ap)
 	 */
 	error = 0;
 	if (ap->a_vp->v_fifoinfo->fi_writers < 1) {
-		 error = (rso->so_rcv.sb_cc == 0) ? EWOULDBLOCK : 0;
+		socket_lock(rso, 1);
+		error = (rso->so_rcv.sb_cc == 0) ? EWOULDBLOCK : 0;
+		socket_unlock(rso, 1);
 	}
 
 	/* skip soreceive to avoid blocking when we have no writers */
 	if (error != EWOULDBLOCK) {
-		VOP_UNLOCK(ap->a_vp, 0, p);
-		thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
-
 		error = soreceive(rso, (struct sockaddr **)0, uio, (struct mbuf **)0,
-	    					(struct mbuf **)0, (int *)0);
-
-		thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
-		vn_lock(ap->a_vp, LK_EXCLUSIVE | LK_RETRY, p);
+	    					(struct mbuf **)0, &rflags);
 	}
 	else {
 		/* clear EWOULDBLOCK and return EOF (zero) */
@@ -321,102 +351,102 @@ fifo_read(ap)
 	/*
 	 * Clear EOF indication after first such return.
 	 */
-	if (uio->uio_resid == startresid)
+	if (uio_resid(uio) == startresid) {
+		socket_lock(rso, 1);
 		rso->so_state &= ~SS_CANTRCVMORE;
-	if (ap->a_ioflag & IO_NDELAY)
-		rso->so_state &= ~SS_NBIO;
+		socket_unlock(rso, 1);
+	}
 	return (error);
 }
 
 /*
  * Vnode op for write
  */
-/* ARGSUSED */
+int
 fifo_write(ap)
-	struct vop_write_args /* {
+	struct vnop_write_args /* {
 		struct vnode *a_vp;
 		struct uio *a_uio;
 		int  a_ioflag;
-		struct ucred *a_cred;
+		vfs_context_t a_context;
 	} */ *ap;
 {
 	struct socket *wso = ap->a_vp->v_fifoinfo->fi_writesock;
-	struct proc *p = ap->a_uio->uio_procp;
 	int error;
 
 #if DIAGNOSTIC
 	if (ap->a_uio->uio_rw != UIO_WRITE)
 		panic("fifo_write mode");
 #endif
-	if (ap->a_ioflag & IO_NDELAY)
-		wso->so_state |= SS_NBIO;
-	VOP_UNLOCK(ap->a_vp, 0, p);
-	thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
-	error = sosend(wso, (struct sockaddr *)0, ap->a_uio, 0, (struct mbuf *)0, 0);
-	thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
-	vn_lock(ap->a_vp, LK_EXCLUSIVE | LK_RETRY, p);
-	if (ap->a_ioflag & IO_NDELAY)
-		wso->so_state &= ~SS_NBIO;
+	error = sosend(wso, (struct sockaddr *)0, ap->a_uio, 0,
+		       (struct mbuf *)0, (ap->a_ioflag & IO_NDELAY) ? MSG_NBIO : 0);
+
 	return (error);
 }
 
 /*
  * Device ioctl operation.
  */
-/* ARGSUSED */
+int
 fifo_ioctl(ap)
-	struct vop_ioctl_args /* {
+	struct vnop_ioctl_args /* {
 		struct vnode *a_vp;
 		int  a_command;
 		caddr_t  a_data;
 		int  a_fflag;
-		struct ucred *a_cred;
-		struct proc *a_p;
+		vfs_context_t a_context;
 	} */ *ap;
 {
-	struct file filetmp;
+	struct proc *p = vfs_context_proc(ap->a_context);
+	struct fileproc filetmp;
+	struct fileglob filefg;
 	int error;
 
 	if (ap->a_command == FIONBIO)
 		return (0);
+	bzero(&filetmp, sizeof(struct fileproc));
+	filetmp.f_fglob = &filefg;
 	if (ap->a_fflag & FREAD) {
-		filetmp.f_data = (caddr_t)ap->a_vp->v_fifoinfo->fi_readsock;
-		error = soo_ioctl(&filetmp, ap->a_command, ap->a_data, ap->a_p);
+		filetmp.f_fglob->fg_data = (caddr_t)ap->a_vp->v_fifoinfo->fi_readsock;
+		error = soo_ioctl(&filetmp, ap->a_command, ap->a_data, p);
 		if (error)
 			return (error);
 	}
 	if (ap->a_fflag & FWRITE) {
-		filetmp.f_data = (caddr_t)ap->a_vp->v_fifoinfo->fi_writesock;
-		error = soo_ioctl(&filetmp, ap->a_command, ap->a_data, ap->a_p);
+		filetmp.f_fglob->fg_data = (caddr_t)ap->a_vp->v_fifoinfo->fi_writesock;
+		error = soo_ioctl(&filetmp, ap->a_command, ap->a_data, p);
 		if (error)
 			return (error);
 	}
 	return (0);
 }
 
-/* ARGSUSED */
+int
 fifo_select(ap)
-	struct vop_select_args /* {
+	struct vnop_select_args /* {
 		struct vnode *a_vp;
 		int  a_which;
 		int  a_fflags;
-		struct ucred *a_cred;
 		void * a_wql;
-		struct proc *a_p;
+		vfs_context_t a_context;
 	} */ *ap;
 {
-	struct file filetmp;
+	struct proc *p = vfs_context_proc(ap->a_context);
+	struct fileproc filetmp;
+	struct fileglob filefg;
 	int ready;
 
+	bzero(&filetmp, sizeof(struct fileproc));
+	filetmp.f_fglob = &filefg;
 	if (ap->a_which & FREAD) {
-		filetmp.f_data = (caddr_t)ap->a_vp->v_fifoinfo->fi_readsock;
-		ready = soo_select(&filetmp, ap->a_which, ap->a_wql, ap->a_p);
+		filetmp.f_fglob->fg_data = (caddr_t)ap->a_vp->v_fifoinfo->fi_readsock;
+		ready = soo_select(&filetmp, ap->a_which, ap->a_wql, p);
 		if (ready)
 			return (ready);
 	}
 	if (ap->a_which & FWRITE) {
-		filetmp.f_data = (caddr_t)ap->a_vp->v_fifoinfo->fi_writesock;
-		ready = soo_select(&filetmp, ap->a_which, ap->a_wql, ap->a_p);
+		filetmp.f_fglob->fg_data = (caddr_t)ap->a_vp->v_fifoinfo->fi_writesock;
+		ready = soo_select(&filetmp, ap->a_which, ap->a_wql, p);
 		if (ready)
 			return (ready);
 	}
@@ -424,101 +454,95 @@ fifo_select(ap)
 }
 
 int
-fifo_inactive(ap)
-	struct vop_inactive_args /* {
-		struct vnode *a_vp;
-		struct proc *a_p;
-	} */ *ap;
+fifo_inactive(__unused struct vnop_inactive_args *ap)
 {
-
-	VOP_UNLOCK(ap->a_vp, 0, ap->a_p);
 	return (0);
 }
 
-/*
- * This is a noop, simply returning what one has been given.
- */
-fifo_bmap(ap)
-	struct vop_bmap_args /* {
-		struct vnode *a_vp;
-		daddr_t  a_bn;
-		struct vnode **a_vpp;
-		daddr_t *a_bnp;
-		int *a_runp;
-	} */ *ap;
-{
-
-	if (ap->a_vpp != NULL)
-		*ap->a_vpp = ap->a_vp;
-	if (ap->a_bnp != NULL)
-		*ap->a_bnp = ap->a_bn;
-	if (ap->a_runp != NULL)
-		*ap->a_runp = 0;
-	return (0);
-}
 
 /*
  * Device close routine
  */
-/* ARGSUSED */
+int
 fifo_close(ap)
-	struct vop_close_args /* {
+	struct vnop_close_args /* {
 		struct vnode *a_vp;
 		int  a_fflag;
-		struct ucred *a_cred;
-		struct proc *a_p;
+		vfs_context_t a_context;
 	} */ *ap;
 {
-	register struct vnode *vp = ap->a_vp;
+	return fifo_close_internal(ap->a_vp, ap->a_fflag, ap->a_context, 0);
+}
+
+int
+fifo_close_internal(vnode_t vp, int fflag, __unused vfs_context_t context, int locked)
+{
 	register struct fifoinfo *fip = vp->v_fifoinfo;
 	int error1, error2;
+	struct socket *rso;
+	struct socket *wso;
 
-	if (ap->a_fflag & FREAD) {
+	if (!locked)
+		vnode_lock(vp);
+
+	if ((fip->fi_flags & FIFO_CREATED) == 0) {
+		if (!locked)
+			vnode_unlock(vp);
+		return(0);
+
+	}
+		
+	if (fflag & FREAD) {
 		fip->fi_readers--;
 		if (fip->fi_readers == 0){
-			thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
+			socket_lock(fip->fi_writesock, 1);
 			socantsendmore(fip->fi_writesock);
-			thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
+			socket_unlock(fip->fi_writesock, 1);
 		}
 	}
-	if (ap->a_fflag & FWRITE) {
+
+	if (fflag & FWRITE) {
 		fip->fi_writers--;
 		if (fip->fi_writers == 0) {
-			thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
+			socket_lock(fip->fi_readsock, 1);
 			socantrcvmore(fip->fi_readsock);
-			thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
+			socket_unlock(fip->fi_readsock, 1);
 		}
 	}
-	if (vp->v_usecount > 1)
+#if 0
+	if (vnode_isinuse_locked(vp, 0, 1)) {
+		if (!locked)
+			vnode_unlock(vp);
 		return (0);
-	thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
-	error1 = soclose(fip->fi_readsock);
-	error2 = soclose(fip->fi_writesock);
-	thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
-	vp->v_fifoinfo = NULL;
-	FREE(fip, M_TEMP);
+	}
+#endif
+
+	if (fip->fi_writers || fip->fi_readers) {
+		if (!locked)
+			vnode_unlock(vp);
+		return (0);
+	}
+
+	wso = fip->fi_writesock;
+	rso = fip->fi_readsock;
+	fip->fi_readsock = 0;
+	fip->fi_writesock = 0;
+	fip->fi_flags &= ~FIFO_CREATED;
+	if (!locked)
+		vnode_unlock(vp);
+	error1 = soclose(rso);
+	error2 = soclose(wso);
+
 	if (error1)
 		return (error1);
 	return (error2);
 }
 
-/*
- * Print out the contents of a fifo vnode.
- */
-fifo_print(ap)
-	struct vop_print_args /* {
-		struct vnode *a_vp;
-	} */ *ap;
-{
-
-	printf("tag VT_NON");
-	fifo_printinfo(ap->a_vp);
-	printf("\n");
-}
 
 /*
  * Print out internal contents of a fifo vnode.
  */
+void
 fifo_printinfo(vp)
 	struct vnode *vp;
 {
@@ -531,11 +555,13 @@ fifo_printinfo(vp)
 /*
  * Return POSIX pathconf information applicable to fifo's.
  */
+int
 fifo_pathconf(ap)
-	struct vop_pathconf_args /* {
+	struct vnop_pathconf_args /* {
 		struct vnode *a_vp;
 		int a_name;
 		int *a_retval;
+		vfs_context_t a_context;
 	} */ *ap;
 {
 
@@ -558,7 +584,8 @@ fifo_pathconf(ap)
 /*
  * Fifo failed operation
  */
-fifo_ebadf()
+int
+fifo_ebadf(__unused void *dummy)
 {
 
 	return (EBADF);
@@ -567,17 +594,10 @@ fifo_ebadf()
 /*
  * Fifo advisory byte-level locks.
  */
-/* ARGSUSED */
-fifo_advlock(ap)
-	struct vop_advlock_args /* {
-		struct vnode *a_vp;
-		caddr_t  a_id;
-		int  a_op;
-		struct flock *a_fl;
-		int  a_flags;
-	} */ *ap;
+int
+fifo_advlock(__unused struct vnop_advlock_args *ap)
 {
 
-	return (EOPNOTSUPP);
+	return (ENOTSUP);
 }
 

@@ -59,7 +59,6 @@
 #include <sys/appleapiopts.h>
 
 #include <sys/sysctl.h>
-#ifdef __APPLE_API_PRIVATE
 
 /*
  * UDP kernel structures and variables.
@@ -79,9 +78,7 @@ struct	udpiphdr {
 #define	ui_sum		ui_u.uh_sum
 #define ui_next		ui_i.ih_next
 #define ui_prev		ui_i.ih_prev
-#endif /* __APPLE_API_PRIVATE */
 
-#ifdef __APPLE_API_UNSTABLE
 struct	udpstat {
 				/* input statistics: */
 	u_long	udps_ipackets;		/* total input packets */
@@ -102,7 +99,6 @@ struct	udpstat {
 	u_long	udps_noportmcast;
 #endif
 };
-#endif /* __APPLE_API_UNSTABLE */
 
 /*
  * Names for UDP sysctl objects
@@ -114,6 +110,7 @@ struct	udpstat {
 #define	UDPCTL_PCBLIST		5	/* list of PCBs for UDP sockets */
 #define UDPCTL_MAXID		6
 
+#ifdef KERNEL_PRIVATE
 #define UDPCTL_NAMES { \
 	{ 0, 0 }, \
 	{ "checksum", CTLTYPE_INT }, \
@@ -123,8 +120,6 @@ struct	udpstat {
 	{ "pcblist", CTLTYPE_STRUCT }, \
 }
 
-#ifdef __APPLE_API_PRIVATE
-#ifdef KERNEL
 SYSCTL_DECL(_net_inet_udp);
 
 extern struct	pr_usrreqs udp_usrreqs;
@@ -135,13 +130,20 @@ extern u_long	udp_recvspace;
 extern struct	udpstat udpstat;
 extern int	log_in_vain;
 
-void	udp_ctlinput __P((int, struct sockaddr *, void *));
-void	udp_init __P((void));
-void	udp_input __P((struct mbuf *, int));
+void	udp_ctlinput(int, struct sockaddr *, void *);
+void	udp_init(void);
+void	udp_input(struct mbuf *, int);
 
-void	udp_notify __P((struct inpcb *inp, int errno));
-int	udp_shutdown __P((struct socket *so));
+void	udp_notify(struct inpcb *inp, int errno);
+int	udp_shutdown(struct socket *so);
+int	udp_lock (struct socket *, int, int);
+int	udp_unlock (struct socket *, int, int);
+void	udp_slowtimo (void);
+#ifdef _KERN_LOCKS_H_
+lck_mtx_t *	udp_getlock (struct socket *, int);
+#else
+void *	udp_getlock (struct socket *, int);
 #endif
-#endif /* __APPLE_API_PRIVATE */
 
-#endif
+#endif KERNEL_PRIVATE
+#endif _NETINET_UDP_VAR_H_

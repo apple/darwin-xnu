@@ -41,6 +41,7 @@
 
 #include <sys/queue.h>
 
+#ifdef KERNEL_PRIVATE
 struct	llinfo_nd6 {
 	struct	llinfo_nd6 *ln_next;
 	struct	llinfo_nd6 *ln_prev;
@@ -52,6 +53,7 @@ struct	llinfo_nd6 {
 	short	ln_router;	/* 2^0: ND6 router bit */
 	int	ln_byhint;	/* # of times we made it reachable by UL hint */
 };
+#endif /* KERNEL_PRIVATE */
 
 #define ND6_LLINFO_NOSTATE	-2
 /*
@@ -185,8 +187,7 @@ struct	in6_ndifreq {
 
 #define ND6_INFINITE_LIFETIME		0xffffffff
 
-#ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
+#ifdef KERNEL_PRIVATE
 /* node constants */
 #define MAX_REACHABLE_TIME		3600000	/* msec */
 #define REACHABLE_TIME			30000	/* msec */
@@ -338,67 +339,96 @@ union nd_opts {
 
 /* XXX: need nd6_var.h?? */
 /* nd6.c */
-void nd6_init __P((void));
-void nd6_ifattach __P((struct ifnet *));
-int nd6_is_addr_neighbor __P((struct sockaddr_in6 *, struct ifnet *));
-void nd6_option_init __P((void *, int, union nd_opts *));
-struct nd_opt_hdr *nd6_option __P((union nd_opts *));
-int nd6_options __P((union nd_opts *));
-struct	rtentry *nd6_lookup __P((struct in6_addr *, int, struct ifnet *));
-void nd6_setmtu __P((struct ifnet *));
-void nd6_timer __P((void *));
-void nd6_purge __P((struct ifnet *));
-struct llinfo_nd6 *nd6_free __P((struct rtentry *));
-void nd6_nud_hint __P((struct rtentry *, struct in6_addr *, int));
-int nd6_resolve __P((struct ifnet *, struct rtentry *,
-		     struct mbuf *, struct sockaddr *, u_char *));
-void nd6_rtrequest __P((int, struct rtentry *, struct sockaddr *));
-int nd6_ioctl __P((u_long, caddr_t, struct ifnet *));
-struct rtentry *nd6_cache_lladdr __P((struct ifnet *, struct in6_addr *,
-	char *, int, int, int));
-int nd6_output __P((struct ifnet *, struct ifnet *, struct mbuf *,
-		    struct sockaddr_in6 *, struct rtentry *));
-int nd6_storelladdr __P((struct ifnet *, struct rtentry *, struct mbuf *,
-			 struct sockaddr *, u_char *));
-int nd6_need_cache __P((struct ifnet *));
+void nd6_init(void);
+void nd6_ifattach(struct ifnet *);
+int nd6_is_addr_neighbor(struct sockaddr_in6 *, struct ifnet *, int);
+void nd6_option_init(void *, int, union nd_opts *);
+struct nd_opt_hdr *nd6_option(union nd_opts *);
+int nd6_options(union nd_opts *);
+struct	rtentry *nd6_lookup(struct in6_addr *, int, struct ifnet *, int);
+void nd6_setmtu(struct ifnet *);
+void nd6_timer(void *);
+void nd6_purge(struct ifnet *);
+struct llinfo_nd6 *nd6_free(struct rtentry *);
+void nd6_nud_hint(struct rtentry *, struct in6_addr *, int);
+int nd6_resolve(struct ifnet *, struct rtentry *,
+		     struct mbuf *, struct sockaddr *, u_char *);
+void nd6_rtrequest(int, struct rtentry *, struct sockaddr *);
+int nd6_ioctl(u_long, caddr_t, struct ifnet *);
+struct rtentry *nd6_cache_lladdr(struct ifnet *, struct in6_addr *,
+	char *, int, int, int);
+int nd6_output(struct ifnet *, struct ifnet *, struct mbuf *,
+		    struct sockaddr_in6 *, struct rtentry *, int);
+int nd6_storelladdr(struct ifnet *, struct rtentry *, struct mbuf *,
+			 struct sockaddr *, u_char *);
+int nd6_need_cache(struct ifnet *);
 
 /* nd6_nbr.c */
-void nd6_na_input __P((struct mbuf *, int, int));
-void nd6_na_output __P((struct ifnet *, const struct in6_addr *,
-	const struct in6_addr *, u_long, int, struct sockaddr *));
-void nd6_ns_input __P((struct mbuf *, int, int));
-void nd6_ns_output __P((struct ifnet *, const struct in6_addr *,
-	const struct in6_addr *, struct llinfo_nd6 *, int));
-caddr_t nd6_ifptomac __P((struct ifnet *));
-void nd6_dad_start __P((struct ifaddr *, int *));
-void nd6_dad_stop __P((struct ifaddr *));
-void nd6_dad_duplicated __P((struct ifaddr *));
+void nd6_na_input(struct mbuf *, int, int);
+void nd6_na_output(struct ifnet *, const struct in6_addr *,
+	const struct in6_addr *, u_long, int, struct sockaddr *);
+void nd6_ns_input(struct mbuf *, int, int);
+void nd6_ns_output(struct ifnet *, const struct in6_addr *,
+	const struct in6_addr *, struct llinfo_nd6 *, int, int);
+caddr_t nd6_ifptomac(struct ifnet *);
+void nd6_dad_start(struct ifaddr *, int *);
+void nd6_dad_stop(struct ifaddr *);
+void nd6_dad_duplicated(struct ifaddr *);
 
 /* nd6_rtr.c */
-void nd6_rs_input __P((struct mbuf *, int, int));
-void nd6_ra_input __P((struct mbuf *, int, int));
-void prelist_del __P((struct nd_prefix *));
-void defrouter_addreq __P((struct nd_defrouter *));
-void defrouter_delreq __P((struct nd_defrouter *, int));
-void defrouter_select __P((void));
-void defrtrlist_del __P((struct nd_defrouter *));
-void prelist_remove __P((struct nd_prefix *));
-int prelist_update __P((struct nd_prefix *, struct nd_defrouter *,
-			struct mbuf *));
-int nd6_prelist_add __P((struct nd_prefix *, struct nd_defrouter *,
-			 struct nd_prefix **));
-int nd6_prefix_onlink __P((struct nd_prefix *));
-int nd6_prefix_offlink __P((struct nd_prefix *));
-void pfxlist_onlink_check __P((void));
-struct nd_defrouter *defrouter_lookup __P((struct in6_addr *,
-					   struct ifnet *));
-struct nd_prefix *nd6_prefix_lookup __P((struct nd_prefix *));
-int in6_init_prefix_ltimes __P((struct nd_prefix *ndpr));
-void rt6_flush __P((struct in6_addr *, struct ifnet *));
-int nd6_setdefaultiface __P((int));
-int in6_tmpifadd __P((const struct in6_ifaddr *, int));
+void nd6_rs_input(struct mbuf *, int, int);
+void nd6_ra_input(struct mbuf *, int, int);
+void prelist_del(struct nd_prefix *);
+void defrouter_addreq(struct nd_defrouter *);
+void defrouter_delreq(struct nd_defrouter *, int);
+void defrouter_select(void);
+void defrtrlist_del(struct nd_defrouter *, int);
+void prelist_remove(struct nd_prefix *, int);
+int prelist_update(struct nd_prefix *, struct nd_defrouter *,
+			struct mbuf *);
+int nd6_prelist_add(struct nd_prefix *, struct nd_defrouter *,
+			 struct nd_prefix **);
+int nd6_prefix_onlink(struct nd_prefix *, int, int);
+int nd6_prefix_offlink(struct nd_prefix *);
+void pfxlist_onlink_check(int);
+struct nd_defrouter *defrouter_lookup(struct in6_addr *,
+					   struct ifnet *);
+struct nd_prefix *nd6_prefix_lookup(struct nd_prefix *);
+int in6_init_prefix_ltimes(struct nd_prefix *ndpr);
+void rt6_flush(struct in6_addr *, struct ifnet *);
+int nd6_setdefaultiface(int);
+int in6_tmpifadd(const struct in6_ifaddr *, int);
+#endif /* KERNEL_PRIVATE */
 
-#endif /* __APPLE_API_PRIVATE */
-#endif /* KERNEL */
+#ifdef KERNEL
 
+/*!
+	@function nd6_lookup_ipv6
+	@discussion This function will check the routing table for a cached
+		neighbor discovery entry or trigger an neighbor discovery query
+		to resolve the IPv6 address to a link-layer address.
+		
+		nd entries are stored in the routing table. This function will
+		lookup the IPv6 destination in the routing table. If the
+		destination requires forwarding to a gateway, the route of the
+		gateway will be looked up. The route entry is inspected to
+		determine if the link layer destination address is known. If
+		unknown, neighbor discovery will be used to resolve the entry.
+	@param interface The interface the packet is being sent on.
+	@param ip6_dest The IPv6 destination of the packet.
+	@param ll_dest On output, the link-layer destination.
+	@param ll_dest_len The length of the buffer for ll_dest.
+	@param hint Any routing hint passed down from the protocol.
+	@param packet The packet being transmitted.
+	@result May return an error such as EHOSTDOWN or ENETUNREACH. If
+		this function returns EJUSTRETURN, the packet has been queued
+		and will be sent when the address is resolved. If any other
+		value is returned, the caller is responsible for disposing of
+		the packet.
+ */
+errno_t nd6_lookup_ipv6(ifnet_t interface, const struct sockaddr_in6 *ip6_dest,
+			struct sockaddr_dl *ll_dest, size_t ll_dest_len, route_t hint,
+			mbuf_t packet);
+
+#endif KERNEL
 #endif /* _NETINET6_ND6_H_ */

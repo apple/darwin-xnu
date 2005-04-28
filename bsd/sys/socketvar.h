@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -65,17 +65,19 @@
 #include <sys/select.h>			/* for struct selinfo */
 #include <net/kext_net.h>
 #include <sys/ev.h>
+#include <sys/cdefs.h>
+
 /*
  * Hacks to get around compiler complaints
  */
 struct mbuf;
-struct kextcb;
+struct socket_filter_entry;
 struct protosw;
 struct sockif;
 struct sockutil;
 
+#ifdef KERNEL_PRIVATE
 /* strings for sleep message: */
-#ifdef __APPLE_API_UNSTABLE
 extern	char netio[], netcon[], netcls[];
 #define SOCKET_CACHE_ON	
 #define SO_CACHE_FLUSH_INTERVAL 1	/* Seconds */
@@ -90,8 +92,11 @@ extern	char netio[], netcon[], netcls[];
  * handle on protocol and pointer to protocol
  * private data and error information.
  */
+#endif /* KERNEL_PRIVATE */
+
 typedef	u_quad_t so_gen_t;
 
+#ifdef KERNEL_PRIVATE
 #ifndef __APPLE__
 /* We don't support BSD style socket filters */
 struct accept_filter;
@@ -147,9 +152,9 @@ struct socket {
 #endif
 		struct	selinfo sb_sel;	/* process selecting read/write */
 		short	sb_flags;	/* flags, see below */
-		short	sb_timeo;	/* timeout for read/write */
-		void	*reserved1;	/* for future use if needed */
-		void	*reserved2;
+		struct timeval	sb_timeo;	/* timeout for read/write */
+		void    *reserved1;     /* for future use if needed */
+		void    *reserved2;
 	} so_rcv, so_snd;
 #define	SB_MAX		(256*1024)	/* default for max chars in sockbuf */
 #define	SB_LOCK		0x01		/* lock on data queue */
@@ -169,7 +174,7 @@ struct socket {
 	caddr_t	so_tpcb;		/* Wisc. protocol control block - XXX unused? */
 #endif
 
-	void	(*so_upcall) __P((struct socket *so, caddr_t arg, int waitf));
+	void	(*so_upcall)(struct socket *so, caddr_t arg, int waitf);
 	caddr_t	so_upcallarg;		/* Arg for above */
 	uid_t	so_uid;			/* who opened the socket */
 	/* NB: generation count must not be first; easiest to make it last. */
@@ -191,16 +196,20 @@ struct socket {
 	struct	mbuf *so_temp;		/* Holding area for outbound frags */
 	/* Plug-in support - make the socket interface overridable */
 	struct	mbuf *so_tail;
-	struct	kextcb *so_ext;		/* NKE hook */
+	struct socket_filter_entry *so_filt;		/* NKE hook */
 	u_long	so_flags;		/* Flags */
-#define SOF_NOSIGPIPE	0x00000001
-#define SOF_NOADDRAVAIL	0x00000002	/* returns EADDRNOTAVAIL if src address is gone */
-	void	*reserved2;
-	void	*reserved3;
-	void	*reserved4;
+#define SOF_NOSIGPIPE		0x00000001
+#define SOF_NOADDRAVAIL		0x00000002	/* returns EADDRNOTAVAIL if src address is gone */
+#define SOF_PCBCLEARING		0x00000004	/* pru_disconnect done, no need to call pru_detach */
+	int	so_usecount;		/* refcounting of socket use */;
+	int	so_retaincnt;
+	u_int32_t	so_filteruse; /* usecount for the socket filters */
+	void	*reserved3;		/* Temporarily in use/debug: last socket lock LR */
+	void	*reserved4;		/* Temporarily in use/debug: last socket unlock LR */
+
 #endif
 };
-#endif /* __APPLE_API_UNSTABLE */
+#endif /* KERNEL_PRIVATE */
 
 /*
  * Socket state bits.
@@ -220,6 +229,7 @@ struct socket {
 #define	SS_INCOMP		0x800	/* Unaccepted, incomplete connection */
 #define	SS_COMP			0x1000	/* unaccepted, complete connection */
 #define	SS_ISDISCONNECTED	0x2000	/* socket disconnected from peer */
+#define	SS_DRAINING		0x4000	/* close waiting for blocked system calls to drain */
 
 /*
  * Externalized form of struct socket used by the sysctl(3) interface.
@@ -253,11 +263,11 @@ struct	xsocket {
 	uid_t	so_uid;		/* XXX */
 };
 
+#ifdef KERNEL_PRIVATE
 /*
  * Macros for sockets and socket buffering.
  */
-#ifdef __APPLE__
-#ifdef __APPLE_API_UNSTABLE
+
 #define sbtoso(sb) (sb->sb_so)
 
 /*
@@ -265,17 +275,20 @@ struct	xsocket {
  * These are macros on FreeBSD. On Darwin the
  * implementation is in bsd/kern/uipc_socket2.c
  */
-int		sb_notify __P((struct sockbuf *sb));
-long		sbspace	__P((struct sockbuf *sb));
-int		sosendallatonce __P((struct socket *so));
-int		soreadable __P((struct socket *so));
-int		sowriteable __P((struct socket *so));
-void		sballoc __P((struct sockbuf *sb, struct mbuf *m));
-void		sbfree __P((struct sockbuf *sb, struct mbuf *m));
-int		sblock __P((struct sockbuf *sb, int wf));
-void		sbunlock __P((struct sockbuf *sb));
-void		sorwakeup __P((struct socket * so));
-void		sowwakeup __P((struct socket * so));
+
+__BEGIN_DECLS
+int		sb_notify(struct sockbuf *sb);
+long		sbspace(struct sockbuf *sb);
+int		sosendallatonce(struct socket *so);
+int		soreadable(struct socket *so);
+int		sowriteable(struct socket *so);
+void		sballoc(struct sockbuf *sb, struct mbuf *m);
+void		sbfree(struct sockbuf *sb, struct mbuf *m);
+int		sblock(struct sockbuf *sb, int wf);
+void		sbunlock(struct sockbuf *sb, int locked);
+void		sorwakeup(struct socket * so);
+void		sowwakeup(struct socket * so);
+__END_DECLS
 
 /*
  * Socket extension mechanism: control block hooks:
@@ -294,9 +307,10 @@ struct kextcb
 };
 #define EXT_NULL	0x0		/* STATE: Not in use */
 #define sotokextcb(so) (so ? so->so_ext : 0)
-#endif /* __APPLE___ */
 
 #ifdef KERNEL
+
+#define SO_FILT_HINT_LOCKED 0x1
 
 /*
  * Argument structure for sosetopt et seq.  This is in the KERNEL
@@ -307,7 +321,7 @@ struct sockopt {
 	enum	sopt_dir sopt_dir; /* is this a get or a set? */
 	int	sopt_level;	/* second arg of [gs]etsockopt */
 	int	sopt_name;	/* third arg of [gs]etsockopt */
-	void   *sopt_val;	/* fourth arg of [gs]etsockopt */
+	user_addr_t sopt_val;	/* fourth arg of [gs]etsockopt */
 	size_t	sopt_valsize;	/* (almost) fifth arg of [gs]etsockopt */
 	struct	proc *sopt_p;	/* calling process or null if kernel */
 };
@@ -341,108 +355,100 @@ struct uio;
 struct knote;
 
 /*
- * File operations on sockets.
- */
-int	soo_read __P((struct file *fp, struct uio *uio, struct ucred *cred,
-		int flags, struct proc *p));
-int	soo_write __P((struct file *fp, struct uio *uio, struct ucred *cred,
-		int flags, struct proc *p));
-int soo_close __P((struct file *fp, struct proc *p));
-int	soo_ioctl __P((struct file *fp, u_long cmd, caddr_t data,
-	    struct proc *p));
-int	soo_stat __P((struct socket *so, struct stat *ub));
-int	soo_select __P((struct file *fp, int which, void * wql, struct proc *p));
-int     soo_kqfilter __P((struct file *fp, struct knote *kn, struct proc *p));
-
-
-/*
  * From uipc_socket and friends
  */
-struct	sockaddr *dup_sockaddr __P((struct sockaddr *sa, int canwait));
-int	getsock __P((struct filedesc *fdp, int fd, struct file **fpp));
-int	sockargs __P((struct mbuf **mp, caddr_t buf, int buflen, int type));
-int	getsockaddr __P((struct sockaddr **namp, caddr_t uaddr, size_t len));
-void	sbappend __P((struct sockbuf *sb, struct mbuf *m));
-int	sbappendaddr __P((struct sockbuf *sb, struct sockaddr *asa,
-	    struct mbuf *m0, struct mbuf *control));
-int	sbappendcontrol __P((struct sockbuf *sb, struct mbuf *m0,
-	    struct mbuf *control));
-void	sbappendrecord __P((struct sockbuf *sb, struct mbuf *m0));
-void	sbcheck __P((struct sockbuf *sb));
-void	sbcompress __P((struct sockbuf *sb, struct mbuf *m, struct mbuf *n));
+__BEGIN_DECLS
+struct	sockaddr *dup_sockaddr(struct sockaddr *sa, int canwait);
+int	getsock(struct filedesc *fdp, int fd, struct file **fpp);
+int	sockargs(struct mbuf **mp, user_addr_t data, int buflen, int type);
+int	getsockaddr(struct sockaddr **namp, user_addr_t uaddr, size_t len);
+int	sbappend(struct sockbuf *sb, struct mbuf *m);
+int	sbappendaddr(struct sockbuf *sb, struct sockaddr *asa,
+	    struct mbuf *m0, struct mbuf *control, int *error_out);
+int	sbappendcontrol(struct sockbuf *sb, struct mbuf *m0,
+	    struct mbuf *control, int *error_out);
+int	sbappendrecord(struct sockbuf *sb, struct mbuf *m0);
+void	sbcheck(struct sockbuf *sb);
+int	sbcompress(struct sockbuf *sb, struct mbuf *m, struct mbuf *n);
 struct mbuf *
-	sbcreatecontrol __P((caddr_t p, int size, int type, int level));
-void	sbdrop __P((struct sockbuf *sb, int len));
-void	sbdroprecord __P((struct sockbuf *sb));
-void	sbflush __P((struct sockbuf *sb));
-void	sbinsertoob __P((struct sockbuf *sb, struct mbuf *m0));
-void	sbrelease __P((struct sockbuf *sb));
-int	sbreserve __P((struct sockbuf *sb, u_long cc));
-void	sbtoxsockbuf __P((struct sockbuf *sb, struct xsockbuf *xsb));
-int	sbwait __P((struct sockbuf *sb));
-int	sb_lock __P((struct sockbuf *sb));
-int	soabort __P((struct socket *so));
-int	soaccept __P((struct socket *so, struct sockaddr **nam));
-struct	socket *soalloc __P((int waitok, int dom, int type));
-int	sobind __P((struct socket *so, struct sockaddr *nam));
-void	socantrcvmore __P((struct socket *so));
-void	socantsendmore __P((struct socket *so));
-int	soclose __P((struct socket *so));
-int	soconnect __P((struct socket *so, struct sockaddr *nam));
-int	soconnect2 __P((struct socket *so1, struct socket *so2));
-int	socreate __P((int dom, struct socket **aso, int type, int proto));
-void	sodealloc __P((struct socket *so));
-int	sodisconnect __P((struct socket *so));
-void	sofree __P((struct socket *so));
-int	sogetopt __P((struct socket *so, struct sockopt *sopt));
-void	sohasoutofband __P((struct socket *so));
-void	soisconnected __P((struct socket *so));
-void	soisconnecting __P((struct socket *so));
-void	soisdisconnected __P((struct socket *so));
-void	soisdisconnecting __P((struct socket *so));
-int	solisten __P((struct socket *so, int backlog));
+	sbcreatecontrol(caddr_t p, int size, int type, int level);
+void	sbdrop(struct sockbuf *sb, int len);
+void	sbdroprecord(struct sockbuf *sb);
+void	sbflush(struct sockbuf *sb);
+int		sbinsertoob(struct sockbuf *sb, struct mbuf *m0);
+void	sbrelease(struct sockbuf *sb);
+int	sbreserve(struct sockbuf *sb, u_long cc);
+void	sbtoxsockbuf(struct sockbuf *sb, struct xsockbuf *xsb);
+int	sbwait(struct sockbuf *sb);
+int	sb_lock(struct sockbuf *sb);
+int	soabort(struct socket *so);
+int	soaccept(struct socket *so, struct sockaddr **nam);
+int	soacceptlock (struct socket *so, struct sockaddr **nam, int dolock);
+struct	socket *soalloc(int waitok, int dom, int type);
+int	sobind(struct socket *so, struct sockaddr *nam);
+void	socantrcvmore(struct socket *so);
+void	socantsendmore(struct socket *so);
+int	soclose(struct socket *so);
+int	soconnect(struct socket *so, struct sockaddr *nam);
+int	soconnectlock (struct socket *so, struct sockaddr *nam, int dolock);
+int	soconnect2(struct socket *so1, struct socket *so2);
+int	socreate(int dom, struct socket **aso, int type, int proto);
+void	sodealloc(struct socket *so);
+int	sodisconnect(struct socket *so);
+void	sofree(struct socket *so);
+int	sogetopt(struct socket *so, struct sockopt *sopt);
+void	sohasoutofband(struct socket *so);
+void	soisconnected(struct socket *so);
+void	soisconnecting(struct socket *so);
+void	soisdisconnected(struct socket *so);
+void	soisdisconnecting(struct socket *so);
+int	solisten(struct socket *so, int backlog);
 struct socket *
-	sodropablereq __P((struct socket *head));
+	sodropablereq(struct socket *head);
 struct socket *
-	sonewconn __P((struct socket *head, int connstatus));
-int	sooptcopyin __P((struct sockopt *sopt, void *buf, size_t len,
-			 size_t minlen));
-int	sooptcopyout __P((struct sockopt *sopt, void *buf, size_t len));
+	sonewconn(struct socket *head, int connstatus, const struct sockaddr* from);
+int	sooptcopyin(struct sockopt *sopt, void *data, size_t len, size_t minlen);
+int	sooptcopyout(struct sockopt *sopt, void *data, size_t len);
+int 	socket_lock(struct socket *so, int refcount);
+int 	socket_unlock(struct socket *so, int refcount);
 
 /*
  * XXX; prepare mbuf for (__FreeBSD__ < 3) routines.
  * Used primarily in IPSec and IPv6 code.
  */
-int	soopt_getm __P((struct sockopt *sopt, struct mbuf **mp));
-int	soopt_mcopyin __P((struct sockopt *sopt, struct mbuf *m));
-int	soopt_mcopyout __P((struct sockopt *sopt, struct mbuf *m));
+int	soopt_getm(struct sockopt *sopt, struct mbuf **mp);
+int	soopt_mcopyin(struct sockopt *sopt, struct mbuf *m);
+int	soopt_mcopyout(struct sockopt *sopt, struct mbuf *m);
 
-int	sopoll __P((struct socket *so, int events, struct ucred *cred, void *wql));
-int	soreceive __P((struct socket *so, struct sockaddr **paddr,
+int	sopoll(struct socket *so, int events, struct ucred *cred, void *wql);
+int	soreceive(struct socket *so, struct sockaddr **paddr,
 		       struct uio *uio, struct mbuf **mp0,
-		       struct mbuf **controlp, int *flagsp));
-int	soreserve __P((struct socket *so, u_long sndcc, u_long rcvcc));
-void	sorflush __P((struct socket *so));
-int	sosend __P((struct socket *so, struct sockaddr *addr, struct uio *uio,
-		    struct mbuf *top, struct mbuf *control, int flags));
+		       struct mbuf **controlp, int *flagsp);
+int	soreserve(struct socket *so, u_long sndcc, u_long rcvcc);
+void	sorflush(struct socket *so);
+int	sosend(struct socket *so, struct sockaddr *addr, struct uio *uio,
+		    struct mbuf *top, struct mbuf *control, int flags);
 
-int	sosetopt __P((struct socket *so, struct sockopt *sopt));
-int	soshutdown __P((struct socket *so, int how));
-void	sotoxsocket __P((struct socket *so, struct xsocket *xso));
-void	sowakeup __P((struct socket *so, struct sockbuf *sb));
+int	sosetopt(struct socket *so, struct sockopt *sopt);
+int	soshutdown(struct socket *so, int how);
+void	sotoxsocket(struct socket *so, struct xsocket *xso);
+void	sowakeup(struct socket *so, struct sockbuf *sb);
+int	soioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p);
 
 #ifndef __APPLE__
 /* accept filter functions */
-int	accept_filt_add __P((struct accept_filter *filt));
-int	accept_filt_del __P((char *name));
-struct accept_filter *	accept_filt_get __P((char *name));
+int	accept_filt_add(struct accept_filter *filt);
+int	accept_filt_del(char *name);
+struct accept_filter *	accept_filt_get(char *name);
 #ifdef ACCEPT_FILTER_MOD
-int accept_filt_generic_mod_event __P((module_t mod, int event, void *data));
+int accept_filt_generic_mod_event(module_t mod, int event, void *data);
 SYSCTL_DECL(_net_inet_accf);
 #endif /* ACCEPT_FILTER_MOD */
 #endif /* !defined(__APPLE__) */
 
+__END_DECLS
+
 #endif /* KERNEL */
-#endif /* __APPLE_API_UNSTABLE */
+#endif /* KERNEL_PRIVATE */
 
 #endif /* !_SYS_SOCKETVAR_H_ */

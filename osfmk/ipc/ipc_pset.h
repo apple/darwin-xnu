@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -60,27 +60,28 @@
 #ifndef	_IPC_IPC_PSET_H_
 #define _IPC_IPC_PSET_H_
 
+#include <mach/mach_types.h>
 #include <mach/port.h>
 #include <mach/kern_return.h>
-#include <kern/ipc_kobject.h>
+#include <kern/kern_types.h>
+#include <ipc/ipc_types.h>
 #include <ipc/ipc_object.h>
 #include <ipc/ipc_mqueue.h>
 
 #include <mach_kdb.h>
 
-typedef struct ipc_pset {
+struct ipc_pset {
 
 	/*
 	 * Initial sub-structure in common with all ipc_objects.
 	 */
 	struct ipc_object	ips_object;
 	struct ipc_mqueue	ips_messages;
-} *ipc_pset_t;
+};
 
 #define	ips_references		ips_object.io_references
 #define ips_local_name		ips_object.io_receiver_name
 
-#define	IPS_NULL		((ipc_pset_t) IO_NULL)
 
 #define	ips_active(pset)	io_active(&(pset)->ips_object)
 #define	ips_lock(pset)		io_lock(&(pset)->ips_object)
@@ -104,6 +105,11 @@ extern kern_return_t ipc_pset_alloc_name(
 
 /* Add a port to a port set */
 extern kern_return_t ipc_pset_add(
+	ipc_pset_t	pset,
+	ipc_port_t	port);
+
+/* determine if port is a member of set */
+extern boolean_t ipc_pset_member(
 	ipc_pset_t	pset,
 	ipc_port_t	port);
 

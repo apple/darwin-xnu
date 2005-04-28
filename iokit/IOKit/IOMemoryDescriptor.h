@@ -53,7 +53,7 @@ enum IODirection
 };
 
 /*
- * IOOptionBits used in the second withRanges variant
+ * IOOptionBits used in the withOptions variant
  */
 enum {
     kIOMemoryDirectionMask	= 0x00000007,
@@ -62,6 +62,8 @@ enum {
     kIOMemoryTypeVirtual	= 0x00000010,
     kIOMemoryTypePhysical	= 0x00000020,
     kIOMemoryTypeUPL		= 0x00000030,
+    kIOMemoryTypePersistentMD	= 0x00000040,	// Persistent Memory Descriptor
+    kIOMemoryTypeUIO		= 0x00000050,
     kIOMemoryTypeMask		= 0x000000f0,
 
     kIOMemoryAsReference	= 0x00000100,
@@ -72,6 +74,19 @@ enum {
 
 #define kIOMapperNone	((IOMapper *) -1)
 #define kIOMapperSystem	((IOMapper *) 0)
+
+enum 
+{
+    kIOMemoryPurgeableKeepCurrent = 1,
+    kIOMemoryPurgeableNonVolatile = 2,
+    kIOMemoryPurgeableVolatile    = 3,
+    kIOMemoryPurgeableEmpty       = 4
+};
+enum 
+{
+    kIOMemoryIncoherentIOFlush	 = 1,
+    kIOMemoryIncoherentIOStore	 = 2,
+};
 
 /*! @class IOMemoryDescriptor : public OSObject
     @abstract An abstract base class defining common methods for describing physical or virtual memory.
@@ -110,13 +125,6 @@ protected:
 
 public:
 
-/*! @function getBackingID
-    @abstract Get an unique identifier for the virtual memory systems backing memory object.
-    @discussion For memory descriptors that are directly mapped by real memory, IOGeneralMemoryDescriptors that are also persistent (kIOMemoryPersistent) return the id of the backing vm object.  This returned value can be tested to see if 2 memory persistent memory descriptors share the same backing.  The call itself is fairly heavy weight and can only be applied to persistent memory descriptors so it is not generally useful.  This function is NOT virtual at the moment.  We may choose to make it virtual in the future however.
-    @result 0 on non-persistent or non IOGeneralMemoryDescriptors, unique id if not. */
-    // See implementation at end of file
-    inline void * getBackingID() const;
-
     virtual IOPhysicalAddress getSourceSegment( IOByteCount offset,
 						IOByteCount * length );
     OSMetaClassDeclareReservedUsed(IOMemoryDescriptor, 0);
@@ -133,14 +141,45 @@ public:
                                  IOMapper *	mapper = 0);
     OSMetaClassDeclareReservedUsed(IOMemoryDescriptor, 1);
 
-    virtual addr64_t IOMemoryDescriptor::getPhysicalSegment64( IOByteCount offset,
-								IOByteCount * length );
+    virtual addr64_t getPhysicalSegment64( IOByteCount offset,
+                                            IOByteCount * length );
     OSMetaClassDeclareReservedUsed(IOMemoryDescriptor, 2);
+
+
+/*! @function setPurgeable
+    @abstract Control the purgeable status of a memory descriptors memory.
+    @discussion Buffers may be allocated with the ability to have their purgeable status changed - IOBufferMemoryDescriptor with the kIOMemoryPurgeable option, VM_FLAGS_PURGEABLE may be passed to vm_allocate() in user space to allocate such buffers. The purgeable status of such a buffer may be controlled with setPurgeable(). The process of making a purgeable memory descriptor non-volatile and determining its previous state is atomic - if a purgeable memory descriptor is made nonvolatile and the old state is returned as kIOMemoryPurgeableVolatile, then the memory's previous contents are completely intact and will remain so until the memory is made volatile again.  If the old state is returned as kIOMemoryPurgeableEmpty then the memory was reclaimed while it was in a volatile state and its previous contents have been lost.
+    @param newState - the desired new purgeable state of the memory:<br>
+    kIOMemoryPurgeableKeepCurrent - make no changes to the memory's purgeable state.<br>
+    kIOMemoryPurgeableVolatile    - make the memory volatile - the memory may be reclaimed by the VM system without saving its contents to backing store.<br>
+    kIOMemoryPurgeableNonVolatile - make the memory nonvolatile - the memory is treated as with usual allocations and must be saved to backing store if paged.<br>
+    kIOMemoryPurgeableEmpty       - make the memory volatile, and discard any pages allocated to it.
+    @param oldState - if non-NULL, the previous purgeable state of the memory is returned here:<br>
+    kIOMemoryPurgeableNonVolatile - the memory was nonvolatile.<br>
+    kIOMemoryPurgeableVolatile    - the memory was volatile but its content has not been discarded by the VM system.<br>
+    kIOMemoryPurgeableEmpty       - the memory was volatile and has been discarded by the VM system.<br>
+    @result An IOReturn code. */
+
+    virtual IOReturn setPurgeable( IOOptionBits newState,
+                                    IOOptionBits * oldState );
+    OSMetaClassDeclareReservedUsed(IOMemoryDescriptor, 3);
+
+/*! @function performOperation
+    @abstract Perform an operation on the memory descriptor's memory.
+    @discussion This method performs some operation on a range of the memory descriptor's memory. When a memory descriptor's memory is not mapped, it should be more efficient to use this method than mapping the memory to perform the operation virtually.
+    @param options The operation to perform on the memory:<br>
+    kIOMemoryIncoherentIOFlush - pass this option to store to memory and flush any data in the processor cache for the memory range, with synchronization to ensure the data has passed through all levels of processor cache. It may not be supported on all architectures. This type of flush may be used for non-coherent I/O such as AGP - it is NOT required for PCI coherent operations. The memory descriptor must have been previously prepared.<br>
+    kIOMemoryIncoherentIOStore - pass this option to store to memory any data in the processor cache for the memory range, with synchronization to ensure the data has passed through all levels of processor cache. It may not be supported on all architectures. This type of flush may be used for non-coherent I/O such as AGP - it is NOT required for PCI coherent operations. The memory descriptor must have been previously prepared.
+    @param offset A byte offset into the memory descriptor's memory.
+    @param length The length of the data range.
+    @result An IOReturn code. */
+
+    virtual IOReturn performOperation( IOOptionBits options,
+                                        IOByteCount offset, IOByteCount length );
+    OSMetaClassDeclareReservedUsed(IOMemoryDescriptor, 4);
 
 private:
 
-    OSMetaClassDeclareReservedUnused(IOMemoryDescriptor, 3);
-    OSMetaClassDeclareReservedUnused(IOMemoryDescriptor, 4);
     OSMetaClassDeclareReservedUnused(IOMemoryDescriptor, 5);
     OSMetaClassDeclareReservedUnused(IOMemoryDescriptor, 6);
     OSMetaClassDeclareReservedUnused(IOMemoryDescriptor, 7);
@@ -273,6 +312,14 @@ public:
 					     IOByteCount offset,
 					     IOByteCount length,
                                              IODirection withDirection);
+
+/*! @function withPersistentMemoryDescriptor
+    @abstract Copy constructor that generates a new memory descriptor if the backing memory for the same task's virtual address and length has changed.
+    @discussion If the original memory descriptor's address and length is still backed by the same real memory, i.e. the user hasn't deallocated and the reallocated memory at the same address then the original memory descriptor is returned with a additional reference.  Otherwise we build a totally new memory descriptor with the same characteristics as the previous one but with a new view of the vm.  Note not legal to call this function with anything except an IOGeneralMemoryDescriptor that was created with the kIOMemoryPersistent option.
+    @param originalMD The memory descriptor to be duplicated.
+    @result Either the original memory descriptor with an additional retain or a new memory descriptor, 0 for a bad original memory descriptor or some other resource shortage. */
+    static IOMemoryDescriptor *
+	withPersistentMemoryDescriptor(IOMemoryDescriptor *originalMD);
 
 /*! @function initWithAddress
     @abstract Initialize or reinitialize an IOMemoryDescriptor to describe one virtual range of the kernel task.
@@ -447,6 +494,7 @@ public:
 	kIOMapInhibitCache, kIOMapWriteThruCache, kIOMapCopybackCache to set the appropriate caching.<br>
 	kIOMapReadOnly to allow only read only accesses to the memory - writes will cause and access fault.<br>
 	kIOMapReference will only succeed if the mapping already exists, and the IOMemoryMap object is just an extra reference, ie. no new mapping will be created.<br>
+	kIOMapUnique allows a special kind of mapping to be created that may be used with the IOMemoryMap::redirect() API. These mappings will not be shared as is the default - there will always be a unique mapping created for the caller, not an existing mapping with an extra reference.<br>
     @param offset Is a beginning offset into the IOMemoryDescriptor's memory where the mapping starts. Zero is the default to map all the memory.
     @param length Is the length of the mapping requested for a subset of the IOMemoryDescriptor. Zero is the default to map all the memory.
     @result A reference to an IOMemoryMap object representing the mapping, which can supply the virtual address of the mapping and other information. The mapping may be shared with multiple callers - multiple maps are avoided if a compatible one exists. The IOMemoryMap object returned should be released only when the caller has finished accessing the mapping, as freeing the object destroys the mapping. The IOMemoryMap instance also retains the IOMemoryDescriptor it maps while it exists. */
@@ -593,6 +641,18 @@ public:
     virtual IOReturn 		unmap() = 0;
 
     virtual void		taskDied() = 0;
+
+/*! @function redirect
+    @abstract Replace the memory mapped in a process with new backing memory.
+    @discussion An IOMemoryMap created with the kIOMapUnique option to IOMemoryDescriptor::map() can remapped to a new IOMemoryDescriptor backing object. If the new IOMemoryDescriptor is specified as NULL, client access to the memory map is blocked until a new backing object has been set. By blocking access and copying data, the caller can create atomic copies of the memory while the client is potentially reading or writing the memory. 
+    @param newBackingMemory The IOMemoryDescriptor that represents the physical memory that is to be now mapped in the virtual range the IOMemoryMap represents. If newBackingMemory is NULL, any access to the mapping will hang (in vm_fault()) until access has been restored by a new call to redirect() with non-NULL newBackingMemory argument.
+    @param options Mapping options are defined in IOTypes.h, and are documented in IOMemoryDescriptor::map()
+    @param offset As with IOMemoryDescriptor::map(), a beginning offset into the IOMemoryDescriptor's memory where the mapping starts. Zero is the default.
+    @result An IOReturn code. */
+
+    virtual IOReturn		redirect(IOMemoryDescriptor * newBackingMemory,
+					 IOOptionBits         options,
+					 IOByteCount          offset = 0) = 0;
 };
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -614,11 +674,14 @@ class IOGeneralMemoryDescriptor : public IOMemoryDescriptor
 {
     OSDeclareDefaultStructors(IOGeneralMemoryDescriptor);
 
-protected:
-    union {
+public:
+    union Ranges {
         IOVirtualRange *  v;
         IOPhysicalRange * p;
-    }			_ranges;            /* list of address ranges */
+	void 		 *uio;
+    };
+protected:
+    Ranges		_ranges;
     unsigned		_rangesCount;       /* number of address ranges in list */
     bool		_rangesIsAllocated; /* is list allocated by us? */
 
@@ -641,8 +704,10 @@ protected:
 
 
 private:
-    // Internal API may be made virtual at some time in the future.
+    // Internal APIs may be made virtual at some time in the future.
     IOReturn wireVirtual(IODirection forDirection);
+    void *createNamedEntry();	
+
 
     /* DEPRECATED */ IOByteCount _position; /* absolute position over all ranges */
     /* DEPRECATED */ virtual void setPosition(IOByteCount position);
@@ -671,11 +736,6 @@ public:
     /*
      * IOMemoryDescriptor required methods
      */
-
-/*! @function getBackingID
-    @abstract Returns the vm systems unique id for the memory backing this IOGeneralMemoryDescriptor.  See IOMemoryDescriptor::getBackingID for details.
-    @result 0 on non-persistent or non IOGeneralMemoryDescriptors, unique id if not. */
-    void * getBackingID() const;
 
     // Master initaliser
     virtual bool initWithOptions(void *		buffers,
@@ -736,6 +796,10 @@ public:
 	IOVirtualAddress	logical,
 	IOByteCount		length );
     virtual bool serialize(OSSerialize *s) const;
+
+    // Factory method for cloning a persistent IOMD, see IOMemoryDescriptor
+    static IOMemoryDescriptor *
+	withPersistentMemoryDescriptor(IOGeneralMemoryDescriptor *originalMD);
 };
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -824,6 +888,11 @@ public:
 
     virtual bool serialize(OSSerialize *s) const;
 
+    virtual IOReturn setPurgeable( IOOptionBits newState,
+                                    IOOptionBits * oldState );
+    virtual IOReturn performOperation( IOOptionBits options,
+                                        IOByteCount offset, IOByteCount length );
+
 protected:
     virtual IOMemoryMap * 	makeMapping(
 	IOMemoryDescriptor *	owner,
@@ -832,20 +901,15 @@ protected:
 	IOOptionBits		options,
 	IOByteCount		offset,
 	IOByteCount		length );
+
+    virtual IOReturn doMap(
+	vm_map_t		addressMap,
+	IOVirtualAddress *	atAddress,
+	IOOptionBits		options,
+	IOByteCount		sourceOffset = 0,
+	IOByteCount		length = 0 );
 };
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
-
-// Implementation of inline functions
-void * IOMemoryDescriptor::getBackingID() const
-{
-    const IOGeneralMemoryDescriptor *genMD = (const IOGeneralMemoryDescriptor *)
-	OSDynamicCast(IOGeneralMemoryDescriptor, this);
-
-    if (genMD)
-        return genMD->getBackingID();
-    else
-	return 0;
-}
 
 #endif /* !_IOMEMORYDESCRIPTOR_H */

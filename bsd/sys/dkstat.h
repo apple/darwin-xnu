@@ -63,17 +63,11 @@
 #ifndef	_SYS_DKSTAT_H_
 #define	_SYS_DKSTAT_H_
 
-#include <sys/appleapiopts.h>
-
-#ifdef	__APPLE_API_PRIVATE
-
-#ifdef KERNEL
+#ifdef KERNEL_PRIVATE
 extern long tk_cancc;
 extern long tk_nin;
 extern long tk_nout;
 extern long tk_rawcc;
 #endif
-
-#endif	/* __APPLE_API_PRIVATE */
 
 #endif	/* _SYS_DKSTAT_H_ */

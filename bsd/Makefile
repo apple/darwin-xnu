@@ -24,6 +24,7 @@ INSTINC_SUBDIRS = \
 	nfs \
 	sys \
 	ufs \
+	uuid \
 	vfs
 
 INSTINC_SUBDIRS_PPC = \
@@ -49,6 +50,7 @@ EXPINC_SUBDIRS = \
 	nfs \
 	sys \
 	ufs \
+	uuid \
 	vfs \
 	vm
 

@@ -49,7 +49,7 @@
    subject to change. Applications should only use zlib.h.
  */
 
-/* @(#) $Id: zlib.c,v 1.9 2002/11/28 00:56:55 lindak Exp $ */
+/* @(#) $Id: zlib.c,v 1.10 2004/07/29 19:17:20 lindak Exp $ */
 
 #ifndef _Z_UTIL_H
 #define _Z_UTIL_H
@@ -295,7 +295,7 @@ void   zcfree  OF((voidpf opaque, voidpf ptr));
    subject to change. Applications should only use zlib.h.
  */
 
-/* @(#) $Id: zlib.c,v 1.9 2002/11/28 00:56:55 lindak Exp $ */
+/* @(#) $Id: zlib.c,v 1.10 2004/07/29 19:17:20 lindak Exp $ */
 
 #ifndef _DEFLATE_H
 #define _DEFLATE_H
@@ -655,7 +655,7 @@ void _tr_stored_block OF((deflate_state *s, charf *buf, ulg stored_len,
  *
  */
 
-/* @(#) $Id: zlib.c,v 1.9 2002/11/28 00:56:55 lindak Exp $ */
+/* @(#) $Id: zlib.c,v 1.10 2004/07/29 19:17:20 lindak Exp $ */
 
 /* #include "deflate.h" */
 
@@ -1997,7 +1997,7 @@ local block_state deflate_slow(s, flush)
  *          Addison-Wesley, 1983. ISBN 0-201-06672-6.
  */
 
-/* @(#) $Id: zlib.c,v 1.9 2002/11/28 00:56:55 lindak Exp $ */
+/* @(#) $Id: zlib.c,v 1.10 2004/07/29 19:17:20 lindak Exp $ */
 
 /* #define GEN_TREES_H */
 
@@ -2359,7 +2359,7 @@ local int tr_static_init(
     ush bl_count[MAX_BITS+1];
     /* number of codes at each bit length for an optimal tree */
 
-    if (static_init_done) return;
+    if (static_init_done) return Z_OK;
     
     /* allocate storage for static structures */
     if (static_storage == Z_NULL) {
@@ -2439,6 +2439,7 @@ local int tr_static_init(
     gen_trees_header();
 #  endif
 #endif /* defined(GEN_TREES_H) || !defined(STDC) */
+    return Z_OK;
 }
 
 /* ===========================================================================
@@ -5541,7 +5542,7 @@ z_streamp z;
  * For conditions of distribution and use, see copyright notice in zlib.h 
  */
 
-/* @(#) $Id: zlib.c,v 1.9 2002/11/28 00:56:55 lindak Exp $ */
+/* @(#) $Id: zlib.c,v 1.10 2004/07/29 19:17:20 lindak Exp $ */
 
 /* #include "zutil.h" */
 
@@ -5771,7 +5772,7 @@ void  zcfree (opaque, ptr)
  * For conditions of distribution and use, see copyright notice in zlib.h 
  */
 
-/* @(#) $Id: zlib.c,v 1.9 2002/11/28 00:56:55 lindak Exp $ */
+/* @(#) $Id: zlib.c,v 1.10 2004/07/29 19:17:20 lindak Exp $ */
 
 /* #include "zlib.h" */
 

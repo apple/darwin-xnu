@@ -35,12 +35,17 @@ shadow_map_read(shadow_map_t * map, u_long block_offset, u_long block_count,
 boolean_t
 shadow_map_write(shadow_map_t * map, u_long block_offset, u_long block_count,
 		 u_long * incr_block_offset, u_long * incr_block_count);
+boolean_t
+shadow_map_is_written(shadow_map_t * map, u_long block_offset);
+
 u_long
 shadow_map_shadow_size(shadow_map_t * map);
 
 shadow_map_t *
 shadow_map_create(off_t file_size, off_t shadow_size, 
 		  unsigned long band_size, unsigned long block_size);
+void
+shadow_map_free(shadow_map_t * map);
 
 #endif /* __APPLE_API_PRIVATE */
 #endif /* __VN_SHADOW_H__ */

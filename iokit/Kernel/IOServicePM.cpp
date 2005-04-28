@@ -19,60 +19,36 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
- 
-#include <IOKit/IOService.h>
-#include <IOKit/IOLib.h>
+
+#include <IOKit/assert.h>
+
 #include <IOKit/IOCommandGate.h>
+#include <IOKit/IOKitDebug.h>
+#include <IOKit/IOLib.h>
+#include <IOKit/IOMessage.h>
+#include <IOKit/IOPlatformExpert.h>
+#include <IOKit/IOService.h>
 #include <IOKit/IOTimerEventSource.h>
 #include <IOKit/IOWorkLoop.h>
-#include <IOKit/IOPlatformExpert.h>
-#include <IOKit/assert.h>
-#include <IOKit/IOMessage.h>
-#include <IOKit/IOKitDebug.h>
-#include <IOKit/IOTimeStamp.h>
-#include <IOKit/pwr_mgt/RootDomain.h>
+
+#include <IOKit/pwr_mgt/IOPMchangeNoteList.h>
 #include <IOKit/pwr_mgt/IOPMinformee.h>
-#include "IOKit/pwr_mgt/IOPMinformeeList.h"
-#include "IOKit/pwr_mgt/IOPMchangeNoteList.h"
-#include "IOKit/pwr_mgt/IOPMlog.h"
-#include "IOKit/pwr_mgt/IOPowerConnection.h"
-#include <kern/clock.h>
+#include <IOKit/pwr_mgt/IOPMinformeeList.h>
+#include <IOKit/pwr_mgt/IOPMlog.h>
+#include <IOKit/pwr_mgt/IOPowerConnection.h>
+#include <IOKit/pwr_mgt/RootDomain.h>
+
+// Required for notification instrumentation
+#include "IOServicePrivate.h"
 
 #define super IORegistryEntry
 
-// Some debug functions
-static inline void
-ioSPMTrace(unsigned int csc,
-	   unsigned int a = 0, unsigned int b = 0,
-	   unsigned int c = 0, unsigned int d = 0)
-{
-    if (gIOKitDebug & kIOLogTracePower)
-	IOTimeStampConstant(IODBG_POWER(csc), a, b, c, d);
-}
-
-static inline void
-ioSPMTraceStart(unsigned int csc,
-		unsigned int a = 0, unsigned int b = 0,
-		unsigned int c = 0, unsigned int d = 0)
-{
-    if (gIOKitDebug & kIOLogTracePower)
-	IOTimeStampConstant(IODBG_POWER(csc)|DBG_FUNC_START, a, b, c, d);
-}
-
-static inline void
-ioSPMTraceEnd(unsigned int csc,
-	      unsigned int a = 0, unsigned int b = 0,
-	      unsigned int c = 0, unsigned int d = 0)
-{
-    if (gIOKitDebug & kIOLogTracePower)
-	IOTimeStampConstant(IODBG_POWER(csc)|DBG_FUNC_END, a, b, c, d);
-}
-
+#define OUR_PMLog(t, a, b) \
+    do { pm_vars->thePlatform->PMLog(pm_vars->ourName, t, a, b); } while(0)
 
 static void ack_timer_expired(thread_call_param_t);
 static void settle_timer_expired(thread_call_param_t);
 static void PM_idle_timer_expired(OSObject *, IOTimerEventSource *);
-static void c_PM_Clamp_Timer_Expired (OSObject * client,IOTimerEventSource *);
 void tellAppWithResponse ( OSObject * object, void * context);
 void tellClientWithResponse ( OSObject * object, void * context);
 void tellClient ( OSObject * object, void * context);
@@ -360,6 +336,8 @@ void IOService::PMfree ( void )
     
     if ( pm_vars ) {
         if ( pm_vars->PMcommandGate ) {
+            if(pm_vars->PMworkloop)
+                pm_vars->PMworkloop->removeEventSource(pm_vars->PMcommandGate);
             pm_vars->PMcommandGate->release();
             pm_vars->PMcommandGate = NULL;
         }
@@ -419,9 +397,12 @@ void IOService::PMstop ( void )
     // detach IOConnections   
     detachAbove( gIOPowerPlane );		
     
-    // no more power state changes
-    pm_vars->parentsKnowState = false;		
-
+    if ( pm_vars )
+    {
+        // no more power state changes
+        pm_vars->parentsKnowState = false;		
+    }
+    
     // detach children
     iter = getChildIterator(gIOPowerPlane);	
 
@@ -1033,33 +1014,28 @@ IOReturn IOService::acknowledgePowerChange ( IOService * whichObject )
 
 IOReturn IOService::acknowledgeSetPowerState ( void )
 {
-    if (! acquire_lock() ) 
-    {
+    if (!acquire_lock()) 
         return IOPMNoErr;
-    }
 
-    ioSPMTrace(IOPOWER_ACK, * (int *) this);
-
-    if ( priv->driver_timer == -1 ) 
-    {
+    IOReturn timer = priv->driver_timer;
+    if ( timer == -1 ) {
         // driver is acking instead of using return code
+	OUR_PMLog(kPMLogDriverAcknowledgeSet, (UInt32) this, timer);
         priv->driver_timer = 0;
-    } else {
-        // are we expecting this?
-        if ( priv->driver_timer > 0 ) 
-        {
-            // yes, stop the timer
-            stop_ack_timer();
-            priv->driver_timer = 0;
-            IOUnlock(priv->our_lock);
-            pm_vars->thePlatform->PMLog(pm_vars->ourName,PMlogDriverAcknowledgeSet,0,0);
-            driver_acked();
-            return IOPMNoErr;
-        } else {
-            // not expecting this
-            pm_vars->thePlatform->PMLog(pm_vars->ourName,PMlogAcknowledgeErr4,0,0);
-        }
     }
+    else if ( timer > 0 ) {	// are we expecting this?
+	// yes, stop the timer
+	stop_ack_timer();
+	priv->driver_timer = 0;
+	OUR_PMLog(kPMLogDriverAcknowledgeSet, (UInt32) this, timer);
+	IOUnlock(priv->our_lock);
+	driver_acked();
+	return IOPMNoErr;
+    } else {
+	// not expecting this
+	OUR_PMLog(kPMLogAcknowledgeErr4, (UInt32) this, 0);
+    }
+
     IOUnlock(priv->our_lock);
     return IOPMNoErr;
 }
@@ -1333,7 +1309,7 @@ IOReturn IOService::requestPowerDomainState ( IOPMPowerFlags desiredState, IOPow
 
         case IOPMNextLowerState:
             i = pm_vars->myCurrentState - 1;
-            while ( i >= 0 ) 
+            while ( (int) i >= 0 ) 
             {
                 if ( ( pm_vars->thePowerStates[i].outputPowerCharacter & theDesiredState) == (theDesiredState & pm_vars->myCharacterFlags) ) 
                 {
@@ -1341,7 +1317,7 @@ IOReturn IOService::requestPowerDomainState ( IOPMPowerFlags desiredState, IOPow
                 }
                 i--;
             }
-            if ( i < 0 ) 
+            if ( (int) i < 0 ) 
             {
                 return IOPMNoSuchState;
             }
@@ -1349,7 +1325,7 @@ IOReturn IOService::requestPowerDomainState ( IOPMPowerFlags desiredState, IOPow
 
         case IOPMHighestState:
             i = pm_vars->theNumberOfPowerStates;
-            while ( i >= 0 ) 
+            while ( (int) i >= 0 ) 
             {
                 i--;
                 if ( ( pm_vars->thePowerStates[i].outputPowerCharacter & theDesiredState) == (theDesiredState & pm_vars->myCharacterFlags) ) 
@@ -1357,7 +1333,7 @@ IOReturn IOService::requestPowerDomainState ( IOPMPowerFlags desiredState, IOPow
                     break;
                 }
             }
-            if ( i < 0 ) 
+            if ( (int) i < 0 ) 
             {
                 return IOPMNoSuchState;
             }
@@ -1683,7 +1659,7 @@ bool IOService::activityTickle ( unsigned long type, unsigned long stateNumber )
             return true;
         }
         IOUnlock(priv->activityLock);
-        
+                
         // Transfer execution to the PM workloop
         if( (pmRootDomain = getPMRootDomain()) )
             pmRootDomain->unIdleDevice(this, stateNumber);
@@ -1773,41 +1749,73 @@ IOReturn  IOService::setIdleTimerPeriod ( unsigned long period )
     return IOPMNoErr;
 }
 
+//******************************************************************************
+// nextIdleTimeout
+//
+// Returns how many "seconds from now" the device should idle into its
+// next lowest power state.
+//******************************************************************************
+SInt32 IOService::nextIdleTimeout(
+    AbsoluteTime currentTime,
+    AbsoluteTime lastActivity, 
+    unsigned int powerState)
+{
+    AbsoluteTime                        delta;
+    UInt64                              delta_ns;
+    SInt32                              delta_secs;
+    SInt32                              delay_secs;
 
-//*********************************************************************************
+    // Calculate time difference using funky macro from clock.h.
+    delta = currentTime;
+    SUB_ABSOLUTETIME(&delta, &lastActivity);
+    
+    // Figure it in seconds.
+    absolutetime_to_nanoseconds(delta, &delta_ns);
+    delta_secs = (SInt32)(delta_ns / NSEC_PER_SEC);
+
+    // Be paranoid about delta somehow exceeding timer period.
+    if (delta_secs < (int) priv->idle_timer_period ) 
+        delay_secs = (int) priv->idle_timer_period - delta_secs;
+    else
+        delay_secs = (int) priv->idle_timer_period;
+    
+    return (SInt32)delay_secs;
+}
+
+//******************************************************************************
 // start_PM_idle_timer
 //
 // The parameter is a pointer to us.  Use it to call our timeout method.
-//*********************************************************************************
+//******************************************************************************
 void IOService::start_PM_idle_timer ( void )
 {
+    static const int                    maxTimeout = 100000;
+    static const int                    minTimeout = 1;
     AbsoluteTime                        uptime;
-    AbsoluteTime                        delta;
-    UInt64                              delta_ns;
-    UInt64                              delta_secs;
-    UInt64                              delay_secs;
+    SInt32                              idle_in = 0;
 
     IOLockLock(priv->activityLock);
 
     clock_get_uptime(&uptime);
+    
+    // Subclasses may modify idle sleep algorithm
+    idle_in = nextIdleTimeout(uptime, 
+        priv->device_active_timestamp,
+        pm_vars->myCurrentState);
 
-    // Calculate time difference using funky macro from clock.h.
-    delta = uptime;
-    SUB_ABSOLUTETIME(&delta, &(priv->device_active_timestamp));
-
-    // Figure it in seconds.
-    absolutetime_to_nanoseconds(delta, &delta_ns);
-    delta_secs = delta_ns / NSEC_PER_SEC;
-
-    // Be paranoid about delta somehow exceeding timer period.
-    if (delta_secs < priv->idle_timer_period ) 
+    // Check for out-of range responses
+    if(idle_in > maxTimeout)
     {
-        delay_secs = priv->idle_timer_period - delta_secs;
-    } else {
-        delay_secs = priv->idle_timer_period;
+        // use standard implementation
+        idle_in = IOService::nextIdleTimeout(uptime,
+                        priv->device_active_timestamp,
+                        pm_vars->myCurrentState);
+    } else if(idle_in < minTimeout) {
+        // fire immediately
+        idle_in = 0;
     }
 
-    priv->timerEventSrc->setTimeout(delay_secs, NSEC_PER_SEC);
+    priv->timerEventSrc->setTimeout(idle_in, NSEC_PER_SEC);
 
     IOLockUnlock(priv->activityLock);
     return;
@@ -1885,6 +1893,10 @@ void IOService::command_received ( void *statePtr , void *, void * , void * )
             (priv->imminentState < stateNumber) ) 
     {
         changePowerStateToPriv(stateNumber);
+
+        // After we raise our state, re-schedule the idle timer.
+        if(priv->timerEventSrc)
+            start_PM_idle_timer();
     }
 }
 
@@ -1941,8 +1953,8 @@ IOReturn IOService::setAggressiveness ( unsigned long type, unsigned long newLev
 
 IOReturn IOService::getAggressiveness ( unsigned long type, unsigned long * currentLevel )
 {
-//    if ( type > kMaxType ) 
-//        return kIOReturnBadArgument;
+    if ( type > kMaxType ) 
+        return kIOReturnBadArgument;
 
     if ( !pm_vars->current_aggressiveness_valid[type] )
         return kIOReturnInvalid;
@@ -3850,7 +3862,7 @@ IOReturn IOService::ask_parent ( unsigned long requestedState )
 //*********************************************************************************
 IOReturn IOService::instruct_driver ( unsigned long newState )
 {
-    IOReturn return_code;
+    IOReturn delay;
 
     // can our driver switch to the desired state?
     if (  pm_vars->thePowerStates[newState].capabilityFlags & IOPMNotAttainable ) 
@@ -3860,15 +3872,14 @@ IOReturn IOService::instruct_driver ( unsigned long newState )
     }
 
     priv->driver_timer = -1;
-    pm_vars->thePlatform->PMLog(pm_vars->ourName,PMlogProgramHardware,newState,0);
 
     // yes, instruct it
-    ioSPMTraceStart(IOPOWER_STATE, * (int *) this, (int) newState); 
-    return_code = pm_vars->theControllingDriver->setPowerState( newState,this );
-    ioSPMTraceEnd(IOPOWER_STATE, * (int *) this, (int) newState, (int) return_code);
+    OUR_PMLog(          kPMLogProgramHardware, (UInt32) this, newState);
+    delay = pm_vars->theControllingDriver->setPowerState( newState,this );
+    OUR_PMLog((UInt32) -kPMLogProgramHardware, (UInt32) this, (UInt32) delay);
 
     // it finished
-    if ( return_code == IOPMAckImplied ) 
+    if ( delay == IOPMAckImplied ) 
     {
         priv->driver_timer = 0;
         return IOPMAckImplied;
@@ -3881,13 +3892,13 @@ IOReturn IOService::instruct_driver ( unsigned long newState )
     }
 
     // somebody goofed
-    if ( return_code < 0 ) 
+    if ( delay < 0 ) 
     {
         return IOPMAckImplied;
     }
     
     // it didn't finish
-    priv->driver_timer = (return_code / ( ACK_TIMER_PERIOD / ns_per_us )) + 1;
+    priv->driver_timer = (delay / ( ACK_TIMER_PERIOD / ns_per_us )) + 1;
     return IOPMWillAckLater;
 }
 
@@ -4085,23 +4096,31 @@ bool IOService::tellClientsWithResponse ( int messageType )
 void tellAppWithResponse ( OSObject * object, void * context)
 {
     struct context                      *theContext = (struct context *)context;
-    UInt32                              refcon;
     OSBoolean                           *aBool;
-    
+    IOPMprot 				*pm_vars = theContext->us->pm_vars;
+
     if( OSDynamicCast( IOService, object) ) 
     {
+	// Automatically 'ack' in kernel clients
         IOLockLock(theContext->flags_lock);
         aBool = OSBoolean::withBoolean(true);
         theContext->responseFlags->setObject(theContext->counter,aBool);
         aBool->release();
         IOLockUnlock(theContext->flags_lock);
+
+	const char *who = ((IOService *) object)->getName();
+	pm_vars->thePlatform->PMLog(who,
+	    kPMLogClientAcknowledge, theContext->msgType, * (UInt32 *) object);
     } else {
-        refcon = ((theContext->serialNumber & 0xFFFF)<<16) + (theContext->counter & 0xFFFF);
+        UInt32 refcon = ((theContext->serialNumber & 0xFFFF)<<16)
+	              +  (theContext->counter & 0xFFFF);
         IOLockLock(theContext->flags_lock);
         aBool = OSBoolean::withBoolean(false);
         theContext->responseFlags->setObject(theContext->counter,aBool);
         aBool->release();
         IOLockUnlock(theContext->flags_lock);
+
+	OUR_PMLog(kPMLogAppNotify, theContext->msgType, refcon);
         theContext->us->messageClient(theContext->msgType,object,(void *)refcon);
         if ( theContext->maxTimeRequested < k30seconds ) 
         {
@@ -4110,7 +4129,6 @@ void tellAppWithResponse ( OSObject * object, void * context)
     }
     theContext->counter += 1;
 }
-
 
 //*********************************************************************************
 // tellClientWithResponse
@@ -4138,6 +4156,19 @@ void tellClientWithResponse ( OSObject * object, void * context)
     aBool->release();
     IOLockUnlock(theContext->flags_lock);
 
+    IOPMprot *pm_vars = theContext->us->pm_vars;
+    if (gIOKitDebug & kIOLogPower) {
+	OUR_PMLog(kPMLogClientNotify, refcon, (UInt32) theContext->msgType);
+	if (OSDynamicCast(IOService, object)) {
+	    const char *who = ((IOService *) object)->getName();
+	    pm_vars->thePlatform->PMLog(who,
+		    kPMLogClientNotify, * (UInt32 *) object, (UInt32) object);
+	} else if (OSDynamicCast(_IOServiceInterestNotifier, object)) {
+	    _IOServiceInterestNotifier *n = (_IOServiceInterestNotifier *) object;
+	    OUR_PMLog(kPMLogClientNotify, (UInt32) n->handler, 0);
+	}
+    }
+
     notify.powerRef = (void *)refcon;
     notify.returnValue = 0;
     notify.stateNumber = theContext->stateNumber;
@@ -4154,6 +4185,7 @@ void tellClientWithResponse ( OSObject * object, void * context)
             theContext->responseFlags->replaceObject(theContext->counter,aBool);
             aBool->release();
             IOLockUnlock(theContext->flags_lock);
+	    OUR_PMLog(kPMLogClientAcknowledge, refcon, (UInt32) object);
         } else {
             IOLockLock(theContext->flags_lock);
             
@@ -4173,6 +4205,7 @@ void tellClientWithResponse ( OSObject * object, void * context)
             IOLockUnlock(theContext->flags_lock);
         }
     } else {
+	OUR_PMLog(kPMLogClientAcknowledge, refcon, 0);
         // not a client of ours
         IOLockLock(theContext->flags_lock);
         // so we won't be waiting for response
@@ -4488,17 +4521,51 @@ IOReturn IOService::allowCancelCommon ( void )
 }
 
 
+#if 0
 //*********************************************************************************
+// c_PM_clamp_Timer_Expired (C Func)
+//
+// Called when our clamp timer expires...we will call the object method.
+//*********************************************************************************
+
+static void c_PM_Clamp_Timer_Expired (OSObject * client, IOTimerEventSource *)
+{
+    if (client)
+        ((IOService *)client)->PM_Clamp_Timer_Expired ();
+}
+#endif
+
+
+//*********************************************************************************
+// PM_Clamp_Timer_Expired
+//
+// called when clamp timer expires...set power state to 0.
+//*********************************************************************************
+
+void IOService::PM_Clamp_Timer_Expired (void)
+{
+#if 0
+    if ( ! initialized ) 
+    {
+        // we're unloading
+        return;
+    }
+
+  changePowerStateToPriv (0);
+#endif
+}
+
+//******************************************************************************
 // clampPowerOn
 //
 // Set to highest available power state for a minimum of duration milliseconds
-//*********************************************************************************
+//******************************************************************************
 
 #define kFiveMinutesInNanoSeconds (300 * NSEC_PER_SEC)
 
 void IOService::clampPowerOn (unsigned long duration)
 {
-/*
+#if 0
   changePowerStateToPriv (pm_vars->theNumberOfPowerStates-1);
 
   if (  priv->clampTimerEventSrc == NULL ) {
@@ -4514,38 +4581,8 @@ void IOService::clampPowerOn (unsigned long duration)
   }
 
    priv->clampTimerEventSrc->setTimeout(300*USEC_PER_SEC, USEC_PER_SEC);
-*/
+#endif
 }
-
-//*********************************************************************************
-// PM_Clamp_Timer_Expired
-//
-// called when clamp timer expires...set power state to 0.
-//*********************************************************************************
-
-void IOService::PM_Clamp_Timer_Expired (void)
-{
-    if ( ! initialized ) 
-    {
-        // we're unloading
-        return;
-    }
-
-  changePowerStateToPriv (0);
-}
-
-//*********************************************************************************
-// c_PM_clamp_Timer_Expired (C Func)
-//
-// Called when our clamp timer expires...we will call the object method.
-//*********************************************************************************
-
-void c_PM_Clamp_Timer_Expired (OSObject * client, IOTimerEventSource *)
-{
-    if (client)
-        ((IOService *)client)->PM_Clamp_Timer_Expired ();
-}
-
 
 //*********************************************************************************
 // setPowerState
@@ -4714,10 +4751,16 @@ bool IOPMprot::serialize(OSSerialize *s) const
     OSString * theOSString;
     char * buffer;
     char * ptr;
+    int     buf_size;
     int i;
     bool	rtn_code;
 
-    buffer = ptr = IONew(char, 2000);
+    // estimate how many bytes we need to present all power states
+    buf_size = 150      // beginning and end of string
+                + (275 * (int)theNumberOfPowerStates) // size per state
+                + 100;   // extra room just for kicks
+
+    buffer = ptr = IONew(char, buf_size);
     if(!buffer)
         return false;
 
@@ -4729,7 +4772,7 @@ bool IOPMprot::serialize(OSSerialize *s) const
 
     if ( theNumberOfPowerStates != 0 ) {
         for ( i = 0; i < (int)theNumberOfPowerStates; i++ ) {
-            ptr += sprintf(ptr,"power state %d = { ",i);
+            ptr += sprintf(ptr, "power state %d = { ",i);
             ptr += sprintf(ptr,"capabilityFlags %08x, ",(unsigned int)thePowerStates[i].capabilityFlags);
             ptr += sprintf(ptr,"outputPowerCharacter %08x, ",(unsigned int)thePowerStates[i].outputPowerCharacter);
             ptr += sprintf(ptr,"inputPowerRequirement %08x, ",(unsigned int)thePowerStates[i].inputPowerRequirement);
@@ -4752,7 +4795,7 @@ bool IOPMprot::serialize(OSSerialize *s) const
     theOSString = OSString::withCString(buffer);
     rtn_code = theOSString->serialize(s);
     theOSString->release();
-    IODelete(buffer, char, 2000);
+    IODelete(buffer, char, buf_size);
 
     return rtn_code;
 }

@@ -83,15 +83,12 @@
 #include <sys/protosw.h>
 #include <sys/kernel.h>
 #include <sys/syslog.h>
-#include <machine/cpu.h>
 
 #include <sys/malloc.h>
 
 #include <net/if.h>
 #include <net/route.h>
-#include <net/netisr.h>
 #include <net/if_types.h>
-#include <net/if_stf.h>
 
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
@@ -118,7 +115,7 @@
 struct stf_softc {
 	struct ifnet	sc_if;	   /* common area */
 #ifdef __APPLE__
-	struct if_proto *stf_proto; /* dlil protocol attached */
+	u_long sc_protocol_family; /* dlil protocol attached */
 #endif
 	union {
 		struct route  __sc_ro4;
@@ -131,10 +128,7 @@ struct stf_softc {
 static struct stf_softc *stf;
 
 #ifdef __APPLE__
-void stfattach __P((void));
-int stf_pre_output __P((struct ifnet *, register struct mbuf **, struct sockaddr *,
-	caddr_t, char *, char *, u_long));
-static u_long stf_dl_tag=0;
+void stfattach (void);
 #endif
 
 #ifndef __APPLE__
@@ -142,147 +136,94 @@ static MALLOC_DEFINE(M_STF, "stf", "6to4 Tunnel Interface");
 #endif
 static int ip_stf_ttl = 40;
 
+static void in_stf_input(struct mbuf *, int);
 extern  struct domain inetdomain;
 struct protosw in_stf_protosw =
 { SOCK_RAW,	&inetdomain,	IPPROTO_IPV6,	PR_ATOMIC|PR_ADDR,
   in_stf_input, 0,	0,		rip_ctloutput,
   0,
-  0,            0,              0,              0,
   0,
-  &rip_usrreqs
+  &rip_usrreqs,
+  0,            rip_unlock,	0
 };
 
-static int stf_encapcheck __P((const struct mbuf *, int, int, void *));
-static struct in6_ifaddr *stf_getsrcifa6 __P((struct ifnet *));
-int stf_pre_output __P((struct ifnet *, register struct mbuf **, struct sockaddr *,
-	caddr_t, char *, char *, u_long));
-static int stf_checkaddr4 __P((struct stf_softc *, struct in_addr *,
-	struct ifnet *));
-static int stf_checkaddr6 __P((struct stf_softc *, struct in6_addr *,
-	struct ifnet *));
-static void stf_rtrequest __P((int, struct rtentry *, struct sockaddr *));
-int stf_ioctl __P((struct ifnet *, u_long, void *));
-
-
-static
-int  stf_add_if(struct ifnet *ifp)
-{
-    ifp->if_demux  = 0;
-    ifp->if_framer = 0;
-    return 0;
-}
-
-static 
-int  stf_del_if(struct ifnet *ifp)
-{
-    return 0;
-}
+static int stf_encapcheck(const struct mbuf *, int, int, void *);
+static struct in6_ifaddr *stf_getsrcifa6(struct ifnet *);
+int stf_pre_output(struct ifnet *, u_long, register struct mbuf **,
+	const struct sockaddr *, caddr_t, char *, char *);
+static int stf_checkaddr4(struct stf_softc *, struct in_addr *,
+	struct ifnet *);
+static int stf_checkaddr6(struct stf_softc *, struct in6_addr *,
+	struct ifnet *);
+static void stf_rtrequest(int, struct rtentry *, struct sockaddr *);
+int stf_ioctl(struct ifnet *, u_long, void *);
 
 static
-int  stf_add_proto(struct ddesc_head_str *desc_head, struct if_proto *proto, u_long dl_tag)
+int  stf_add_proto(
+	struct ifnet *ifp,
+	u_long protocol_family,
+	struct ddesc_head_str *desc_head)
 {       
 	/* Only one protocol may be attached at a time */
-	struct stf_softc* stf = (struct stf_softc*)proto->ifp;
-	if (stf->stf_proto == NULL)
-		stf->stf_proto = proto;
+	struct stf_softc* stf = (struct stf_softc*)ifp;
+	if (stf->sc_protocol_family == 0)
+		stf->sc_protocol_family = protocol_family;
 	else {
 		printf("stf_add_proto: stf already has a proto\n");
-		return (EBUSY);
+		return EBUSY;
 	}
-
-    	return (0);
+	
+	return 0;
 }
 
 static
-int  stf_del_proto(struct if_proto *proto, u_long dl_tag)
+int  stf_del_proto(
+	struct ifnet *ifp,
+	u_long protocol_family)
 {   
-	if (((struct stf_softc*)proto->ifp)->stf_proto == proto)
-		((struct stf_softc*)proto->ifp)->stf_proto = NULL;
+	if (((struct stf_softc*)ifp)->sc_protocol_family == protocol_family)
+		((struct stf_softc*)ifp)->sc_protocol_family = 0;
 	else
 		return ENOENT;
 
 	return 0;
 }
 
-int stf_shutdown()
-{
-	return 0;
-}
-
-int  stf_attach_inet6(struct ifnet *ifp, u_long *dl_tag)
+static int
+stf_attach_inet6(struct ifnet *ifp, u_long protocol_family)
 {       
     struct dlil_proto_reg_str   reg;
-    struct dlil_demux_desc      desc;
-    short native=0;
     int   stat, i;
 
-    if (stf_dl_tag != 0) {
-		*dl_tag = stf_dl_tag;
-		return 0;
-    }
-
+	bzero(&reg, sizeof(reg));
     TAILQ_INIT(&reg.demux_desc_head); 
-    desc.type = DLIL_DESC_RAW;
-    desc.variants.bitmask.proto_id_length = 0;
-    desc.variants.bitmask.proto_id = 0;
-    desc.variants.bitmask.proto_id_mask = 0;
-    desc.native_type = (char *) &native;
-    TAILQ_INSERT_TAIL(&reg.demux_desc_head, &desc, next);
     reg.interface_family = ifp->if_family;
     reg.unit_number      = ifp->if_unit;
-    reg.input            = 0;
     reg.pre_output       = stf_pre_output;
-    reg.event            = 0;
-    reg.offer            = 0;
-    reg.ioctl            = 0;
-    reg.default_proto    = 0;
     reg.protocol_family  = PF_INET6;
 
-    stat = dlil_attach_protocol(&reg, &stf_dl_tag);
-    *dl_tag = stf_dl_tag;
+    stat = dlil_attach_protocol(&reg);
 
     return stat;
 }
 
-int  stf_detach_inet6(struct ifnet *ifp, u_long dl_tag)
+static int
+stf_demux(
+	struct ifnet *ifp,
+	struct mbuf *m,
+	char *frame_ptr,
+	u_long *protocol_family)
 {
-    int         stat;
-
-    stat = dlil_find_dltag(ifp->if_family, ifp->if_unit, AF_INET6, &dl_tag);
-    if (stat == 0) {
-        stat = dlil_detach_protocol(dl_tag);
-        if (stat) {
-            printf("WARNING: stf_detach can't detach IP AF_INET6 from interface\n");
-	}
-    }
-    return (stat);
+	*protocol_family = PF_INET6;
+	return 0;
 }
 
 void stf_reg_if_mods()
 {   
-	struct dlil_ifmod_reg_str  stf_ifmod;
-	struct dlil_protomod_reg_str stf_protoreg;
 	int error;
 
-	bzero(&stf_ifmod, sizeof(stf_ifmod));
-	stf_ifmod.add_if 	= stf_add_if;
-	stf_ifmod.del_if	= stf_del_if;
-	stf_ifmod.add_proto = stf_add_proto;
-	stf_ifmod.del_proto = stf_del_proto;
-	stf_ifmod.ifmod_ioctl = 0;
-	stf_ifmod.shutdown    = stf_shutdown;
-
-    
-	if (dlil_reg_if_modules(APPLE_IF_FAM_STF, &stf_ifmod))
-        panic("Couldn't register stf modules\n");
-
 	/* Register protocol registration functions */
-
-	bzero(&stf_protoreg, sizeof(stf_protoreg));
-	stf_protoreg.attach_proto = stf_attach_inet6;
-	stf_protoreg.detach_proto = stf_detach_inet6;
-	
-	if ( error = dlil_reg_proto_module(AF_INET6, APPLE_IF_FAM_STF, &stf_protoreg) != 0)
+	if ( error = dlil_reg_proto_module(AF_INET6, APPLE_IF_FAM_STF, stf_attach_inet6, NULL) != 0)
 		kprintf("dlil_reg_proto_module failed for AF_INET6 error=%d\n", error);
 }
 
@@ -292,8 +233,6 @@ stfattach(void)
 	struct ifnet *ifp;
 	struct stf_softc *sc;
 	int i, error;
-
-
 	int err;
 	const struct encaptab *p;
 
@@ -323,6 +262,9 @@ stfattach(void)
 	sc->sc_if.if_output = NULL; /* processing done in pre_output */
 	sc->sc_if.if_type   = IFT_STF;
 	sc->sc_if.if_family= APPLE_IF_FAM_STF;
+	sc->sc_if.if_add_proto = stf_add_proto;
+	sc->sc_if.if_del_proto = stf_del_proto;
+	sc->sc_if.if_demux = stf_demux;
 #if 0
 	/* turn off ingress filter */
 	sc->sc_if.if_flags  |= IFF_LINK2;
@@ -409,6 +351,7 @@ stf_getsrcifa6(ifp)
 	struct sockaddr_in6 *sin6;
 	struct in_addr in;
 
+	ifnet_lock_shared(ifp);
 	for (ia = ifp->if_addrlist.tqh_first;
 	     ia;
 	     ia = ia->ifa_list.tqe_next)
@@ -422,6 +365,7 @@ stf_getsrcifa6(ifp)
 			continue;
 
 		bcopy(GET_V4(&sin6->sin6_addr), &in, sizeof(in));
+		lck_mtx_lock(rt_mtx);
 		for (ia4 = TAILQ_FIRST(&in_ifaddrhead);
 		     ia4;
 		     ia4 = TAILQ_NEXT(ia4, ia_link))
@@ -429,24 +373,27 @@ stf_getsrcifa6(ifp)
 			if (ia4->ia_addr.sin_addr.s_addr == in.s_addr)
 				break;
 		}
+		lck_mtx_unlock(rt_mtx);
 		if (ia4 == NULL)
 			continue;
 
+		ifnet_lock_done(ifp);
 		return (struct in6_ifaddr *)ia;
 	}
+	ifnet_lock_done(ifp);
 
 	return NULL;
 }
 
 int
-stf_pre_output(ifp, m0, dst, rt, frame_type, address, dl_tag)
-	struct ifnet *ifp;
-	register struct mbuf **m0;
-	struct sockaddr *dst;
-	caddr_t			rt;
-	char		     *frame_type;
-	char		     *address;
-	u_long		     dl_tag;
+stf_pre_output(
+	struct ifnet *ifp,
+	u_long protocol_family,
+	register struct mbuf **m0,
+	const struct sockaddr *dst,
+	caddr_t			rt,
+	char		     *frame_type,
+	char		     *address)
 {
 	register struct mbuf *m = *m0;
 	struct stf_softc *sc;
@@ -506,14 +453,14 @@ stf_pre_output(ifp, m0, dst, rt, frame_type, address, dl_tag)
 		 * will only read from the mbuf (i.e., it won't
 		 * try to free it or keep a pointer a to it).
 		 */
-		struct mbuf m0;
+		struct mbuf m1;
 		u_int32_t af = AF_INET6;
 		
-		m0.m_next = m;
-		m0.m_len = 4;
-		m0.m_data = (char *)&af;
+		m1.m_next = m;
+		m1.m_len = 4;
+		m1.m_data = (char *)&af;
 		
-		bpf_mtap(ifp, &m0);
+		bpf_mtap(ifp, &m1);
 	}
 
 	M_PREPEND(m, sizeof(struct ip), M_DONTWAIT);
@@ -544,7 +491,7 @@ stf_pre_output(ifp, m0, dst, rt, frame_type, address, dl_tag)
 		dst4->sin_len = sizeof(struct sockaddr_in);
 		bcopy(&ip->ip_dst, &dst4->sin_addr, sizeof(dst4->sin_addr));
 		if (sc->sc_ro.ro_rt) {
-			RTFREE(sc->sc_ro.ro_rt);
+			rtfree(sc->sc_ro.ro_rt);
 			sc->sc_ro.ro_rt = NULL;
 		}
 	}
@@ -559,6 +506,8 @@ stf_pre_output(ifp, m0, dst, rt, frame_type, address, dl_tag)
 	error = ip_output(m, NULL, &sc->sc_ro, 0, NULL);
 	if (error == 0)
 		return EJUSTRETURN;
+
+	return error;
 }
 
 static int
@@ -583,15 +532,19 @@ stf_checkaddr4(sc, in, inifp)
 	/*
 	 * reject packets with broadcast
 	 */
+	lck_mtx_lock(rt_mtx);
 	for (ia4 = TAILQ_FIRST(&in_ifaddrhead);
 	     ia4;
 	     ia4 = TAILQ_NEXT(ia4, ia_link))
 	{
 		if ((ia4->ia_ifa.ifa_ifp->if_flags & IFF_BROADCAST) == 0)
 			continue;
-		if (in->s_addr == ia4->ia_broadaddr.sin_addr.s_addr)
+		if (in->s_addr == ia4->ia_broadaddr.sin_addr.s_addr) {
+			lck_mtx_unlock(rt_mtx);
 			return -1;
+		}
 	}
+	lck_mtx_unlock(rt_mtx);
 
 	/*
 	 * perform ingress filter
@@ -645,7 +598,7 @@ stf_checkaddr6(sc, in6, inifp)
 	return 0;
 }
 
-void
+static void
 in_stf_input(m, off)
 	struct mbuf *m;
 	int off;
@@ -654,8 +607,7 @@ in_stf_input(m, off)
 	struct ip *ip;
 	struct ip6_hdr *ip6;
 	u_int8_t otos, itos;
-	int s, isr, proto;
-	struct ifqueue *ifq = NULL;
+	int proto;
 	struct ifnet *ifp;
 
 	ip = mtod(m, struct ip *);
@@ -746,21 +698,9 @@ in_stf_input(m, off)
 	 * See net/if_gif.c for possible issues with packet processing
 	 * reorder due to extra queueing.
 	 */
-	ifq = &ip6intrq;
-	isr = NETISR_IPV6;
-
-	s = splimp();
-	if (IF_QFULL(ifq)) {
-		IF_DROP(ifq);	/* update statistics */
-		m_freem(m);
-		splx(s);
-		return;
-	}
-	IF_ENQUEUE(ifq, m);
-	schednetisr(isr);
+	proto_input(PF_INET6, m);
 	ifp->if_ipackets++;
 	ifp->if_ibytes += m->m_pkthdr.len;
-	splx(s);
 
 	return;
 }
@@ -798,8 +738,11 @@ stf_ioctl(ifp, cmd, data)
 		}
 		sin6 = (struct sockaddr_in6 *)ifa->ifa_addr;
 		if (IN6_IS_ADDR_6TO4(&sin6->sin6_addr)) {
-			ifa->ifa_rtrequest = stf_rtrequest;
-			ifp->if_flags |= IFF_UP;
+                        if ( !(ifnet_flags( ifp ) & IFF_UP) ) {
+                                /* do this only if the interface is not already up */
+				ifa->ifa_rtrequest = stf_rtrequest;
+				ifnet_set_flags(ifp, IFF_UP, IFF_UP);
+			}
 		} else
 			error = EINVAL;
 		break;

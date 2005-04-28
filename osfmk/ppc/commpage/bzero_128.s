@@ -28,12 +28,26 @@
 
         .text
         .align	2
-        .globl	EXT(bzero_128)
-        
+/*
+ * WARNING: this code is written for 32-bit mode, and ported by the kernel if necessary
+ * to 64-bit mode for use in the 64-bit commpage.  This "port" consists of the following
+ * simple transformations:
+ *      - all word compares are changed to doubleword
+ *      - all "srwi[.]" opcodes are changed to "srdi[.]"                      
+ * Nothing else is done.  For this to work, the following rules must be
+ * carefully followed:
+ *      - do not use carry or overflow
+ *      - only use record mode if you are sure the results are mode-invariant
+ *        for example, all "andi." and almost all "rlwinm." are fine
+ *      - do not use "slwi", "slw", or "srw"
+ * An imaginative programmer could break the porting model in other ways, but the above
+ * are the most likely problem areas.  It is perhaps surprising how well in practice
+ * this simple method works.
+ */        
 
-// *********************
-// * B Z E R O _ 1 2 8 *
-// *********************
+// **********************
+// * B Z E R O _ 1 2 8  *
+// **********************
 //
 // For 64-bit processors with a 128-byte cache line.
 //
@@ -42,7 +56,7 @@
 //		r3 = original ptr, not changed since memset returns it
 //		r4 = count of bytes to set
 //		r9 = working operand ptr
-// We do not touch r2 and r10-r12, which some callers depend on.
+// WARNING: We do not touch r2 and r10-r12, which some callers depend on.
 
         .align	5
 bzero_128:						// void	bzero(void *b, size_t len);
@@ -150,4 +164,5 @@ Ltail:
         stb		r0,0(r9)
         blr
 
-        COMMPAGE_DESCRIPTOR(bzero_128,_COMM_PAGE_BZERO,kCache128+k64Bit,0,kCommPageMTCRF)
+	COMMPAGE_DESCRIPTOR(bzero_128,_COMM_PAGE_BZERO,kCache128+k64Bit,0, \
+				kCommPageMTCRF+kCommPageBoth+kPort32to64)

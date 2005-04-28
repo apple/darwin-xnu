@@ -42,7 +42,6 @@
  * Modified by Pavlin Ivanov Radoslavov, USC/ISI, May 1998
  */
 
-#ifdef __APPLE_API_UNSTABLE
 struct pim6stat {
 	u_quad_t pim6s_rcv_total;	/* total PIM messages received	*/
 	u_quad_t pim6s_rcv_tooshort;	/* received with too few bytes	*/
@@ -52,15 +51,9 @@ struct pim6stat {
 	u_quad_t pim6s_rcv_badregisters; /* received invalid registers	*/
 	u_quad_t pim6s_snd_registers;	/* sent registers		*/
 };
-#endif
 
-#if (defined(KERNEL)) || (defined(_KERNEL))
-#ifdef __APPLE_API_PRIVATE
 extern struct pim6stat pim6stat;
 
-int pim6_input __P((struct mbuf **, int*));
-#endif /* __APPLE_API_PRIVATE */
-#endif /* KERNEL */
 
 /*
  * Names for PIM sysctl objects
@@ -68,8 +61,13 @@ int pim6_input __P((struct mbuf **, int*));
 #define PIM6CTL_STATS		1	/* statistics (read-only) */
 #define PIM6CTL_MAXID		2
 
+#ifdef KERNEL_PRIVATE
 #define PIM6CTL_NAMES { \
 	{ 0, 0 }, \
 	{ 0, 0 }, \
 }
-#endif /* _NETINET6_PIM6_VAR_H_ */
+
+int pim6_input(struct mbuf **, int*);
+
+#endif KERNEL_PRIVATE
+#endif _NETINET6_PIM6_VAR_H_

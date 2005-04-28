@@ -50,13 +50,13 @@
 #include <netat/debug.h>
 
 
-/* funnel version of AURPsndOpenReq */
-void AURPsndOpenReq_funnel(state)
+/* locked version of AURPsndOpenReq */
+void AURPsndOpenReq_locked(state)
 	aurp_state_t *state;
 {
-        thread_funnel_set(network_flock, TRUE);
+	atalk_lock();
 	AURPsndOpenReq(state);
-        thread_funnel_set(network_flock, FALSE);
+	atalk_unlock();
 }
 
 /* */
@@ -116,7 +116,7 @@ void AURPsndOpenReq(state)
 	}
 
 	/* start the retry timer */
-	timeout(AURPsndOpenReq_funnel, state, AURP_RetryInterval*HZ);
+	timeout(AURPsndOpenReq_locked, state, AURP_RetryInterval*HZ);
 	state->rcv_tmo = 1;
 }
 
@@ -218,7 +218,7 @@ void AURPrcvOpenRsp(state, m)
 	}
 
 	/* cancel the retry timer */
-	untimeout(AURPsndOpenReq_funnel, state);
+	untimeout(AURPsndOpenReq_locked, state);
 	state->rcv_tmo = 0;
 	state->rcv_retry = 0;
 

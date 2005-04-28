@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2004-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -19,7 +19,6 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
-/* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
  * Copyright (c) 1991, 1993
  *	The Regents of the University of California.  All rights reserved.
@@ -35,10 +34,6 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *	This product includes software developed by the University of
- *	California, Berkeley and its contributors.
  * 4. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
@@ -56,59 +51,63 @@
  * SUCH DAMAGE.
  *
  *	@(#)lockf.h	8.1 (Berkeley) 6/11/93
+ * $FreeBSD: src/sys/sys/lockf.h,v 1.16 2004/04/07 04:19:49 imp Exp $
  */
 
 #ifndef _SYS_LOCKF_H_
 #define	_SYS_LOCKF_H_
 
-#include <sys/appleapiopts.h>
-#include <sys/cdefs.h> 
+#include <sys/queue.h>
+#include <sys/cdefs.h>
 
-#ifdef __APPLE_API_PRIVATE
+struct vnop_advlock_args;
+struct vnode;
+
+#ifdef MALLOC_DECLARE
+MALLOC_DECLARE(M_LOCKF);
+#endif
+
 /*
  * The lockf structure is a kernel structure which contains the information
  * associated with a byte range lock.  The lockf structures are linked into
  * the inode structure. Locks are sorted by the starting byte of the lock for
  * efficiency.
  */
+TAILQ_HEAD(locklist, lockf);
+
+#if __DARWIN_ALIGN_POWER
+#pragma options align=power
+#endif
+
 struct lockf {
-	short	lf_flags;	 /* Lock semantics: F_POSIX, F_FLOCK, F_WAIT */
+	short	lf_flags;	    /* Semantics: F_POSIX, F_FLOCK, F_WAIT */
 	short	lf_type;	 /* Lock type: F_RDLCK, F_WRLCK */
-	off_t	lf_start;	 /* The byte # of the start of the lock */
-	off_t	lf_end;		 /* The byte # of the end of the lock (-1=EOF)*/
-	caddr_t	lf_id;		 /* The id of the resource holding the lock */
-	struct	lockf **lf_head; /* Back pointer to the head of lockf list */
-	struct	lockf *lf_next;	 /* A pointer to the next lock on this inode */
-	struct	lockf *lf_block; /* The list of blocked locks */
+	off_t	lf_start;	    /* Byte # of the start of the lock */
+	off_t	lf_end;		    /* Byte # of the end of the lock (-1=EOF) */
+	caddr_t	lf_id;		    /* Id of the resource holding the lock */
+	struct	lockf **lf_head;    /* Back pointer to the head of the locf list */
+	struct vnode *lf_vnode;	    /* Back pointer to the inode */
+	struct	lockf *lf_next;	    /* Pointer to the next lock on this inode */
+	struct	locklist lf_blkhd;  /* List of requests blocked on this lock */
+	TAILQ_ENTRY(lockf) lf_block;/* A request waiting for a lock */
 };
+
+#if __DARWIN_ALIGN_POWER
+#pragma options align=reset
+#endif
 
 /* Maximum length of sleep chains to traverse to try and detect deadlock. */
 #define MAXDEPTH 50
 
 __BEGIN_DECLS
-void	 lf_addblock __P((struct lockf *, struct lockf *));
-int	 lf_advlock __P((struct lockf **,
-	    off_t, caddr_t, int, struct flock *, int));
-int	 lf_clearlock __P((struct lockf *));
-int	 lf_findoverlap __P((struct lockf *,
-	    struct lockf *, int, struct lockf ***, struct lockf **));
-struct lockf *
-	 lf_getblock __P((struct lockf *));
-int	 lf_getlock __P((struct lockf *, struct flock *));
-int	 lf_setlock __P((struct lockf *));
-void	 lf_split __P((struct lockf *, struct lockf *));
-void	 lf_wakelock __P((struct lockf *));
+
+int	 lf_advlock(struct vnop_advlock_args *);
+
+#ifdef LOCKF_DEBUG
+void	lf_print(char *, struct lockf *);
+void	lf_printlist(char *, struct lockf *);
+#endif
+
 __END_DECLS
-
-#if LOCKF_DEBUG
-extern int lockf_debug;
-
-__BEGIN_DECLS
-void	lf_print __P((char *, struct lockf *));
-void	lf_printlist __P((char *, struct lockf *));
-__END_DECLS
-#endif /* LOCKF_DEBUG */
-
-#endif /* __APPLE_API_PRIVATE */
 
 #endif /* !_SYS_LOCKF_H_ */

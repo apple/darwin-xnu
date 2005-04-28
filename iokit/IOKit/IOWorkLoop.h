@@ -39,14 +39,16 @@ HISTORY
 #include <IOKit/system.h>
 
 class IOEventSource;
+class IOTimerEventSource;
 class IOCommandGate;
 
-/*! @class IOWorkLoop : public OSObject
-    @discussion An IOWorkLoop is a thread of control that is intended to be used to provide single threaded access to hardware.	 This class has no knowledge of the nature and type of the events that it marshals and forwards.  When an device driver sucessfully starts, See $link IOService::start it is expected to create the event sources it will need to receive events from.	Then a work loop is initialised and the events are added to the work loop for monitoring.  In general this set up will be automated by the family superclass of the specific device.
+/*! @class IOWorkLoop
+    @discussion An IOWorkLoop is a thread of control that is intended to be used to provide single threaded access to hardware.  This class has no knowledge of the nature and type of the events that it marshals and forwards.  When a device driver successfully starts (see IOService::start), it is expected to create the event sources it will need to receive events.  Then a work loop is initialized and the events are added to the work loop for monitoring.  In general this set up will be automated by the family superclass of the specific device.
 <br><br>
-	The thread main method walks the event source linked list and messages each one requesting a work check.  At this point each event source is expected to notify their registered owner that the event has occured.  After each event has been walked and they indicate that another loop isn't required by the 'more' flag being false the thread will go to sleep on a signaling semaphore.
+	The thread main method walks the event source linked list and messages each one requesting a work check.  At this point each event source is expected to notify its registered owner that the event has occurred.  After each event has been walked and each indicates that another loop isn't required (by setting the 'more' flag to false) the thread will go to sleep on a signaling semaphore.
 <br><br>
-	When an event source is registered with a work loop it is informed of the semaphore to use to wake up the loop.*/
+	When an event source is registered with a work loop it is informed of the semaphore to use to wake up the loop.
+*/
 class IOWorkLoop : public OSObject
 {
     OSDeclareDefaultStructors(IOWorkLoop)
@@ -60,7 +62,7 @@ member function to be used.  Note the arg1 - arg3 parameters are straight pass
 through from the runCommand to the action callout.
     @param target
 	Target of the function, can be used as a refcon.  Note if a C++ function
-was specified this parameter is implicitly the first paramter in the target
+was specified, this parameter is implicitly the first parameter in the target
 member function's parameter list.
     @param arg0 Argument to action from run operation.
     @param arg1 Argument to action from run operation.
@@ -72,38 +74,43 @@ member function's parameter list.
 			       void *arg2, void *arg3);
 
 private:
-/*! @function launchThreadMain
-    @abstract Static function that setup thread state and calls the continuation function, $link threadMainContinuation */
-    static void launchThreadMain(void *self);
-
 /*! @function threadMainContinuation
-    @abstract Static function that calls the $link threadMain function. */
-    static void threadMainContinuation();
+    @abstract Static function that calls the threadMain function. 
+*/
+    static void threadMainContinuation(IOWorkLoop *self);
 
 protected:
 
 /*! @typedef maintCommandEnum
-    @discussion Enumeration of commands that $link _maintCommand can deal with.
-    @enum 
+    @discussion Enumeration of commands that _maintCommand can deal with.  
     @constant mAddEvent Used to tag a Remove event source command.
-    @constant mRemoveEvent Used to tag a Remove event source command. */    
+    @constant mRemoveEvent Used to tag a Remove event source command. 
+*/    
     typedef enum { mAddEvent, mRemoveEvent } maintCommandEnum;
 
 /*! @var gateLock
-    Mutual exlusion lock that used by close and open Gate functions.  */
+    Mutual exclusion lock that is used by close and open Gate functions.  
+*/
     IORecursiveLock *gateLock;
 
-/*! @var eventChain Pointer to first Event Source in linked list.  */
+/*! @var eventChain 
+    Pointer to first event source in linked list. 
+*/
     IOEventSource *eventChain;
 
-/*! @var controlG Internal control gate to maintain event system.  */
+/*! @var controlG 
+    Internal control gate to maintain event system.  
+*/
     IOCommandGate *controlG;
 
 /*! @var workSpinLock
-    The spin lock that is used to guard the 'workToDo' variable.  */
+    The spin lock that is used to guard the 'workToDo' variable. 
+*/
     IOSimpleLock *workToDoLock;
 
-/*! @var workThread Work loop thread.	 */
+/*! @var workThread 
+    Work loop thread.	
+*/
     IOThread workThread;
 
 /*! @var workToDo
@@ -112,96 +119,114 @@ protected:
     volatile bool workToDo;
 
 /*! @var loopRestart
-    If event chain has been changed and the system has to be rechecked from start this flag is set.  (Internal use only)  */
+    Set if an event chain has been changed and the system has to be rechecked from start.  (Internal use only)  
+*/
     bool loopRestart;
 
 /*! @struct ExpansionData
     @discussion This structure will be used to expand the capablilties of the IOWorkLoop in the future.
-    */    
+*/    
     struct ExpansionData { };
 
 /*! @var reserved
-    Reserved for future use.  (Internal use only)  */
+    Reserved for future use.  (Internal use only) 
+*/
     ExpansionData *reserved;
 
 /*! @function _maintRequest
-    @abstract Synchrounous implementation of $link addEventSource & $link removeEventSource functions. */
+    @abstract Synchronous implementation of addEventSource and removeEventSource functions. 
+    @discussion This function implements the commands as defined in the maintCommandEnum.  It can be subclassed but it isn't an external API in the usual sense.  A subclass implementation of _maintRequest would be called synchronously with respect to the work loop and it should be implemented in the usual way that an ioctl would be.
+    @return kIOReturnUnsupported if the command given is not implemented, kIOReturnSuccess otherwise.
+*/
     virtual IOReturn _maintRequest(void *command, void *data, void *, void *);
 
 /*! @function free
-    @discussion Mandatory free of the object independent of the current retain count.  If the work loop is running this method will not return until the thread has succefully terminated.  Each event source in the chain will be released and the working semaphore will be destroyed.
+    @discussion Mandatory free of the object independent of the current retain count.  If the work loop is running, this method will not return until the thread has successfully terminated.  Each event source in the chain will be released and the working semaphore will be destroyed.
 <br><br>
-	If the client has some outstanding requests on an event they will never be informed of completion.	If an external thread is blocked on any of the event sources they will be awoken with a KERN_INTERUPTED status. */
+	If the client has some outstanding requests on an event they will never be informed of completion.  If an external thread is blocked on any of the event sources they will be awakened with a KERN_INTERUPTED status. 
+*/
     virtual void free();
 
 /*! @function threadMain
-    @discussion Work loop threads main function.  This function consists of 3 loops: the outermost loop is the semaphore clear and wait loop, the middle loop terminates when there is no more work and the inside loop walks the event list calling the $link checkForWork method in each event source.  If an event source has more work to do then it can set the more flag and the middle loop will repeat.  When no more work is outstanding the outermost will sleep until and event is signaled or the least wakeupTime whichever occurs first.  If the event source does not require the semaphore wait to time out it must set the provided wakeupTime parameter to zero. */
+    @discussion Work loop threads main function.  This function consists of 3 loops: the outermost loop is the semaphore clear and wait loop, the middle loop terminates when there is no more work, and the inside loop walks the event list calling the checkForWork method in each event source.  If an event source has more work to do, it can set the more flag and the middle loop will repeat.  When no more work is outstanding the outermost will sleep until an event is signalled or the least wakeupTime, whichever occurs first.  If the event source does not require the semaphore wait to time out, it must set the provided wakeupTime parameter to zero.
+*/
     virtual void threadMain();
 
 public:
 
 /*! @function workLoop
-    @abstract Factory member function to constuct and intialise a work loop.
-    @result workLoop instance if constructed successfully, 0 otherwise. */
+    @abstract Factory member function to constuct and intialize a work loop.
+    @result Returns a workLoop instance if constructed successfully, 0 otherwise. 
+*/
     static IOWorkLoop *workLoop();
 
 /*! @function init
-    @description
-    Initialises an instance of the workloop.  This method creates and initialses the signaling semaphore and forks the thread that will continue executing.
-    @result true if initialised successfully, false otherwise. */
+    @discussion Initializes an instance of the workloop.  This method creates and initialses the signaling semaphore and forks the thread that will continue executing.
+    @result Returns true if initialized successfully, false otherwise. 
+*/
     virtual bool init();
 
 /*! @function getThread
-    @abstract Get'ter for $link workThread.
-    @result Returns workThread */
+    @abstract Gets the workThread.
+    @result Returns workThread.
+*/
     virtual IOThread getThread() const;
 
 /*! @function onThread
     @abstract Is the current execution context on the work thread? 
-    @result Returns true if IOThreadSelf() == workThread. */
+    @result Returns true if IOThreadSelf() == workThread. 
+*/
     virtual bool onThread() const;
 
 /*! @function inGate
     @abstract Is the current execution context holding the work-loop's gate? 
-    @result Returns true if IOThreadSelf() is gate holder. */
+    @result Returns true if IOThreadSelf() is gate holder.
+*/
     virtual bool inGate() const;
     
 /*! @function addEventSource
-    @discussion Add an event source to be monitored by the work loop.  This function does not return until the work loop has acknowledged the arrival of the new event source.	When a new event has been added the threadMain will always restart it's loop and check all outstanding events.	The event source is retained by the work loop
-    @param newEvent Pointer to $link IOEventSource subclass to add.
-    @result Always returns kIOReturnSuccess. */
+    @discussion Add an event source to be monitored by the work loop.  This function does not return until the work loop has acknowledged the arrival of the new event source.  When a new event has been added the threadMain will always restart its loop and check all outstanding events.  The event source is retained by the work loop.
+    @param newEvent Pointer to IOEventSource subclass to add.
+    @result Always returns kIOReturnSuccess. 
+*/
     virtual IOReturn addEventSource(IOEventSource *newEvent);
 
 /*! @function removeEventSource
-    @discussion Remove an event source from the work loop.  This function does not return until the work loop has acknowledged the removal of the event source.	 When an event has been removed the threadMain will always restart it's loop and check all outstanding events.	The event source will be released before return.
-    @param toRemove Pointer to $link IOEventSource subclass to remove.
-    @result kIOReturnSuccess if successful, kIOReturnBadArgument if toRemove couldn't be found. */
+    @discussion Remove an event source from the work loop.  This function does not return until the work loop has acknowledged the removal of the event source.  When an event has been removed the threadMain will always restart its loop and check all outstanding events.  The event source will be released before return.
+    @param toRemove Pointer to IOEventSource subclass to remove.
+    @result Returns kIOReturnSuccess if successful, kIOReturnBadArgument if toRemove couldn't be found. 
+*/
     virtual IOReturn removeEventSource(IOEventSource *toRemove);
 
 /*! @function enableAllEventSources
-    @abstract Call enable() in all event sources
-    @discussion For all event sources in $link eventChain call enable() function.  See $link IOEventSource::enable()  */
+    @abstract Calls enable() in all event sources.
+    @discussion For all event sources in eventChain, call enable() function.  See IOEventSource::enable().
+*/
     virtual void enableAllEventSources() const;
 
 /*! @function disableAllEventSources
-    @abstract Call disable() in all event sources
-    @discussion For all event sources in $link eventChain call disable() function.  See $link IOEventSource::disable() */
+    @abstract Calls disable() in all event sources.
+    @discussion For all event sources in eventChain, call disable() function.  See IOEventSource::disable().
+*/
     virtual void disableAllEventSources() const;
 
 /*! @function enableAllInterrupts
-    @abstract Call enable() in all interrupt event sources
-    @discussion For all event sources, ES, for which IODynamicCast(IOInterruptEventSource, ES) is valid, in $link eventChain call enable() function.  See $link IOEventSource::enable()	 */
+    @abstract Calls enable() in all interrupt event sources.
+    @discussion For all event sources (ES) for which IODynamicCast(IOInterruptEventSource, ES) is valid, in eventChain call enable() function.  See IOEventSource::enable().
+*/
     virtual void enableAllInterrupts() const;
 
 /*! @function disableAllInterrupts
-    @abstract Call disable() in all interrupt event sources
-    @discussion For all event sources, ES, for which IODynamicCast(IOInterruptEventSource, ES) is valid,  in $link eventChain call disable() function.	See $link IOEventSource::disable() */
+    @abstract Calls disable() in all interrupt event sources.
+    @discussion For all event sources (ES) for which IODynamicCast(IOInterruptEventSource, ES) is valid,  in eventChain call disable() function.  See IOEventSource::disable().
+*/
     virtual void disableAllInterrupts() const;
 
 
 protected:
     // Internal APIs used by event sources to control the thread
     friend class IOEventSource;
+    friend class IOTimerEventSource;
     virtual void signalWorkAvailable();
     virtual void openGate();
     virtual void closeGate();
@@ -215,17 +240,14 @@ public:
 /*! @function runAction
     @abstract Single thread a call to an action with the work-loop.
     @discussion Client function that causes the given action to be called in
-a single threaded manner.  Beware the work-loop's gate is recursive and runAction
- can cause direct or indirect re-entrancy.	 When the executing on a
-client's thread runAction will sleep until the work-loop's gate opens for
-execution of client actions, the action is single threaded against all other
-work-loop event sources.
+a single threaded manner.  Beware: the work-loop's gate is recursive and runAction can cause direct or indirect re-entrancy.  When executing on a client's thread, runAction will sleep until the work-loop's gate opens for
+execution of client actions, the action is single threaded against all other work-loop event sources.
     @param action Pointer to function to be executed in work-loop context.
     @param arg0 Parameter for action parameter, defaults to 0.
     @param arg1 Parameter for action parameter, defaults to 0.
     @param arg2 Parameter for action parameter, defaults to 0.
     @param arg3 Parameter for action parameter, defaults to 0.
-    @result return value of the Action callout.
+    @result Returns the value of the Action callout.
 */
     virtual IOReturn runAction(Action action, OSObject *target,
 			       void *arg0 = 0, void *arg1 = 0,

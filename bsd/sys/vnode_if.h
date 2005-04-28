@@ -68,685 +68,507 @@
 #define _SYS_VNODE_IF_H_
 
 #include <sys/appleapiopts.h>
+#include <sys/cdefs.h>
+#include <sys/kernel_types.h>
+#include <sys/buf.h>
+#ifdef BSD_KERNEL_PRIVATE
+#include <sys/vm.h>
+#endif
+#include <mach/memory_object_types.h>
 
-#ifdef __APPLE_API_UNSTABLE
-extern struct vnodeop_desc vop_default_desc;
 
+#ifdef KERNEL
 
-struct vop_lookup_args {
+extern struct vnodeop_desc vnop_default_desc;
+extern struct vnodeop_desc vnop_lookup_desc;
+extern struct vnodeop_desc vnop_create_desc;
+extern struct vnodeop_desc vnop_whiteout_desc;
+extern struct vnodeop_desc vnop_mknod_desc;
+extern struct vnodeop_desc vnop_open_desc;
+extern struct vnodeop_desc vnop_close_desc;
+extern struct vnodeop_desc vnop_access_desc;
+extern struct vnodeop_desc vnop_getattr_desc;
+extern struct vnodeop_desc vnop_setattr_desc;
+extern struct vnodeop_desc vnop_getattrlist_desc;
+extern struct vnodeop_desc vnop_setattrlist_desc;
+extern struct vnodeop_desc vnop_read_desc;
+extern struct vnodeop_desc vnop_write_desc;
+extern struct vnodeop_desc vnop_ioctl_desc;
+extern struct vnodeop_desc vnop_select_desc;
+extern struct vnodeop_desc vnop_exchange_desc;
+extern struct vnodeop_desc vnop_revoke_desc;
+extern struct vnodeop_desc vnop_mmap_desc;
+extern struct vnodeop_desc vnop_mnomap_desc;
+extern struct vnodeop_desc vnop_fsync_desc;
+extern struct vnodeop_desc vnop_remove_desc;
+extern struct vnodeop_desc vnop_link_desc;
+extern struct vnodeop_desc vnop_rename_desc;
+extern struct vnodeop_desc vnop_mkdir_desc;
+extern struct vnodeop_desc vnop_rmdir_desc;
+extern struct vnodeop_desc vnop_symlink_desc;
+extern struct vnodeop_desc vnop_readdir_desc;
+extern struct vnodeop_desc vnop_readdirattr_desc;
+extern struct vnodeop_desc vnop_readlink_desc;
+extern struct vnodeop_desc vnop_inactive_desc;
+extern struct vnodeop_desc vnop_reclaim_desc;
+extern struct vnodeop_desc vnop_print_desc;
+extern struct vnodeop_desc vnop_pathconf_desc;
+extern struct vnodeop_desc vnop_advlock_desc;
+extern struct vnodeop_desc vnop_truncate_desc;
+extern struct vnodeop_desc vnop_allocate_desc;
+extern struct vnodeop_desc vnop_pagein_desc;
+extern struct vnodeop_desc vnop_pageout_desc;
+extern struct vnodeop_desc vnop_devblocksize_desc;
+extern struct vnodeop_desc vnop_searchfs_desc;
+extern struct vnodeop_desc vnop_copyfile_desc;
+extern struct vnodeop_desc vnop_blktooff_desc;
+extern struct vnodeop_desc vnop_offtoblk_desc;
+extern struct vnodeop_desc vnop_blockmap_desc;
+extern struct vnodeop_desc vnop_strategy_desc;
+extern struct vnodeop_desc vnop_bwrite_desc;
+
+__BEGIN_DECLS
+/*
+ *# 
+ *#% lookup       dvp     L ? ?
+ *#% lookup       vpp     - L -
+ */
+struct vnop_lookup_args {
 	struct vnodeop_desc *a_desc;
-	struct vnode *a_dvp;
-	struct vnode **a_vpp;
+	vnode_t a_dvp;
+	vnode_t *a_vpp;
 	struct componentname *a_cnp;
+	vfs_context_t a_context;
 };
-extern struct vnodeop_desc vop_lookup_desc;
-#define VOP_LOOKUP(dvp, vpp, cnp) _VOP_LOOKUP(dvp, vpp, cnp)
-static __inline int _VOP_LOOKUP(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp)
-{
-	struct vop_lookup_args a;
-	a.a_desc = VDESC(vop_lookup);
-	a.a_dvp = dvp;
-	a.a_vpp = vpp;
-	a.a_cnp = cnp;
-	return (VCALL(dvp, VOFFSET(vop_lookup), &a));
-}
+extern errno_t VNOP_LOOKUP(vnode_t, vnode_t *, struct componentname *, vfs_context_t);
 
-struct vop_cachedlookup_args {
+
+/*
+ *#
+ *#% create       dvp     L L L
+ *#% create       vpp     - L -
+ *#
+ */
+ 
+struct vnop_create_args {
 	struct vnodeop_desc *a_desc;
-	struct vnode *a_dvp;
-	struct vnode **a_vpp;
+	vnode_t a_dvp;
+	vnode_t *a_vpp;
 	struct componentname *a_cnp;
+	struct vnode_attr *a_vap;
+	vfs_context_t a_context;
 };
-extern struct vnodeop_desc vop_cachedlookup_desc;
-#define VOP_CACHEDLOOKUP(dvp, vpp, cnp) _VOP_CACHEDLOOKUP(dvp, vpp, cnp)
-static __inline int _VOP_CACHEDLOOKUP(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp)
-{
-	struct vop_cachedlookup_args a;
-	a.a_desc = VDESC(vop_cachedlookup);
-	a.a_dvp = dvp;
-	a.a_vpp = vpp;
-	a.a_cnp = cnp;
-	return (VCALL(dvp, VOFFSET(vop_cachedlookup), &a));
-}
+extern errno_t VNOP_CREATE(vnode_t, vnode_t *, struct componentname *, struct vnode_attr *, vfs_context_t);
 
-struct vop_create_args {
+/*
+ *#
+ *#% whiteout     dvp     L L L
+ *#% whiteout     cnp     - - -
+ *#% whiteout     flag    - - -
+ *#
+ */
+struct vnop_whiteout_args {
 	struct vnodeop_desc *a_desc;
-	struct vnode *a_dvp;
-	struct vnode **a_vpp;
-	struct componentname *a_cnp;
-	struct vattr *a_vap;
-};
-extern struct vnodeop_desc vop_create_desc;
-#define VOP_CREATE(dvp, vpp, cnp, vap) _VOP_CREATE(dvp, vpp, cnp, vap)
-static __inline int _VOP_CREATE(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp, struct vattr *vap)
-{
-	struct vop_create_args a;
-	a.a_desc = VDESC(vop_create);
-	a.a_dvp = dvp;
-	a.a_vpp = vpp;
-	a.a_cnp = cnp;
-	a.a_vap = vap;
-	return (VCALL(dvp, VOFFSET(vop_create), &a));
-}
-
-struct vop_whiteout_args {
-	struct vnodeop_desc *a_desc;
-	struct vnode *a_dvp;
+	vnode_t a_dvp;
 	struct componentname *a_cnp;
 	int a_flags;
+	vfs_context_t a_context;
 };
-extern struct vnodeop_desc vop_whiteout_desc;
-#define VOP_WHITEOUT(dvp, cnp, flags) _VOP_WHITEOUT(dvp, cnp, flags)
-static __inline int _VOP_WHITEOUT(struct vnode *dvp, struct componentname *cnp, int flags)
-{
-	struct vop_whiteout_args a;
-	a.a_desc = VDESC(vop_whiteout);
-	a.a_dvp = dvp;
-	a.a_cnp = cnp;
-	a.a_flags = flags;
-	return (VCALL(dvp, VOFFSET(vop_whiteout), &a));
-}
+extern errno_t VNOP_WHITEOUT(vnode_t, struct componentname *, int, vfs_context_t);
 
-struct vop_mknod_args {
-	struct vnodeop_desc *a_desc;
-	struct vnode *a_dvp;
-	struct vnode **a_vpp;
-	struct componentname *a_cnp;
-	struct vattr *a_vap;
+/*
+ *#
+ *#% mknod        dvp     L U U
+ *#% mknod        vpp     - X -
+ *#
+ */
+struct vnop_mknod_args {
+       struct vnodeop_desc *a_desc;
+       vnode_t a_dvp;
+       vnode_t *a_vpp;
+       struct componentname *a_cnp;
+       struct vnode_attr *a_vap;
+       vfs_context_t a_context;
 };
-extern struct vnodeop_desc vop_mknod_desc;
-#define VOP_MKNOD(dvp, vpp, cnp, vap) _VOP_MKNOD(dvp, vpp, cnp, vap)
-static __inline int _VOP_MKNOD(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp, struct vattr *vap)
-{
-	struct vop_mknod_args a;
-	a.a_desc = VDESC(vop_mknod);
-	a.a_dvp = dvp;
-	a.a_vpp = vpp;
-	a.a_cnp = cnp;
-	a.a_vap = vap;
-	return (VCALL(dvp, VOFFSET(vop_mknod), &a));
-}
+extern errno_t VNOP_MKNOD(vnode_t, vnode_t *, struct componentname *, struct vnode_attr *, vfs_context_t);
 
-struct vop_mkcomplex_args {
+/*
+ *#
+ *#% open         vp      L L L
+ *#
+ */
+struct vnop_open_args {
 	struct vnodeop_desc *a_desc;
-	struct vnode *a_dvp;
-	struct vnode **a_vpp;
-	struct componentname *a_cnp;
-	struct vattr *a_vap;
-	u_long a_type;
-};
-extern struct vnodeop_desc vop_mkcomplex_desc;
-#define VOP_MKCOMPLEX(dvp, vpp, cnp, vap, type) _VOP_MKCOMPLEX(dvp, vpp, cnp, vap, type)
-static __inline int _VOP_MKCOMPLEX(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp, struct vattr *vap, u_long type)
-{
-	struct vop_mkcomplex_args a;
-	a.a_desc = VDESC(vop_mkcomplex);
-	a.a_dvp = dvp;
-	a.a_vpp = vpp;
-	a.a_cnp = cnp;
-	a.a_vap = vap;
-	a.a_type = type;
-	return (VCALL(dvp, VOFFSET(vop_mkcomplex), &a));
-}
-
-struct vop_open_args {
-	struct vnodeop_desc *a_desc;
-	struct vnode *a_vp;
+	vnode_t a_vp;
 	int a_mode;
-	struct ucred *a_cred;
-	struct proc *a_p;
+	vfs_context_t a_context;
 };
-extern struct vnodeop_desc vop_open_desc;
-#define VOP_OPEN(vp, mode, cred, p) _VOP_OPEN(vp, mode, cred, p)
-static __inline int _VOP_OPEN(struct vnode *vp, int mode, struct ucred *cred, struct proc *p)
-{
-	struct vop_open_args a;
-	a.a_desc = VDESC(vop_open);
-	a.a_vp = vp;
-	a.a_mode = mode;
-	a.a_cred = cred;
-	a.a_p = p;
-	return (VCALL(vp, VOFFSET(vop_open), &a));
-}
+extern errno_t VNOP_OPEN(vnode_t, int, vfs_context_t);
 
-struct vop_close_args {
+/*
+ *#
+ *#% close        vp      U U U
+ *#
+ */
+struct vnop_close_args {
 	struct vnodeop_desc *a_desc;
-	struct vnode *a_vp;
+	vnode_t a_vp;
 	int a_fflag;
-	struct ucred *a_cred;
-	struct proc *a_p;
+	vfs_context_t a_context;
 };
-extern struct vnodeop_desc vop_close_desc;
-#define VOP_CLOSE(vp, fflag, cred, p) _VOP_CLOSE(vp, fflag, cred, p)
-static __inline int _VOP_CLOSE(struct vnode *vp, int fflag, struct ucred *cred, struct proc *p)
-{
-	struct vop_close_args a;
-	a.a_desc = VDESC(vop_close);
-	a.a_vp = vp;
-	a.a_fflag = fflag;
-	a.a_cred = cred;
-	a.a_p = p;
-	return (VCALL(vp, VOFFSET(vop_close), &a));
-}
+extern errno_t VNOP_CLOSE(vnode_t, int, vfs_context_t);
 
-struct vop_access_args {
+/*
+ *#
+ *#% access       vp      L L L
+ *#
+ */
+struct vnop_access_args {
 	struct vnodeop_desc *a_desc;
-	struct vnode *a_vp;
-	int a_mode;
-	struct ucred *a_cred;
-	struct proc *a_p;
+	vnode_t a_vp;
+	int a_action;
+	vfs_context_t a_context;
 };
-extern struct vnodeop_desc vop_access_desc;
-#define VOP_ACCESS(vp, mode, cred, p) _VOP_ACCESS(vp, mode, cred, p)
-static __inline int _VOP_ACCESS(struct vnode *vp, int mode, struct ucred *cred, struct proc *p)
-{
-	struct vop_access_args a;
-	a.a_desc = VDESC(vop_access);
-	a.a_vp = vp;
-	a.a_mode = mode;
-	a.a_cred = cred;
-	a.a_p = p;
-	return (VCALL(vp, VOFFSET(vop_access), &a));
-}
+extern errno_t VNOP_ACCESS(vnode_t, int, vfs_context_t);
 
-struct vop_getattr_args {
+
+/*
+ *#
+ *#% getattr      vp      = = =
+ *#
+ */
+struct vnop_getattr_args {
 	struct vnodeop_desc *a_desc;
-	struct vnode *a_vp;
-	struct vattr *a_vap;
-	struct ucred *a_cred;
-	struct proc *a_p;
+	vnode_t a_vp;
+	struct vnode_attr *a_vap;
+	vfs_context_t a_context;
 };
-extern struct vnodeop_desc vop_getattr_desc;
-#define VOP_GETATTR(vp, vap, cred, p) _VOP_GETATTR(vp, vap, cred, p)
-static __inline int _VOP_GETATTR(struct vnode *vp, struct vattr *vap, struct ucred *cred, struct proc *p)
-{
-	struct vop_getattr_args a;
-	a.a_desc = VDESC(vop_getattr);
-	a.a_vp = vp;
-	a.a_vap = vap;
-	a.a_cred = cred;
-	a.a_p = p;
-	return (VCALL(vp, VOFFSET(vop_getattr), &a));
-}
+extern errno_t VNOP_GETATTR(vnode_t, struct vnode_attr *, vfs_context_t);
 
-struct vop_setattr_args {
+/*
+ *#
+ *#% setattr      vp      L L L
+ *#
+ */
+struct vnop_setattr_args {
 	struct vnodeop_desc *a_desc;
-	struct vnode *a_vp;
-	struct vattr *a_vap;
-	struct ucred *a_cred;
-	struct proc *a_p;
+	vnode_t a_vp;
+	struct vnode_attr *a_vap;
+	vfs_context_t a_context;
 };
-extern struct vnodeop_desc vop_setattr_desc;
-#define VOP_SETATTR(vp, vap, cred, p) _VOP_SETATTR(vp, vap, cred, p)
-static __inline int _VOP_SETATTR(struct vnode *vp, struct vattr *vap, struct ucred *cred, struct proc *p)
-{
-	struct vop_setattr_args a;
-	a.a_desc = VDESC(vop_setattr);
-	a.a_vp = vp;
-	a.a_vap = vap;
-	a.a_cred = cred;
-	a.a_p = p;
-	return (VCALL(vp, VOFFSET(vop_setattr), &a));
-}
+extern errno_t VNOP_SETATTR(vnode_t, struct vnode_attr *, vfs_context_t);
 
-struct vop_getattrlist_args {
+/*
+ *#
+ *#% getattrlist  vp      = = =
+ *#
+ */
+struct vnop_getattrlist_args {
 	struct vnodeop_desc *a_desc;
-	struct vnode *a_vp;
+	vnode_t a_vp;
 	struct attrlist *a_alist;
 	struct uio *a_uio;
-	struct ucred *a_cred;
-	struct proc *a_p;
+	int a_options;
+	vfs_context_t a_context;
 };
-extern struct vnodeop_desc vop_getattrlist_desc;
-#define VOP_GETATTRLIST(vp, alist, uio, cred, p) _VOP_GETATTRLIST(vp, alist, uio, cred, p)
-static __inline int _VOP_GETATTRLIST(struct vnode *vp, struct attrlist *alist, struct uio *uio, struct ucred *cred, struct proc *p)
-{
-	struct vop_getattrlist_args a;
-	a.a_desc = VDESC(vop_getattrlist);
-	a.a_vp = vp;
-	a.a_alist = alist;
-	a.a_uio = uio;
-	a.a_cred = cred;
-	a.a_p = p;
-	return (VCALL(vp, VOFFSET(vop_getattrlist), &a));
-}
+extern errno_t VNOP_GETATTRLIST(vnode_t, struct attrlist *, struct uio *, int, vfs_context_t);
 
-struct vop_setattrlist_args {
+
+/*
+ *#
+ *#% setattrlist  vp      L L L
+ *#
+ */
+struct vnop_setattrlist_args {
 	struct vnodeop_desc *a_desc;
-	struct vnode *a_vp;
+	vnode_t a_vp;
 	struct attrlist *a_alist;
 	struct uio *a_uio;
-	struct ucred *a_cred;
-	struct proc *a_p;
+	int a_options;
+	vfs_context_t a_context;
 };
-extern struct vnodeop_desc vop_setattrlist_desc;
-#define VOP_SETATTRLIST(vp, alist, uio, cred, p) _VOP_SETATTRLIST(vp, alist, uio, cred, p)
-static __inline int _VOP_SETATTRLIST(struct vnode *vp, struct attrlist *alist, struct uio *uio, struct ucred *cred, struct proc *p)
-{
-	struct vop_setattrlist_args a;
-	a.a_desc = VDESC(vop_setattrlist);
-	a.a_vp = vp;
-	a.a_alist = alist;
-	a.a_uio = uio;
-	a.a_cred = cred;
-	a.a_p = p;
-	return (VCALL(vp, VOFFSET(vop_setattrlist), &a));
-}
+extern errno_t VNOP_SETATTRLIST(vnode_t, struct attrlist *, struct uio *, int, vfs_context_t);
 
-struct vop_read_args {
+
+/*
+ *#
+ *#% read         vp      L L L
+ *#
+ */
+struct vnop_read_args {
 	struct vnodeop_desc *a_desc;
-	struct vnode *a_vp;
+	vnode_t a_vp;
 	struct uio *a_uio;
 	int a_ioflag;
-	struct ucred *a_cred;
+	vfs_context_t a_context;
 };
-extern struct vnodeop_desc vop_read_desc;
-#define VOP_READ(vp, uio, ioflag, cred) _VOP_READ(vp, uio, ioflag, cred)
-static __inline int _VOP_READ(struct vnode *vp, struct uio *uio, int ioflag, struct ucred *cred)
-{
-	struct vop_read_args a;
-	a.a_desc = VDESC(vop_read);
-	a.a_vp = vp;
-	a.a_uio = uio;
-	a.a_ioflag = ioflag;
-	a.a_cred = cred;
-	{
-		int _err;
-		extern int ubc_hold(struct vnode *vp);
-		extern void ubc_rele(struct vnode *vp);
-		int _didhold = ubc_hold(vp);
-		_err = VCALL(vp, VOFFSET(vop_read), &a);
-		if (_didhold)
-			ubc_rele(vp);
-		return (_err);
-	}
-}
+extern errno_t VNOP_READ(vnode_t, struct uio *, int, vfs_context_t);
 
-struct vop_write_args {
+
+/*
+ *#
+ *#% write        vp      L L L
+ *#
+ */
+struct vnop_write_args {
 	struct vnodeop_desc *a_desc;
-	struct vnode *a_vp;
+	vnode_t a_vp;
 	struct uio *a_uio;
 	int a_ioflag;
-	struct ucred *a_cred;
+	vfs_context_t a_context;
 };
-extern struct vnodeop_desc vop_write_desc;
-#define VOP_WRITE(vp, uio, ioflag, cred) _VOP_WRITE(vp, uio, ioflag, cred)
-static __inline int _VOP_WRITE(struct vnode *vp, struct uio *uio, int ioflag, struct ucred *cred)
-{
-	struct vop_write_args a;
-	a.a_desc = VDESC(vop_write);
-	a.a_vp = vp;
-	a.a_uio = uio;
-	a.a_ioflag = ioflag;
-	a.a_cred = cred;
-	{
-		int _err;
-		extern int ubc_hold(struct vnode *vp);
-		extern void ubc_rele(struct vnode *vp);
-		int _didhold = ubc_hold(vp);
-		_err = VCALL(vp, VOFFSET(vop_write), &a);
-		if (_didhold)
-			ubc_rele(vp);
-		return (_err);
-	}
-}
+extern errno_t VNOP_WRITE(vnode_t, struct uio *, int, vfs_context_t);
 
-struct vop_lease_args {
-	struct vnodeop_desc *a_desc;
-	struct vnode *a_vp;
-	struct proc *a_p;
-	struct ucred *a_cred;
-	int a_flag;
-};
-extern struct vnodeop_desc vop_lease_desc;
-#define VOP_LEASE(vp, p, cred, flag) _VOP_LEASE(vp, p, cred, flag)
-static __inline int _VOP_LEASE(struct vnode *vp, struct proc *p, struct ucred *cred, int flag)
-{
-	struct vop_lease_args a;
-	a.a_desc = VDESC(vop_lease);
-	a.a_vp = vp;
-	a.a_p = p;
-	a.a_cred = cred;
-	a.a_flag = flag;
-	return (VCALL(vp, VOFFSET(vop_lease), &a));
-}
 
-struct vop_ioctl_args {
+/*
+ *#
+ *#% ioctl        vp      U U U
+ *#
+ */
+struct vnop_ioctl_args {
 	struct vnodeop_desc *a_desc;
-	struct vnode *a_vp;
+	vnode_t a_vp;
 	u_long a_command;
 	caddr_t a_data;
 	int a_fflag;
-	struct ucred *a_cred;
-	struct proc *a_p;
+	vfs_context_t a_context;
 };
-extern struct vnodeop_desc vop_ioctl_desc;
-#define VOP_IOCTL(vp, command, data, fflag, cred, p) _VOP_IOCTL(vp, command, data, fflag, cred, p)
-static __inline int _VOP_IOCTL(struct vnode *vp, u_long command, caddr_t data, int fflag, struct ucred *cred, struct proc *p)
-{
-	struct vop_ioctl_args a;
-	a.a_desc = VDESC(vop_ioctl);
-	a.a_vp = vp;
-	a.a_command = command;
-	a.a_data = data;
-	a.a_fflag = fflag;
-	a.a_cred = cred;
-	a.a_p = p;
-	return (VCALL(vp, VOFFSET(vop_ioctl), &a));
-}
+extern errno_t VNOP_IOCTL(vnode_t, u_long, caddr_t, int, vfs_context_t);
 
-struct vop_select_args {
+
+/*
+ *#
+ *#% select       vp      U U U
+ *#
+ */
+struct vnop_select_args {
 	struct vnodeop_desc *a_desc;
-	struct vnode *a_vp;
+	vnode_t a_vp;
 	int a_which;
 	int a_fflags;
-	struct ucred *a_cred;
 	void *a_wql;
-	struct proc *a_p;
+	vfs_context_t a_context;
 };
-extern struct vnodeop_desc vop_select_desc;
-#define VOP_SELECT(vp, which, fflags, cred, wql, p) _VOP_SELECT(vp, which, fflags, cred, wql, p)
-static __inline int _VOP_SELECT(struct vnode *vp, int which, int fflags, struct ucred *cred, void *wql, struct proc *p)
-{
-	struct vop_select_args a;
-	a.a_desc = VDESC(vop_select);
-	a.a_vp = vp;
-	a.a_which = which;
-	a.a_fflags = fflags;
-	a.a_cred = cred;
-	a.a_wql = wql;
-	a.a_p = p;
-	return (VCALL(vp, VOFFSET(vop_select), &a));
-}
+extern errno_t VNOP_SELECT(vnode_t, int, int, void *, vfs_context_t);
 
-struct vop_exchange_args {
+
+/*
+ *#
+ *#% exchange fvp         L L L
+ *#% exchange tvp         L L L
+ *#
+ */
+struct vnop_exchange_args {
 	struct vnodeop_desc *a_desc;
-	struct vnode *a_fvp;
-	struct vnode *a_tvp;
-	struct ucred *a_cred;
-	struct proc *a_p;
+	vnode_t a_fvp;
+        vnode_t a_tvp;
+	int a_options;
+	vfs_context_t a_context;
 };
-extern struct vnodeop_desc vop_exchange_desc;
-#define VOP_EXCHANGE(fvp, tvp, cred, p) _VOP_EXCHANGE(fvp, tvp, cred, p)
-static __inline int _VOP_EXCHANGE(struct vnode *fvp, struct vnode *tvp, struct ucred *cred, struct proc *p)
-{
-	struct vop_exchange_args a;
-	a.a_desc = VDESC(vop_exchange);
-	a.a_fvp = fvp;
-	a.a_tvp = tvp;
-	a.a_cred = cred;
-	a.a_p = p;
-	return (VCALL(fvp, VOFFSET(vop_exchange), &a));
-}
+extern errno_t VNOP_EXCHANGE(vnode_t, vnode_t, int, vfs_context_t);
 
-struct vop_kqfilt_add_args {
-	struct vnodeop_desc *a_desc;
-	struct vnode *a_vp;
-	struct knote *a_kn;
-	struct proc *a_p;
-};
-extern struct vnodeop_desc vop_kqfilt_add_desc;
-#define VOP_KQFILT_ADD(vp, kn, p) _VOP_KQFILT_ADD(vp, kn, p)
-static __inline int _VOP_KQFILT_ADD(struct vnode *vp, struct knote *kn, struct proc *p)
-{
-	struct vop_kqfilt_add_args a;
-	a.a_desc = VDESC(vop_kqfilt_add);
-	a.a_vp = vp;
-	a.a_kn = kn;
-	a.a_p = p;
-	return (VCALL(vp, VOFFSET(vop_kqfilt_add), &a));
-}
 
-struct vop_kqfilt_remove_args {
+/*
+ *#
+ *#% revoke       vp      U U U
+ *#
+ */
+struct vnop_revoke_args {
 	struct vnodeop_desc *a_desc;
-	struct vnode *a_vp;
-	uintptr_t a_ident;
-	struct proc *a_p;
-};
-extern struct vnodeop_desc vop_kqfilt_remove_desc;
-#define VOP_KQFILT_REMOVE(vp, ident, p) _VOP_KQFILT_REMOVE(vp, ident, p)
-static __inline int _VOP_KQFILT_REMOVE(struct vnode *vp, uintptr_t ident, struct proc *p)
-{
-	struct vop_kqfilt_remove_args a;
-	a.a_desc = VDESC(vop_kqfilt_remove);
-	a.a_vp = vp;
-	a.a_ident = ident;
-	a.a_p = p;
-	return (VCALL(vp, VOFFSET(vop_kqfilt_remove), &a));
-}
-
-struct vop_revoke_args {
-	struct vnodeop_desc *a_desc;
-	struct vnode *a_vp;
+	vnode_t a_vp;
 	int a_flags;
+	vfs_context_t a_context;
 };
-extern struct vnodeop_desc vop_revoke_desc;
-#define VOP_REVOKE(vp, flags) _VOP_REVOKE(vp, flags)
-static __inline int _VOP_REVOKE(struct vnode *vp, int flags)
-{
-	struct vop_revoke_args a;
-	a.a_desc = VDESC(vop_revoke);
-	a.a_vp = vp;
-	a.a_flags = flags;
-	return (VCALL(vp, VOFFSET(vop_revoke), &a));
-}
+extern errno_t VNOP_REVOKE(vnode_t, int, vfs_context_t);
 
-struct vop_mmap_args {
+
+/*
+ *#
+ *# mmap - vp U U U
+ *#
+ */
+struct vnop_mmap_args {
 	struct vnodeop_desc *a_desc;
-	struct vnode *a_vp;
+	vnode_t a_vp;
 	int a_fflags;
-	struct ucred *a_cred;
-	struct proc *a_p;
+	vfs_context_t a_context;
 };
-extern struct vnodeop_desc vop_mmap_desc;
-#define VOP_MMAP(vp, fflags, cred, p) _VOP_MMAP(vp, fflags, cred, p)
-static __inline int _VOP_MMAP(struct vnode *vp, int fflags, struct ucred *cred, struct proc *p)
-{
-	struct vop_mmap_args a;
-	a.a_desc = VDESC(vop_mmap);
-	a.a_vp = vp;
-	a.a_fflags = fflags;
-	a.a_cred = cred;
-	a.a_p = p;
-	return (VCALL(vp, VOFFSET(vop_mmap), &a));
-}
+extern errno_t VNOP_MMAP(vnode_t, int, vfs_context_t);
 
-struct vop_fsync_args {
+/*
+ *#
+ *# mnomap - vp U U U
+ *#
+ */
+struct vnop_mnomap_args {
 	struct vnodeop_desc *a_desc;
-	struct vnode *a_vp;
-	struct ucred *a_cred;
+	vnode_t a_vp;
+	vfs_context_t a_context;
+};
+extern errno_t VNOP_MNOMAP(vnode_t, vfs_context_t);
+
+
+/*
+ *#
+ *#% fsync        vp      L L L
+ *#
+ */
+struct vnop_fsync_args {
+	struct vnodeop_desc *a_desc;
+	vnode_t a_vp;
 	int a_waitfor;
-	struct proc *a_p;
+	vfs_context_t a_context;
 };
-extern struct vnodeop_desc vop_fsync_desc;
-#define VOP_FSYNC(vp, cred, waitfor, p) _VOP_FSYNC(vp, cred, waitfor, p)
-static __inline int _VOP_FSYNC(struct vnode *vp, struct ucred *cred, int waitfor, struct proc *p)
-{
-	struct vop_fsync_args a;
-	a.a_desc = VDESC(vop_fsync);
-	a.a_vp = vp;
-	a.a_cred = cred;
-	a.a_waitfor = waitfor;
-	a.a_p = p;
-	{
-		int _err;
-		extern int ubc_hold(struct vnode *vp);
-		extern void ubc_rele(struct vnode *vp);
-		int _didhold = ubc_hold(vp);
-		_err = VCALL(vp, VOFFSET(vop_fsync), &a);
-		if (_didhold)
-			ubc_rele(vp);
-		return (_err);
-	}
-}
+extern errno_t VNOP_FSYNC(vnode_t, int, vfs_context_t);
 
-struct vop_seek_args {
-	struct vnodeop_desc *a_desc;
-	struct vnode *a_vp;
-	off_t a_oldoff;
-	off_t a_newoff;
-	struct ucred *a_cred;
-};
-extern struct vnodeop_desc vop_seek_desc;
-#define VOP_SEEK(vp, oldoff, newoff, cred) _VOP_SEEK(vp, oldoff, newoff, cred)
-static __inline int _VOP_SEEK(struct vnode *vp, off_t oldoff, off_t newoff, struct ucred *cred)
-{
-	struct vop_seek_args a;
-	a.a_desc = VDESC(vop_seek);
-	a.a_vp = vp;
-	a.a_oldoff = oldoff;
-	a.a_newoff = newoff;
-	a.a_cred = cred;
-	return (VCALL(vp, VOFFSET(vop_seek), &a));
-}
 
-struct vop_remove_args {
+/*
+ *#
+ *#% remove       dvp     L U U
+ *#% remove       vp      L U U
+ *#
+ */
+struct vnop_remove_args {
 	struct vnodeop_desc *a_desc;
-	struct vnode *a_dvp;
-	struct vnode *a_vp;
+	vnode_t a_dvp;
+	vnode_t a_vp;
 	struct componentname *a_cnp;
+	int a_flags;
+	vfs_context_t a_context;
 };
-extern struct vnodeop_desc vop_remove_desc;
-#define VOP_REMOVE(dvp, vp, cnp) _VOP_REMOVE(dvp, vp, cnp)
-static __inline int _VOP_REMOVE(struct vnode *dvp, struct vnode *vp, struct componentname *cnp)
-{
-	struct vop_remove_args a;
-	a.a_desc = VDESC(vop_remove);
-	a.a_dvp = dvp;
-	a.a_vp = vp;
-	a.a_cnp = cnp;
-	return (VCALL(dvp, VOFFSET(vop_remove), &a));
-}
+extern errno_t VNOP_REMOVE(vnode_t, vnode_t, struct componentname *, int, vfs_context_t);
 
-struct vop_link_args {
+
+/*
+ *#
+ *#% link         vp      U U U
+ *#% link         tdvp    L U U
+ *#
+ */
+struct vnop_link_args {
 	struct vnodeop_desc *a_desc;
-	struct vnode *a_vp;
-	struct vnode *a_tdvp;
+	vnode_t a_vp;
+	vnode_t a_tdvp;
 	struct componentname *a_cnp;
+	vfs_context_t a_context;
 };
-extern struct vnodeop_desc vop_link_desc;
-#define VOP_LINK(vp, tdvp, cnp) _VOP_LINK(vp, tdvp, cnp)
-static __inline int _VOP_LINK(struct vnode *vp, struct vnode *tdvp, struct componentname *cnp)
-{
-	struct vop_link_args a;
-	a.a_desc = VDESC(vop_link);
-	a.a_vp = vp;
-	a.a_tdvp = tdvp;
-	a.a_cnp = cnp;
-	return (VCALL(vp, VOFFSET(vop_link), &a));
-}
+extern errno_t VNOP_LINK(vnode_t, vnode_t, struct componentname *, vfs_context_t);
 
-struct vop_rename_args {
+
+/*
+ *#
+ *#% rename       fdvp    U U U
+ *#% rename       fvp     U U U
+ *#% rename       tdvp    L U U
+ *#% rename       tvp     X U U
+ *#
+ */
+struct vnop_rename_args {
 	struct vnodeop_desc *a_desc;
-	struct vnode *a_fdvp;
-	struct vnode *a_fvp;
+	vnode_t a_fdvp;
+	vnode_t a_fvp;
 	struct componentname *a_fcnp;
-	struct vnode *a_tdvp;
-	struct vnode *a_tvp;
+	vnode_t a_tdvp;
+	vnode_t a_tvp;
 	struct componentname *a_tcnp;
+	vfs_context_t a_context;
 };
-extern struct vnodeop_desc vop_rename_desc;
-#define VOP_RENAME(fdvp, fvp, fcnp, tdvp, tvp, tcnp) _VOP_RENAME(fdvp, fvp, fcnp, tdvp, tvp, tcnp)
-static __inline int _VOP_RENAME(struct vnode *fdvp, struct vnode *fvp, struct componentname *fcnp, struct vnode *tdvp, struct vnode *tvp, struct componentname *tcnp)
-{
-	struct vop_rename_args a;
-	a.a_desc = VDESC(vop_rename);
-	a.a_fdvp = fdvp;
-	a.a_fvp = fvp;
-	a.a_fcnp = fcnp;
-	a.a_tdvp = tdvp;
-	a.a_tvp = tvp;
-	a.a_tcnp = tcnp;
-	return (VCALL(fdvp, VOFFSET(vop_rename), &a));
-}
+extern errno_t VNOP_RENAME(vnode_t, vnode_t, struct componentname *, vnode_t, vnode_t, struct componentname *, vfs_context_t);
 
-struct vop_mkdir_args {
+
+/*
+ *#
+ *#% mkdir        dvp     L U U
+ *#% mkdir        vpp     - L -
+ *#
+ */
+struct vnop_mkdir_args {
 	struct vnodeop_desc *a_desc;
-	struct vnode *a_dvp;
-	struct vnode **a_vpp;
+	vnode_t a_dvp;
+	vnode_t *a_vpp;
 	struct componentname *a_cnp;
-	struct vattr *a_vap;
-};
-extern struct vnodeop_desc vop_mkdir_desc;
-#define VOP_MKDIR(dvp, vpp, cnp, vap) _VOP_MKDIR(dvp, vpp, cnp, vap)
-static __inline int _VOP_MKDIR(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp, struct vattr *vap)
-{
-	struct vop_mkdir_args a;
-	a.a_desc = VDESC(vop_mkdir);
-	a.a_dvp = dvp;
-	a.a_vpp = vpp;
-	a.a_cnp = cnp;
-	a.a_vap = vap;
-	return (VCALL(dvp, VOFFSET(vop_mkdir), &a));
-}
+	struct vnode_attr *a_vap;
+	vfs_context_t a_context;
+	};
+extern errno_t VNOP_MKDIR(vnode_t, vnode_t *, struct componentname *, struct vnode_attr *, vfs_context_t);
 
-struct vop_rmdir_args {
+
+/*
+ *#
+ *#% rmdir        dvp     L U U
+ *#% rmdir        vp      L U U
+ *#
+ */
+struct vnop_rmdir_args {
 	struct vnodeop_desc *a_desc;
-	struct vnode *a_dvp;
-	struct vnode *a_vp;
+	vnode_t a_dvp;
+	vnode_t a_vp;
 	struct componentname *a_cnp;
+	vfs_context_t a_context;
 };
-extern struct vnodeop_desc vop_rmdir_desc;
-#define VOP_RMDIR(dvp, vp, cnp) _VOP_RMDIR(dvp, vp, cnp)
-static __inline int _VOP_RMDIR(struct vnode *dvp, struct vnode *vp, struct componentname *cnp)
-{
-	struct vop_rmdir_args a;
-	a.a_desc = VDESC(vop_rmdir);
-	a.a_dvp = dvp;
-	a.a_vp = vp;
-	a.a_cnp = cnp;
-	return (VCALL(dvp, VOFFSET(vop_rmdir), &a));
-}
+extern errno_t VNOP_RMDIR(vnode_t, vnode_t, struct componentname *, vfs_context_t);
 
-struct vop_symlink_args {
-	struct vnodeop_desc *a_desc;
-	struct vnode *a_dvp;
-	struct vnode **a_vpp;
-	struct componentname *a_cnp;
-	struct vattr *a_vap;
-	char *a_target;
+
+/*
+ *#
+ *#% symlink      dvp     L U U
+ *#% symlink      vpp     - U -
+ *#
+ */
+struct vnop_symlink_args {
+       struct vnodeop_desc *a_desc;
+       vnode_t a_dvp;
+       vnode_t *a_vpp;
+       struct componentname *a_cnp;
+       struct vnode_attr *a_vap;
+       char *a_target;
+       vfs_context_t a_context;
 };
-extern struct vnodeop_desc vop_symlink_desc;
-#define VOP_SYMLINK(dvp, vpp, cnp, vap, target) _VOP_SYMLINK(dvp, vpp, cnp, vap, target)
-static __inline int _VOP_SYMLINK(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp, struct vattr *vap, char *target)
-{
-	struct vop_symlink_args a;
-	a.a_desc = VDESC(vop_symlink);
-	a.a_dvp = dvp;
-	a.a_vpp = vpp;
-	a.a_cnp = cnp;
-	a.a_vap = vap;
-	a.a_target = target;
-	return (VCALL(dvp, VOFFSET(vop_symlink), &a));
-}
+extern errno_t VNOP_SYMLINK(vnode_t, vnode_t *, struct componentname *, struct vnode_attr *, char *, vfs_context_t);
 
-struct vop_readdir_args {
+
+/*
+ *#
+ *#% readdir      vp      L L L
+ *#
+ *
+ *  When VNOP_READDIR is called from the NFS Server, the nfs_data
+ *  argument is non-NULL.
+ *
+ *  The value of nfs_eofflag should be set to TRUE if the end of
+ *  the directory was reached while reading.
+ *
+ *  The directory seek offset (cookies) are returned to the NFS client and
+ *  may be used later to restart a directory read part way through
+ *  the directory. There is one cookie returned for each directory
+ *  entry returned and its size is determince from nfs_sizeofcookie.
+ *  The value of the cookie should be the logical offset within the
+ *  directory where the on-disc version of the appropriate directory
+ *  entry starts. Memory for the cookies is allocated from M_TEMP
+ *  and it is freed by the caller of VNOP_READDIR.
+ *
+ */
+
+struct vnop_readdir_args {
 	struct vnodeop_desc *a_desc;
-	struct vnode *a_vp;
+	vnode_t a_vp;
 	struct uio *a_uio;
-	struct ucred *a_cred;
+	int a_flags;
 	int *a_eofflag;
-	int *a_ncookies;
-	u_long **a_cookies;
+	int *a_numdirent;
+	vfs_context_t a_context;
 };
-extern struct vnodeop_desc vop_readdir_desc;
-#define VOP_READDIR(vp, uio, cred, eofflag, ncookies, cookies) _VOP_READDIR(vp, uio, cred, eofflag, ncookies, cookies)
-static __inline int _VOP_READDIR(struct vnode *vp, struct uio *uio, struct ucred *cred, int *eofflag, int *ncookies, u_long **cookies)
-{
-	struct vop_readdir_args a;
-	a.a_desc = VDESC(vop_readdir);
-	a.a_vp = vp;
-	a.a_uio = uio;
-	a.a_cred = cred;
-	a.a_eofflag = eofflag;
-	a.a_ncookies = ncookies;
-	a.a_cookies = cookies;
-	return (VCALL(vp, VOFFSET(vop_readdir), &a));
-}
+extern errno_t VNOP_READDIR(vnode_t, struct uio *, int, int *, int *, vfs_context_t);
 
-struct vop_readdirattr_args {
+
+/*
+ *#
+ *#% readdirattr  vp      L L L
+ *#
+ */
+struct vnop_readdirattr_args {
 	struct vnodeop_desc *a_desc;
-	struct vnode *a_vp;
+	vnode_t a_vp;
 	struct attrlist *a_alist;
 	struct uio *a_uio;
 	u_long a_maxcount;
@@ -754,480 +576,154 @@ struct vop_readdirattr_args {
 	u_long *a_newstate;
 	int *a_eofflag;
 	u_long *a_actualcount;
-	u_long **a_cookies;
-	struct ucred *a_cred;
+	vfs_context_t a_context;
 };
-extern struct vnodeop_desc vop_readdirattr_desc;
-#define VOP_READDIRATTR(vp, alist, uio, maxcount, options, newstate, eofflag, actualcount, cookies, cred) _VOP_READDIRATTR(vp, alist, uio, maxcount, options, newstate, eofflag, actualcount, cookies, cred)
-static __inline int _VOP_READDIRATTR(struct vnode *vp, struct attrlist *alist, struct uio *uio, u_long maxcount, u_long options, u_long *newstate, int *eofflag, u_long *actualcount, u_long **cookies, struct ucred *cred)
-{
-	struct vop_readdirattr_args a;
-	a.a_desc = VDESC(vop_readdirattr);
-	a.a_vp = vp;
-	a.a_alist = alist;
-	a.a_uio = uio;
-	a.a_maxcount = maxcount;
-	a.a_options = options;
-	a.a_newstate = newstate;
-	a.a_eofflag = eofflag;
-	a.a_actualcount = actualcount;
-	a.a_cookies = cookies;
-	a.a_cred = cred;
-	return (VCALL(vp, VOFFSET(vop_readdirattr), &a));
-}
+extern errno_t VNOP_READDIRATTR(vnode_t, struct attrlist *, struct uio *, u_long, u_long, u_long *, int *, u_long *, vfs_context_t);
 
-struct vop_readlink_args {
+
+/*
+ *#
+ *#% readlink     vp      L L L
+ *#
+ */
+struct vnop_readlink_args {
 	struct vnodeop_desc *a_desc;
-	struct vnode *a_vp;
+	vnode_t a_vp;
 	struct uio *a_uio;
-	struct ucred *a_cred;
+	vfs_context_t a_context;
 };
-extern struct vnodeop_desc vop_readlink_desc;
-#define VOP_READLINK(vp, uio, cred) _VOP_READLINK(vp, uio, cred)
-static __inline int _VOP_READLINK(struct vnode *vp, struct uio *uio, struct ucred *cred)
-{
-	struct vop_readlink_args a;
-	a.a_desc = VDESC(vop_readlink);
-	a.a_vp = vp;
-	a.a_uio = uio;
-	a.a_cred = cred;
-	return (VCALL(vp, VOFFSET(vop_readlink), &a));
-}
+extern errno_t VNOP_READLINK(vnode_t, struct uio *, vfs_context_t);
 
-struct vop_abortop_args {
+
+/*
+ *#
+ *#% inactive     vp      L U U
+ *#
+ */
+struct vnop_inactive_args {
 	struct vnodeop_desc *a_desc;
-	struct vnode *a_dvp;
-	struct componentname *a_cnp;
+	vnode_t a_vp;
+	vfs_context_t a_context;
 };
-extern struct vnodeop_desc vop_abortop_desc;
-#define VOP_ABORTOP(dvp, cnp) _VOP_ABORTOP(dvp, cnp)
-static __inline int _VOP_ABORTOP(struct vnode *dvp, struct componentname *cnp)
-{
-	struct vop_abortop_args a;
-	a.a_desc = VDESC(vop_abortop);
-	a.a_dvp = dvp;
-	a.a_cnp = cnp;
-	return (VCALL(dvp, VOFFSET(vop_abortop), &a));
-}
+extern errno_t VNOP_INACTIVE(vnode_t, vfs_context_t);
 
-struct vop_inactive_args {
+
+/*
+ *#
+ *#% reclaim      vp      U U U
+ *#
+ */
+struct vnop_reclaim_args {
 	struct vnodeop_desc *a_desc;
-	struct vnode *a_vp;
-	struct proc *a_p;
+	vnode_t a_vp;
+	vfs_context_t a_context;
 };
-extern struct vnodeop_desc vop_inactive_desc;
-#define VOP_INACTIVE(vp, p) _VOP_INACTIVE(vp, p)
-static __inline int _VOP_INACTIVE(struct vnode *vp, struct proc *p)
-{
-	struct vop_inactive_args a;
-	a.a_desc = VDESC(vop_inactive);
-	a.a_vp = vp;
-	a.a_p = p;
-	return (VCALL(vp, VOFFSET(vop_inactive), &a));
-}
+extern errno_t VNOP_RECLAIM(vnode_t, vfs_context_t);
 
-struct vop_reclaim_args {
-	struct vnodeop_desc *a_desc;
-	struct vnode *a_vp;
-	struct proc *a_p;
-};
-extern struct vnodeop_desc vop_reclaim_desc;
-#define VOP_RECLAIM(vp, p) _VOP_RECLAIM(vp, p)
-static __inline int _VOP_RECLAIM(struct vnode *vp, struct proc *p)
-{
-	struct vop_reclaim_args a;
-	a.a_desc = VDESC(vop_reclaim);
-	a.a_vp = vp;
-	a.a_p = p;
-	return (VCALL(vp, VOFFSET(vop_reclaim), &a));
-}
 
-struct vop_lock_args {
+/*
+ *#
+ *#% pathconf     vp      L L L
+ *#
+ */
+struct vnop_pathconf_args {
 	struct vnodeop_desc *a_desc;
-	struct vnode *a_vp;
-	int a_flags;
-	struct proc *a_p;
-};
-extern struct vnodeop_desc vop_lock_desc;
-#define VOP_LOCK(vp, flags, p) _VOP_LOCK(vp, flags, p)
-static __inline int _VOP_LOCK(struct vnode *vp, int flags, struct proc *p)
-{
-	struct vop_lock_args a;
-	a.a_desc = VDESC(vop_lock);
-	a.a_vp = vp;
-	a.a_flags = flags;
-	a.a_p = p;
-	return (VCALL(vp, VOFFSET(vop_lock), &a));
-}
-
-struct vop_unlock_args {
-	struct vnodeop_desc *a_desc;
-	struct vnode *a_vp;
-	int a_flags;
-	struct proc *a_p;
-};
-extern struct vnodeop_desc vop_unlock_desc;
-#define VOP_UNLOCK(vp, flags, p) _VOP_UNLOCK(vp, flags, p)
-static __inline int _VOP_UNLOCK(struct vnode *vp, int flags, struct proc *p)
-{
-	struct vop_unlock_args a;
-	a.a_desc = VDESC(vop_unlock);
-	a.a_vp = vp;
-	a.a_flags = flags;
-	a.a_p = p;
-	return (VCALL(vp, VOFFSET(vop_unlock), &a));
-}
-
-struct vop_bmap_args {
-	struct vnodeop_desc *a_desc;
-	struct vnode *a_vp;
-	daddr_t a_bn;
-	struct vnode **a_vpp;
-	daddr_t *a_bnp;
-	int *a_runp;
-};
-extern struct vnodeop_desc vop_bmap_desc;
-#define VOP_BMAP(vp, bn, vpp, bnp, runp) _VOP_BMAP(vp, bn, vpp, bnp, runp)
-static __inline int _VOP_BMAP(struct vnode *vp, daddr_t bn, struct vnode **vpp, daddr_t *bnp, int *runp)
-{
-	struct vop_bmap_args a;
-	a.a_desc = VDESC(vop_bmap);
-	a.a_vp = vp;
-	a.a_bn = bn;
-	a.a_vpp = vpp;
-	a.a_bnp = bnp;
-	a.a_runp = runp;
-	return (VCALL(vp, VOFFSET(vop_bmap), &a));
-}
-
-struct vop_print_args {
-	struct vnodeop_desc *a_desc;
-	struct vnode *a_vp;
-};
-extern struct vnodeop_desc vop_print_desc;
-#define VOP_PRINT(vp) _VOP_PRINT(vp)
-static __inline int _VOP_PRINT(struct vnode *vp)
-{
-	struct vop_print_args a;
-	a.a_desc = VDESC(vop_print);
-	a.a_vp = vp;
-	return (VCALL(vp, VOFFSET(vop_print), &a));
-}
-
-struct vop_islocked_args {
-	struct vnodeop_desc *a_desc;
-	struct vnode *a_vp;
-};
-extern struct vnodeop_desc vop_islocked_desc;
-#define VOP_ISLOCKED(vp) _VOP_ISLOCKED(vp)
-static __inline int _VOP_ISLOCKED(struct vnode *vp)
-{
-	struct vop_islocked_args a;
-	a.a_desc = VDESC(vop_islocked);
-	a.a_vp = vp;
-	return (VCALL(vp, VOFFSET(vop_islocked), &a));
-}
-
-struct vop_pathconf_args {
-	struct vnodeop_desc *a_desc;
-	struct vnode *a_vp;
+	vnode_t a_vp;
 	int a_name;
 	register_t *a_retval;
+	vfs_context_t a_context;
 };
-extern struct vnodeop_desc vop_pathconf_desc;
-#define VOP_PATHCONF(vp, name, retval) _VOP_PATHCONF(vp, name, retval)
-static __inline int _VOP_PATHCONF(struct vnode *vp, int name, register_t *retval)
-{
-	struct vop_pathconf_args a;
-	a.a_desc = VDESC(vop_pathconf);
-	a.a_vp = vp;
-	a.a_name = name;
-	a.a_retval = retval;
-	return (VCALL(vp, VOFFSET(vop_pathconf), &a));
-}
+extern errno_t VNOP_PATHCONF(vnode_t, int, register_t *, vfs_context_t); /* register_t??????? */
 
-struct vop_advlock_args {
+
+/*
+ *#
+ *#% advlock      vp      U U U
+ *#
+ */
+struct vnop_advlock_args {
 	struct vnodeop_desc *a_desc;
-	struct vnode *a_vp;
+	vnode_t a_vp;
 	caddr_t a_id;
 	int a_op;
 	struct flock *a_fl;
 	int a_flags;
+	vfs_context_t a_context;
 };
-extern struct vnodeop_desc vop_advlock_desc;
-#define VOP_ADVLOCK(vp, id, op, fl, flags) _VOP_ADVLOCK(vp, id, op, fl, flags)
-static __inline int _VOP_ADVLOCK(struct vnode *vp, caddr_t id, int op, struct flock *fl, int flags)
-{
-	struct vop_advlock_args a;
-	a.a_desc = VDESC(vop_advlock);
-	a.a_vp = vp;
-	a.a_id = id;
-	a.a_op = op;
-	a.a_fl = fl;
-	a.a_flags = flags;
-	return (VCALL(vp, VOFFSET(vop_advlock), &a));
-}
+extern errno_t VNOP_ADVLOCK(vnode_t, caddr_t, int, struct flock *, int, vfs_context_t);
 
-struct vop_blkatoff_args {
+/*
+ *#
+ *#% allocate     vp      L L L
+ *#
+ */
+struct vnop_allocate_args {
 	struct vnodeop_desc *a_desc;
-	struct vnode *a_vp;
-	off_t a_offset;
-	char **a_res;
-	struct buf **a_bpp;
-};
-extern struct vnodeop_desc vop_blkatoff_desc;
-#define VOP_BLKATOFF(vp, offset, res, bpp) _VOP_BLKATOFF(vp, offset, res, bpp)
-static __inline int _VOP_BLKATOFF(struct vnode *vp, off_t offset, char **res, struct buf **bpp)
-{
-	struct vop_blkatoff_args a;
-	a.a_desc = VDESC(vop_blkatoff);
-	a.a_vp = vp;
-	a.a_offset = offset;
-	a.a_res = res;
-	a.a_bpp = bpp;
-	return (VCALL(vp, VOFFSET(vop_blkatoff), &a));
-}
-
-struct vop_valloc_args {
-	struct vnodeop_desc *a_desc;
-	struct vnode *a_pvp;
-	int a_mode;
-	struct ucred *a_cred;
-	struct vnode **a_vpp;
-};
-extern struct vnodeop_desc vop_valloc_desc;
-#define VOP_VALLOC(pvp, mode, cred, vpp) _VOP_VALLOC(pvp, mode, cred, vpp)
-static __inline int _VOP_VALLOC(struct vnode *pvp, int mode, struct ucred *cred, struct vnode **vpp)
-{
-	struct vop_valloc_args a;
-	a.a_desc = VDESC(vop_valloc);
-	a.a_pvp = pvp;
-	a.a_mode = mode;
-	a.a_cred = cred;
-	a.a_vpp = vpp;
-	return (VCALL(pvp, VOFFSET(vop_valloc), &a));
-}
-
-struct vop_reallocblks_args {
-	struct vnodeop_desc *a_desc;
-	struct vnode *a_vp;
-	struct cluster_save *a_buflist;
-};
-extern struct vnodeop_desc vop_reallocblks_desc;
-#define VOP_REALLOCBLKS(vp, buflist) _VOP_REALLOCBLKS(vp, buflist)
-static __inline int _VOP_REALLOCBLKS(struct vnode *vp, struct cluster_save *buflist)
-{
-	struct vop_reallocblks_args a;
-	a.a_desc = VDESC(vop_reallocblks);
-	a.a_vp = vp;
-	a.a_buflist = buflist;
-	return (VCALL(vp, VOFFSET(vop_reallocblks), &a));
-}
-
-struct vop_vfree_args {
-	struct vnodeop_desc *a_desc;
-	struct vnode *a_pvp;
-	ino_t a_ino;
-	int a_mode;
-};
-extern struct vnodeop_desc vop_vfree_desc;
-#define VOP_VFREE(pvp, ino, mode) _VOP_VFREE(pvp, ino, mode)
-static __inline int _VOP_VFREE(struct vnode *pvp, ino_t ino, int mode)
-{
-	struct vop_vfree_args a;
-	a.a_desc = VDESC(vop_vfree);
-	a.a_pvp = pvp;
-	a.a_ino = ino;
-	a.a_mode = mode;
-	return (VCALL(pvp, VOFFSET(vop_vfree), &a));
-}
-
-struct vop_truncate_args {
-	struct vnodeop_desc *a_desc;
-	struct vnode *a_vp;
-	off_t a_length;
-	int a_flags;
-	struct ucred *a_cred;
-	struct proc *a_p;
-};
-extern struct vnodeop_desc vop_truncate_desc;
-#define VOP_TRUNCATE(vp, length, flags, cred, p) _VOP_TRUNCATE(vp, length, flags, cred, p)
-static __inline int _VOP_TRUNCATE(struct vnode *vp, off_t length, int flags, struct ucred *cred, struct proc *p)
-{
-	struct vop_truncate_args a;
-	a.a_desc = VDESC(vop_truncate);
-	a.a_vp = vp;
-	a.a_length = length;
-	a.a_flags = flags;
-	a.a_cred = cred;
-	a.a_p = p;
-	{
-		int _err;
-		extern int ubc_hold(struct vnode *vp);
-		extern void ubc_rele(struct vnode *vp);
-		int _didhold = ubc_hold(vp);
-		_err = VCALL(vp, VOFFSET(vop_truncate), &a);
-		if (_didhold)
-			ubc_rele(vp);
-		return (_err);
-	}
-}
-
-struct vop_allocate_args {
-	struct vnodeop_desc *a_desc;
-	struct vnode *a_vp;
+	vnode_t a_vp;
 	off_t a_length;
 	u_int32_t a_flags;
 	off_t *a_bytesallocated;
 	off_t a_offset;
-	struct ucred *a_cred;
-	struct proc *a_p;
+	vfs_context_t a_context;
 };
-extern struct vnodeop_desc vop_allocate_desc;
-#define VOP_ALLOCATE(vp, length, flags, bytesallocated, offset, cred, p) _VOP_ALLOCATE(vp, length, flags, bytesallocated, offset, cred, p)
-static __inline int _VOP_ALLOCATE(struct vnode *vp, off_t length, u_int32_t flags, off_t *bytesallocated, off_t offset, struct ucred *cred, struct proc *p)
-{
-	struct vop_allocate_args a;
-	a.a_desc = VDESC(vop_allocate);
-	a.a_vp = vp;
-	a.a_length = length;
-	a.a_flags = flags;
-	a.a_bytesallocated = bytesallocated;
-	a.a_offset = offset;
-	a.a_cred = cred;
-	a.a_p = p;
-	return (VCALL(vp, VOFFSET(vop_allocate), &a));
-}
+extern errno_t VNOP_ALLOCATE(vnode_t, off_t, u_int32_t, off_t *, off_t, vfs_context_t);
 
-struct vop_update_args {
+/*
+ *#
+ *#% pagein       vp      = = =
+ *#
+ */
+struct vnop_pagein_args {
 	struct vnodeop_desc *a_desc;
-	struct vnode *a_vp;
-	struct timeval *a_access;
-	struct timeval *a_modify;
-	int a_waitfor;
-};
-extern struct vnodeop_desc vop_update_desc;
-#define VOP_UPDATE(vp, access, modify, waitfor) _VOP_UPDATE(vp, access, modify, waitfor)
-static __inline int _VOP_UPDATE(struct vnode *vp, struct timeval *access, struct timeval *modify, int waitfor)
-{
-	struct vop_update_args a;
-	a.a_desc = VDESC(vop_update);
-	a.a_vp = vp;
-	a.a_access = access;
-	a.a_modify = modify;
-	a.a_waitfor = waitfor;
-	return (VCALL(vp, VOFFSET(vop_update), &a));
-}
-
-struct vop_pgrd_args {
-	struct vnodeop_desc *a_desc;
-	struct vnode *a_vp;
-	struct uio *a_uio;
-	struct ucred *a_cred;
-};
-extern struct vnodeop_desc vop_pgrd_desc;
-#define VOP_PGRD(vp, uio, cred) _VOP_PGRD(vp, uio, cred)
-static __inline int _VOP_PGRD(struct vnode *vp, struct uio *uio, struct ucred *cred)
-{
-	struct vop_pgrd_args a;
-	a.a_desc = VDESC(vop_pgrd);
-	a.a_vp = vp;
-	a.a_uio = uio;
-	a.a_cred = cred;
-	return (VCALL(vp, VOFFSET(vop_pgrd), &a));
-}
-
-struct vop_pgwr_args {
-	struct vnodeop_desc *a_desc;
-	struct vnode *a_vp;
-	struct uio *a_uio;
-	struct ucred *a_cred;
-	vm_offset_t a_offset;
-};
-extern struct vnodeop_desc vop_pgwr_desc;
-#define VOP_PGWR(vp, uio, cred, offset) _VOP_PGWR(vp, uio, cred, offset)
-static __inline int _VOP_PGWR(struct vnode *vp, struct uio *uio, struct ucred *cred, vm_offset_t offset)
-{
-	struct vop_pgwr_args a;
-	a.a_desc = VDESC(vop_pgwr);
-	a.a_vp = vp;
-	a.a_uio = uio;
-	a.a_cred = cred;
-	a.a_offset = offset;
-	return (VCALL(vp, VOFFSET(vop_pgwr), &a));
-}
-
-struct vop_pagein_args {
-	struct vnodeop_desc *a_desc;
-	struct vnode *a_vp;
+	vnode_t a_vp;
 	upl_t a_pl;
 	vm_offset_t a_pl_offset;
 	off_t a_f_offset;
 	size_t a_size;
-	struct ucred *a_cred;
 	int a_flags;
+	vfs_context_t a_context;
 };
-extern struct vnodeop_desc vop_pagein_desc;
-#define VOP_PAGEIN(vp, pl, pl_offset, f_offset, size, cred, flags) _VOP_PAGEIN(vp, pl, pl_offset, f_offset, size, cred, flags)
-static __inline int _VOP_PAGEIN(struct vnode *vp, upl_t pl, vm_offset_t pl_offset, off_t f_offset, size_t size, struct ucred *cred, int flags)
-{
-	struct vop_pagein_args a;
-	a.a_desc = VDESC(vop_pagein);
-	a.a_vp = vp;
-	a.a_pl = pl;
-	a.a_pl_offset = pl_offset;
-	a.a_f_offset = f_offset;
-	a.a_size = size;
-	a.a_cred = cred;
-	a.a_flags = flags;
-	return (VCALL(vp, VOFFSET(vop_pagein), &a));
-}
+extern errno_t VNOP_PAGEIN(vnode_t, upl_t, vm_offset_t, off_t, size_t, int, vfs_context_t); /* vm_offset_t ? */
 
-struct vop_pageout_args {
+
+/*
+ *#
+ *#% pageout      vp      = = =
+ *#
+ */
+struct vnop_pageout_args {
 	struct vnodeop_desc *a_desc;
-	struct vnode *a_vp;
+	vnode_t a_vp;
 	upl_t a_pl;
 	vm_offset_t a_pl_offset;
 	off_t a_f_offset;
 	size_t a_size;
-	struct ucred *a_cred;
 	int a_flags;
+	vfs_context_t a_context;
 };
-extern struct vnodeop_desc vop_pageout_desc;
-#define VOP_PAGEOUT(vp, pl, pl_offset, f_offset, size, cred, flags) _VOP_PAGEOUT(vp, pl, pl_offset, f_offset, size, cred, flags)
-static __inline int _VOP_PAGEOUT(struct vnode *vp, upl_t pl, vm_offset_t pl_offset, off_t f_offset, size_t size, struct ucred *cred, int flags)
-{
-	struct vop_pageout_args a;
-	a.a_desc = VDESC(vop_pageout);
-	a.a_vp = vp;
-	a.a_pl = pl;
-	a.a_pl_offset = pl_offset;
-	a.a_f_offset = f_offset;
-	a.a_size = size;
-	a.a_cred = cred;
-	a.a_flags = flags;
-	return (VCALL(vp, VOFFSET(vop_pageout), &a));
-}
+extern errno_t VNOP_PAGEOUT(vnode_t, upl_t, vm_offset_t, off_t, size_t, int, vfs_context_t);
 
-struct vop_devblocksize_args {
+
+#ifdef BSD_KERNEL_PRIVATE
+/*
+ *#% devblocksize vp      = = =
+ *#
+ */
+struct vnop_devblocksize_args {
 	struct vnodeop_desc *a_desc;
-	struct vnode *a_vp;
+	vnode_t a_vp;
 	register_t *a_retval;
 };
-extern struct vnodeop_desc vop_devblocksize_desc;
-#define VOP_DEVBLOCKSIZE(vp, retval) _VOP_DEVBLOCKSIZE(vp, retval)
-static __inline int _VOP_DEVBLOCKSIZE(struct vnode *vp, register_t *retval)
-{
-	struct vop_devblocksize_args a;
-	a.a_desc = VDESC(vop_devblocksize);
-	a.a_vp = vp;
-	a.a_retval = retval;
-	return (VCALL(vp, VOFFSET(vop_devblocksize), &a));
-}
+#endif /* BSD_KERNEL_PRIVATE */
 
-struct vop_searchfs_args {
+/*
+ *#
+ *#% searchfs     vp      L L L
+ *#
+ */
+struct vnop_searchfs_args {
 	struct vnodeop_desc *a_desc;
-	struct vnode *a_vp;
+	vnode_t a_vp;
 	void *a_searchparams1;
 	void *a_searchparams2;
 	struct attrlist *a_searchattrs;
@@ -1239,145 +735,156 @@ struct vop_searchfs_args {
 	u_long a_options;
 	struct uio *a_uio;
 	struct searchstate *a_searchstate;
+	vfs_context_t a_context;
 };
-extern struct vnodeop_desc vop_searchfs_desc;
-#define VOP_SEARCHFS(vp, searchparams1, searchparams2, searchattrs, maxmatches, timelimit, returnattrs, nummatches, scriptcode, options, uio, searchstate) _VOP_SEARCHFS(vp, searchparams1, searchparams2, searchattrs, maxmatches, timelimit, returnattrs, nummatches, scriptcode, options, uio, searchstate)
-static __inline int _VOP_SEARCHFS(struct vnode *vp, void *searchparams1, void *searchparams2, struct attrlist *searchattrs, u_long maxmatches, struct timeval *timelimit, struct attrlist *returnattrs, u_long *nummatches, u_long scriptcode, u_long options, struct uio *uio, struct searchstate *searchstate)
-{
-	struct vop_searchfs_args a;
-	a.a_desc = VDESC(vop_searchfs);
-	a.a_vp = vp;
-	a.a_searchparams1 = searchparams1;
-	a.a_searchparams2 = searchparams2;
-	a.a_searchattrs = searchattrs;
-	a.a_maxmatches = maxmatches;
-	a.a_timelimit = timelimit;
-	a.a_returnattrs = returnattrs;
-	a.a_nummatches = nummatches;
-	a.a_scriptcode = scriptcode;
-	a.a_options = options;
-	a.a_uio = uio;
-	a.a_searchstate = searchstate;
-	return (VCALL(vp, VOFFSET(vop_searchfs), &a));
-}
+extern errno_t VNOP_SEARCHFS(vnode_t, void *, void *, struct attrlist *, u_long, struct timeval *, struct attrlist *, u_long *, u_long, u_long, struct uio *, struct searchstate *, vfs_context_t);
 
-struct vop_copyfile_args {
+
+/*
+ *#
+ *#% copyfile fvp U U U
+ *#% copyfile tdvp L U U
+ *#% copyfile tvp X U U
+ *#
+ */
+struct vnop_copyfile_args {
 	struct vnodeop_desc *a_desc;
-	struct vnode *a_fvp;
-	struct vnode *a_tdvp;
-	struct vnode *a_tvp;
+	vnode_t a_fvp;
+	vnode_t a_tdvp;
+	vnode_t a_tvp;
 	struct componentname *a_tcnp;
 	int a_mode;
 	int a_flags;
+	vfs_context_t a_context;
 };
-extern struct vnodeop_desc vop_copyfile_desc;
-#define VOP_COPYFILE(fvp, tdvp, tvp, tcnp, mode, flags) _VOP_COPYFILE(fvp, tdvp, tvp, tcnp, mode, flags)
-static __inline int _VOP_COPYFILE(struct vnode *fvp, struct vnode *tdvp, struct vnode *tvp, struct componentname *tcnp, int mode, int flags)
-{
-	struct vop_copyfile_args a;
-	a.a_desc = VDESC(vop_copyfile);
-	a.a_fvp = fvp;
-	a.a_tdvp = tdvp;
-	a.a_tvp = tvp;
-	a.a_tcnp = tcnp;
-	a.a_mode = mode;
-	a.a_flags = flags;
-	return (VCALL(fvp, VOFFSET(vop_copyfile), &a));
-}
+extern errno_t VNOP_COPYFILE(vnode_t, vnode_t, vnode_t, struct componentname *, int, int, vfs_context_t);
 
-struct vop_blktooff_args {
+
+struct vnop_getxattr_args {
 	struct vnodeop_desc *a_desc;
-	struct vnode *a_vp;
-	daddr_t a_lblkno;
+	vnode_t a_vp;
+	char * a_name;
+	uio_t a_uio;
+	size_t *a_size;
+	int a_options;
+	vfs_context_t a_context;
+};
+extern struct vnodeop_desc vnop_getxattr_desc;
+extern errno_t VNOP_GETXATTR(vnode_t, const char *, uio_t, size_t *, int, vfs_context_t);
+
+struct vnop_setxattr_args {
+	struct vnodeop_desc *a_desc;
+	vnode_t a_vp;
+	char * a_name;
+	uio_t a_uio;
+	int a_options;
+	vfs_context_t a_context;
+};
+extern struct vnodeop_desc vnop_setxattr_desc;
+extern errno_t VNOP_SETXATTR(vnode_t, const char *, uio_t, int, vfs_context_t);
+
+struct vnop_removexattr_args {
+	struct vnodeop_desc *a_desc;
+	vnode_t a_vp;
+	char * a_name;
+	int a_options;
+	vfs_context_t a_context;
+};
+extern struct vnodeop_desc vnop_removexattr_desc;
+extern errno_t VNOP_REMOVEXATTR(vnode_t, const char *, int, vfs_context_t);
+
+struct vnop_listxattr_args {
+	struct vnodeop_desc *a_desc;
+	vnode_t a_vp;
+	uio_t a_uio;
+	size_t *a_size;
+	int a_options;
+	vfs_context_t a_context;
+};
+extern struct vnodeop_desc vnop_listxattr_desc;
+extern errno_t VNOP_LISTXATTR(vnode_t, uio_t, size_t *, int, vfs_context_t);
+
+
+/*
+ *#
+ *#% blktooff vp = = =
+ *#
+ */
+struct vnop_blktooff_args {
+	struct vnodeop_desc *a_desc;
+	vnode_t a_vp;
+	daddr64_t a_lblkno;
 	off_t *a_offset;
 };
-extern struct vnodeop_desc vop_blktooff_desc;
-#define VOP_BLKTOOFF(vp, lblkno, offset) _VOP_BLKTOOFF(vp, lblkno, offset)
-static __inline int _VOP_BLKTOOFF(struct vnode *vp, daddr_t lblkno, off_t *offset)
-{
-	struct vop_blktooff_args a;
-	a.a_desc = VDESC(vop_blktooff);
-	a.a_vp = vp;
-	a.a_lblkno = lblkno;
-	a.a_offset = offset;
-	return (VCALL(vp, VOFFSET(vop_blktooff), &a));
-}
+extern errno_t VNOP_BLKTOOFF(vnode_t, daddr64_t, off_t *); 
 
-struct vop_offtoblk_args {
+
+/*
+ *#
+ *#% offtoblk vp = = =
+ *#
+ */
+struct vnop_offtoblk_args {
 	struct vnodeop_desc *a_desc;
-	struct vnode *a_vp;
+	vnode_t a_vp;
 	off_t a_offset;
-	daddr_t *a_lblkno;
+	daddr64_t *a_lblkno;
 };
-extern struct vnodeop_desc vop_offtoblk_desc;
-#define VOP_OFFTOBLK(vp, offset, lblkno) _VOP_OFFTOBLK(vp, offset, lblkno)
-static __inline int _VOP_OFFTOBLK(struct vnode *vp, off_t offset, daddr_t *lblkno)
-{
-	struct vop_offtoblk_args a;
-	a.a_desc = VDESC(vop_offtoblk);
-	a.a_vp = vp;
-	a.a_offset = offset;
-	a.a_lblkno = lblkno;
-	return (VCALL(vp, VOFFSET(vop_offtoblk), &a));
-}
+extern errno_t VNOP_OFFTOBLK(vnode_t, off_t, daddr64_t *); 
 
-struct vop_cmap_args {
+
+/*
+ *#
+ *#% blockmap vp L L L
+ *#
+ */
+struct vnop_blockmap_args {
 	struct vnodeop_desc *a_desc;
-	struct vnode *a_vp;
+	vnode_t a_vp;
 	off_t a_foffset;
 	size_t a_size;
-	daddr_t *a_bpn;
+	daddr64_t *a_bpn;
 	size_t *a_run;
 	void *a_poff;
+	int a_flags;
+	vfs_context_t a_context;
 };
-extern struct vnodeop_desc vop_cmap_desc;
-#define VOP_CMAP(vp, foffset, size, bpn, run, poff) _VOP_CMAP(vp, foffset, size, bpn, run, poff)
-static __inline int _VOP_CMAP(struct vnode *vp, off_t foffset, size_t size, daddr_t *bpn, size_t *run, void *poff)
-{
-	struct vop_cmap_args a;
-	a.a_desc = VDESC(vop_cmap);
-	a.a_vp = vp;
-	a.a_foffset = foffset;
-	a.a_size = size;
-	a.a_bpn = bpn;
-	a.a_run = run;
-	a.a_poff = poff;
-	return (VCALL(vp, VOFFSET(vop_cmap), &a));
-}
+extern errno_t VNOP_BLOCKMAP(vnode_t, off_t, size_t, daddr64_t *, size_t *, void *,
+                             int, vfs_context_t);
 
-/* Special cases: */
-#include <sys/buf.h>
-#include <sys/vm.h>
-
-struct vop_strategy_args {
+struct vnop_strategy_args {
 	struct vnodeop_desc *a_desc;
 	struct buf *a_bp;
 };
-extern struct vnodeop_desc vop_strategy_desc;
-#define VOP_STRATEGY(bp) _VOP_STRATEGY(bp)
-static __inline int _VOP_STRATEGY(struct buf *bp)
-{
-	struct vop_strategy_args a;
-	a.a_desc = VDESC(vop_strategy);
-	a.a_bp = bp;
-	return (VCALL(bp->b_vp, VOFFSET(vop_strategy), &a));
-}
+extern errno_t VNOP_STRATEGY(struct buf *bp);
 
-struct vop_bwrite_args {
+struct vnop_bwrite_args {
 	struct vnodeop_desc *a_desc;
-	struct buf *a_bp;
+	buf_t a_bp;
 };
-extern struct vnodeop_desc vop_bwrite_desc;
-#define VOP_BWRITE(bp) _VOP_BWRITE(bp)
-static __inline int _VOP_BWRITE(struct buf *bp)
-{
-	struct vop_bwrite_args a;
-	a.a_desc = VDESC(vop_bwrite);
-	a.a_bp = bp;
-	return (VCALL(bp->b_vp, VOFFSET(vop_bwrite), &a));
-}
+extern errno_t VNOP_BWRITE(buf_t);
 
-/* End of special cases. */
 
-#endif /* __APPLE_API_UNSTABLE */
+struct vnop_kqfilt_add_args {
+	struct vnodeop_desc *a_desc;
+	struct vnode *a_vp;
+	struct knote *a_kn;
+	vfs_context_t a_context;
+};
+extern struct vnodeop_desc vnop_kqfilt_add_desc;
+extern errno_t VNOP_KQFILT_ADD(vnode_t , struct knote *, vfs_context_t);
+
+struct vnop_kqfilt_remove_args {
+	struct vnodeop_desc *a_desc;
+	struct vnode *a_vp;
+	uintptr_t a_ident;
+	vfs_context_t a_context;
+};
+extern struct vnodeop_desc vnop_kqfilt_remove_desc;
+errno_t VNOP_KQFILT_REMOVE(vnode_t , uintptr_t , vfs_context_t);
+
+__END_DECLS
+
+#endif /* KERNEL */
+
 #endif /* !_SYS_VNODE_IF_H_ */

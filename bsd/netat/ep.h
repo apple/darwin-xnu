@@ -31,6 +31,8 @@
 #define _NETAT_EP_H_
 #include <sys/appleapiopts.h>
 
+#ifdef __APPLE_API_OBSOLETE
+
 #define EP_REQUEST         	1  	/* Echo request packet 		*/
 #define EP_REPLY           	2  	/* Echo reply packet 		*/
 
@@ -38,4 +40,5 @@
 
 #define EP_DATA_SIZE		585   	/* Maximum size of EP data 	*/
 
+#endif /* __APPLE_API_OBSOLETE */
 #endif /* _NETAT_EP_H_ */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -35,10 +35,5 @@
 extern unsigned int	vm_page_info(
 					hash_info_bucket_t	*info,
 					unsigned int		count);
-
-extern int		pmap_list_resident_pages(
-					pmap_t		pmap,
-					vm_offset_t	*listp,
-					int		space);
 
 #endif	/* VM_VM_DEBUG_H */

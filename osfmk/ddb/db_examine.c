@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -75,7 +75,7 @@
 char		db_examine_format[TOK_STRING_SIZE] = "x";
 int		db_examine_count = 1;
 db_addr_t	db_examine_prev_addr = 0;
-thread_act_t	db_examine_act = THR_ACT_NULL;
+thread_t	db_examine_act = THREAD_NULL;
 
 extern int	db_max_width;
 
@@ -103,7 +103,7 @@ db_examine_cmd(
 	db_expr_t	count,
 	char *		modif)
 {
-	thread_act_t	thr_act;
+	thread_t	thr_act;
 	extern char	db_last_modifier[];
 
 	if (modif[0] != '\0')
@@ -121,7 +121,7 @@ db_examine_cmd(
 	  if (db_option(modif,'u'))
 	    thr_act = current_act();
 	  else
-	    thr_act = THR_ACT_NULL;
+	    thr_act = THREAD_NULL;
 
 	db_examine_act = thr_act;
 	db_examine((db_addr_t) addr, db_examine_format, count, 
@@ -248,7 +248,7 @@ db_examine(
 			    db_find_task_sym_and_offset(addr,&name,&off,task);
 			    if (off == 0)
 				db_printf("\r%s:\n", name);
-			    db_printf("%#n: ", addr);
+			    db_printf("%#lln: ", (unsigned long long)addr);
 			    for (sz = 0; sz < leader; sz++)
 				    db_putchar(' ');
 			    db_prev = addr;
@@ -267,9 +267,9 @@ db_examine(
 				    db_find_task_sym_and_offset( value,
 					&symName, &offset, task);
 				    db_printf("\n\t*%8llX(%8llX) = %s",
-						next_addr, value, symName );
+						(unsigned long long)next_addr, (unsigned long long)value, symName );
 				    if( offset )  {
-					db_printf("+%llX", offset );
+					db_printf("+%llX", (unsigned long long)offset );
 				    }
 				    next_addr += size;
 				}
@@ -285,7 +285,7 @@ db_examine(
 				    value = db_get_task_value(next_addr,
 							      sizeof (db_expr_t),
 							      TRUE,task);
-				    db_printf("%-*llr", width, value);
+				    db_printf("%-*llr", width, (unsigned long long)value);
 				    next_addr += sizeof (db_expr_t);
 				}
 				if (sz > 0) {
@@ -295,7 +295,7 @@ db_examine(
 				    }
 				    value = db_get_task_value(next_addr, sz,
 							      TRUE, task);
-				    db_printf("%-*llR", width, value);
+				    db_printf("%-*llR", width, (unsigned long long)value);
 				    next_addr += sz;
 				}
 				break;
@@ -312,9 +312,9 @@ db_examine(
 							      sizeof (db_expr_t),
 							      FALSE,task);
 			            if ( c == 'X')
-				      db_printf("%0*llX ", 2*size, value);
+				      db_printf("%0*llX ", 2*size, (unsigned long long)value);
 				    else
-				      db_printf("%-*llx", width, value);
+				      db_printf("%-*llx", width, (unsigned long long)value);
 				    next_addr += sizeof (db_expr_t);
 			        }
 				if (sz > 0) {
@@ -325,9 +325,9 @@ db_examine(
 				    value = db_get_task_value(next_addr, sz,
 							      FALSE, task);
 			            if ( c == 'X')
-				      db_printf("%0*llX ", 2*size, value);
+				      db_printf("%0*llX ", 2*size, (unsigned long long)value);
 				    else
-				      db_printf("%-*llX", width, value);
+				      db_printf("%-*llX", width, (unsigned long long)value);
 				    next_addr += sz;
 				}
 				break;
@@ -342,7 +342,7 @@ db_examine(
 				    value = db_get_task_value(next_addr,
 							      sizeof (db_expr_t),
 							      TRUE, task);
-				    db_printf("%-*llz", width, value);
+				    db_printf("%-*llz", width, (unsigned long long)value);
 				    next_addr += sizeof (db_expr_t);
 				}
 				if (sz > 0) {
@@ -352,7 +352,7 @@ db_examine(
 				    }
 				    value = db_get_task_value(next_addr,sz,
 							      TRUE,task);
-				    db_printf("%-*llZ", width, value);
+				    db_printf("%-*llZ", width, (unsigned long long)value);
 				    next_addr += sz;
 				}
 				break;
@@ -367,7 +367,7 @@ db_examine(
 				    value = db_get_task_value(next_addr,
 							      sizeof (db_expr_t),
 							      TRUE,task);
-				    db_printf("%-*lld", width, value);
+				    db_printf("%-*lld", width, (unsigned long long)value);
 				    next_addr += sizeof (db_expr_t);
 				}
 				if (sz > 0) {
@@ -377,7 +377,7 @@ db_examine(
 				    }
 				    value = db_get_task_value(next_addr, sz,
 							      TRUE, task);
-				    db_printf("%-*llD", width, value);
+				    db_printf("%-*llD", width, (unsigned long long)value);
 				    next_addr += sz;
 				}
 				break;
@@ -393,7 +393,7 @@ db_examine(
 				    value = db_get_task_value(next_addr,
 							      sizeof (db_expr_t),
 							      FALSE,task);
-				    db_printf("%-*llu", width, value);
+				    db_printf("%-*llu", width, (unsigned long long)value);
 				    next_addr += sizeof (db_expr_t);
 				}
 				if (sz > 0) {
@@ -403,7 +403,7 @@ db_examine(
 				    }
 				    value = db_get_task_value(next_addr, sz,
 							      FALSE, task);
-				    db_printf("%-*llU", width, value);
+				    db_printf("%-*llU", width, (unsigned long long)value);
 				    next_addr += sz;
 				}
 				break;
@@ -418,7 +418,7 @@ db_examine(
 				    value = db_get_task_value(next_addr,
 							      sizeof (db_expr_t),
 							      FALSE,task);
-				    db_printf("%-*llo", width, value);
+				    db_printf("%-*llo", width, (unsigned long long)value);
 				    next_addr += sizeof (db_expr_t);
 				}
 				if (sz > 0) {
@@ -428,7 +428,7 @@ db_examine(
 				    }
 				    value = db_get_task_value(next_addr, sz,
 							      FALSE, task);
-				    db_printf("%-*llo", width, value);
+				    db_printf("%-*llo", width, (unsigned long long)value);
 				    next_addr += sz;
 				}
 				break;
@@ -441,9 +441,9 @@ db_examine(
 				    if ((value >= ' ' && value <= '~') ||
 					value == '\n' ||
 					value == '\t')
-					    db_printf("%llc", value);
+					    db_printf("%llc", (unsigned long long)value);
 				    else
-					    db_printf("\\%03llo", value);
+					    db_printf("\\%03llo", (unsigned long long)value);
 				}
 				break;
 			    case 's':	/* null-terminated string */
@@ -456,9 +456,9 @@ db_examine(
 				    if (value == 0)
 					break;
 				    if (value >= ' ' && value <= '~')
-					db_printf("%llc", value);
+					db_printf("%llc", (unsigned long long)value);
 				    else
-					db_printf("\\%03llo", value);
+					db_printf("\\%03llo", (unsigned long long)value);
 				}
 				break;
 			    case 'i':	/* instruction */
@@ -529,32 +529,32 @@ db_print_cmd(void)
 				 task);
 		break;
 	    case 'r':
-		db_printf("%11llr", value);
+		db_printf("%11llr", (unsigned long long)value);
 		break;
 	    case 'X':
-		db_printf("%016llX", value);
+		db_printf("%016llX", (unsigned long long)value);
 		break;
 	    case 'x':
-		db_printf("%016llx", value);
+		db_printf("%016llx", (unsigned long long)value);
 		break;
 	    case 'z':
-		db_printf("%16llz", value);
+		db_printf("%16llz", (unsigned long long)value);
 		break;
 	    case 'd':
-		db_printf("%11lld", value);
+		db_printf("%11lld", (unsigned long long)value);
 		break;
 	    case 'u':
-		db_printf("%11llu", value);
+		db_printf("%11llu", (unsigned long long)value);
 		break;
 	    case 'o':
-		db_printf("%16llo", value);
+		db_printf("%16llo", (unsigned long long)value);
 		break;
 	    case 'c':
 		value = value & 0xFF;
 		if (value >= ' ' && value <= '~')
-		    db_printf("%llc", value);
+		    db_printf("%llc", (unsigned long long)value);
 		else
-		    db_printf("\\%03llo", value);
+		    db_printf("\\%03llo", (unsigned long long)value);
 		break;
 	    default:
 		db_printf("Unknown format %c\n", db_print_format);
@@ -603,7 +603,7 @@ db_search_cmd(void)
 	db_expr_t	value;
 	db_expr_t	mask;
 	db_addr_t	count;
-	thread_act_t	thr_act;
+	thread_t	thr_act;
 	boolean_t	thread_flag = FALSE;
 	register char	*p;
 
@@ -670,7 +670,7 @@ db_search_cmd(void)
 	    if (!db_get_next_act(&thr_act, 0))
 		return;
 	} else
-	    thr_act = THR_ACT_NULL;
+	    thr_act = THREAD_NULL;
 
 	db_search(addr, size, value, mask, count, db_act_to_task(thr_act));
 }
@@ -690,7 +690,7 @@ db_search(
 			break;
 		addr += size;
 	}
-	db_printf("0x%x: ", addr);
+	db_printf("0x%llx: ", (unsigned long long)addr);
 	db_next = addr;
 }
 
@@ -717,7 +717,7 @@ db_xcdump(
 		db_printf("%s:\n", name);
 		off = -1;
 	    }
-	    db_printf("%0*llX:%s", 2*sizeof(db_addr_t), addr,
+	    db_printf("%0*llX:%s", 2*sizeof(db_addr_t),(unsigned long long) addr,
 					(size != 1) ? " " : "" );
 	    bcount = ((n > DB_XCDUMP_NC)? DB_XCDUMP_NC: n);
 	    if (trunc_page_32(addr) != trunc_page_32(addr+bcount-1)) {
@@ -730,7 +730,7 @@ db_xcdump(
 		if (i % 4 == 0)
 			db_printf(" ");
 		value = db_get_task_value(addr, size, FALSE, task);
-		db_printf("%0*llX ", size*2, value);
+		db_printf("%0*llX ", size*2, (unsigned long long)value);
 		addr += size;
 		db_find_task_sym_and_offset(addr, &name, &off, task);
 	    }
@@ -741,7 +741,7 @@ db_xcdump(
 	    db_printf("%s*", (size != 1)? " ": "");
 	    for (i = 0; i < bcount; i++) {
 		value = data[i];
-		db_printf("%llc", (value >= ' ' && value <= '~')? value: '.');
+		db_printf("%llc", (value >= ' ' && value <= '~')? (unsigned long long)value: (unsigned long long)'.');
 	    }
 	    db_printf("*\n");
 	}

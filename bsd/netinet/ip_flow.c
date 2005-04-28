@@ -194,7 +194,7 @@ ipflow_fastforward(
 		dst = &ipf->ipf_ro.ro_dst;
 #ifdef __APPLE__
 	/* Not sure the rt_dlt is valid here !! XXX */
-	if ((error = dlil_output(ifptodlt(rt->rt_ifp, PF_INET), m, (caddr_t) rt, dst, 0)) != 0) {
+	if ((error = dlil_output(rt->rt_ifp, PF_INET, m, (caddr_t) rt, dst, 0)) != 0) {
 
 #else
 	if ((error = (*rt->rt_ifp->if_output)(rt->rt_ifp, m, dst, rt)) != 0) {
@@ -352,7 +352,7 @@ ipflow_create(
 	 * Fill in the updated information.
 	 */
 	ipf->ipf_ro = *ro;
-	rtref(ro->ro_rt);
+	rtref(ro->ro_rt);		//### LD 5/25/04 needs rt_mtx lock
 	ipf->ipf_dst = ip->ip_dst;
 	ipf->ipf_src = ip->ip_src;
 	ipf->ipf_tos = ip->ip_tos;

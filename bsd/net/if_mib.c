@@ -55,6 +55,7 @@
 #include <sys/kernel.h>
 #include <sys/socket.h>
 #include <sys/sysctl.h>
+#include <sys/systm.h>
 
 #include <net/if.h>
 #include <net/if_mib.h>
@@ -85,48 +86,44 @@
  */
 
 SYSCTL_DECL(_net_link_generic);
-SYSCTL_NODE(_net_link_generic, IFMIB_SYSTEM, system, CTLFLAG_RW, 0,
+
+SYSCTL_NODE(_net_link_generic, IFMIB_SYSTEM, system, CTLFLAG_RD, 0,
 	    "Variables global to all interfaces");
+
 SYSCTL_INT(_net_link_generic_system, IFMIB_IFCOUNT, ifcount, CTLFLAG_RD,
 	   &if_index, 0, "Number of configured interfaces");
 
-static int
-sysctl_ifdata SYSCTL_HANDLER_ARGS /* XXX bad syntax! */
+static int sysctl_ifdata SYSCTL_HANDLER_ARGS;
+SYSCTL_NODE(_net_link_generic, IFMIB_IFDATA, ifdata, CTLFLAG_RD,
+            sysctl_ifdata, "Interface table");
+
+static int sysctl_ifalldata SYSCTL_HANDLER_ARGS;
+SYSCTL_NODE(_net_link_generic, IFMIB_IFALLDATA, ifalldata, CTLFLAG_RD,
+            sysctl_ifalldata, "Interface table");
+
+static int make_ifmibdata(struct ifnet *, int *, struct sysctl_req *);
+
+
+int 
+make_ifmibdata(struct ifnet *ifp, int *name, struct sysctl_req *req)
 {
-	int *name = (int *)arg1;
-	int error, ifnlen;
-	u_int namelen = arg2;
-	struct ifnet *ifp;
-	char workbuf[64];
-	struct ifmibdata ifmd;
-
-	if (namelen != 2)
-		return EINVAL;
-
-	if (name[0] <= 0 || name[0] > if_index)
-		return ENOENT;
-
-	ifp = ifnet_addrs[name[0] - 1]->ifa_ifp;
-
+	struct ifmibdata	ifmd;
+	int error = 0;
+	
 	switch(name[1]) {
 	default:
-		return ENOENT;
+		error = ENOENT;
+		break;
 
 	case IFDATA_GENERAL:
-	    /*
-		ifnlen = snprintf(workbuf, sizeof(workbuf),
-		    "%s%d", ifp->if_name, ifp->if_unit);
-		if(ifnlen + 1 > sizeof ifmd.ifmd_name) {
-			return ENAMETOOLONG;
-		} else {
-			strcpy(ifmd.ifmd_name, workbuf);
-		}
-	    */
+		
+		snprintf(ifmd.ifmd_name, sizeof(ifmd.ifmd_name), "%s%d",
+			ifp->if_name, ifp->if_unit);
 
 #define COPY(fld) ifmd.ifmd_##fld = ifp->if_##fld
 		COPY(pcount);
 		COPY(flags);
-		COPY(data);
+		if_data_internal_to_if_data64(&ifp->if_data, &ifmd.ifmd_data);
 #undef COPY
 		ifmd.ifmd_snd_len = ifp->if_snd.ifq_len;
 		ifmd.ifmd_snd_maxlen = ifp->if_snd.ifq_maxlen;
@@ -134,11 +131,12 @@ sysctl_ifdata SYSCTL_HANDLER_ARGS /* XXX bad syntax! */
 
 		error = SYSCTL_OUT(req, &ifmd, sizeof ifmd);
 		if (error || !req->newptr)
-			return error;
+			break;
 
+#ifdef IF_MIB_WR
 		error = SYSCTL_IN(req, &ifmd, sizeof ifmd);
 		if (error)
-			return error;
+			break;
 
 #define DONTCOPY(fld) ifmd.ifmd_data.ifi_##fld = ifp->if_data.ifi_##fld
 		DONTCOPY(type);
@@ -154,22 +152,72 @@ sysctl_ifdata SYSCTL_HANDLER_ARGS /* XXX bad syntax! */
 		ifp->if_snd.ifq_maxlen = ifmd.ifmd_snd_maxlen;
 		ifp->if_snd.ifq_drops = ifmd.ifmd_snd_drops;
 #undef COPY
+#endif /* IF_MIB_WR */
 		break;
 
 	case IFDATA_LINKSPECIFIC:
 		error = SYSCTL_OUT(req, ifp->if_linkmib, ifp->if_linkmiblen);
 		if (error || !req->newptr)
-			return error;
+			break;
 
+#ifdef IF_MIB_WR
 		error = SYSCTL_IN(req, ifp->if_linkmib, ifp->if_linkmiblen);
 		if (error)
-			return error;
-		
+			break;
+#endif /* IF_MIB_WR */
+		break;
 	}
-	return 0;
+	
+	return error;
 }
 
-SYSCTL_NODE(_net_link_generic, IFMIB_IFDATA, ifdata, CTLFLAG_RW,
-	    sysctl_ifdata, "Interface table");
+int
+sysctl_ifdata SYSCTL_HANDLER_ARGS /* XXX bad syntax! */
+{
+	int *name = (int *)arg1;
+	int error = 0;
+	u_int namelen = arg2;
+	struct ifnet *ifp;
+
+	if (namelen != 2)
+		return EINVAL;
+
+	if (name[0] <= 0 || name[0] > if_index ||
+	    (ifp = ifindex2ifnet[name[0]]) == NULL)
+		return ENOENT;
+
+	ifnet_lock_shared(ifp);
+	
+	error = make_ifmibdata(ifp, name, req);
+	
+	ifnet_lock_done(ifp);
+	
+	return error;
+}
+
+int
+sysctl_ifalldata SYSCTL_HANDLER_ARGS /* XXX bad syntax! */
+{
+	int *name = (int *)arg1;
+	int error = 0;
+	u_int namelen = arg2;
+	struct ifnet *ifp;
+
+	if (namelen != 2)
+		return EINVAL;
+
+	ifnet_head_lock_shared();
+	TAILQ_FOREACH(ifp, &ifnet_head, if_link) {
+		ifnet_lock_shared(ifp);
+		
+		error = make_ifmibdata(ifp, name, req);
+		
+		ifnet_lock_done(ifp);
+		if (error)
+			break;
+	}
+	ifnet_head_done();
+	return error;
+}
 
 #endif

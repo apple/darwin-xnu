@@ -174,6 +174,7 @@ echo '
 #define _SYS_VNODE_IF_H_
 
 #include <sys/appleapiopts.h>
+#include <sys/ubc.h>
 
 #ifdef __APPLE_API_UNSTABLE
 extern struct vnodeop_desc vop_default_desc;
@@ -206,26 +207,23 @@ function doit() {
 	printf("static __inline int _%s(", toupper(name));
 	for (i=0; i<argc; i++) {
 		# generate ANSI protoypes now, hurrah!
-		printf("%s %s", argtype[i], argname[i]);
+		printf("%s _%s", argtype[i], argname[i]);
 		if (i < (argc-1)) printf(", ");
 	}
 	printf(")\n");
 	printf("{\n\tstruct %s_args a;\n", name);
 	printf("\ta.a_desc = VDESC(%s);\n", name);
 	for (i=0; i<argc; i++) {
-		printf("\ta.a_%s = %s;\n", argname[i], argname[i]);
+		printf("\ta.a_%s = _%s;\n", argname[i], argname[i]);
 	}
 	if (toupper(ubc) == "UBC") {
-		printf("\t{\n\t\tint _err;\n\t\t"   \
-			"extern int ubc_hold(struct vnode *vp);\n\t\t"	\
-			"extern void ubc_rele(struct vnode *vp);\n\t\t"	\
-			"int _didhold = ubc_hold(%s);\n\t\t"  \
-			"_err = VCALL(%s%s, VOFFSET(%s), &a);\n\t\t"    \
-			"if (_didhold)\n\t\t\tubc_rele(%s);\n\t\t"	\
+		printf("\t{\n\t\t" \
+			"int _err;\n\t\t"   \
+			"_err = VCALL(_%s%s, VOFFSET(%s), &a);\n\t\t"    \
 			"return (_err);\n\t}\n}\n",
 			argname[0], argname[0], arg0special, name, argname[0]);
 	} else {
-		printf("\treturn (VCALL(%s%s, VOFFSET(%s), &a));\n}\n",
+		printf("\treturn (VCALL(_%s%s, VOFFSET(%s), &a));\n}\n",
 			argname[0], arg0special, name);
 	}
 }
@@ -240,7 +238,7 @@ END	{
 	arg0special="->b_vp";
 	name="vop_strategy";
 	doit();
-	name="vop_bwrite";
+	name="VNOP_BWRITE";
 	doit();
 }
 '"$awk_parser" | sed -e "$space_elim"
@@ -332,7 +330,7 @@ function doit() {
 	# vpp (if any)
 	do_offset("struct vnode **");
 	# cred (if any)
-	do_offset("struct ucred *");
+	do_offset("kauth_credential_t");
 	# proc (if any)
 	do_offset("struct proc *");
 	# componentname
@@ -349,7 +347,7 @@ END	{
 	willrele[0]=0;
 	name="vop_strategy";
 	doit();
-	name="vop_bwrite";
+	name="VNOP_BWRITE";
 	doit();
 }
 '"$awk_parser" | sed -e "$space_elim"
@@ -364,7 +362,7 @@ echo '
 struct vnodeop_desc *vfs_op_descs[] = {
 	&vop_default_desc,	/* MUST BE FIRST */
 	&vop_strategy_desc,	/* XXX: SPECIAL CASE */
-	&vop_bwrite_desc,	/* XXX: SPECIAL CASE */
+	&VNOP_BWRITE_desc,	/* XXX: SPECIAL CASE */
 '
 
 # Body stuff

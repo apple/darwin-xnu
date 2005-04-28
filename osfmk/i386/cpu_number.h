@@ -55,20 +55,23 @@
  *	Machine-dependent definitions for cpu identification.
  *
  */
+#ifdef	KERNEL_PRIVATE
+
 #ifndef	_I386_CPU_NUMBER_H_
 #define	_I386_CPU_NUMBER_H_
 
-#if	MP_V1_1
+#ifdef	I386_CPU_DATA
 
 /* Get the cpu number directly from the pre-processor data area */
-#include <i386/cpu_data.h>
 #define	cpu_number()	get_cpu_number()
 
-#else	/* MP_V1_1 */
+#else	/* I386_CPU_DATA */
 
 /* Use a function to do this less directly. */
 extern int	cpu_number(void);
 
-#endif	/* MP_V1_1 */
+#endif	/* I386_CPU_DATA */
 
 #endif	/* _I386_CPU_NUMBER_H_ */
+
+#endif	/* KERNEL_PRIVATE */

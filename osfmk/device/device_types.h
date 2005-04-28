@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -61,6 +61,8 @@
  * Types for device interface.
  */
 #include <mach/std_types.h>
+#include <mach/mach_types.h>
+#include <mach/message.h>
 #include <mach/port.h>
 
 /*
@@ -93,6 +95,8 @@ extern io_connect_t iokit_lookup_connect_port( ipc_port_t port );
 
 extern ipc_port_t iokit_make_object_port( io_object_t obj );
 extern ipc_port_t iokit_make_connect_port( io_connect_t obj );
+
+extern boolean_t iokit_notify( mach_msg_header_t *msg );
 
 #else
 

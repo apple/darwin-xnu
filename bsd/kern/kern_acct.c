@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -67,10 +67,11 @@
 
 
 #include <sys/param.h>
-#include <sys/proc.h>
-#include <sys/mount.h>
-#include <sys/vnode.h>
-#include <sys/file.h>
+#include <sys/proc_internal.h>
+#include <sys/kauth.h>
+#include <sys/mount_internal.h>
+#include <sys/vnode_internal.h>
+#include <sys/file_internal.h>
 #include <sys/syslog.h>
 #include <sys/kernel.h>
 #include <sys/namei.h>
@@ -79,6 +80,8 @@
 #include <sys/resourcevar.h>
 #include <sys/ioctl.h>
 #include <sys/tty.h>
+#include <sys/sysproto.h>
+#include <machine/spl.h>
 
 /*
  * The routines implemented in this file are described in:
@@ -96,15 +99,23 @@
  * The former's operation is described in Leffler, et al., and the latter
  * was provided by UCB with the 4.4BSD-Lite release
  */
-comp_t	encode_comp_t __P((u_long, u_long));
-void	acctwatch __P((void *));
-void	acctwatch_funnel __P((void *));
+comp_t	encode_comp_t(u_long, u_long);
+void	acctwatch(void *);
+void	acctwatch_funnel(void *);
 
 /*
- * Accounting vnode pointer, and saved vnode pointer.
+ * Accounting vnode pointer, and suspended accounting vnode pointer.  States
+ * are as follows:
+ *
+ *	acctp		suspend_acctp	state
+ *	-------------	------------	------------------------------
+ *	NULL		NULL		Accounting disabled
+ *	!NULL		NULL		Accounting enabled
+ *	NULL		!NULL		Accounting enabled, but suspended
+ *	!NULL		!NULL		<not allowed>
  */
 struct	vnode *acctp;
-struct	vnode *savacctp;
+struct	vnode *suspend_acctp;
 
 /*
  * Values associated with enabling and disabling accounting
@@ -117,32 +128,32 @@ int	acctchkfreq = 15;	/* frequency (in seconds) to check space */
  * Accounting system call.  Written based on the specification and
  * previous implementation done by Mark Tinguely.
  */
-struct acct_args {
-	char	*path;
-};
-acct(p, uap, retval)
-	struct proc *p;
-	struct acct_args *uap;
-	int *retval;
+int
+acct(struct proc *p, struct acct_args *uap, __unused int *retval)
 {
 	struct nameidata nd;
 	int error;
+	struct vfs_context context;
+
+	context.vc_proc = p;
+	context.vc_ucred = kauth_cred_get();
 
 	/* Make sure that the caller is root. */
-	if (error = suser(p->p_ucred, &p->p_acflag))
+	if ((error = suser(kauth_cred_get(), &p->p_acflag)))
 		return (error);
 
 	/*
 	 * If accounting is to be started to a file, open that file for
 	 * writing and make sure it's a 'normal'.
 	 */
-	if (uap->path != NULL) {
-		NDINIT(&nd, LOOKUP, NOFOLLOW, UIO_USERSPACE, uap->path, p);
-		if (error = vn_open(&nd, FWRITE, 0))
+	if (uap->path != USER_ADDR_NULL) {
+		NDINIT(&nd, LOOKUP, NOFOLLOW, UIO_USERSPACE, uap->path, &context);
+		if ((error = vn_open(&nd, FWRITE, 0)))
 			return (error);
-		VOP_UNLOCK(nd.ni_vp, 0, p);
+		vnode_put(nd.ni_vp);
+
 		if (nd.ni_vp->v_type != VREG) {
-			vn_close(nd.ni_vp, FWRITE, p->p_ucred, p);
+			vn_close(nd.ni_vp, FWRITE, kauth_cred_get(), p);
 			return (EACCES);
 		}
 	}
@@ -151,13 +162,14 @@ acct(p, uap, retval)
 	 * If accounting was previously enabled, kill the old space-watcher,
 	 * close the file, and (if no new file was specified, leave).
 	 */
-	if (acctp != NULLVP || savacctp != NULLVP) {
+	if (acctp != NULLVP || suspend_acctp != NULLVP) {
 		untimeout(acctwatch_funnel, NULL);
-		error = vn_close((acctp != NULLVP ? acctp : savacctp), FWRITE,
-		    p->p_ucred, p);
-		acctp = savacctp = NULLVP;
+		error = vn_close((acctp != NULLVP ? acctp : suspend_acctp), FWRITE,
+		    kauth_cred_get(), p);
+
+		acctp = suspend_acctp = NULLVP;
 	}
-	if (uap->path == NULL)
+	if (uap->path == USER_ADDR_NULL)
 		return (error);
 
 	/*
@@ -175,13 +187,15 @@ acct(p, uap, retval)
  * and are enumerated below.  (They're also noted in the system
  * "acct.h" header file.)
  */
+int
 acct_process(p)
 	struct proc *p;
 {
-	struct acct acct;
+	struct acct an_acct;
 	struct rusage *r;
 	struct timeval ut, st, tmp;
-	int s, t;
+	int t;
+	int error;
 	struct vnode *vp;
 
 	/* If accounting isn't enabled, don't bother */
@@ -194,20 +208,18 @@ acct_process(p)
 	 */
 
 	/* (1) The name of the command that ran */
-	bcopy(p->p_comm, acct.ac_comm, sizeof acct.ac_comm);
+	bcopy(p->p_comm, an_acct.ac_comm, sizeof an_acct.ac_comm);
 
 	/* (2) The amount of user and system time that was used */
 	calcru(p, &ut, &st, NULL);
-	acct.ac_utime = encode_comp_t(ut.tv_sec, ut.tv_usec);
-	acct.ac_stime = encode_comp_t(st.tv_sec, st.tv_usec);
+	an_acct.ac_utime = encode_comp_t(ut.tv_sec, ut.tv_usec);
+	an_acct.ac_stime = encode_comp_t(st.tv_sec, st.tv_usec);
 
 	/* (3) The elapsed time the commmand ran (and its starting time) */
-	acct.ac_btime = p->p_stats->p_start.tv_sec;
-	s = splclock();
-	tmp = time;
-	splx(s);
+	an_acct.ac_btime = p->p_stats->p_start.tv_sec;
+	microtime(&tmp);
 	timevalsub(&tmp, &p->p_stats->p_start);
-	acct.ac_etime = encode_comp_t(tmp.tv_sec, tmp.tv_usec);
+	an_acct.ac_etime = encode_comp_t(tmp.tv_sec, tmp.tv_usec);
 
 	/* (4) The average amount of memory used */
 	r = &p->p_stats->p_ru;
@@ -215,33 +227,36 @@ acct_process(p)
 	timevaladd(&tmp, &st);
 	t = tmp.tv_sec * hz + tmp.tv_usec / tick;
 	if (t)
-		acct.ac_mem = (r->ru_ixrss + r->ru_idrss + r->ru_isrss) / t;
+		an_acct.ac_mem = (r->ru_ixrss + r->ru_idrss + r->ru_isrss) / t;
 	else
-		acct.ac_mem = 0;
+		an_acct.ac_mem = 0;
 
 	/* (5) The number of disk I/O operations done */
-	acct.ac_io = encode_comp_t(r->ru_inblock + r->ru_oublock, 0);
+	an_acct.ac_io = encode_comp_t(r->ru_inblock + r->ru_oublock, 0);
 
 	/* (6) The UID and GID of the process */
-	acct.ac_uid = p->p_cred->p_ruid;
-	acct.ac_gid = p->p_cred->p_rgid;
+	an_acct.ac_uid = p->p_ucred->cr_ruid;
+	an_acct.ac_gid = p->p_ucred->cr_rgid;
 
 	/* (7) The terminal from which the process was started */
 	if ((p->p_flag & P_CONTROLT) && p->p_pgrp->pg_session->s_ttyp)
-		acct.ac_tty = p->p_pgrp->pg_session->s_ttyp->t_dev;
+		an_acct.ac_tty = p->p_pgrp->pg_session->s_ttyp->t_dev;
 	else
-		acct.ac_tty = NODEV;
+		an_acct.ac_tty = NODEV;
 
 	/* (8) The boolean flags that tell how the process terminated, etc. */
-	acct.ac_flag = p->p_acflag;
+	an_acct.ac_flag = p->p_acflag;
 
 	/*
 	 * Now, just write the accounting information to the file.
 	 */
-	VOP_LEASE(vp, p, p->p_ucred, LEASE_WRITE);
-	return (vn_rdwr(UIO_WRITE, vp, (caddr_t)&acct, sizeof (acct),
-	    (off_t)0, UIO_SYSSPACE, IO_APPEND|IO_UNIT, p->p_ucred,
-	    (int *)0, p));
+	if ((error = vnode_getwithref(vp)) == 0) {
+	        error = vn_rdwr(UIO_WRITE, vp, (caddr_t)&an_acct, sizeof (an_acct),
+				(off_t)0, UIO_SYSSPACE32, IO_APPEND|IO_UNIT, p->p_ucred,
+				(int *)0, p);
+		vnode_put(vp);
+	}
+	return (error);
 }
 
 /*
@@ -301,32 +316,48 @@ acctwatch_funnel(a)
  */
 /* ARGSUSED */
 void
-acctwatch(a)
-	void *a;
+acctwatch(__unused void *a)
 {
-	struct statfs sb;
+	struct vfs_context context;
+	struct vfs_attr va;
 
-	if (savacctp != NULLVP) {
-		if (savacctp->v_type == VBAD) {
-			(void) vn_close(savacctp, FWRITE, NOCRED, NULL);
-			savacctp = NULLVP;
+	VFSATTR_INIT(&va);
+	VFSATTR_WANTED(&va, f_blocks);
+	VFSATTR_WANTED(&va, f_bavail);
+	context.vc_proc = current_proc();
+	context.vc_ucred = kauth_cred_get();
+
+	if (suspend_acctp != NULLVP) {
+		/*
+		 * Resuming accounting when accounting is suspended, and the
+		 * filesystem containing the suspended accounting file goes
+		 * below a low watermark
+		 */
+		if (suspend_acctp->v_type == VBAD) {
+			(void) vn_close(suspend_acctp, FWRITE, NOCRED, NULL);
+			suspend_acctp = NULLVP;
 			return;
 		}
-		(void)VFS_STATFS(savacctp->v_mount, &sb, (struct proc *)0);
-		if (sb.f_bavail > acctresume * sb.f_blocks / 100) {
-			acctp = savacctp;
-			savacctp = NULLVP;
+		(void)vfs_getattr(suspend_acctp->v_mount, &va, &context);
+		if (va.f_bavail > acctresume * va.f_blocks / 100) {
+			acctp = suspend_acctp;
+			suspend_acctp = NULLVP;
 			log(LOG_NOTICE, "Accounting resumed\n");
 		}
 	} else if (acctp != NULLVP) {
+		/*
+		 * Suspending accounting when accounting is currently active,
+		 * and the filesystem containing the active accounting file
+		 * goes over a high watermark
+		 */
 		if (acctp->v_type == VBAD) {
 			(void) vn_close(acctp, FWRITE, NOCRED, NULL);
 			acctp = NULLVP;
 			return;
 		}
-		(void)VFS_STATFS(acctp->v_mount, &sb, (struct proc *)0);
-		if (sb.f_bavail <= acctsuspend * sb.f_blocks / 100) {
-			savacctp = acctp;
+		(void)vfs_getattr(acctp->v_mount, &va, &context);
+		if (va.f_bavail <= acctsuspend * va.f_blocks / 100) {
+			suspend_acctp = acctp;
 			acctp = NULLVP;
 			log(LOG_NOTICE, "Accounting suspended\n");
 		}

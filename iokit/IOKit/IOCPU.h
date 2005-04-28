@@ -73,6 +73,9 @@ public:
   static  void           initCPUs(void);
   
   virtual bool           start(IOService *provider);
+  virtual OSObject       *getProperty(const OSSymbol *aKey) const;
+  virtual bool           setProperty(const OSSymbol *aKey, OSObject *anObject);
+  virtual bool           serializeProperties(OSSerialize *serialize) const;
   virtual IOReturn       setProperties(OSObject *properties);
   virtual void           initCPU(bool boot) = 0;
   virtual void           quiesceCPU(void) = 0;

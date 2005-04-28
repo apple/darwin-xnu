@@ -55,127 +55,185 @@
  *	@(#)mman.h	8.1 (Berkeley) 6/2/93
  */
 
+/*
+ * Currently unsupported:
+ *
+ * [TYM]	POSIX_TYPED_MEM_ALLOCATE
+ * [TYM]	POSIX_TYPED_MEM_ALLOCATE_CONTIG
+ * [TYM]	POSIX_TYPED_MEM_MAP_ALLOCATABLE
+ * [TYM]	struct posix_typed_mem_info
+ * [TYM]	posix_mem_offset()
+ * [TYM]	posix_typed_mem_get_info()
+ * [TYM]	posix_typed_mem_open()
+ */
+
 #ifndef	_SYS_MMAN_H_
 #define _SYS_MMAN_H_
 
 #include <sys/appleapiopts.h>
-#include <mach/shared_memory_server.h>
+#include <sys/cdefs.h>
+
+#include <sys/_types.h>
+
+/*
+ * [various] The mode_t, off_t, and size_t types shall be defined as
+ * described in <sys/types.h>
+ */
+#ifndef	_MODE_T
+typedef	__darwin_mode_t	mode_t;
+#define _MODE_T
+#endif
+
+#ifndef _OFF_T
+typedef __darwin_off_t	off_t;
+#define _OFF_T
+#endif
+
+#ifndef _SIZE_T
+#define _SIZE_T
+typedef __darwin_size_t	size_t;
+#endif
+
 
 /*
  * Protections are chosen from these bits, or-ed together
  */
-#define	PROT_NONE	0x00	/* no permissions */
-#define	PROT_READ	0x01	/* pages can be read */
-#define	PROT_WRITE	0x02	/* pages can be written */
-#define	PROT_EXEC	0x04	/* pages can be executed */
+#define	PROT_NONE	0x00	/* [MC2] no permissions */
+#define	PROT_READ	0x01	/* [MC2] pages can be read */
+#define	PROT_WRITE	0x02	/* [MC2] pages can be written */
+#define	PROT_EXEC	0x04	/* [MC2] pages can be executed */
 
 /*
  * Flags contain sharing type and options.
  * Sharing types; choose one.
  */
-#define	MAP_SHARED	0x0001		/* share changes */
-#define	MAP_PRIVATE	0x0002		/* changes are private */
+#define	MAP_SHARED	0x0001		/* [MF|SHM] share changes */
+#define	MAP_PRIVATE	0x0002		/* [MF|SHM] changes are private */
+#ifndef _POSIX_C_SOURCE
 #define	MAP_COPY	MAP_PRIVATE	/* Obsolete */
+#endif	/* !_POSIX_C_SOURCE */
 
 /*
  * Other flags
  */
-#define	MAP_FIXED	 0x0010	/* map addr must be exactly as requested */
+#define	MAP_FIXED	 0x0010	/* [MF|SHM] interpret addr exactly */
+#ifndef _POSIX_C_SOURCE
 #define	MAP_RENAME	 0x0020	/* Sun: rename private pages to file */
 #define	MAP_NORESERVE	 0x0040	/* Sun: don't reserve needed swap area */
 #define	MAP_RESERVED0080 0x0080	/* previously unimplemented MAP_INHERIT */
 #define	MAP_NOEXTEND	 0x0100	/* for MAP_FILE, don't change file size */
 #define	MAP_HASSEMAPHORE 0x0200	/* region may contain semaphores */
+#endif	/* !_POSIX_C_SOURCE */
 
-#ifdef _P1003_1B_VISIBLE
 /*
  * Process memory locking
  */
-#define MCL_CURRENT	0x0001	/* Lock only current memory */
-#define MCL_FUTURE	0x0002	/* Lock all future memory as well */
-
-#endif /* _P1003_1B_VISIBLE */
+#define MCL_CURRENT	0x0001	/* [ML] Lock only current memory */
+#define MCL_FUTURE	0x0002	/* [ML] Lock all future memory as well */
 
 /*
  * Error return from mmap()
  */
-#define MAP_FAILED	((void *)-1)
+#define MAP_FAILED	((void *)-1)	/* [MF|SHM] mmap failed */
 
 /*
  * msync() flags
  */
-#define	MS_SYNC		0x0000	/* msync synchronously */
-#define MS_ASYNC	0x0001	/* return immediately */
-#define MS_INVALIDATE	0x0002	/* invalidate all cached data */
+#define MS_ASYNC	0x0001	/* [MF|SIO] return immediately */
+#define MS_INVALIDATE	0x0002	/* [MF|SIO] invalidate all cached data */
+#define	MS_SYNC		0x0010	/* [MF|SIO] msync synchronously */
 
-#ifndef _POSIX_SOURCE
+#ifndef _POSIX_C_SOURCE
 #define MS_KILLPAGES    0x0004  /* invalidate pages, leave mapped */
 #define MS_DEACTIVATE   0x0008  /* deactivate pages, leave mapped */
-#endif
 
 /*
  * Mapping type
  */
 #define	MAP_FILE	0x0000	/* map from file (default) */
 #define	MAP_ANON	0x1000	/* allocated from memory, swap space */
+#endif	/* !_POSIX_C_SOURCE */
+
 
 /*
  * Advice to madvise
  */
-#define	MADV_NORMAL	0	/* no further special treatment */
-#define	MADV_RANDOM	1	/* expect random page references */
-#define	MADV_SEQUENTIAL	2	/* expect sequential page references */
-#define	MADV_WILLNEED	3	/* will need these pages */
-#define	MADV_DONTNEED	4	/* dont need these pages */
-#define	MADV_FREE	5	/* dont need these pages, and junk contents */
-#define	POSIX_MADV_NORMAL	MADV_NORMAL
-#define	POSIX_MADV_RANDOM	MADV_RANDOM
-#define	POSIX_MADV_SEQUENTIAL	MADV_SEQUENTIAL
-#define	POSIX_MADV_WILLNEED	MADV_WILLNEED
-#define	POSIX_MADV_DONTNEED	MADV_DONTNEED
+#define	POSIX_MADV_NORMAL	0	/* [MC1] no further special treatment */
+#define	POSIX_MADV_RANDOM	1	/* [MC1] expect random page refs */
+#define	POSIX_MADV_SEQUENTIAL	2	/* [MC1] expect sequential page refs */
+#define	POSIX_MADV_WILLNEED	3	/* [MC1] will need these pages */
+#define	POSIX_MADV_DONTNEED	4	/* [MC1] dont need these pages */
+
+#ifndef _POSIX_C_SOURCE
+#define	MADV_NORMAL		POSIX_MADV_NORMAL
+#define	MADV_RANDOM		POSIX_MADV_RANDOM
+#define	MADV_SEQUENTIAL		POSIX_MADV_SEQUENTIAL
+#define	MADV_WILLNEED		POSIX_MADV_WILLNEED
+#define	MADV_DONTNEED		POSIX_MADV_DONTNEED
+#define	MADV_FREE		5	/* pages unneeded, discard contents */
 
 /*
  * Return bits from mincore
  */
-#define	MINCORE_INCORE	 	 0x1 /* Page is incore */
-#define	MINCORE_REFERENCED	 0x2 /* Page has been referenced by us */
-#define	MINCORE_MODIFIED	 0x4 /* Page has been modified by us */
-#define	MINCORE_REFERENCED_OTHER 0x8 /* Page has been referenced */
-#define	MINCORE_MODIFIED_OTHER	0x10 /* Page has been modified */
+#define	MINCORE_INCORE	 	 0x1	 /* Page is incore */
+#define	MINCORE_REFERENCED	 0x2	 /* Page has been referenced by us */
+#define	MINCORE_MODIFIED	 0x4	 /* Page has been modified by us */
+#define	MINCORE_REFERENCED_OTHER 0x8	 /* Page has been referenced */
+#define	MINCORE_MODIFIED_OTHER	0x10	 /* Page has been modified */
+#endif	/* !_POSIX_C_SOURCE */
+
 
 #ifndef KERNEL
 
-#include <sys/cdefs.h>
-
 __BEGIN_DECLS
-#ifdef _P1003_1B_VISIBLE
-int	mlockall __P((int));
-int	munlockall __P((void));
-#endif /* _P1003_1B_VISIBLE */
-int	mlock __P((const void *, size_t));
-#ifndef _MMAP_DECLARED
-#define	_MMAP_DECLARED
-void *	mmap __P((void *, size_t, int, int, int, off_t));
+/* [ML] */
+int	mlockall(int);
+int	munlockall(void);
+/* [MR] */
+int	mlock(const void *, size_t);
+#ifndef _MMAP
+#define	_MMAP
+/* [MC3]*/
+void *	mmap(void *, size_t, int, int, int, off_t) __DARWIN_ALIAS(mmap);
 #endif
-int	mprotect __P((const void *, size_t, int));
-int	msync __P((void *, size_t, int));
-int	munlock __P((const void *, size_t));
-int	munmap __P((void *, size_t));
-int	shm_open __P((const char *, int, ...));
-int	shm_unlink __P((const char *));
-int	posix_madvise __P((void *, size_t, int));
-#ifndef _POSIX_SOURCE
-#ifdef __APPLE_API_PRIVATE
-int	load_shared_file __P((char *, caddr_t, u_long,
-		caddr_t *, int, sf_mapping_t *, int *));
-int	reset_shared_file __P((caddr_t *, int, sf_mapping_t *));
-int	new_system_shared_regions __P((void));
-#endif /* __APPLE_API_PRIVATE */
-int	madvise __P((void *, size_t, int));
-int	mincore __P((const void *, size_t, char *));
-int	minherit __P((void *, size_t, int));
+/* [MPR] */
+int	mprotect(void *, size_t, int) __DARWIN_ALIAS(mprotect);
+/* [MF|SIO] */
+int	msync(void *, size_t, int) __DARWIN_ALIAS(msync);
+/* [MR] */
+int	munlock(const void *, size_t);
+/* [MC3]*/
+int	munmap(void *, size_t) __DARWIN_ALIAS(munmap);
+/* [SHM] */
+int	shm_open(const char *, int, ...);
+int	shm_unlink(const char *);
+/* [ADV] */
+int	posix_madvise(void *, size_t, int);
+
+#ifndef _POSIX_C_SOURCE
+int	madvise(void *, size_t, int);
+int	mincore(const void *, size_t, char *);
+int	minherit(void *, size_t, int);
 #endif
 __END_DECLS
 
-#endif /* !KERNEL */
+#else	/* KERNEL */
+
+void pshm_cache_init(void);	/* for bsd_init() */
+
+/*
+ * XXX routine exported by posix_shm.c, but never used there, only used in
+ * XXX kern_mman.c in the implementation of mmap().
+ */
+struct mmap_args;
+struct fileproc;
+int pshm_mmap(struct proc *p, struct mmap_args *uap, user_addr_t *retval,
+		struct fileproc *fp, off_t pageoff);
+/* Really need to overhaul struct fileops to avoid this... */
+struct pshmnode;
+int pshm_stat(struct pshmnode *pnode, struct stat *sb);
+struct fileproc;
+int pshm_truncate(struct proc *p, struct fileproc *fp, int fd, off_t length, register_t *retval);
+
+#endif /* KERNEL */
 #endif /* !_SYS_MMAN_H_ */

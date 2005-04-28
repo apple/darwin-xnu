@@ -34,16 +34,14 @@
 #define _NETINET6_SCOPE6_VAR_H_
 #include <sys/appleapiopts.h>
 
-#ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
-void	scope6_ifattach __P((struct ifnet *));
-int	scope6_set __P((struct ifnet *, u_int32_t *));
-int	scope6_get __P((struct ifnet *, u_int32_t *));
-void	scope6_setdefault __P((struct ifnet *));
-int	scope6_get_default __P((u_int32_t *));
-u_int32_t scope6_in6_addrscope __P((struct in6_addr *));
-u_int32_t scope6_addr2default __P((struct in6_addr *));
-#endif /* __APPLE_API_PRIVATE */
-#endif /* KERNEL */
+#ifdef KERNEL_PRIVATE
+void	scope6_ifattach(struct ifnet *);
+int	scope6_set(struct ifnet *, u_int32_t *);
+int	scope6_get(struct ifnet *, u_int32_t *);
+void	scope6_setdefault(struct ifnet *);
+int	scope6_get_default(u_int32_t *);
+u_int32_t scope6_in6_addrscope(struct in6_addr *);
+u_int32_t scope6_addr2default(struct in6_addr *);
+#endif KERNEL_PRIVATE
 
-#endif /* _NETINET6_SCOPE6_VAR_H_ */
+#endif _NETINET6_SCOPE6_VAR_H_

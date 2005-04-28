@@ -59,64 +59,124 @@
 #ifndef _SYS_SHM_H_
 #define _SYS_SHM_H_
 
-#include <sys/appleapiopts.h>
-#include <sys/param.h>
+#include <sys/cdefs.h>
+#include <sys/_types.h>
+
+/*
+ * [XSI]	All of the symbols from <sys/ipc.h> SHALL be defined
+ *		when this header is included
+ */
 #include <sys/ipc.h>
 
-#define SHM_RDONLY  010000  /* Attach read-only (else read-write) */
-#define SHM_RND     020000  /* Round attach address to SHMLBA */
-#define SHMLBA      NBPG /* Segment low boundary address multiple */
+/*
+ * [XSI] The pid_t, time_t, key_t, and size_t types shall be defined as
+ * described in <sys/types.h>.
+ *
+ * NOTE:	The definition of the key_t type is implicit from the
+ *		inclusion of <sys/ipc.h>
+ */
+#ifndef _PID_T
+typedef __darwin_pid_t	pid_t;
+#define _PID_T
+#endif
+
+#ifndef	_TIME_T
+#define	_TIME_T
+typedef	__darwin_time_t	time_t;
+#endif
+
+#ifndef _SIZE_T
+#define _SIZE_T
+typedef __darwin_size_t	size_t;
+#endif
+
+/*
+ * [XSI] The unsigned integer type used for the number of current attaches
+ * that MUST be able to store values at least as large as a type unsigned
+ * short.
+ */
+typedef unsigned short	shmatt_t;
+
+
+/*
+ * Possible flag values which may be OR'ed into the third argument to
+ * shmat()
+ */
+#define SHM_RDONLY	010000	/* [XSI] Attach read-only (else read-write) */
+#define SHM_RND		020000	/* [XSI] Round attach address to SHMLBA */
+
+/*
+ * This value is symbolic, and generally not expected to be sed by user
+ * programs directly, although such ise is permitted by the standard.  Its
+ * value in our implementation is equal to the number of bytes per page.
+ *
+ * NOTE:	We DO NOT obtain this value from the appropriate system
+ *		headers at this time, to avoid the resulting namespace
+ *		pollution, which is why we discourages its use.
+ */
+#define SHMLBA      4096	/* [XSI] Segment low boundary address multiple*/
 
 /* "official" access mode definitions; somewhat braindead since you have
    to specify (SHM_* >> 3) for group and (SHM_* >> 6) for world permissions */
 #define SHM_R       (IPC_R)
 #define SHM_W       (IPC_W)
 
-
-struct shmid_ds {
-	struct ipc_perm shm_perm;	/* operation permission structure */
-	int             shm_segsz;	/* size of segment in bytes */
-	pid_t           shm_lpid;   /* process ID of last shared memory op */
-	pid_t           shm_cpid;	/* process ID of creator */
-	short		shm_nattch;	/* number of current attaches */
-	time_t          shm_atime;	/* time of last shmat() */
-	time_t          shm_dtime;	/* time of last shmdt() */
-	time_t          shm_ctime;	/* time of last change by shmctl() */
-	void           *shm_internal;   /* sysv stupidity */
-};
-
-#ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
 /*
- * System 5 style catch-all structure for shared memory constants that
- * might be of interest to user programs.  Do we really want/need this?
+ * Technically, we should force all code references to the new structure
+ * definition, not in just the standards conformance case, and leave the
+ * legacy interface there for binary compatibility only.  Currently, we
+ * are only forcing this for programs requesting standards conformance.
  */
-struct shminfo {
-	int	shmmax,		/* max shared memory segment size (bytes) */
-		shmmin,		/* min shared memory segment size (bytes) */
-		shmmni,		/* max number of shared memory identifiers */
-		shmseg,		/* max shared memory segments per process */
-		shmall;		/* max amount of shared memory (pages) */
+#if defined(__POSIX_C_SOURCE) || defined(kernel) || defined(__LP64__)
+/*
+ * Structure used internally.
+ * 
+ * This structure is exposed because standards dictate that it is used as
+ * the third argment to shmctl().
+ *
+ * NOTE:	The field shm_internal is not meaningful in user space,
+ *		and mst not be used there.
+ */
+struct __shmid_ds_new {
+	struct __ipc_perm_new shm_perm;	/* [XSI] Operation permission value */
+	size_t		shm_segsz;	/* [XSI] Size of segment in bytes */
+	pid_t		shm_lpid;	/* [XSI] PID of last shared memory op */
+	pid_t		shm_cpid;	/* [XSI] PID of creator */
+	short		shm_nattch;	/* [XSI] Number of current attaches */
+	time_t		shm_atime;	/* [XSI] Time of last shmat() */
+	time_t		shm_dtime;	/* [XSI] Time of last shmdt() */
+	time_t		shm_ctime;	/* [XSI] Time of last shmctl() change */
+	void		*shm_internal;	/* reserved for kernel use */
 };
-extern struct shminfo	shminfo;
-extern struct shmid_ds	*shmsegs;
+#define	shmid_ds	__shmid_ds_new
+#else	/* !_POSIX_C_SOURCE */
+#define	shmid_ds	__shmid_ds_old
+#endif	/* !_POSIX_C_SOURCE */
 
-struct proc;
+#if !defined(__POSIX_C_SOURCE) && !defined(__LP64__)
+struct __shmid_ds_old {
+	struct __ipc_perm_old shm_perm;	/* [XSI] Operation permission value */
+	size_t		shm_segsz;	/* [XSI] Size of segment in bytes */
+	pid_t		shm_lpid;	/* [XSI] PID of last shared memory op */
+	pid_t		shm_cpid;	/* [XSI] PID of creator */
+	short		shm_nattch;	/* [XSI] Number of current attaches */
+	time_t		shm_atime;	/* [XSI] Time of last shmat() */
+	time_t		shm_dtime;	/* [XSI] Time of last shmdt() */
+	time_t		shm_ctime;	/* [XSI] Time of last shmctl() change */
+	void		*shm_internal;	/* reserved for kernel use */
+};
+#endif	/* !_POSIX_C_SOURCE */
 
-void	shmexit __P((struct proc *));
-void	shmfork __P((struct proc *, struct proc *));
-__private_extern__ void	shmexec __P((struct proc *));
-#endif /* __APPLE_API_PRIVATE */
-#else /* !KERNEL */
-
-#include <sys/cdefs.h>
+#ifndef KERNEL
 
 __BEGIN_DECLS
-int shmsys __P((int, ...));
-void *shmat  __P((int, void *, int));
-int shmget __P((key_t, int, int));
-int shmctl __P((int, int, struct shmid_ds *));
-int shmdt  __P((void *));
+#ifndef _POSIX_C_SOURCE
+int	shmsys(int, ...);
+#endif /* !_POSIX_C_SOURCE */
+void	*shmat (int, const void *, int);
+int	shmctl(int, int, struct shmid_ds *) __DARWIN_ALIAS(shmctl);
+int	shmdt(const void *);
+int	shmget(key_t, size_t, int);
 __END_DECLS
 
 #endif /* !KERNEL */

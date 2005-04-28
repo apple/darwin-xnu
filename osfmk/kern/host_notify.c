@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -29,7 +29,9 @@
  */
 
 #include <mach/mach_types.h>
+#include <mach/mach_host.h>
 
+#include <kern/kern_types.h>
 #include <kern/ipc_kobject.h>
 #include <kern/host_notify.h>
 
@@ -60,7 +62,7 @@ host_notify_init(void)
 	for (i = 0; i <= HOST_NOTIFY_TYPE_MAX; i++)
 		queue_init(&host_notify_queue[i]);
 
-	mutex_init(&host_notify_lock, ETAP_MISC_EVENT);
+	mutex_init(&host_notify_lock, 0);
 
 	i = sizeof (struct host_notify_entry);
 	host_notify_zone =
@@ -95,7 +97,7 @@ host_request_notification(
 		ip_unlock(port);
 
 		mutex_unlock(&host_notify_lock);
-		zfree(host_notify_zone, (vm_offset_t)entry);
+		zfree(host_notify_zone, entry);
 
 		return (KERN_FAILURE);
 	}
@@ -128,7 +130,7 @@ host_notify_port_destroy(
 		assert(entry->port == port);
 		remqueue(NULL, (queue_entry_t)entry);
 		mutex_unlock(&host_notify_lock);
-		zfree(host_notify_zone, (vm_offset_t)entry);
+		zfree(host_notify_zone, entry);
 
 		ipc_port_release_sonce(port);
 		return;
@@ -176,7 +178,7 @@ host_notify_all(
 			ip_unlock(port);
 
 			mutex_unlock(&host_notify_lock);
-			zfree(host_notify_zone, (vm_offset_t)entry);
+			zfree(host_notify_zone, entry);
 
 			msg->msgh_remote_port = port;
 

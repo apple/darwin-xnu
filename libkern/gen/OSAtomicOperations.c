@@ -39,6 +39,11 @@ enum {
  *	which I wrote for NuKernel in a previous life with a different last name...)
  *
  * native Boolean	CompareAndSwap(UInt32 oldValue, UInt32 newValue, UInt32 * oldValuePtr);
+ *
+ * We've since implemented a few more of these -- OSAddAtomic, OSDequeueAtomic,
+ * OSEnqueueAtomic etc -- in assembler, either for speed or correctness.  See also the
+ * commpage atomic operations, and the platform specific versions.
+ * Like standards, there are a lot of atomic ops to choose from!
  */
 
 #ifndef __ppc__
@@ -64,6 +69,37 @@ SInt32	OSIncrementAtomic(SInt32 * value)
 SInt32	OSDecrementAtomic(SInt32 * value)
 {
 	return OSAddAtomic(-1, value);
+}
+
+void *	OSDequeueAtomic(void ** inList, SInt32 inOffset)
+{
+	void *	oldListHead;
+	void *	newListHead;
+	
+	do {
+		oldListHead = *inList;
+		if (oldListHead == NULL) {
+			break;
+		}
+		
+		newListHead = *(void **) (((char *) oldListHead) + inOffset);
+	} while (! OSCompareAndSwap((UInt32)oldListHead,
+					(UInt32)newListHead, (UInt32 *)inList));
+	
+	return oldListHead;
+}
+
+void	OSEnqueueAtomic(void ** inList, void * inNewLink, SInt32 inOffset)
+{
+	void *	oldListHead;
+	void *	newListHead = inNewLink;
+	void **	newLinkNextPtr = (void **) (((char *) inNewLink) + inOffset);
+	
+	do {
+		oldListHead = *inList;
+		*newLinkNextPtr = oldListHead;
+	} while (! OSCompareAndSwap((UInt32)oldListHead, (UInt32)newListHead,
+					(UInt32 *)inList));
 }
 
 #endif	/* !__ppc__ */
@@ -143,37 +179,6 @@ Boolean	OSTestAndSet(UInt32 bit, UInt8 * startAddress)
 Boolean	OSTestAndClear(UInt32 bit, UInt8 * startAddress)
 {
 	return OSTestAndSetClear(bit, false, startAddress);
-}
-
-void *	OSDequeueAtomic(void ** inList, SInt32 inOffset)
-{
-	void *	oldListHead;
-	void *	newListHead;
-	
-	do {
-		oldListHead = *inList;
-		if (oldListHead == NULL) {
-			break;
-		}
-		
-		newListHead = *(void **) (((char *) oldListHead) + inOffset);
-	} while (! OSCompareAndSwap((UInt32)oldListHead,
-					(UInt32)newListHead, (UInt32 *)inList));
-	
-	return oldListHead;
-}
-
-void	OSEnqueueAtomic(void ** inList, void * inNewLink, SInt32 inOffset)
-{
-	void *	oldListHead;
-	void *	newListHead = inNewLink;
-	void **	newLinkNextPtr = (void **) (((char *) inNewLink) + inOffset);
-	
-	do {
-		oldListHead = *inList;
-		*newLinkNextPtr = oldListHead;
-	} while (! OSCompareAndSwap((UInt32)oldListHead, (UInt32)newListHead,
-					(UInt32 *)inList));
 }
 
 /*

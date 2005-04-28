@@ -64,7 +64,6 @@ __OUT(w, short)
 __OUT(l, long)
 
 extern void cninit(void);
-extern void bcopy(void * from, void * to, int size);
 extern int  sprintf(char * str, const char * format, ...);
 
 //------------------------------------------------------------------------

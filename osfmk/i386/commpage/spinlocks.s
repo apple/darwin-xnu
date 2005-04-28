@@ -49,7 +49,8 @@
 Lspin_lock_try_up:
 	movl		4(%esp), %ecx 
 	xorl		%eax, %eax
-	cmpxchgl	%ecx, (%ecx)
+	orl		$-1, %edx
+	cmpxchgl	%edx, (%ecx)
 	setz		%dl
 	movzbl		%dl, %eax
 	ret
@@ -60,8 +61,9 @@ Lspin_lock_try_up:
 Lspin_lock_try_mp:
 	movl		4(%esp), %ecx 
 	xorl		%eax, %eax
+	orl		$-1, %edx
 	lock
-	cmpxchgl	%ecx, (%ecx)
+	cmpxchgl	%edx, (%ecx)
 	setz		%dl
 	movzbl		%dl, %eax
 	ret
@@ -75,7 +77,8 @@ Lspin_lock_up:
 	movl		4(%esp), %ecx
 	xorl		%eax, %eax
 .set Lretry,		. - Lspin_lock_up
-	cmpxchgl	%ecx, (%ecx)
+	orl		$-1, %edx
+	cmpxchgl	%edx, (%ecx)
 	UNLIKELY
 	JNZ		Lrelinquish_off - . + Lspin_lock_up - LEN
 	ret
@@ -87,8 +90,9 @@ Lspin_lock_mp:
 	movl		4(%esp), %ecx
 	xorl		%eax, %eax
 0:
+	orl		$-1, %edx
 	lock
-	cmpxchgl	%ecx, (%ecx)
+	cmpxchgl	%edx, (%ecx)
 	UNLIKELY
 	jnz		1f
 	ret
@@ -120,11 +124,11 @@ Lrelinquish:				/* relinquish the processor	*/
 	pushl		$1		/* 1 ms				*/
 	pushl		$1		/* SWITCH_OPTION_DEPRESS	*/
 	pushl		$0		/* THREAD_NULL			*/
+	pushl		$0		/* push dummy stack ret addr    */
 	movl		$-61, %eax	/* syscall_thread_switch	*/
 	lcall		$7, $0
-	popl		%eax		/* set %eax to 0 again		*/
-	popl		%edx		/* use %edx as scratch		*/
-	popl		%edx		/* reg to fixup stack		*/
+	addl		$16, %esp	/* adjust stack*/
+	xorl		%eax, %eax	/* set %eax to 0 again		*/
 	JMP		Lretry - Lrelinquish_off - . + Lrelinquish - LEN
 
 	COMMPAGE_DESCRIPTOR(relinquish,_COMM_PAGE_RELINQUISH,0,0)

@@ -77,10 +77,10 @@
 #define	PATH_MAX		 1024	/* max bytes in pathname */
 #define	PIPE_BUF		  512	/* max bytes for atomic pipe writes */
 
-#define	BC_BASE_MAX	      INT_MAX	/* max ibase/obase values in bc(1) */
-#define	BC_DIM_MAX		65535	/* max array elements in bc(1) */
-#define	BC_SCALE_MAX	      INT_MAX	/* max scale value in bc(1) */
-#define	BC_STRING_MAX	      INT_MAX	/* max const string length in bc(1) */
+#define	BC_BASE_MAX		   99	/* max ibase/obase values in bc(1) */
+#define	BC_DIM_MAX		 2048	/* max array elements in bc(1) */
+#define	BC_SCALE_MAX		   99	/* max scale value in bc(1) */
+#define	BC_STRING_MAX		 1000	/* max const string length in bc(1) */
 #define	COLL_WEIGHTS_MAX	    2	/* max weights for order keyword */
 #define	EQUIV_CLASS_MAX		    2
 #define	EXPR_NEST_MAX		   32	/* max expressions nested in expr(1) */

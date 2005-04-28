@@ -28,8 +28,7 @@
 /*
  * Empty file (publicly)
  */
-#ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
+#ifdef BSD_KERNEL_PRIVATE
 /*
  *	Use most significant 16 bits to avoid collisions with
  *	machine independent flags.
@@ -43,9 +42,8 @@
 #define RB_BOOTNEXT	0x00400000	/* reboot into NeXT */
 #define RB_BOOTDOS	0x00800000	/* reboot into DOS */
 
-#endif /* __APPLE_API_PRIVATE */
 
-#endif /* KERNEL */
+#endif /* BSD_KERNEL_PRIVATE */
 
 #endif /* _BSD_PPC_REBOOT_H_ */
 

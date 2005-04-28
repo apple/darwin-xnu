@@ -49,9 +49,9 @@
 
 #include <net/if.h>
 #include <net/route.h>
-#include <net/netisr.h>
 #include <net/zlib.h>
 #include <kern/cpu_number.h>
+#include <kern/locks.h>
 
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
@@ -80,7 +80,7 @@
 
 #define IPLEN_FLIPPED
 
-
+extern lck_mtx_t *sadb_mutex;
 void
 ipcomp4_input(struct mbuf *m, int off)
 {
@@ -95,6 +95,7 @@ ipcomp4_input(struct mbuf *m, int off)
 	size_t newlen, olen;
 	struct secasvar *sav = NULL;
 
+	lck_mtx_lock(sadb_mutex);
 
 	if (m->m_pkthdr.len < off + sizeof(struct ipcomp)) {
 		ipseclog((LOG_DEBUG, "IPv4 IPComp input: assumption failed "
@@ -153,7 +154,9 @@ ipcomp4_input(struct mbuf *m, int off)
 
 	olen = m->m_pkthdr.len;
 	newlen = m->m_pkthdr.len - off;
+	lck_mtx_unlock(sadb_mutex);
 	error = (*algo->decompress)(m, m->m_next, &newlen);
+	lck_mtx_lock(sadb_mutex);
 	if (error != 0) {
 		if (error == EINVAL)
 			ipsecstat.in_inval++;
@@ -214,18 +217,22 @@ ipcomp4_input(struct mbuf *m, int off)
 			ipsecstat.in_polvio++;
 			goto fail;
 		}
-		(*ip_protox[nxt]->pr_input)(m, off);
-
+		lck_mtx_unlock(sadb_mutex);
+		ip_proto_dispatch_in(m, off, nxt, 0);
+		lck_mtx_lock(sadb_mutex);
 	} else
 		m_freem(m);
 	m = NULL;
 
 	ipsecstat.in_success++;
+	lck_mtx_unlock(sadb_mutex);
 	return;
 
 fail:
 	if (sav)
 		key_freesav(sav);
+
+	lck_mtx_unlock(sadb_mutex);
 	if (m)
 		m_freem(m);
 	return;
@@ -252,6 +259,7 @@ ipcomp6_input(mp, offp)
 	m = *mp;
 	off = *offp;
 
+	lck_mtx_lock(sadb_mutex);
 	md = m_pulldown(m, off, sizeof(*ipcomp), NULL);
 	if (!m) {
 		m = NULL;	/*already freed*/
@@ -291,7 +299,9 @@ ipcomp6_input(mp, offp)
 	m->m_pkthdr.len -= sizeof(struct ipcomp);
 
 	newlen = m->m_pkthdr.len - off;
+	lck_mtx_unlock(sadb_mutex);
 	error = (*algo->decompress)(m, md, &newlen);
+	lck_mtx_lock(sadb_mutex);
 	if (error != 0) {
 		if (error == EINVAL)
 			ipsec6stat.in_inval++;
@@ -330,6 +340,7 @@ ipcomp6_input(mp, offp)
 	*offp = off;
 	*mp = m;
 	ipsec6stat.in_success++;
+	lck_mtx_unlock(sadb_mutex);
 	return nxt;
 
 fail:
@@ -337,6 +348,7 @@ fail:
 		m_freem(m);
 	if (sav)
 		key_freesav(sav);
+	lck_mtx_unlock(sadb_mutex);
 	return IPPROTO_DONE;
 }
 #endif /* INET6 */

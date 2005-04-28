@@ -26,6 +26,8 @@
  *
  */
 
+#include <sys/sysctl.h>
+
 #include <IOKit/IOKitDebug.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/assert.h>
@@ -35,18 +37,24 @@
 #include <libkern/c++/OSContainers.h>
 #include <libkern/c++/OSCPPDebug.h>
 
-extern "C" {
-
-SInt64		gIOKitDebug
 #ifdef IOKITDEBUG
-                            = IOKITDEBUG
+#define DEBUG_INIT_VALUE IOKITDEBUG
+#else
+#define DEBUG_INIT_VALUE 0
 #endif
-;
+
+SInt64		gIOKitDebug = DEBUG_INIT_VALUE;
+SYSCTL_QUAD(_debug, OID_AUTO, iokit, CTLFLAG_RW, &gIOKitDebug, "boot_arg io");
+
 
 int 		debug_malloc_size;
 int		debug_iomalloc_size;
+vm_size_t	debug_iomallocpageable_size;
 int 		debug_container_malloc_size;
 // int 		debug_ivars_size; // in OSObject.cpp
+
+extern "C" {
+
 
 void IOPrintPlane( const IORegistryPlane * plane )
 {
@@ -202,6 +210,7 @@ bool IOKitDiagnostics::serialize(OSSerialize *s) const
     updateOffset( dict, debug_ivars_size, "Instance allocation" );
     updateOffset( dict, debug_container_malloc_size, "Container allocation" );
     updateOffset( dict, debug_iomalloc_size, "IOMalloc allocation" );
+    updateOffset( dict, debug_iomallocpageable_size, "Pageable allocation" );
 
     OSMetaClass::serializeClassDictionary(dict);
 

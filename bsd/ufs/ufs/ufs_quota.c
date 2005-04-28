@@ -62,9 +62,10 @@
 #include <sys/systm.h>
 #include <sys/malloc.h>
 #include <sys/file.h>
-#include <sys/proc.h>
-#include <sys/vnode.h>
-#include <sys/mount.h>
+#include <sys/proc.h>	
+#include <sys/kauth.h>
+#include <sys/vnode_internal.h>
+#include <sys/mount_internal.h>
 #include <sys/namei.h>
 #include <sys/quota.h>
 
@@ -101,7 +102,7 @@ getinoquota(ip)
 	 */
 	if (ip->i_dquot[USRQUOTA] == NODQUOT &&
 	    (error =
-		dqget(vp, ip->i_uid, &ump->um_qfiles[USRQUOTA], USRQUOTA, &ip->i_dquot[USRQUOTA])) &&
+		dqget(ip->i_uid, &ump->um_qfiles[USRQUOTA], USRQUOTA, &ip->i_dquot[USRQUOTA])) &&
 	    error != EINVAL)
 		return (error);
 	/*
@@ -110,7 +111,7 @@ getinoquota(ip)
 	 */
 	if (ip->i_dquot[GRPQUOTA] == NODQUOT &&
 	    (error =
-		dqget(vp, ip->i_gid, &ump->um_qfiles[GRPQUOTA], GRPQUOTA, &ip->i_dquot[GRPQUOTA])) &&
+		dqget(ip->i_gid, &ump->um_qfiles[GRPQUOTA], GRPQUOTA, &ip->i_dquot[GRPQUOTA])) &&
 	    error != EINVAL)
 		return (error);
 	return (0);
@@ -120,11 +121,7 @@ getinoquota(ip)
  * Update disk usage, and take corrective action.
  */
 int
-chkdq(ip, change, cred, flags)
-	register struct inode *ip;
-	int64_t change;
-	struct ucred *cred;
-	int flags;
+chkdq(struct inode *ip, int64_t change, kauth_cred_t cred, int flags)
 {
 	register struct dquot *dq;
 	register int i;
@@ -142,10 +139,8 @@ chkdq(ip, change, cred, flags)
 		for (i = 0; i < MAXQUOTAS; i++) {
 			if ((dq = ip->i_dquot[i]) == NODQUOT)
 				continue;
-			while (dq->dq_flags & DQ_LOCK) {
-				dq->dq_flags |= DQ_WANT;
-				sleep((caddr_t)dq, PINOD+1);
-			}
+			dqlock(dq);
+
 			ncurbytes = dq->dq_curbytes + change;
 			if (ncurbytes >= 0)
 				dq->dq_curbytes = ncurbytes;
@@ -153,29 +148,32 @@ chkdq(ip, change, cred, flags)
 				dq->dq_curbytes = 0;
 			dq->dq_flags &= ~DQ_BLKS;
 			dq->dq_flags |= DQ_MOD;
+
+			dqunlock(dq);
 		}
 		return (0);
 	}
+#warning "hack for no cred passed to chkdq()"
 	p = current_proc();
 	if (cred == NOCRED)
-		cred = kernproc->p_ucred;
-	if ((flags & FORCE) == 0 && ((cred->cr_uid != 0) || (p->p_flag & P_FORCEQUOTA))) {
+		cred = proc_ucred(kernproc);
+	if ((flags & FORCE) == 0 && (suser(cred, NULL) || (proc_forcequota(p)))) {
 		for (i = 0; i < MAXQUOTAS; i++) {
 			if ((dq = ip->i_dquot[i]) == NODQUOT)
 				continue;
-			if (error = chkdqchg(ip, change, cred, i))
+			if ( (error = chkdqchg(ip, change, cred, i)) )
 				return (error);
 		}
 	}
 	for (i = 0; i < MAXQUOTAS; i++) {
 		if ((dq = ip->i_dquot[i]) == NODQUOT)
 			continue;
-		while (dq->dq_flags & DQ_LOCK) {
-			dq->dq_flags |= DQ_WANT;
-			sleep((caddr_t)dq, PINOD+1);
-		}
+		dqlock(dq);
+
 		dq->dq_curbytes += change;
 		dq->dq_flags |= DQ_MOD;
+
+		dqunlock(dq);
 	}
 	return (0);
 }
@@ -185,28 +183,29 @@ chkdq(ip, change, cred, flags)
  * Issue an error message if appropriate.
  */
 int
-chkdqchg(ip, change, cred, type)
-	struct inode *ip;
-	int64_t change;
-	struct ucred *cred;
-	int type;
+chkdqchg(struct inode *ip, int64_t change, kauth_cred_t cred, int type)
 {
 	register struct dquot *dq = ip->i_dquot[type];
-	u_int64_t ncurbytes = dq->dq_curbytes + change;
+	u_int64_t ncurbytes;
 
+	dqlock(dq);
+
+	ncurbytes = dq->dq_curbytes + change;
 	/*
 	 * If user would exceed their hard limit, disallow space allocation.
 	 */
 	if (ncurbytes >= dq->dq_bhardlimit && dq->dq_bhardlimit) {
 		if ((dq->dq_flags & DQ_BLKS) == 0 &&
-		    ip->i_uid == cred->cr_uid) {
+		    ip->i_uid == kauth_cred_getuid(cred)) {
 #if 1
 			printf("\n%s: write failed, %s disk limit reached\n",
-			    ITOV(ip)->v_mount->mnt_stat.f_mntonname,
+			    ITOV(ip)->v_mount->mnt_vfsstat.f_mntonname,
 			    quotatypes[type]);
 #endif
 			dq->dq_flags |= DQ_BLKS;
 		}
+		dqunlock(dq);
+
 		return (EDQUOT);
 	}
 	/*
@@ -214,31 +213,40 @@ chkdqchg(ip, change, cred, type)
 	 * allocation. Reset time limit as they cross their soft limit.
 	 */
 	if (ncurbytes >= dq->dq_bsoftlimit && dq->dq_bsoftlimit) {
+		struct timeval tv;
+
+		microtime(&tv);
 		if (dq->dq_curbytes < dq->dq_bsoftlimit) {
-			dq->dq_btime = time.tv_sec +
+			dq->dq_btime = tv.tv_sec +
 			    VFSTOUFS(ITOV(ip)->v_mount)->um_qfiles[type].qf_btime;
 #if 1
-			if (ip->i_uid == cred->cr_uid)
+			if (ip->i_uid == kauth_cred_getuid(cred))
 				printf("\n%s: warning, %s %s\n",
-				    ITOV(ip)->v_mount->mnt_stat.f_mntonname,
+				    ITOV(ip)->v_mount->mnt_vfsstat.f_mntonname,
 				    quotatypes[type], "disk quota exceeded");
 #endif
+			dqunlock(dq);
+
 			return (0);
 		}
-		if (time.tv_sec > dq->dq_btime) {
+		if (tv.tv_sec > dq->dq_btime) {
 			if ((dq->dq_flags & DQ_BLKS) == 0 &&
-			    ip->i_uid == cred->cr_uid) {
+			    ip->i_uid == kauth_cred_getuid(cred)) {
 #if 1
 				printf("\n%s: write failed, %s %s\n",
-				    ITOV(ip)->v_mount->mnt_stat.f_mntonname,
+				    ITOV(ip)->v_mount->mnt_vfsstat.f_mntonname,
 				    quotatypes[type],
 				    "disk quota exceeded for too long");
 #endif
 				dq->dq_flags |= DQ_BLKS;
 			}
+			dqunlock(dq);
+
 			return (EDQUOT);
 		}
 	}
+	dqunlock(dq);
+
 	return (0);
 }
 
@@ -246,11 +254,7 @@ chkdqchg(ip, change, cred, type)
  * Check the inode limit, applying corrective action.
  */
 int
-chkiq(ip, change, cred, flags)
-	register struct inode *ip;
-	long change;
-	struct ucred *cred;
-	int flags;
+chkiq(struct inode *ip, long change, kauth_cred_t cred, int flags)
 {
 	register struct dquot *dq;
 	register int i;
@@ -267,10 +271,8 @@ chkiq(ip, change, cred, flags)
 		for (i = 0; i < MAXQUOTAS; i++) {
 			if ((dq = ip->i_dquot[i]) == NODQUOT)
 				continue;
-			while (dq->dq_flags & DQ_LOCK) {
-				dq->dq_flags |= DQ_WANT;
-				sleep((caddr_t)dq, PINOD+1);
-			}
+			dqlock(dq);
+
 			ncurinodes = dq->dq_curinodes + change;
 			if (ncurinodes >= 0)
 				dq->dq_curinodes = ncurinodes;
@@ -278,29 +280,32 @@ chkiq(ip, change, cred, flags)
 				dq->dq_curinodes = 0;
 			dq->dq_flags &= ~DQ_INODS;
 			dq->dq_flags |= DQ_MOD;
+
+			dqunlock(dq);
 		}
 		return (0);
 	}
+#warning "hack for no cred passed to chkiq()"
 	p = current_proc();
 	if (cred == NOCRED)
-		cred = kernproc->p_ucred;
-	if ((flags & FORCE) == 0 && ((cred->cr_uid != 0) || (p->p_flag & P_FORCEQUOTA))) {
+		cred = proc_ucred(kernproc);
+	if ((flags & FORCE) == 0 && (suser(cred, NULL) || (proc_forcequota(p)))) {
 		for (i = 0; i < MAXQUOTAS; i++) {
 			if ((dq = ip->i_dquot[i]) == NODQUOT)
 				continue;
-			if (error = chkiqchg(ip, change, cred, i))
+			if ( (error = chkiqchg(ip, change, cred, i)) )
 				return (error);
 		}
 	}
 	for (i = 0; i < MAXQUOTAS; i++) {
 		if ((dq = ip->i_dquot[i]) == NODQUOT)
 			continue;
-		while (dq->dq_flags & DQ_LOCK) {
-			dq->dq_flags |= DQ_WANT;
-			sleep((caddr_t)dq, PINOD+1);
-		}
+		dqlock(dq);
+
 		dq->dq_curinodes += change;
 		dq->dq_flags |= DQ_MOD;
+
+		dqunlock(dq);
 	}
 	return (0);
 }
@@ -310,28 +315,29 @@ chkiq(ip, change, cred, flags)
  * Issue an error message if appropriate.
  */
 int
-chkiqchg(ip, change, cred, type)
-	struct inode *ip;
-	long change;
-	struct ucred *cred;
-	int type;
+chkiqchg(struct inode *ip, long change, kauth_cred_t cred, int type)
 {
 	register struct dquot *dq = ip->i_dquot[type];
-	long ncurinodes = dq->dq_curinodes + change;
+	long ncurinodes;
 
+	dqlock(dq);
+
+	ncurinodes = dq->dq_curinodes + change;
 	/*
 	 * If user would exceed their hard limit, disallow inode allocation.
 	 */
 	if (ncurinodes >= dq->dq_ihardlimit && dq->dq_ihardlimit) {
 		if ((dq->dq_flags & DQ_INODS) == 0 &&
-		    ip->i_uid == cred->cr_uid) {
+		    ip->i_uid == kauth_cred_getuid(cred)) {
 #if 1
 			printf("\n%s: write failed, %s inode limit reached\n",
-			    ITOV(ip)->v_mount->mnt_stat.f_mntonname,
+			    ITOV(ip)->v_mount->mnt_vfsstat.f_mntonname,
 			    quotatypes[type]);
 #endif
 			dq->dq_flags |= DQ_INODS;
 		}
+		dqunlock(dq);
+
 		return (EDQUOT);
 	}
 	/*
@@ -339,31 +345,40 @@ chkiqchg(ip, change, cred, type)
 	 * allocation. Reset time limit as they cross their soft limit.
 	 */
 	if (ncurinodes >= dq->dq_isoftlimit && dq->dq_isoftlimit) {
+		struct timeval tv;
+
+		microtime(&tv);
 		if (dq->dq_curinodes < dq->dq_isoftlimit) {
-			dq->dq_itime = time.tv_sec +
+			dq->dq_itime = tv.tv_sec +
 			    VFSTOUFS(ITOV(ip)->v_mount)->um_qfiles[type].qf_itime;
 #if 1
-			if (ip->i_uid == cred->cr_uid)
+			if (ip->i_uid == kauth_cred_getuid(cred))
 				printf("\n%s: warning, %s %s\n",
-				    ITOV(ip)->v_mount->mnt_stat.f_mntonname,
+				    ITOV(ip)->v_mount->mnt_vfsstat.f_mntonname,
 				    quotatypes[type], "inode quota exceeded");
 #endif
+			dqunlock(dq);
+
 			return (0);
 		}
-		if (time.tv_sec > dq->dq_itime) {
+		if (tv.tv_sec > dq->dq_itime) {
 			if ((dq->dq_flags & DQ_INODS) == 0 &&
-			    ip->i_uid == cred->cr_uid) {
+			    ip->i_uid == kauth_cred_getuid(cred)) {
 #if 1
 				printf("\n%s: write failed, %s %s\n",
-				    ITOV(ip)->v_mount->mnt_stat.f_mntonname,
+				    ITOV(ip)->v_mount->mnt_vfsstat.f_mntonname,
 				    quotatypes[type],
 				    "inode quota exceeded for too long");
 #endif
 				dq->dq_flags |= DQ_INODS;
 			}
+			dqunlock(dq);
+
 			return (EDQUOT);
 		}
 	}
+	dqunlock(dq);
+
 	return (0);
 }
 
@@ -380,8 +395,7 @@ chkdquot(ip)
 	register int i;
 
 	for (i = 0; i < MAXQUOTAS; i++) {
-		if (ump->um_qfiles[i].qf_vp == NULLVP ||
-		    (ump->um_qfiles[i].qf_qflags & (QTF_OPENING|QTF_CLOSING)))
+	        if (ump->um_qfiles[i].qf_vp == NULLVP)
 			continue;
 		if (ip->i_dquot[i] == NODQUOT) {
 			vprint("chkdquot: missing dquot", ITOV(ip));
@@ -395,140 +409,186 @@ chkdquot(ip)
  * Code to process quotactl commands.
  */
 
+
+struct ufs_quotaon_cargs {
+        int	error;
+};
+
+
+static int
+ufs_quotaon_callback(struct vnode *vp, void *cargs)
+{
+	struct ufs_quotaon_cargs *args;
+
+	args = (struct ufs_quotaon_cargs *)cargs;
+
+	if ( (args->error = getinoquota(VTOI(vp))) )
+	        return (VNODE_RETURNED_DONE);
+
+	return (VNODE_RETURNED);
+}
+
+
 /*
  * Q_QUOTAON - set up a quota file for a particular file system.
  */
 int
-quotaon(p, mp, type, fname, segflg)
-	struct proc *p;
+quotaon(context, mp, type, fnamep)
+	vfs_context_t context;
 	struct mount *mp;
 	register int type;
-	caddr_t fname;
-	enum uio_seg segflg;
+	caddr_t fnamep;
 {
 	struct ufsmount *ump = VFSTOUFS(mp);
-	struct vnode *vp, **vpp;
-	struct vnode *nextvp;
-	struct dquot *dq;
-	int error;
-	struct nameidata nd;
+	struct quotafile *qfp;
+	struct vnode *vp;
+	int error = 0;
+	struct ufs_quotaon_cargs args;
 
-	vpp = &ump->um_qfiles[type].qf_vp;
-	NDINIT(&nd, LOOKUP, FOLLOW, segflg, fname, p);
-	if (error = vn_open(&nd, FREAD|FWRITE, 0))
-		return (error);
-	vp = nd.ni_vp;
-	VOP_UNLOCK(vp, 0, p);
-	if (vp->v_type != VREG) {
-		(void) vn_close(vp, FREAD|FWRITE, p->p_ucred, p);
-		return (EACCES);
+	qfp = &ump->um_qfiles[type];
+
+	if ( (qf_get(qfp, QTF_OPENING)) )
+	        return (0);
+	
+	error = vnode_open(fnamep, FREAD|FWRITE, 0, 0, &vp, NULL);
+	if (error) {
+	        goto out;
 	}
-	if (*vpp != vp)
-		quotaoff(p, mp, type);
-	ump->um_qfiles[type].qf_qflags |= QTF_OPENING;
-	mp->mnt_flag |= MNT_QUOTA;
-	vp->v_flag |= VNOFLUSH;
-	*vpp = vp;
+	if (!vnode_isreg(vp)) {
+		(void) vnode_close(vp, FREAD|FWRITE, NULL);
+		error = EACCES;
+		goto out;
+	}
+	vfs_setflags(mp, (uint64_t)((unsigned int)MNT_QUOTA));
+	vnode_setnoflush(vp);
 	/*
 	 * Save the credential of the process that turned on quotas.
 	 */
-	crhold(p->p_ucred);
-	ump->um_qfiles[type].qf_cred = p->p_ucred;
-	/* Finish initializing the quota file */
-	if (error = dqfileopen(&ump->um_qfiles[type], type))
-		goto exit;
-#if 0
-	ump->um_qfiles[type].qf_btime = MAX_DQ_TIME;
-	ump->um_qfiles[type].qf_itime = MAX_IQ_TIME;
-	if (dqget(NULLVP, 0, &ump->um_qfiles[type], type, &dq) == 0) {
-		if (dq->dq_btime > 0)
-			ump->um_qfiles[type].qf_btime = dq->dq_btime;
-		if (dq->dq_itime > 0)
-			ump->um_qfiles[type].qf_itime = dq->dq_itime;
-		dqrele(NULLVP, dq);
-	}
-#endif
+	qfp->qf_vp = vp;
+	qfp->qf_cred = vfs_context_ucred(context);
+	kauth_cred_ref(qfp->qf_cred);
+
+	/*
+	 * Finish initializing the quota file
+	 */
+	if ( (error = dqfileopen(&ump->um_qfiles[type], type)) ) {
+                (void) vnode_close(vp, FREAD|FWRITE, NULL);
+
+		kauth_cred_rele(qfp->qf_cred);
+		qfp->qf_cred = NOCRED;
+                qfp->qf_vp = NULLVP;
+                goto out;
+        }
+        qf_put(qfp, QTF_OPENING);
+
 	/*
 	 * Search vnodes associated with this mount point,
 	 * adding references to quota file being opened.
 	 * NB: only need to add dquot's for inodes being modified.
+	 *
+	 * ufs_quota_callback will be called for each vnode open for
+	 * 'write' (VNODE_WRITEABLE) hung off of this mount point
+	 * the vnode will be in an 'unbusy' state (VNODE_WAIT) and 
+	 * properly referenced and unreferenced around the callback
 	 */
-again:
-	for (vp = mp->mnt_vnodelist.lh_first; vp != NULL; vp = nextvp) {
-		nextvp = vp->v_mntvnodes.le_next;
-		if (vp->v_writecount == 0)
-			continue;
-		if (vget(vp, LK_EXCLUSIVE, p))
-			goto again;
-		if (error = getinoquota(VTOI(vp))) {
-			vput(vp);
-			break;
-		}
-		vput(vp);
-		if (vp->v_mntvnodes.le_next != nextvp || vp->v_mount != mp)
-			goto again;
-	}
-exit:
-	ump->um_qfiles[type].qf_qflags &= ~QTF_OPENING;
+	args.error = 0;
+
+	vnode_iterate(mp, VNODE_WRITEABLE | VNODE_WAIT, ufs_quotaon_callback, (void *)&args);
+	
+	error = args.error;
+
 	if (error)
-		quotaoff(p, mp, type);
+		quotaoff(mp, type);
 	return (error);
+out:
+	qf_put(qfp, QTF_OPENING);
+	
+	return (error);
+}
+
+
+
+struct ufs_quotaoff_cargs {
+        int	type;
+};
+
+static int
+ufs_quotaoff_callback(struct vnode *vp, void *cargs)
+{
+	struct ufs_quotaoff_cargs *args;
+	struct inode *ip;
+	struct dquot *dq;
+
+	args = (struct ufs_quotaoff_cargs *)cargs;
+
+        ip = VTOI(vp);
+
+	dq = ip->i_dquot[args->type];
+	ip->i_dquot[args->type] = NODQUOT;
+
+	dqrele(dq);
+
+	return (VNODE_RETURNED);
 }
 
 /*
  * Q_QUOTAOFF - turn off disk quotas for a filesystem.
  */
 int
-quotaoff(p, mp, type)
-	struct proc *p;
-	struct mount *mp;
-	register int type;
+quotaoff(struct mount *mp, register int type)
 {
-	struct vnode *vp;
-	struct vnode *qvp, *nextvp;
+	struct vnode *qvp;
 	struct ufsmount *ump = VFSTOUFS(mp);
-	struct dquot *dq;
-	struct inode *ip;
-	int error;
-	struct ucred *cred;
+	struct quotafile *qfp;
+	int error = 0;
+	kauth_cred_t cred;
+	struct ufs_quotaoff_cargs args;
 	
-	if ((qvp = ump->um_qfiles[type].qf_vp) == NULLVP)
-		return (0);
-	ump->um_qfiles[type].qf_qflags |= QTF_CLOSING;
+	qfp = &ump->um_qfiles[type];
+
+	if ( (qf_get(qfp, QTF_CLOSING)) )
+	        return (0);
+	qvp = qfp->qf_vp;
+
+        /*
+         * Sync out any orpaned dirty dquot entries.
+         */
+        dqsync_orphans(qfp);
+	
 	/*
 	 * Search vnodes associated with this mount point,
 	 * deleting any references to quota file being closed.
+         *
+	 * ufs_quotaoff_callback will be called for each vnode
+	 * hung off of this mount point
+	 * the vnode will be in an 'unbusy' state (VNODE_WAIT) and 
+	 * properly referenced and unreferenced around the callback
 	 */
-again:
-	for (vp = mp->mnt_vnodelist.lh_first; vp != NULL; vp = nextvp) {
-		nextvp = vp->v_mntvnodes.le_next;
-		if (vget(vp, LK_EXCLUSIVE, p))
-			goto again;
-		ip = VTOI(vp);
-		dq = ip->i_dquot[type];
-		ip->i_dquot[type] = NODQUOT;
-		dqrele(vp, dq);
-		vput(vp);
-		if (vp->v_mntvnodes.le_next != nextvp || vp->v_mount != mp)
-			goto again;
-	}
+	args.type = type;
+
+	vnode_iterate(mp, VNODE_WAIT, ufs_quotaoff_callback, (void *)&args);
+	
 	dqflush(qvp);
 	/* Finish tearing down the quota file */
-	dqfileclose(&ump->um_qfiles[type], type);
-	qvp->v_flag &= ~VNOFLUSH;
-	error = vn_close(qvp, FREAD|FWRITE, p->p_ucred, p);
-	ump->um_qfiles[type].qf_vp = NULLVP;
-	cred = ump->um_qfiles[type].qf_cred;
+	dqfileclose(qfp, type);
+
+	vnode_clearnoflush(qvp);
+	error = vnode_close(qvp, FREAD|FWRITE, NULL);
+
+	qfp->qf_vp = NULLVP;
+	cred = qfp->qf_cred;
 	if (cred != NOCRED) {
-		ump->um_qfiles[type].qf_cred = NOCRED;
-		crfree(cred);
+		qfp->qf_cred = NOCRED;
+		kauth_cred_rele(cred);
 	}
-	ump->um_qfiles[type].qf_qflags &= ~QTF_CLOSING;
 	for (type = 0; type < MAXQUOTAS; type++)
 		if (ump->um_qfiles[type].qf_vp != NULLVP)
 			break;
 	if (type == MAXQUOTAS)
 		mp->mnt_flag &= ~MNT_QUOTA;
+	
+	qf_put(qfp, QTF_CLOSING);
+
 	return (error);
 }
 
@@ -536,19 +596,24 @@ again:
  * Q_GETQUOTA - return current values in a dqblk structure.
  */
 int
-getquota(mp, id, type, addr)
+getquota(mp, id, type, datap)
 	struct mount *mp;
 	u_long id;
 	int type;
-	caddr_t addr;
+	caddr_t datap;
 {
 	struct dquot *dq;
 	int error;
 
-	if (error = dqget(NULLVP, id, &VFSTOUFS(mp)->um_qfiles[type], type, &dq))
+	if ( (error = dqget(id, &VFSTOUFS(mp)->um_qfiles[type], type, &dq)) )
 		return (error);
-	error = copyout((caddr_t)&dq->dq_dqb, addr, sizeof (struct dqblk));
-	dqrele(NULLVP, dq);
+	dqlock(dq);
+
+	bcopy(&dq->dq_dqb, datap, sizeof(dq->dq_dqb));
+
+	dqunlock(dq);
+	dqrele(dq);
+
 	return (error);
 }
 
@@ -556,47 +621,47 @@ getquota(mp, id, type, addr)
  * Q_SETQUOTA - assign an entire dqblk structure.
  */
 int
-setquota(mp, id, type, addr)
+setquota(mp, id, type, datap)
 	struct mount *mp;
 	u_long id;
 	int type;
-	caddr_t addr;
+	caddr_t datap;
 {
-	register struct dquot *dq;
-	struct dquot *ndq;
+	struct dquot *dq;
 	struct ufsmount *ump = VFSTOUFS(mp);
-	struct dqblk newlim;
+	struct dqblk * newlimp = (struct dqblk *) datap;
+	struct timeval tv;
 	int error;
 
-	if (error = copyin(addr, (caddr_t)&newlim, sizeof (struct dqblk)))
+	error = dqget(id, &ump->um_qfiles[type], type, &dq);
+	if (error)
 		return (error);
-	if (error = dqget(NULLVP, id, &ump->um_qfiles[type], type, &ndq))
-		return (error);
-	dq = ndq;
-	while (dq->dq_flags & DQ_LOCK) {
-		dq->dq_flags |= DQ_WANT;
-		sleep((caddr_t)dq, PINOD+1);
-	}
+	dqlock(dq);
+
 	/*
 	 * Copy all but the current values.
 	 * Reset time limit if previously had no soft limit or were
 	 * under it, but now have a soft limit and are over it.
 	 */
-	newlim.dqb_curbytes = dq->dq_curbytes;
-	newlim.dqb_curinodes = dq->dq_curinodes;
+	newlimp->dqb_curbytes = dq->dq_curbytes;
+	newlimp->dqb_curinodes = dq->dq_curinodes;
 	if (dq->dq_id != 0) {
-		newlim.dqb_btime = dq->dq_btime;
-		newlim.dqb_itime = dq->dq_itime;
+		newlimp->dqb_btime = dq->dq_btime;
+		newlimp->dqb_itime = dq->dq_itime;
 	}
-	if (newlim.dqb_bsoftlimit &&
-	    dq->dq_curbytes >= newlim.dqb_bsoftlimit &&
-	    (dq->dq_bsoftlimit == 0 || dq->dq_curbytes < dq->dq_bsoftlimit))
-		newlim.dqb_btime = time.tv_sec + ump->um_qfiles[type].qf_btime;
-	if (newlim.dqb_isoftlimit &&
-	    dq->dq_curinodes >= newlim.dqb_isoftlimit &&
-	    (dq->dq_isoftlimit == 0 || dq->dq_curinodes < dq->dq_isoftlimit))
-		newlim.dqb_itime = time.tv_sec + ump->um_qfiles[type].qf_itime;
-	dq->dq_dqb = newlim;
+	if (newlimp->dqb_bsoftlimit &&
+	    dq->dq_curbytes >= newlimp->dqb_bsoftlimit &&
+	    (dq->dq_bsoftlimit == 0 || dq->dq_curbytes < dq->dq_bsoftlimit)) {
+		microtime(&tv);
+		newlimp->dqb_btime = tv.tv_sec + ump->um_qfiles[type].qf_btime;
+	}
+	if (newlimp->dqb_isoftlimit &&
+	    dq->dq_curinodes >= newlimp->dqb_isoftlimit &&
+	    (dq->dq_isoftlimit == 0 || dq->dq_curinodes < dq->dq_isoftlimit)) {
+		microtime(&tv);
+		newlimp->dqb_itime = tv.tv_sec + ump->um_qfiles[type].qf_itime;
+	}
+	bcopy(newlimp, &dq->dq_dqb, sizeof(dq->dq_dqb));
 	if (dq->dq_curbytes < dq->dq_bsoftlimit)
 		dq->dq_flags &= ~DQ_BLKS;
 	if (dq->dq_curinodes < dq->dq_isoftlimit)
@@ -607,7 +672,10 @@ setquota(mp, id, type, addr)
 	else
 		dq->dq_flags &= ~DQ_FAKE;
 	dq->dq_flags |= DQ_MOD;
-	dqrele(NULLVP, dq);
+
+	dqunlock(dq);
+	dqrele(dq);
+
 	return (0);
 }
 
@@ -615,47 +683,70 @@ setquota(mp, id, type, addr)
  * Q_SETUSE - set current inode and byte usage.
  */
 int
-setuse(mp, id, type, addr)
+setuse(mp, id, type, datap)
 	struct mount *mp;
 	u_long id;
 	int type;
-	caddr_t addr;
+	caddr_t datap;
 {
-	register struct dquot *dq;
+	struct dquot *dq;
 	struct ufsmount *ump = VFSTOUFS(mp);
-	struct dquot *ndq;
-	struct dqblk usage;
+	struct timeval tv;
 	int error;
+	struct dqblk *quotablkp = (struct dqblk *) datap;
+	
+	error = dqget(id, &ump->um_qfiles[type], type, &dq);
+	if (error)
+		return (error);
+	dqlock(dq);
 
-	if (error = copyin(addr, (caddr_t)&usage, sizeof (struct dqblk)))
-		return (error);
-	if (error = dqget(NULLVP, id, &ump->um_qfiles[type], type, &ndq))
-		return (error);
-	dq = ndq;
-	while (dq->dq_flags & DQ_LOCK) {
-		dq->dq_flags |= DQ_WANT;
-		sleep((caddr_t)dq, PINOD+1);
-	}
 	/*
 	 * Reset time limit if have a soft limit and were
 	 * previously under it, but are now over it.
 	 */
 	if (dq->dq_bsoftlimit && dq->dq_curbytes < dq->dq_bsoftlimit &&
-	    usage.dqb_curbytes >= dq->dq_bsoftlimit)
-		dq->dq_btime = time.tv_sec + ump->um_qfiles[type].qf_btime;
+	    quotablkp->dqb_curbytes >= dq->dq_bsoftlimit) {
+		microtime(&tv);
+		dq->dq_btime = tv.tv_sec + ump->um_qfiles[type].qf_btime;
+	}
 	if (dq->dq_isoftlimit && dq->dq_curinodes < dq->dq_isoftlimit &&
-	    usage.dqb_curinodes >= dq->dq_isoftlimit)
-		dq->dq_itime = time.tv_sec + ump->um_qfiles[type].qf_itime;
-	dq->dq_curbytes = usage.dqb_curbytes;
-	dq->dq_curinodes = usage.dqb_curinodes;
+	    quotablkp->dqb_curinodes >= dq->dq_isoftlimit) {
+		microtime(&tv);
+		dq->dq_itime = tv.tv_sec + ump->um_qfiles[type].qf_itime;
+	}
+	dq->dq_curbytes = quotablkp->dqb_curbytes;
+	dq->dq_curinodes = quotablkp->dqb_curinodes;
 	if (dq->dq_curbytes < dq->dq_bsoftlimit)
 		dq->dq_flags &= ~DQ_BLKS;
 	if (dq->dq_curinodes < dq->dq_isoftlimit)
 		dq->dq_flags &= ~DQ_INODS;
 	dq->dq_flags |= DQ_MOD;
-	dqrele(NULLVP, dq);
+
+	dqunlock(dq);
+	dqrele(dq);
+
 	return (0);
 }
+
+
+
+static int
+ufs_qsync_callback(struct vnode *vp, __unused void *cargs)
+{
+	struct inode *ip;
+	struct dquot *dq;
+	int 	i;
+
+        ip = VTOI(vp);
+
+	for (i = 0; i < MAXQUOTAS; i++) {
+	        dq = ip->i_dquot[i];
+		if (dq != NODQUOT && (dq->dq_flags & DQ_MOD))
+		        dqsync(dq);
+	}
+	return (VNODE_RETURNED);
+}
+
 
 /*
  * Q_SYNC - sync quota files to disk.
@@ -665,10 +756,7 @@ qsync(mp)
 	struct mount *mp;
 {
 	struct ufsmount *ump = VFSTOUFS(mp);
-	struct proc *p = current_proc();		/* XXX */
-	struct vnode *vp, *nextvp;
-	struct dquot *dq;
-	int i, error;
+	int i;
 
 	/*
 	 * Check if the mount point has any quotas.
@@ -682,33 +770,14 @@ qsync(mp)
 	/*
 	 * Search vnodes associated with this mount point,
 	 * synchronizing any modified dquot structures.
+	 *
+	 * ufs_qsync_callback will be called for each vnode
+	 * hung off of this mount point
+	 * the vnode will be
+	 * properly referenced and unreferenced around the callback
 	 */
-	simple_lock(&mntvnode_slock);
-again:
-	for (vp = mp->mnt_vnodelist.lh_first; vp != NULL; vp = nextvp) {
-		if (vp->v_mount != mp)
-			goto again;
-		nextvp = vp->v_mntvnodes.le_next;
-		simple_lock(&vp->v_interlock);
-		simple_unlock(&mntvnode_slock);
-		error = vget(vp, LK_EXCLUSIVE | LK_NOWAIT | LK_INTERLOCK, p);
-		if (error) {
-			simple_lock(&mntvnode_slock);
-			if (error == ENOENT)
-				goto again;
-			continue;
-		}
-		for (i = 0; i < MAXQUOTAS; i++) {
-			dq = VTOI(vp)->i_dquot[i];
-			if (dq != NODQUOT && (dq->dq_flags & DQ_MOD))
-				dqsync(vp, dq);
-		}
-		vput(vp);
-		simple_lock(&mntvnode_slock);
-		if (vp->v_mntvnodes.le_next != nextvp)
-			goto again;
-	}
-	simple_unlock(&mntvnode_slock);
+	vnode_iterate(mp, 0, ufs_qsync_callback, (void *)NULL);
+	
 	return (0);
 }
 
@@ -716,10 +785,10 @@ again:
  * Q_QUOTASTAT - get quota on/off status 
  */
 int
-quotastat(mp, type, addr)
+quotastat(mp, type, datap)
 	struct mount *mp;
 	register int type;
-	caddr_t addr;
+	caddr_t datap;
 {
 	struct ufsmount *ump = VFSTOUFS(mp);
 	int error = 0;
@@ -729,8 +798,7 @@ quotastat(mp, type, addr)
 	  qstat = 1;   /* quotas are on for this type */
 	else
 	  qstat = 0;   /* quotas are off for this type */
-	
-	error = copyout ((caddr_t)&qstat, addr, sizeof(qstat));
+	*((int *)datap) = qstat;
 	return (error);
 }
 

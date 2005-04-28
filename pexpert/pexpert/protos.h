@@ -28,8 +28,8 @@
 #include <mach/mach_types.h>
 #include <mach/vm_types.h>
 #include <mach/boolean.h>
-#include <mach/boot_info.h>
 #include <stdarg.h>
+#include <string.h>
 #include <kern/assert.h>
 
 #include <pexpert/machine/protos.h>
@@ -38,15 +38,8 @@
 // from ppc/misc_protos.h
 extern void printf(const char *fmt, ...);
 
-extern int strcmp(const char *s1, const char *s2);
-extern int strncmp(const char *s1, const char *s2, unsigned long n);
-extern int strlen( register const char *string);
-extern char *strcat(char *dest, const char *src);
-extern char *strcpy(char *dest, const char *src);
-extern char *strncpy(char *dest, const char *src, unsigned long n);
 extern void interrupt_enable(void);
 extern void interrupt_disable(void);
-extern void bcopy(void * from, void * to, int size);
 #if __ppc__
 extern void bcopy_nc(char *from, char *to, int size); /* uncached-safe */
 #else
@@ -55,13 +48,6 @@ extern void bcopy_nc(char *from, char *to, int size); /* uncached-safe */
 
 //------------------------------------------------------------------------
 //from kern/misc_protos.h
-extern void panic(const char *string, ...);
-
-/* Zero an arbitrarily aligned array */
-extern void bzero(
-        char    *from,
-        vm_size_t       nbytes);
-
 extern void    
 _doprnt(
         register const char     *fmt,

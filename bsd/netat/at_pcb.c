@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -130,9 +130,11 @@ int at_pcballoc(so, head)
 
 	pcb->atpcb_head = head;
 	pcb->atpcb_socket = so;
+	atalk_lock();	/* makes sure the list is locked while inserting atpcb */
 	if (head)
 	    insque((queue_t)pcb, (queue_t)head);
 	so->so_pcb = (caddr_t)pcb;
+	atalk_unlock();
 
 	return (0);
 }
@@ -149,9 +151,10 @@ int at_pcbdetach(pcb)
 	}
 
 	so->so_pcb = 0;
+	so->so_flags |= SOF_PCBCLEARING;
 	if ((pcb->atpcb_next) && (pcb->atpcb_prev))
 	    remque((queue_t)pcb);
-	zfree(atpcb_zone, (vm_offset_t)pcb);
+	zfree(atpcb_zone, pcb);
 	sofree(so);
 	return(0);
 }

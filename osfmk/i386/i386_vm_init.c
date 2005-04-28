@@ -48,11 +48,9 @@
  * the rights to redistribute these changes.
  */
 
-#include <cpus.h>
 #include <platforms.h>
 #include <mach_kdb.h>
 #include <himem.h>
-#include <fast_idle.h>
 
 #include <mach/i386/vm_param.h>
 
@@ -61,7 +59,6 @@
 #include <mach/vm_prot.h>
 #include <mach/machine.h>
 #include <mach/time_value.h>
-#include <kern/etap_macros.h>
 #include <kern/spl.h>
 #include <kern/assert.h>
 #include <kern/debug.h>
@@ -76,28 +73,23 @@
 #include <i386/pio.h>
 #include <i386/misc_protos.h>
 #include <i386/mp_slave_boot.h>
+#include <i386/cpuid.h>
 #ifdef __MACHO__
-#include <mach/boot_info.h>
 #include <mach/thread_status.h>
 #endif
 
 vm_size_t	mem_size = 0; 
-vm_offset_t	first_addr = 0;	/* set by start.s - keep out of bss */
 vm_offset_t	first_avail = 0;/* first after page tables */
 vm_offset_t	last_addr;
 
 uint64_t        max_mem;
-uint64_t        sane_size;
+uint64_t        sane_size = 0; /* we are going to use the booter memory
+				  table info to construct this */
 
-vm_offset_t	avail_start, avail_end;
+pmap_paddr_t     avail_start, avail_end;
 vm_offset_t	virtual_avail, virtual_end;
-vm_offset_t	hole_start, hole_end;
-vm_offset_t	avail_next;
-unsigned int	avail_remaining;
-
-/* parameters passed from bootstrap loader */
-int		cnvmem = 0;		/* must be in .data section */
-int		extmem = 0;
+pmap_paddr_t	avail_remaining;
+vm_offset_t     static_memory_end = 0;
 
 #ifndef __MACHO__
 extern char	edata, end;
@@ -107,13 +99,19 @@ extern char	edata, end;
 #include	<mach-o/loader.h>
 vm_offset_t	edata, etext, end;
 
+/*
+ * _mh_execute_header is the mach_header for the currently executing
+ * 32 bit kernel
+ */
 extern struct mach_header _mh_execute_header;
 void *sectTEXTB; int sectSizeTEXT;
 void *sectDATAB; int sectSizeDATA;
 void *sectOBJCB; int sectSizeOBJC;
 void *sectLINKB; int sectSizeLINK;
 void *sectPRELINKB; int sectSizePRELINK;
+void *sectHIBB; int sectSizeHIB;
 
+extern void *getsegdatafromheader(struct mach_header *, const char *, int *);
 #endif
 
 /*
@@ -122,8 +120,11 @@ void *sectPRELINKB; int sectSizePRELINK;
 void
 i386_vm_init(unsigned int maxmem, KernelBootArgs_t *args)
 {
-	int i,j;			/* Standard index vars. */
-	vm_size_t	bios_hole_size;	
+	pmap_memory_region_t *pmptr;
+	MemoryRange *mptr;
+	ppnum_t fap;
+	unsigned int i;
+	ppnum_t maxpg = (maxmem >> I386_PGSHIFT);
 
 #ifdef	__MACHO__
 	/* Now retrieve addresses for end, edata, and etext 
@@ -138,6 +139,8 @@ i386_vm_init(unsigned int maxmem, KernelBootArgs_t *args)
 		&_mh_execute_header, "__OBJC", &sectSizeOBJC);
 	sectLINKB = (void *) getsegdatafromheader(
 		&_mh_execute_header, "__LINKEDIT", &sectSizeLINK);
+	sectHIBB = (void *)getsegdatafromheader(
+		&_mh_execute_header, "__HIB", &sectSizeHIB);
 	sectPRELINKB = (void *) getsegdatafromheader(
 		&_mh_execute_header, "__PRELINK", &sectSizePRELINK);
 
@@ -152,10 +155,6 @@ i386_vm_init(unsigned int maxmem, KernelBootArgs_t *args)
 	bzero((char *)&edata,(unsigned)(&end - &edata));
 #endif
 
-	/* Now copy over various boot args bits.. */
-	cnvmem = args->convmem;
-	extmem = args->extmem;
-
 	/*
 	 * Initialize the pic prior to any possible call to an spl.
 	 */
@@ -164,74 +163,210 @@ i386_vm_init(unsigned int maxmem, KernelBootArgs_t *args)
 	vm_set_page_size();
 
 	/*
-	 * Initialize the Event Trace Analysis Package
-	 * Static Phase: 1 of 2
-	 */
-	etap_init_phase1();
-
-	/*
 	 * Compute the memory size.
 	 */
 
-#if NCPUS > 1
-	/* First two pages are used to boot the other cpus. */
-	/* TODO - reclaim pages after all cpus have booted */
+	avail_remaining = 0;
+	avail_end = 0;
+	pmptr = pmap_memory_regions;
+	pmap_memory_region_count = pmap_memory_region_current = 0;
+	fap = (ppnum_t) i386_btop(first_avail);
+	mptr = args->memoryMap;
 
-	first_addr = MP_FIRST_ADDR;
+#ifdef PAE
+#define FOURGIG 0x0000000100000000ULL
+	for (i=0; i < args->memoryMapCount; i++,mptr++) {
+	  ppnum_t base, top;
+
+	  base = (ppnum_t) (mptr->base >> I386_PGSHIFT);
+	  top = (ppnum_t) ((mptr->base + mptr->length) >> I386_PGSHIFT) - 1;
+
+	  if (maxmem) {
+	    if (base >= maxpg) break;
+	    top = (top > maxpg)? maxpg : top;
+	  }
+
+	  if (kMemoryRangeUsable != mptr->type) continue;
+	  sane_size += (uint64_t)(mptr->length);
+#ifdef DEVICES_HANDLE_64BIT_IO  /* XXX enable else clause  when I/O to high memory works */
+	  if (top < fap) {
+	    /* entire range below first_avail */
+	    continue;
+	  } else if (mptr->base >= FOURGIG) {
+	    /* entire range above 4GB (pre PAE) */
+	    continue;
+	  } else if ( (base < fap) &&
+		      (top > fap)) {
+	    /* spans first_avail */
+	    /*  put mem below first avail in table but
+		mark already allocated */
+	    pmptr->base = base;
+	    pmptr->alloc = pmptr->end = (fap - 1);
+            pmptr->type = mptr->type;
+	    /* we bump these here inline so the accounting below works
+	       correctly */
+	    pmptr++;
+	    pmap_memory_region_count++;
+	    pmptr->alloc = pmptr->base = fap;
+            pmptr->type = mptr->type;
+	    pmptr->end = top;
+	  } else if ( (mptr->base < FOURGIG) &&
+		      ((mptr->base+mptr->length) > FOURGIG) ) {
+	    /* spans across 4GB (pre PAE) */
+	    pmptr->alloc = pmptr->base = base;
+            pmptr->type = mptr->type;
+	    pmptr->end = (FOURGIG >> I386_PGSHIFT) - 1;
+	  } else {
+	    /* entire range useable */
+	    pmptr->alloc = pmptr->base = base;
+            pmptr->type = mptr->type;
+	    pmptr->end = top;
+	  }
 #else
-	first_addr = 0x1000;
+	  if (top < fap) {
+	    /* entire range below first_avail */
+	    continue;
+	  } else if ( (base < fap) &&
+		      (top > fap)) {
+	    /* spans first_avail */
+	    pmptr->alloc = pmptr->base = fap;
+            pmptr->type = mptr->type;
+	    pmptr->end = top;
+	  } else {
+	    /* entire range useable */
+	    pmptr->alloc = pmptr->base = base;
+            pmptr->type = mptr->type;
+	    pmptr->end = top;
+	  }
+#endif
+	  if (i386_ptob(pmptr->end) > avail_end ) {
+	    avail_end = i386_ptob(pmptr->end);
+	  }
+	  avail_remaining += (pmptr->end - pmptr->base);
+	  pmap_memory_region_count++;
+	  pmptr++;
+	}
+#else  /* non PAE follows */
+#define FOURGIG 0x0000000100000000ULL
+	for (i=0; i < args->memoryMapCount; i++,mptr++) {
+	  ppnum_t base, top;
+
+	  base = (ppnum_t) (mptr->base >> I386_PGSHIFT);
+	  top = (ppnum_t) ((mptr->base + mptr->length) >> I386_PGSHIFT) - 1;
+
+	  if (maxmem) {
+	    if (base >= maxpg) break;
+	    top = (top > maxpg)? maxpg : top;
+	  }
+
+	  if (kMemoryRangeUsable != mptr->type) continue;
+
+          // save other regions
+          if (kMemoryRangeNVS == mptr->type) {
+              pmptr->base = base;
+              pmptr->end = ((mptr->base + mptr->length + I386_PGBYTES - 1) >> I386_PGSHIFT) - 1;
+              pmptr->alloc = pmptr->end;
+              pmptr->type = mptr->type;
+              kprintf("NVS region: 0x%x ->0x%x\n", pmptr->base, pmptr->end);
+          } else if (kMemoryRangeUsable != mptr->type) {
+              continue;
+          } else {
+              // Usable memory region
+	  sane_size += (uint64_t)(mptr->length);
+	  if (top < fap) {
+	    /* entire range below first_avail */
+	    /* salvage some low memory pages */
+	    /* we use some very low memory at startup */
+	    /* mark as already allocated here */
+	    pmptr->base = 0x18; /* PAE and HIB use below this */
+	    pmptr->alloc = pmptr->end = top;  /* mark as already mapped */
+	    pmptr->type = mptr->type;
+	  } else if (mptr->base >= FOURGIG) {
+	    /* entire range above 4GB (pre PAE) */
+	    continue;
+	  } else if ( (base < fap) &&
+		      (top > fap)) {
+	    /* spans first_avail */
+	    /*  put mem below first avail in table but
+		mark already allocated */
+	    pmptr->base = base;
+	    pmptr->alloc = pmptr->end = (fap - 1);
+            pmptr->type = mptr->type;
+	    /* we bump these here inline so the accounting below works
+	       correctly */
+	    pmptr++;
+	    pmap_memory_region_count++;
+	    pmptr->alloc = pmptr->base = fap;
+            pmptr->type = mptr->type;
+	    pmptr->end = top;
+	  } else if ( (mptr->base < FOURGIG) &&
+		      ((mptr->base+mptr->length) > FOURGIG) ) {
+	    /* spans across 4GB (pre PAE) */
+	    pmptr->alloc = pmptr->base = base;
+            pmptr->type = mptr->type;
+	    pmptr->end = (FOURGIG >> I386_PGSHIFT) - 1;
+	  } else {
+	    /* entire range useable */
+	    pmptr->alloc = pmptr->base = base;
+            pmptr->type = mptr->type;
+	    pmptr->end = top;
+	  }
+
+	  if (i386_ptob(pmptr->end) > avail_end ) {
+	    avail_end = i386_ptob(pmptr->end);
+	  }
+
+	  avail_remaining += (pmptr->end - pmptr->base);
+	  pmap_memory_region_count++;
+	  pmptr++;
+	  }
+	}
 #endif
 
-	/* BIOS leaves data in low memory */
-	last_addr = 1024*1024 + extmem*1024;
+#ifdef PRINT_PMAP_MEMORY_TABLE
+ {
+   unsigned int j;
+  pmap_memory_region_t *p = pmap_memory_regions;
+   for (j=0;j<pmap_memory_region_count;j++, p++) {
+     kprintf("%d base 0x%x alloc 0x%x top 0x%x\n",j,
+	     p->base, p->alloc, p->end);
+   }
+ }
+#endif
 
-	/* extended memory starts at 1MB */
-       
-	bios_hole_size = 1024*1024 - trunc_page((vm_offset_t)(1024 * cnvmem));
+	avail_start = first_avail;
 
-	/*
-	 *	Initialize for pmap_free_pages and pmap_next_page.
-	 *	These guys should be page-aligned.
-	 */
-
-	hole_start = trunc_page((vm_offset_t)(1024 * cnvmem));
-	hole_end = round_page((vm_offset_t)first_avail);
-
-	/*
-	 * compute mem_size
-	 */
-
-	/*
-	 * We're currently limited to 512 MB max physical memory.
-	 */
-#define M	(1024*1024)
-#define MAXMEM	(512*M)
-	if ((maxmem == 0) && (last_addr - bios_hole_size > MAXMEM)) {
-		printf("Physical memory %d MB, "\
-			"maximum usable memory limited to %d MB\n",
-			(last_addr - bios_hole_size)/M, MAXMEM/M);
-		maxmem = MAXMEM;
+	if (maxmem) {  /* if user set maxmem try to use it */
+	  uint64_t  tmp = (uint64_t)maxmem;
+	  /* can't set below first_avail or above actual memory */
+	  if ( (maxmem > first_avail) && (tmp < sane_size) ) {
+	    sane_size = tmp;
+	    avail_end = maxmem;
+	  }
 	}
+	// round up to a megabyte - mostly accounting for the
+	// low mem madness
+	sane_size += ( 0x100000ULL - 1);
+	sane_size &=  ~0xFFFFFULL;
 
-	if (maxmem != 0) {
-	    if (maxmem < (last_addr) - bios_hole_size)
-		last_addr = maxmem + bios_hole_size;
-	}
+#ifndef PAE
+	if (sane_size < FOURGIG)
+	  mem_size = (unsigned long) sane_size;
+	else
+	  mem_size = (unsigned long) (FOURGIG >> 1);
+#else
+	  mem_size = (unsigned long) sane_size;
+#endif
 
-	first_addr = round_page(first_addr);
-	last_addr = trunc_page(last_addr);
-	mem_size = last_addr - bios_hole_size;
+	max_mem = sane_size;
 
-	max_mem = (uint64_t)mem_size;
-	sane_size = max_mem;
+	/* now make sane size sane */
+#define MIN(a,b)	(((a)<(b))?(a):(b))
+#define MEG		(1024*1024)
+	sane_size = MIN(sane_size, 256*MEG);
 
-	avail_start = first_addr;
-	avail_end = last_addr;
-	avail_next = avail_start;
-
-#if	NCPUS > 1
-	interrupt_stack_alloc();
-#endif	/* NCPUS > 1 */
+	kprintf("Physical memory %d MB\n",
+		mem_size/MEG);
 
 	/*
 	 *	Initialize kernel physical map.
@@ -239,8 +374,7 @@ i386_vm_init(unsigned int maxmem, KernelBootArgs_t *args)
 	 */
 	pmap_bootstrap(0);
 
-	avail_remaining = atop((avail_end - avail_start) -
-			       (hole_end - hole_start));
+
 }
 
 unsigned int
@@ -253,24 +387,36 @@ boolean_t
 pmap_next_page(
 	       ppnum_t *pn)
 {
-	if (avail_next == avail_end) 
-		return FALSE;
 
-	/* skip the hole */
+	while (pmap_memory_region_current < pmap_memory_region_count) {
+	  if (pmap_memory_regions[pmap_memory_region_current].alloc ==
+	      pmap_memory_regions[pmap_memory_region_current].end) {
+	    pmap_memory_region_current++;
+	    continue;
+	  }
+	  *pn = pmap_memory_regions[pmap_memory_region_current].alloc++;
+	  avail_remaining--;
 
-	if (avail_next == hole_start)
-		avail_next = hole_end;
-
-	*pn = (ppnum_t)i386_btop(avail_next);
-	avail_next += PAGE_SIZE;
-	avail_remaining--;
-
-	return TRUE;
+	  return TRUE;
+	}
+	return FALSE;
 }
 
 boolean_t
 pmap_valid_page(
-	vm_offset_t x)
+	ppnum_t pn)
 {
-	return ((avail_start <= x) && (x < avail_end));
+  unsigned int i;
+  pmap_memory_region_t *pmptr = pmap_memory_regions;
+
+  assert(pn);
+  for (i=0; i<pmap_memory_region_count; i++, pmptr++) {
+    if ( (pn >= pmptr->base) && (pn <= pmptr->end) ) {
+        if (pmptr->type == kMemoryRangeUsable)
+            return TRUE;
+        else
+            return FALSE;
+    }
+  }
+  return FALSE;
 }

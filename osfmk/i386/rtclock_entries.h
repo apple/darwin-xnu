@@ -35,13 +35,8 @@ extern kern_return_t	rtc_getattr(
 				clock_flavor_t		flavor,
 				clock_attr_t		ttr,
 				mach_msg_type_number_t	* count);
-extern kern_return_t	rtc_setattr(
-				clock_flavor_t		flavor,
-				clock_attr_t		ttr,
-				mach_msg_type_number_t	count);
 extern void		rtc_setalrm(
 				mach_timespec_t		* alarmtime);
-extern void		rtclock_reset(void);
-extern int		rtclock_intr(
+extern void		rtclock_intr(
 				struct i386_interrupt_state	*regs);
-extern void		calibrate_delay(void);
+extern void		rtc_sleep_wakeup(void);

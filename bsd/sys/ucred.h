@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -59,48 +59,59 @@
 #define	_SYS_UCRED_H_
 
 #include <sys/appleapiopts.h>
+#include <sys/cdefs.h>
 #include <sys/param.h>
+#include <bsm/audit.h>
 
 #ifdef __APPLE_API_UNSTABLE
+
 /*
- * Credentials.
+ * In-kernel credential structure.
+ *
+ * Note that this structure should not be used outside the kernel, nor should
+ * it or copies of it be exported outside.  
  */
 struct ucred {
+	TAILQ_ENTRY(ucred)	cr_link; /* never modify this without KAUTH_CRED_HASH_LOCK */
 	u_long	cr_ref;			/* reference count */
+	
+	/* credential hash depends on everything from this point on (see kauth_cred_get_hashkey) */
 	uid_t	cr_uid;			/* effective user id */
-	short	cr_ngroups;		/* number of groups */
-	gid_t	cr_groups[NGROUPS];	/* groups */
+	uid_t	cr_ruid;		/* real user id */
+	uid_t	cr_svuid;		/* saved user id */
+	short	cr_ngroups;		/* number of groups in advisory list */
+	gid_t	cr_groups[NGROUPS];	/* advisory group list */
+	gid_t	cr_rgid;		/* real group id */
+	gid_t	cr_svgid;		/* saved group id */
+	uid_t	cr_gmuid;		/* user id for group membership purposes */
+	struct auditinfo cr_au;		/* user auditing data */
 };
+typedef struct ucred *kauth_cred_t;
+
 /*
  * This is the external representation of struct ucred.
  */
 struct xucred {
         u_int   cr_version;             /* structure layout version */
         uid_t   cr_uid;                 /* effective user id */
-        short   cr_ngroups;             /* number of groups */
-        gid_t   cr_groups[NGROUPS];     /* groups */
+        short   cr_ngroups;             /* number of advisory groups */
+        gid_t   cr_groups[NGROUPS];     /* advisory group list */
 };
 #define XUCRED_VERSION  0
 
 #define cr_gid cr_groups[0]
-#define NOCRED ((struct ucred *)0)	/* no credential available */
-#define FSCRED ((struct ucred *)-1)	/* filesystem credential */
+#define NOCRED ((kauth_cred_t )0)	/* no credential available */
+#define FSCRED ((kauth_cred_t )-1)	/* filesystem credential */
 
 #ifdef KERNEL
-#define	crhold(cr)			\
-{					\
-	if (++(cr)->cr_ref == 0)	\
-		panic("crhold");	\
-}
-
-struct ucred	*crcopy __P((struct ucred *cr));
-struct ucred	*crdup __P((struct ucred *cr));
-void		crfree __P((struct ucred *cr));
-struct ucred	*crget __P((void));
-int		crcmp __P((struct ucred *cr1, struct ucred *cr2));
-int		suser __P((struct ucred *cred, u_short *acflag));
-void		cru2x __P((struct ucred *cr, struct xucred *xcr));
-
+#ifdef __APPLE_API_OBSOLETE
+__BEGIN_DECLS
+int		crcmp(kauth_cred_t cr1, kauth_cred_t cr2);
+int		suser(kauth_cred_t cred, u_short *acflag);
+int		set_security_token(struct proc * p);
+void		cru2x(kauth_cred_t cr, struct xucred *xcr);
+__END_DECLS
+#endif /* __APPLE_API_OBSOLETE */
 #endif /* KERNEL */
 #endif /* __APPLE_API_UNSTABLE */
 

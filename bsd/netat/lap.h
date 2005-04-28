@@ -30,6 +30,8 @@
 #define _NETAT_LAP_H_
 #include <sys/appleapiopts.h>
 
+#ifdef __APPLE_API_OBSOLETE
+
 #define	AT_MID_ELAP	202
 
 /* elap ioctl's */ 
@@ -88,5 +90,6 @@
 
 #endif /* NOT_USED */
 
+#endif /* __APPLE_API_OBSOLETE */
 #endif /*  _NETAT_LAP_H_ */
 

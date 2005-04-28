@@ -32,6 +32,8 @@
 #define	_NETAT_ZIP_H_
 #include <sys/appleapiopts.h>
 
+#ifdef __APPLE_API_OBSOLETE
+
 /* Definitions for ZIP, per AppleTalk Zone Information Protocol
  * documentation from `Inside AppleTalk', July 14, 1986.
  */
@@ -90,4 +92,5 @@ typedef struct {
 
 #define ZIP_RE_AARP		-1
 
+#endif /* __APPLE_API_OBSOLETE */
 #endif /* _NETAT_ZIP_H_ */

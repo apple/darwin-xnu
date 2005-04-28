@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -35,12 +35,15 @@
 #include <sys/proc.h>
 #include <sys/filedesc.h>
 #include <sys/fcntl.h>
+#include <sys/file_internal.h>
 #include <sys/mbuf.h>
 #include <sys/ioctl.h>
 #include <sys/malloc.h>
+#include <kern/locks.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
 #include <sys/ioccom.h>
+#include <sys/uio_internal.h>
 
 #include <sys/sysctl.h>
 
@@ -55,6 +58,7 @@
 #include <netat/debug.h>
 
 extern struct atpcb ddp_head;
+extern lck_mtx_t * atalk_mutex;
 
 extern void 
   ddp_putmsg(gref_t *gref, gbuf_t *m),
@@ -84,6 +88,9 @@ at_ddp_stats_t at_ddp_stats;		/* DDP statistics */
 SYSCTL_STRUCT(_net_appletalk, OID_AUTO, ddpstats, CTLFLAG_RD,
 	      &at_ddp_stats, at_ddp_stats, "AppleTalk DDP Stats");
 
+static void ioccmd_t_32_to_64( ioccmd_t *from_p, user_ioccmd_t *to_p );
+static void ioccmd_t_64_to_32( user_ioccmd_t *from_p, ioccmd_t *to_p );
+
 atlock_t refall_lock;
 
 caddr_t	atp_free_cluster_list = 0;
@@ -112,7 +119,7 @@ void gref_wput(gref, m)
 			gbuf_freem(gbuf_cont(m));
 			gbuf_cont(m) = 0;
 			((ioc_t *)gbuf_rptr(m))->ioc_rval = -1;
-			((ioc_t *)gbuf_rptr(m))->ioc_error = EPROTO;
+			((ioc_t *)gbuf_rptr(m))->ioc_error = EPROTOTYPE;
 			gbuf_set_type(m, MSG_IOCNAK);
 			atalk_putnext(gref, m);
 		} else
@@ -159,7 +166,7 @@ int _ATsocket(proto, err, proc)
 		return -1;
 	}
 	gref->proto = proto;
-	gref->pid = ((struct proc *)proc)->p_pid;
+	gref->pid = proc_pid((struct proc *)proc);
 
 	/* open the specified protocol */
 	switch (gref->proto) {
@@ -211,7 +218,7 @@ int _ATgetmsg(fd, ctlptr, datptr, flags, err, proc)
 	int rc = -1;
 	gref_t *gref;
 
-	if ((*err = atalk_getref(0, fd, &gref, proc)) == 0) {
+	if ((*err = atalk_getref(0, fd, &gref, proc, 1)) == 0) {
 		switch (gref->proto) {
 		case ATPROTO_ASP:
 			rc = ASPgetmsg(gref, ctlptr, datptr, NULL, flags, err); 
@@ -225,6 +232,7 @@ int _ATgetmsg(fd, ctlptr, datptr, flags, err, proc)
 			*err = EPROTONOSUPPORT; 
 			break;
 		}
+		file_drop(fd);
 	}
 
 /*	kprintf("_ATgetmsg: return=%d\n", *err);*/
@@ -242,30 +250,31 @@ int _ATputmsg(fd, ctlptr, datptr, flags, err, proc)
 	int rc = -1;
 	gref_t *gref;
 
-	if ((*err = atalk_getref(0, fd, &gref, proc)) == 0) {
+	if ((*err = atalk_getref(0, fd, &gref, proc, 1)) == 0) {
 		switch (gref->proto) {
 		case ATPROTO_ASP:
 			rc = ASPputmsg(gref, ctlptr, datptr, NULL, flags, err); break;
 		default:
 			*err = EPROTONOSUPPORT; break;
 		}
+		file_drop(fd);
 	}
 
 /*	kprintf("_ATputmsg: return=%d\n", *err); */
 	return rc;
 }
 
-int _ATclose(fp, proc)
-	struct file *fp;
+int _ATclose(fg, proc)
+	struct fileglob *fg;
 	struct proc *proc;
 {
 	int err;
 	gref_t *gref;
 
-	if ((err = atalk_closeref(fp, &gref)) == 0) {
-	     thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
+	if ((err = atalk_closeref(fg, &gref)) == 0) {
+		atalk_lock();
 	     (void)gref_close(gref);
-	     thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
+		atalk_unlock();
 	}
 
 	return err;
@@ -281,10 +290,12 @@ int _ATrw(fp, rw, uio, ext)
     gref_t *gref;
     gbuf_t *m, *mhead, *mprev;
 
-    if ((err = atalk_getref(fp, 0, &gref, 0)) != 0)
+	/* no need to get/drop iocount as the fp already has one */
+    if ((err = atalk_getref_locked(fp, 0, &gref, 0, 1)) != 0)
     	return err;
 
-    if ((len = uio->uio_resid) == 0)
+	// LP64todo - fix this!
+    if ((len = uio_resid(uio)) == 0)
     	return 0;
 
     ATDISABLE(s, gref->lock);
@@ -293,7 +304,7 @@ int _ATrw(fp, rw, uio, ext)
 	KERNEL_DEBUG(DBG_ADSP_ATRW, 0, gref, len, gref->rdhead, 0);
 	while ((gref->errno == 0) && ((mhead = gref->rdhead) == 0)) {
 		gref->sevents |= POLLMSG;
-		err = tsleep(&gref->event, PSOCK | PCATCH, "AT read", 0);
+		err = msleep(&gref->event, atalk_mutex, PSOCK | PCATCH, "AT read", 0);
 		gref->sevents &= ~POLLMSG;
 		if (err != 0) {
 			ATENABLE(s, gref->lock);
@@ -359,7 +370,7 @@ int _ATrw(fp, rw, uio, ext)
 		while (!(*gref->writeable)(gref)) {
 			/* flow control on, wait to be enabled to write */ 
 			gref->sevents |= POLLSYNC;
-			err = tsleep(&gref->event, PSOCK | PCATCH, "AT write", 0);
+			err = msleep(&gref->event, atalk_mutex, PSOCK | PCATCH, "AT write", 0);
 			gref->sevents &= ~POLLSYNC;
 			if (err != 0) {
 				ATENABLE(s, gref->lock);
@@ -394,7 +405,7 @@ int _ATrw(fp, rw, uio, ext)
 } /* _ATrw */
 
 int _ATread(fp, uio, cred, flags, p)
-	void *fp;
+	struct fileproc *fp;
 	struct uio *uio;
 	void *cred;
 	int flags;
@@ -402,14 +413,14 @@ int _ATread(fp, uio, cred, flags, p)
 {
      int stat;
 
-	thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
+	atalk_lock();
 	stat = _ATrw(fp, UIO_READ, uio, 0);
-	thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
+	atalk_unlock();
 	return stat;
 }
 
 int _ATwrite(fp, uio, cred, flags, p)
-	void *fp;
+	struct fileproc *fp;
 	struct uio *uio;
 	void *cred;
 	int flags;
@@ -417,10 +428,9 @@ int _ATwrite(fp, uio, cred, flags, p)
 {
      int stat;
 
-
-	thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
+	atalk_lock();
 	stat = _ATrw(fp, UIO_WRITE, uio, 0);
-	thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
+	atalk_unlock();
 
 	return stat;
 }
@@ -431,27 +441,43 @@ int _ATwrite(fp, uio, cred, flags, p)
 int at_ioctl(gref_t *gref, u_long cmd, caddr_t arg, int fromKernel)
 {
     int s, err = 0, len;
+    u_int size;
     gbuf_t *m, *mdata;
     ioc_t *ioc;
-    ioccmd_t ioccmd;
+    user_addr_t user_arg;
+    user_ioccmd_t user_ioccmd;
+	boolean_t is64bit;
 
     /* error if not for us */
     if ((cmd  & 0xffff) != 0xff99)
         return EOPNOTSUPP;
 
+	size = IOCPARM_LEN(cmd);
+	if (size != sizeof(user_addr_t))
+		return EINVAL;
+		
+	user_arg = *((user_addr_t *)arg);
+
     /* copy in ioc command info */
-/*
-    kprintf("at_ioctl: arg ioccmd.ic_cmd=%x ic_len=%x gref->lock=%x, gref->event=%x\n",
-        ((ioccmd_t *)arg)->ic_cmd, ((ioccmd_t *)arg)->ic_len, 
-        gref->lock, gref->event);
-*/
-    if (fromKernel)
-        bcopy (arg, &ioccmd, sizeof (ioccmd_t));
+    is64bit = proc_is64bit(current_proc());
+    if (fromKernel) {
+    	ioccmd_t	tmp;
+        bcopy (CAST_DOWN(caddr_t, user_arg), &tmp, sizeof (tmp));
+        ioccmd_t_32_to_64(&tmp, &user_ioccmd);
+    }
     else {
-    	if ((err = copyin((caddr_t)arg, (caddr_t)&ioccmd, sizeof(ioccmd_t))) != 0) { 
+		if (is64bit) {
+			err = copyin(user_arg, (caddr_t)&user_ioccmd, sizeof(user_ioccmd));
+    	}
+    	else {
+	    	ioccmd_t	tmp;
+			err = copyin(user_arg, (caddr_t)&tmp, sizeof(tmp));
+        	ioccmd_t_32_to_64(&tmp, &user_ioccmd);
+    	}
+    	if (err != 0) { 
 #ifdef APPLETALK_DEBUG
-			kprintf("at_ioctl: err = %d, copyin(%x, %x, %d)\n", err, 
-              		(caddr_t)arg, (caddr_t)&ioccmd, sizeof(ioccmd_t));
+			kprintf("at_ioctl: err = %d, copyin(%llx, %x, %d)\n", err, 
+              		user_arg, (caddr_t)&user_ioccmd, sizeof(user_ioccmd));
 #endif
             return err;
         } 
@@ -466,27 +492,27 @@ int at_ioctl(gref_t *gref, u_long cmd, caddr_t arg, int fromKernel)
 
     /* create the ioc command 
        second mbuf contains the actual ASP command */
-    if (ioccmd.ic_len) {
-        if ((gbuf_cont(m) = gbuf_alloc(ioccmd.ic_len, PRI_HI)) == 0) {
+    if (user_ioccmd.ic_len) {
+        if ((gbuf_cont(m) = gbuf_alloc(user_ioccmd.ic_len, PRI_HI)) == 0) {
             gbuf_freem(m);
 #ifdef APPLETALK_DEBUG
 			kprintf("at_ioctl: gbuf_alloc err=%d\n",ENOBUFS);
 #endif
             return ENOBUFS;
         }
-        gbuf_wset(gbuf_cont(m), ioccmd.ic_len);     /* mbuf->m_len */
+        gbuf_wset(gbuf_cont(m), user_ioccmd.ic_len);     /* mbuf->m_len */
         if (fromKernel)
-            bcopy (ioccmd.ic_dp, gbuf_rptr(gbuf_cont(m)), ioccmd.ic_len);
+            bcopy (CAST_DOWN(caddr_t, user_ioccmd.ic_dp), gbuf_rptr(gbuf_cont(m)), user_ioccmd.ic_len);
         else {
-            if ((err = copyin((caddr_t)ioccmd.ic_dp, (caddr_t)gbuf_rptr(gbuf_cont(m)), ioccmd.ic_len)) != 0) { 
+            if ((err = copyin(user_ioccmd.ic_dp, (caddr_t)gbuf_rptr(gbuf_cont(m)), user_ioccmd.ic_len)) != 0) { 
                 gbuf_freem(m);
                 return err;
             }
         }
     }
     ioc = (ioc_t *) gbuf_rptr(m);
-    ioc->ioc_cmd = ioccmd.ic_cmd;
-    ioc->ioc_count = ioccmd.ic_len;
+    ioc->ioc_cmd = user_ioccmd.ic_cmd;
+    ioc->ioc_count = user_ioccmd.ic_len;
     ioc->ioc_error = 0;
     ioc->ioc_rval = 0;
 
@@ -500,7 +526,7 @@ int at_ioctl(gref_t *gref, u_long cmd, caddr_t arg, int fromKernel)
 #ifdef APPLETALK_DEBUG
 		kprintf("sleep gref = 0x%x\n", (unsigned)gref);
 #endif
-		err = tsleep(&gref->iocevent, PSOCK | PCATCH, "AT ioctl", 0);
+		err = msleep(&gref->iocevent, atalk_mutex, PSOCK | PCATCH, "AT ioctl", 0);
 		gref->sevents &= ~POLLPRI;
 		if (err != 0) {
 			ATENABLE(s, gref->lock);
@@ -527,19 +553,19 @@ int at_ioctl(gref_t *gref, u_long cmd, caddr_t arg, int fromKernel)
     /* process the ioc response */
     ioc = (ioc_t *) gbuf_rptr(m);
     if ((err = ioc->ioc_error) == 0) {
-        ioccmd.ic_timout = ioc->ioc_rval;
-        ioccmd.ic_len = 0;
+        user_ioccmd.ic_timout = ioc->ioc_rval;
+        user_ioccmd.ic_len = 0;
         mdata = gbuf_cont(m);
-        if (mdata && ioccmd.ic_dp) {
-            ioccmd.ic_len = gbuf_msgsize(mdata);
+        if (mdata && user_ioccmd.ic_dp) {
+            user_ioccmd.ic_len = gbuf_msgsize(mdata);
             for (len = 0; mdata; mdata = gbuf_cont(mdata)) {
                 if (fromKernel)
-                    bcopy (gbuf_rptr(mdata), &ioccmd.ic_dp[len], gbuf_len(mdata));
+                    bcopy (gbuf_rptr(mdata), CAST_DOWN(caddr_t, (user_ioccmd.ic_dp + len)), gbuf_len(mdata));
                 else {
-                    if ((err = copyout((caddr_t)gbuf_rptr(mdata), (caddr_t)&ioccmd.ic_dp[len], gbuf_len(mdata))) < 0) {
+                    if ((err = copyout((caddr_t)gbuf_rptr(mdata), (user_ioccmd.ic_dp + len), gbuf_len(mdata))) < 0) {
 #ifdef APPLETALK_DEBUG
 						kprintf("at_ioctl: len=%d error copyout=%d from=%x to=%x gbuf_len=%x\n",
-					 			len, err, (caddr_t)gbuf_rptr(mdata), (caddr_t)&ioccmd.ic_dp[len], gbuf_len(mdata));
+					 			len, err, (caddr_t)gbuf_rptr(mdata), (caddr_t)&user_ioccmd.ic_dp[len], gbuf_len(mdata));
 #endif
                         goto l_done;
                     }
@@ -548,14 +574,21 @@ int at_ioctl(gref_t *gref, u_long cmd, caddr_t arg, int fromKernel)
             }
         }
         
-        if (fromKernel)
-            bcopy (&ioccmd, arg, sizeof(ioccmd_t));
+        if (fromKernel) {
+			ioccmd_t	tmp;
+			ioccmd_t_64_to_32(&user_ioccmd, &tmp);
+ 			bcopy (&tmp, CAST_DOWN(caddr_t, user_arg), sizeof(tmp));
+        }
         else {
-            if ((err = copyout((caddr_t)&ioccmd, (caddr_t)arg, sizeof(ioccmd_t))) != 0) {
-#ifdef APPLETALK_DEBUG
-                kprintf("at_ioctl: error copyout2=%d from=%x to=%x len=%d\n",
-                         err, &ioccmd, arg, sizeof(ioccmd_t));
-#endif
+ 			if (is64bit) {
+				err = copyout((caddr_t)&user_ioccmd, user_arg, sizeof(user_ioccmd));
+			}
+			else {
+				ioccmd_t	tmp;
+				ioccmd_t_64_to_32(&user_ioccmd, &tmp);
+				err = copyout((caddr_t)&tmp, user_arg, sizeof(tmp));
+			}
+            if (err != 0) {
                 goto l_done;
             }
         }
@@ -576,8 +609,9 @@ int _ATioctl(fp, cmd, arg, proc)
 	int err;
 	gref_t *gref;
 
-	thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
-	if ((err = atalk_getref(fp, 0, &gref, 0)) != 0) {
+	atalk_lock();
+	/* No need to get a reference on fp as it already has one */
+	if ((err = atalk_getref_locked(fp, 0, &gref, 0, 0)) != 0) {
 #ifdef APPLETALK_DEBUG
 		kprintf("_ATioctl: atalk_getref err = %d\n", err);
 #endif
@@ -585,13 +619,13 @@ int _ATioctl(fp, cmd, arg, proc)
 	else
 	     err = at_ioctl(gref, cmd, arg, 0);
 
-	thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
+	atalk_unlock();
 
 	return err;
 }
 
 int _ATselect(fp, which, wql, proc)
-	struct file *fp;
+	struct fileproc *fp;
 	int which;
 	void * wql;
 	struct proc *proc;
@@ -599,9 +633,10 @@ int _ATselect(fp, which, wql, proc)
 	int s, err, rc = 0;
 	gref_t *gref;
 
-	thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
-	err = atalk_getref(fp, 0, &gref, 0);
-	thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
+	atalk_lock();
+	/* no need to drop the iocount as select covers that */
+	err = atalk_getref_locked(fp, 0, &gref, 0, 0);
+	atalk_unlock();
 
 	if (err != 0)
 		rc = 1;
@@ -633,7 +668,7 @@ int _ATselect(fp, which, wql, proc)
 }
 
 int _ATkqfilter(fp, kn, p)
-	struct file *fp;
+	struct fileproc *fp;
 	struct knote *kn;
 	struct proc *p;
 {
@@ -1317,3 +1352,20 @@ void ioc_ack(errno, m, gref)
 	atalk_putnext(gref, m);
 }
 
+
+static void ioccmd_t_32_to_64( ioccmd_t *from_p, user_ioccmd_t *to_p )
+{
+	to_p->ic_cmd = from_p->ic_cmd;
+	to_p->ic_timout = from_p->ic_timout;
+	to_p->ic_len = from_p->ic_len;
+	to_p->ic_dp = CAST_USER_ADDR_T(from_p->ic_dp);
+}
+
+
+static void ioccmd_t_64_to_32( user_ioccmd_t *from_p, ioccmd_t *to_p )
+{
+	to_p->ic_cmd = from_p->ic_cmd;
+	to_p->ic_timout = from_p->ic_timout;
+	to_p->ic_len = from_p->ic_len;
+	to_p->ic_dp = CAST_DOWN(caddr_t, from_p->ic_dp);
+}

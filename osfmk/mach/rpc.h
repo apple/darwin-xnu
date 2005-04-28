@@ -40,10 +40,6 @@
 #include <mach/machine/rpc.h>
 #include <mach/thread_status.h>
 
-#include <sys/appleapiopts.h>
-
-#ifdef __APPLE_API_OBSOLETE
-
 /*
  * These are the types for RPC-specific variants of the MIG routine
  * descriptor and subsystem data types.
@@ -129,7 +125,5 @@ struct rpc_subsystem {
 typedef struct rpc_subsystem  *rpc_subsystem_t;
 
 #define RPC_SUBSYSTEM_NULL	((rpc_subsystem_t) 0)
-
-#endif  /* __APPLE_API_OBSOLETE */
 
 #endif	/* _MACH_RPC_H_ */

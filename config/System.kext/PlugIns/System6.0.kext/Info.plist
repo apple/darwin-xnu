@@ -7,7 +7,7 @@
 	<key>CFBundleExecutable</key>
 	<string>kernel.6.0</string>
 	<key>CFBundleGetInfoString</key>
-	<string>System Resource Pseudoextension, Apple Computer Inc, 6.9.9</string>
+	<string>System Resource Pseudoextension, Apple Computer Inc, 7.9.9</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.apple.kernel.6.0</string>
 	<key>CFBundleInfoDictionaryVersion</key>
@@ -17,13 +17,13 @@
 	<key>CFBundlePackageType</key>
 	<string>KEXT</string>
 	<key>CFBundleShortVersionString</key>
-	<string>6.9.9</string>
+	<string>7.9.9</string>
 	<key>CFBundleSignature</key>
 	<string>????</string>
 	<key>CFBundleVersion</key>
-	<string>6.9.9</string>
+	<string>7.9.9</string>
 	<key>OSBundleCompatibleVersion</key>
-	<string>6.9.9</string>
+	<string>7.9.9</string>
 	<key>OSBundleRequired</key>
 	<string>Root</string>
 	<key>OSKernelResource</key>

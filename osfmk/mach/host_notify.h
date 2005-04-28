@@ -19,14 +19,6 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
-/*
- * Copyright (c) 2003 Apple Computer, Inc.  All rights reserved.
- *
- * HISTORY
- *
- * 14 January 2003 (debo)
- *  Created.
- */
 
 #ifndef	_MACH_HOST_NOTIFY_H_
 #define	_MACH_HOST_NOTIFY_H_

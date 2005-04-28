@@ -58,6 +58,7 @@
 #define _SYS_DISKLABEL_H_
 
 #include <sys/appleapiopts.h>
+#include <sys/types.h>		/* for daddr_t */
 
 #ifdef __APPLE_API_OBSOLETE
 
@@ -357,7 +358,7 @@ struct partinfo {
 #include <sys/cdefs.h>
 
 __BEGIN_DECLS
-struct disklabel *getdiskbyname __P((const char *));
+struct disklabel *getdiskbyname(const char *);
 __END_DECLS
 
 #endif

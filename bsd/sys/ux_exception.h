@@ -57,6 +57,10 @@
 
 extern mach_port_name_t			ux_exception_port;
 
+boolean_t	machine_exception(int exception, int code, int subcode,
+	        int *unix_signal, int *unix_code);
+void	ux_handler_init(void);
+
 #endif /* __APPLE_API_PRIVATE */
 #endif /* KERNEL */
 

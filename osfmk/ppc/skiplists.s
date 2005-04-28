@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2002-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -156,13 +156,19 @@ mapSrch64d:
             lwz		r0,mpFlags(r9)			; get flag bits from prev mapping
             ld		r10,mpVAddr(r9)			; re-fetch base address of prev ptr
             ld		r4,mpList0(r9)			; get 64-bit ptr to next mapping, if any
-            andi.	r0,r0,mpBlock+mpNest	; block mapping or nested pmap?
             lhz		r11,mpBSize(r9)			; get #pages/#segments in block/submap mapping
+            
+            rlwinm	r0,r0,0,mpType			; isolate mapping type code
+            cmplwi	cr1,r0,mpBlock			; cr1_eq <- block type?
+            cmplwi	r0,mpNest				; cr0_eq <- nested type?
+            cror	cr0_eq,cr1_eq,cr0_eq	; cr0_eq <- block or nested type?
+            cmplwi	cr5,r0,mpLinkage		; cr5_eq <- linkage type?
+            cror	cr0_eq,cr5_eq,cr0_eq	; cr0_eq <- block or nested or linkage type?
+            
             rldicr	r10,r10,0,51			; zero low 12 bits of mapping va
-            beq		mapSrch64Exit			; prev mapping was just a scalar page, search failed
-            cmpwi	r0,mpBlock				; block mapping or nested pmap?
+            bne		mapSrch64Exit			; prev mapping was just a scalar page, search failed
             sldi	r0,r11,12				; assume block mapping, get size in bytes - 4k
-            beq		mapSrch64f				; we guessed right, it was a block mapping
+            beq		cr1,mapSrch64f			; we guessed right, it was a block mapping
             addi	r11,r11,1				; mpBSize is 1 too low
             sldi	r11,r11,28				; in a nested pmap, mpBSize is in units of segments
             subi	r0,r11,4096				; get address of last page in submap
@@ -245,14 +251,20 @@ mapSrch32d:
             beq-	mapSrch32Exit			; prev ptr was null, search failed
             lwz		r0,mpFlags(r9)			; get flag bits from prev mapping
             lwz		r10,mpVAddr+4(r9)		; re-fetch base address of prev ptr
-            andi.	r0,r0,mpBlock+mpNest	; block mapping or nested pmap?
             lwz		r4,mpList0+4(r9)		; get ptr to next mapping, if any
-            beq		mapSrch32Exit			; prev mapping was just a scalar page, search failed
+
+            rlwinm	r0,r0,0,mpType			; isolate mapping type code
+            cmplwi	cr1,r0,mpBlock			; cr1_eq <- block type?
+            cmplwi	r0,mpNest				; cr0_eq <- nested type?
+            cror	cr0_eq,cr1_eq,cr0_eq	; cr0_eq <- block or nested type?
+            cmplwi	cr5,r0,mpLinkage		; cr5_eq <- linkage type?
+            cror	cr0_eq,cr5_eq,cr0_eq	; cr0_eq <- block or nested or linkage type?
+
+            bne		mapSrch32Exit			; prev mapping was just a scalar page, search failed
             lhz		r11,mpBSize(r9)			; get #pages/#segments in block/submap mapping
-            cmpwi	r0,mpBlock				; block mapping or nested pmap?
             rlwinm	r10,r10,0,0,19			; zero low 12 bits of block mapping va
             slwi	r0,r11,12				; assume block mapping, get size in bytes - 4k
-            beq		mapSrch32f				; we guessed right, it was a block mapping
+            beq		cr1,mapSrch32f			; we guessed right, it was a block mapping
             addi	r11,r11,1				; mpBSize is 1 too low
             slwi	r11,r11,28				; in a nested pmap, mpBSize is in units of segments
             subi	r0,r11,4096				; get address of last page in submap
@@ -374,14 +386,22 @@ mapSrchFull64a:								; loop over each mapping
             ld		r4,mpVAddr(r3)			; get va for this mapping (plus flags in low 12 bits)
             addi	r2,r2,1					; count mappings visited
             lwz		r0,mpFlags(r3)			; get mapping flag bits
+            
             cmpld	cr0,r10,r4				; make sure VAs come in strictly ascending order
             rldicr	r4,r4,0,51				; zero low 12 bits of mapping va
             cmpld	cr1,r5,r4				; compare the vas
             bge--	cr0,mapSkipListPanic	; die if keys are out of order
-            andi.	r0,r0,mpBlock+mpNest	; is it a scalar mapping? (ie, of a single page)
+
+            rlwinm	r0,r0,0,mpType			; isolate mapping type code
+            cmplwi	r0,mpNest				; cr0_eq <- nested type?
+            cmplwi	cr5,r0,mpLinkage		; cr5_eq <- linkage type?
+            cror	cr0_eq,cr5_eq,cr0_eq	; cr0_eq <- nested type or linkage type?
+            cmplwi	cr5,r0,mpBlock			; cr5_eq <- block type?
+            cror	cr0_eq,cr5_eq,cr0_eq	; cr0_eq <- block or nested or linkage type?
+
             blt		cr1,mapSrchFull64d		; key is less, try next list
             beq		cr1,mapSrchFull64Found	; this is the correct mapping
-            bne--	cr0,mapSrchFull64e		; handle block mapping or nested pmap
+            beq--	cr0,mapSrchFull64e		; handle block mapping or nested pmap
 mapSrchFull64b:
             la		r8,mpList0(r3)			; point to skip list vector in this mapping
             mr		r9,r3					; current becomes previous
@@ -408,9 +428,8 @@ mapSrchFull64d:
 
 mapSrchFull64e:            
             lhz		r11,mpBSize(r3)			; get #pages/#segments in block/submap mapping (if nonscalar)
-            cmpwi	r0,mpBlock				; distinguish between block mapping and nested pmaps
             sldi	r0,r11,12				; assume block mapping, get size in bytes - 4k
-            beq		mapSrchFull64f			; we guessed right, it was a block mapping
+            beq		cr5,mapSrchFull64f		; we guessed right, it was a block mapping
             addi	r11,r11,1				; mpBSize is 1 too low
             sldi	r11,r11,28				; in a nested pmap, mpBSize is in units of segments
             subi	r0,r11,4096				; get address of last page in submap
@@ -456,14 +475,22 @@ mapSrchFull32a:								; loop over each mapping
             lwz		r4,mpVAddr+4(r3)		; get va for this mapping (plus flags in low 12 bits)
             addi	r2,r2,1					; count mappings visited
             lwz		r0,mpFlags(r3)			; get mapping flag bits
+                        
             cmplw	cr0,r10,r4				; make sure VAs come in strictly ascending order
             rlwinm	r4,r4,0,0,19			; zero low 12 bits of mapping va
             cmplw	cr1,r5,r4				; compare the vas
             bge-	cr0,mapSkipListPanic	; die if keys are out of order
-            andi.	r0,r0,mpBlock+mpNest	; is it a scalar mapping? (ie, of a single page)
+
+            rlwinm	r0,r0,0,mpType			; isolate mapping type code
+            cmplwi	cr5,r0,mpLinkage		; cr5_eq <- linkage type?
+            cmplwi	r0,mpNest				; cr0_eq <- nested type?
+            cror	cr0_eq,cr5_eq,cr0_eq	; cr0_eq <- linkage type or nested type?
+            cmplwi	cr5,r0,mpBlock			; cr5_eq <- block type?
+            cror	cr0_eq,cr5_eq,cr0_eq	; cr0_eq <- block or nested or linkage type?
+
             blt		cr1,mapSrchFull32d		; key is less than this va, try next list
             beq-	cr1,mapSrchFull32Found	; this is the correct mapping
-            bne-	cr0,mapSrchFull32e		; handle block mapping or nested pmap
+            beq-	cr0,mapSrchFull32e		; handle block mapping or nested pmap
 mapSrchFull32b:
             la		r8,mpList0+4(r3)		; point to skip list vector in this mapping
             mr		r9,r3					; current becomes previous
@@ -490,9 +517,8 @@ mapSrchFull32d:
 
 mapSrchFull32e:            
             lhz		r11,mpBSize(r3)			; get #pages/#segments in block/submap mapping (if nonscalar)
-            cmpwi	r0,mpBlock				; distinguish between block mapping and nested pmaps
             slwi	r0,r11,12				; assume block mapping, get size in bytes - 4k
-            beq		mapSrchFull32f			; we guessed right, it was a block mapping
+            beq		cr5,mapSrchFull32f		; we guessed right, it was a block mapping
             addi	r11,r11,1				; mpBSize is 1 too low
             slwi	r11,r11,28				; in a nested pmap, mpBSize is in units of segments
             subi	r0,r11,4096				; get address of last page in submap
@@ -1063,13 +1089,18 @@ mapVer64a:
             ; Do some additional checks (so we only do them once per mapping.)
             ; First, if a block mapping or nested pmap, compute block end.
             
-            andi.	r29,r29,mpBlock+mpNest	; is it block mapping or nested pmap?
+            rlwinm	r29,r29,0,mpType		; isolate mapping type code
+            cmplwi	r29,mpNest				; cr0_eq <- nested type?
+            cmplwi	cr1,r29,mpLinkage		; cr1_eq <- linkage type?
+            cror	cr0_eq,cr1_eq,cr0_eq	; cr0_eq <- linkage type or nested type?
+            cmplwi	cr1,r29,mpBlock			; cr1_eq <- block type?
+            cror	cr0_eq,cr1_eq,cr0_eq	; cr0_eq <- block or nested or linkage type?
+            
             subi	r21,r21,1				; count mappings in this pmap
-            beq++	mapVer64b				; not nested or pmap
+            bne++	mapVer64b				; not nested or pmap
             lhz		r27,mpBSize(r26)		; get #pages or #segments
-            cmpwi	r29,mpBlock				; which one is it?
             sldi	r29,r27,12				; assume block mapping, units are (pages-1)
-            beq		mapVer64b				; guessed correctly
+            beq		cr1,mapVer64b			; guessed correctly
             addi	r27,r27,1				; units of nested pmap are (#segs-1)
             sldi	r29,r27,28				; convert to #bytes
             subi	r29,r29,4096			; get offset to last byte in nested pmap
@@ -1190,12 +1221,17 @@ mapVer32a:
             
             ; Then, if a block mapping or nested pmap, compute block end.
             
-            andi.	r29,r29,mpBlock+mpNest	; is it block mapping or nested pmap?
-            beq+	mapVer32b				; no
+            rlwinm	r29,r29,0,mpType		; isolate mapping type code
+            cmplwi	cr1,r29,mpLinkage		; cr1_eq <- linkage type?
+            cmplwi	r29,mpNest				; cr0_eq <- nested type?
+            cror	cr0_eq,cr1_eq,cr0_eq	; cr0_eq <- linkage type or nested type?
+            cmplwi	cr1,r29,mpBlock			; cr1_eq <- block type?
+            cror	cr0_eq,cr1_eq,cr0_eq	; cr0_eq <- block or nested or linkage type?
+            
+            bne+	mapVer32b				; not block or nested type
             lhz		r27,mpBSize(r26)		; get #pages or #segments
-            cmpwi	r29,mpBlock				; which one is it?
             slwi	r29,r27,12				; assume block mapping, units are pages
-            beq		mapVer32b				; guessed correctly
+            beq		cr1,mapVer32b			; guessed correctly
             addi	r27,r27,1				; units of nested pmap are (#segs-1)
             slwi	r29,r27,28				; convert to #bytes
             subi	r29,r29,4096			; get offset to last byte in nested pmap

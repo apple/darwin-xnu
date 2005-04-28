@@ -78,7 +78,7 @@
 #define DSMTU	65532
 #endif
 
-static void discattach __P((void));
+static void discattach(void);
 
 static struct	ifnet discif;
 static int discoutput(struct ifnet *, struct mbuf *, struct sockaddr *,
@@ -200,7 +200,7 @@ discioctl(ifp, cmd, data)
 	switch (cmd) {
 
 	case SIOCSIFADDR:
-		ifp->if_flags |= IFF_UP;
+		ifnet_set_flags(ifp, IFF_UP, IFF_UP);
 		ifa = (struct ifaddr *)data;
 		if (ifa != 0)
 			ifa->ifa_rtrequest = discrtrequest;

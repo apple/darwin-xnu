@@ -38,6 +38,8 @@
 #include <mach_kdb.h>
 #include <mach_counters.h>
 
+#include <mach/mach_types.h>
+#include <vm/vm_page.h>
 /*
  *	Return a linked list of physically contiguous
  *	wired pages.  Caller is responsible for disposal

@@ -22,14 +22,19 @@
 
 extern dt_data gMemoryMapNode;
 extern dt_data gDriversProp;
+extern dt_data gRootpathProp;
+extern dt_data gCompatibleProp;
+
+#define kDefaultPlatformName "ACPI"
 
 dt_init fakePPCDeviceTree[] =
 {
     NODE( 2, 1 ),
         PROP( "name", "device-tree"),
-        PROP( "compatible", "X86PC"),
-        NODE( 1, 1 ),
+        STRINGPROP( "compatible", gCompatibleProp ),
+        NODE( 2, 1 ),
             PROP( "name", "chosen" ),
+            STRINGPROP( "rootpath", gRootpathProp ),
             DATANODE( gMemoryMapNode ),
                 PROP( "name", "memory-map" ),
                 DATAPROP( gDriversProp ),

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -54,10 +54,9 @@
  *	processor.c: processor and processor_set manipulation routines.
  */
 
-#include <cpus.h>
-
 #include <mach/boolean.h>
 #include <mach/policy.h>
+#include <mach/processor.h>
 #include <mach/processor_info.h>
 #include <mach/vm_param.h>
 #include <kern/cpu_number.h>
@@ -77,29 +76,22 @@
  * Exported interface
  */
 #include <mach/mach_host_server.h>
+#include <mach/processor_set_server.h>
 
 /*
  *	Exported variables.
  */
-struct processor_set default_pset;
-struct processor processor_array[NCPUS];
+struct processor_set	default_pset;
 
-int 		master_cpu = 0;
+processor_t				processor_list;
+unsigned int			processor_count;
+static processor_t		processor_list_tail;
+decl_simple_lock_data(,processor_list_lock)
 
 processor_t	master_processor;
-processor_t	processor_ptr[NCPUS];
+int 		master_cpu = 0;
 
 /* Forwards */
-void	pset_init(
-		processor_set_t	pset);
-
-void	processor_init(
-		register processor_t	pr,
-		int			slot_num);
-
-void	pset_quanta_setup(
-		processor_set_t		pset);
-
 kern_return_t	processor_set_base(
 		processor_set_t 	pset,
 		policy_t             	policy,
@@ -118,36 +110,22 @@ kern_return_t	processor_set_things(
 		mach_msg_type_number_t	*count,
 		int			type);
 
-
-/*
- *	Bootstrap the processor/pset system so the scheduler can run.
- */
 void
-pset_sys_bootstrap(void)
+processor_bootstrap(void)
 {
-	register int	i;
-
-	pset_init(&default_pset);
-
-	for (i = 0; i < NCPUS; i++) {
-		/*
-		 *	Initialize processor data structures.
-		 *	Note that cpu_to_processor(i) is processor_ptr[i].
-		 */
-		processor_ptr[i] = &processor_array[i];
-		processor_init(processor_ptr[i], i);
-	}
+	simple_lock_init(&processor_list_lock, 0);
 
 	master_processor = cpu_to_processor(master_cpu);
 
-	default_pset.active = TRUE;
+	processor_init(master_processor, master_cpu);
 }
 
 /*
  *	Initialize the given processor_set structure.
  */
 
-void pset_init(
+void
+pset_init(
 	register processor_set_t	pset)
 {
 	register int	i;
@@ -164,10 +142,10 @@ void pset_init(
 	queue_init(&pset->idle_queue);
 	pset->idle_count = 0;
 	queue_init(&pset->active_queue);
-	simple_lock_init(&pset->sched_lock, ETAP_THREAD_PSET_IDLE);
+	simple_lock_init(&pset->sched_lock, 0);
 	pset->run_count = pset->share_count = 0;
 	pset->mach_factor = pset->load_average = 0;
-	pset->sched_load = 0;
+	pset->pri_shift = INT8_MAX;
 	queue_init(&pset->processors);
 	pset->processor_count = 0;
 	queue_init(&pset->tasks);
@@ -175,14 +153,11 @@ void pset_init(
 	queue_init(&pset->threads);
 	pset->thread_count = 0;
 	pset->ref_count = 1;
-	pset->active = FALSE;
-	mutex_init(&pset->lock, ETAP_THREAD_PSET);
+	pset->active = TRUE;
+	mutex_init(&pset->lock, 0);
 	pset->pset_self = IP_NULL;
 	pset->pset_name_self = IP_NULL;
 	pset->timeshare_quanta = 1;
-
-	for (i = 0; i <= NCPUS; i++)
-	    pset->quantum_factors[i] = 1;
 }
 
 /*
@@ -209,12 +184,23 @@ processor_init(
 	p->active_thread = p->next_thread = p->idle_thread = THREAD_NULL;
 	p->processor_set = PROCESSOR_SET_NULL;
 	p->current_pri = MINPRI;
+	p->deadline = UINT64_MAX;
 	timer_call_setup(&p->quantum_timer, thread_quantum_expire, p);
 	p->timeslice = 0;
-	p->deadline = UINT64_MAX;
-	simple_lock_init(&p->lock, ETAP_THREAD_PROC);
+	simple_lock_init(&p->lock, 0);
 	p->processor_self = IP_NULL;
-	p->slot_num = slot_num;
+	processor_data_init(p);
+	PROCESSOR_DATA(p, slot_num) = slot_num;
+
+	simple_lock(&processor_list_lock);
+	if (processor_list == NULL)
+		processor_list = p;
+	else
+		processor_list_tail->processor_list = p;
+	processor_list_tail = p;
+	processor_count++;
+	p->processor_list = NULL;
+	simple_unlock(&processor_list_lock);
 }
 
 /*
@@ -243,6 +229,9 @@ void
 pset_reference(
 	processor_set_t	pset)
 {
+	if (pset == PROCESSOR_SET_NULL)
+  		return;
+
 	assert(pset == &default_pset);
 }
 
@@ -264,7 +253,7 @@ pset_remove_processor(
 	queue_remove(&pset->processors, processor, processor_t, processors);
 	processor->processor_set = PROCESSOR_SET_NULL;
 	pset->processor_count--;
-	pset_quanta_setup(pset);
+	timeshare_quanta_update(pset);
 }
 
 /*
@@ -281,7 +270,7 @@ pset_add_processor(
 	queue_enter(&pset->processors, processor, processor_t, processors);
 	processor->processor_set = pset;
 	pset->processor_count++;
-	pset_quanta_setup(pset);
+	timeshare_quanta_update(pset);
 }
 
 /*
@@ -300,7 +289,6 @@ pset_remove_task(
 		return;
 
 	queue_remove(&pset->tasks, task, task_t, pset_tasks);
-	task->processor_set = PROCESSOR_SET_NULL;
 	pset->task_count--;
 }
 
@@ -333,7 +321,6 @@ pset_remove_thread(
 	thread_t	thread)
 {
 	queue_remove(&pset->threads, thread, thread_t, pset_threads);
-	thread->processor_set = PROCESSOR_SET_NULL;
 	pset->thread_count--;
 }
 
@@ -375,88 +362,97 @@ thread_change_psets(
 
 kern_return_t
 processor_info_count(
-	processor_flavor_t	flavor,
+	processor_flavor_t		flavor,
 	mach_msg_type_number_t	*count)
 {
-	kern_return_t		kr;
-
 	switch (flavor) {
+
 	case PROCESSOR_BASIC_INFO:
 		*count = PROCESSOR_BASIC_INFO_COUNT;
-		return KERN_SUCCESS;
+		break;
+
 	case PROCESSOR_CPU_LOAD_INFO:
 		*count = PROCESSOR_CPU_LOAD_INFO_COUNT;
-		return KERN_SUCCESS;
+		break;
+
 	default:
-		kr = cpu_info_count(flavor, count);
-		return kr;
+		return (cpu_info_count(flavor, count));
 	}
+
+	return (KERN_SUCCESS);
 }
 
 
 kern_return_t
 processor_info(
 	register processor_t	processor,
-	processor_flavor_t	flavor,
-	host_t			*host,
-	processor_info_t	info,
+	processor_flavor_t		flavor,
+	host_t					*host,
+	processor_info_t		info,
 	mach_msg_type_number_t	*count)
 {
 	register int	i, slot_num, state;
-	register processor_basic_info_t		basic_info;
-	register processor_cpu_load_info_t	cpu_load_info;
-	kern_return_t   kr;
+	kern_return_t	result;
 
 	if (processor == PROCESSOR_NULL)
-		return(KERN_INVALID_ARGUMENT);
+		return (KERN_INVALID_ARGUMENT);
 
-	slot_num = processor->slot_num;
+	slot_num = PROCESSOR_DATA(processor, slot_num);
 
 	switch (flavor) {
 
 	case PROCESSOR_BASIC_INFO:
-	  {
-	    if (*count < PROCESSOR_BASIC_INFO_COUNT)
-	      return(KERN_FAILURE);
+	{
+		register processor_basic_info_t		basic_info;
 
-	    basic_info = (processor_basic_info_t) info;
-	    basic_info->cpu_type = machine_slot[slot_num].cpu_type;
-	    basic_info->cpu_subtype = machine_slot[slot_num].cpu_subtype;
-	    state = processor->state;
-	    if (state == PROCESSOR_OFF_LINE)
-	      basic_info->running = FALSE;
-	    else
-	      basic_info->running = TRUE;
-	    basic_info->slot_num = slot_num;
-	    if (processor == master_processor) 
-	      basic_info->is_master = TRUE;
-	    else
-	      basic_info->is_master = FALSE;
+		if (*count < PROCESSOR_BASIC_INFO_COUNT)
+			return (KERN_FAILURE);
 
-	    *count = PROCESSOR_BASIC_INFO_COUNT;
-	    *host = &realhost;
-	    return(KERN_SUCCESS);
-	  }
+		basic_info = (processor_basic_info_t) info;
+		basic_info->cpu_type = slot_type(slot_num);
+		basic_info->cpu_subtype = slot_subtype(slot_num);
+		state = processor->state;
+		if (state == PROCESSOR_OFF_LINE)
+			basic_info->running = FALSE;
+		else
+			basic_info->running = TRUE;
+		basic_info->slot_num = slot_num;
+		if (processor == master_processor) 
+			basic_info->is_master = TRUE;
+		else
+			basic_info->is_master = FALSE;
+
+		*count = PROCESSOR_BASIC_INFO_COUNT;
+		*host = &realhost;
+
+	    return (KERN_SUCCESS);
+	}
+
 	case PROCESSOR_CPU_LOAD_INFO:
-	  {
+	{
+		register processor_cpu_load_info_t	cpu_load_info;
+		register integer_t					*cpu_ticks;
+
 	    if (*count < PROCESSOR_CPU_LOAD_INFO_COUNT)
-	      return(KERN_FAILURE);
+			return (KERN_FAILURE);
 
 	    cpu_load_info = (processor_cpu_load_info_t) info;
-	    for (i=0;i<CPU_STATE_MAX;i++)
-	      cpu_load_info->cpu_ticks[i] = machine_slot[slot_num].cpu_ticks[i];
+		cpu_ticks = PROCESSOR_DATA(processor, cpu_ticks);
+	    for (i=0; i < CPU_STATE_MAX; i++)
+			cpu_load_info->cpu_ticks[i] = cpu_ticks[i];
 
 	    *count = PROCESSOR_CPU_LOAD_INFO_COUNT;
 	    *host = &realhost;
-	    return(KERN_SUCCESS);
-	  }
+
+	    return (KERN_SUCCESS);
+	}
+
 	default:
-	  {
-	    kr=cpu_info(flavor, slot_num, info, count);
-	    if (kr == KERN_SUCCESS)
-		*host = &realhost;		   
-	    return(kr);
-	  }
+	    result = cpu_info(flavor, slot_num, info, count);
+	    if (result == KERN_SUCCESS)
+			*host = &realhost;		   
+
+	    return (result);
 	}
 }
 
@@ -465,20 +461,22 @@ processor_start(
 	processor_t	processor)
 {
 	kern_return_t	result;
+	thread_t		thread;   
 	spl_t			s;
 
 	if (processor == PROCESSOR_NULL)
-		return(KERN_INVALID_ARGUMENT);
+		return (KERN_INVALID_ARGUMENT);
 
 	if (processor == master_processor) {
+		thread_t		self = current_thread();
 		processor_t		prev;
 
-		prev = thread_bind(current_thread(), processor);
+		prev = thread_bind(self, processor);
 		thread_block(THREAD_CONTINUE_NULL);
 
-		result = cpu_start(processor->slot_num);
+		result = cpu_start(PROCESSOR_DATA(processor, slot_num));
 
-		thread_bind(current_thread(), prev);
+		thread_bind(self, prev);
 
 		return (result);
 	}
@@ -496,30 +494,60 @@ processor_start(
 	processor_unlock(processor);
 	splx(s);
 
-	if (processor->next_thread == THREAD_NULL) {
-		thread_t		thread;   
-		extern void		start_cpu_thread(void);
-	
-		thread = kernel_thread_create(start_cpu_thread, MAXPRI_KERNEL);
+	/*
+	 *	Create the idle processor thread.
+	 */
+	if (processor->idle_thread == THREAD_NULL) {
+		result = idle_thread_create(processor);
+		if (result != KERN_SUCCESS) {
+			s = splsched();
+			processor_lock(processor);
+			processor->state = PROCESSOR_OFF_LINE;
+			processor_unlock(processor);
+			splx(s);
+
+			return (result);
+		}
+	}
+
+	/*
+	 *	If there is no active thread, the processor
+	 *	has never been started.  Create a dedicated
+	 *	start up thread.
+	 */
+	if (	processor->active_thread == THREAD_NULL		&&
+			processor->next_thread == THREAD_NULL		) {
+		result = kernel_thread_create((thread_continue_t)processor_start_thread, NULL, MAXPRI_KERNEL, &thread);
+		if (result != KERN_SUCCESS) {
+			s = splsched();
+			processor_lock(processor);
+			processor->state = PROCESSOR_OFF_LINE;
+			processor_unlock(processor);
+			splx(s);
+
+			return (result);
+		}
 
 		s = splsched();
 		thread_lock(thread);
 		thread->bound_processor = processor;
 		processor->next_thread = thread;
 		thread->state = TH_RUN;
-		pset_run_incr(thread->processor_set);
 		thread_unlock(thread);
 		splx(s);
+
+		thread_deallocate(thread);
 	}
 
 	if (processor->processor_self == IP_NULL)
 		ipc_processor_init(processor);
 
-	result = cpu_start(processor->slot_num);
+	result = cpu_start(PROCESSOR_DATA(processor, slot_num));
 	if (result != KERN_SUCCESS) {
 		s = splsched();
 		processor_lock(processor);
 		processor->state = PROCESSOR_OFF_LINE;
+		timer_call_shutdown(processor);
 		processor_unlock(processor);
 		splx(s);
 
@@ -550,49 +578,44 @@ processor_control(
 	if (processor == PROCESSOR_NULL)
 		return(KERN_INVALID_ARGUMENT);
 
-	return(cpu_control(processor->slot_num, info, count));
+	return(cpu_control(PROCESSOR_DATA(processor, slot_num), info, count));
 }
 
 /*
- *	Precalculate the appropriate timesharing quanta based on load.  The
- *	index into quantum_factors[] is the number of threads on the
- *	processor set queue.  It is limited to the number of processors in
- *	the set.
+ *	Calculate the appropriate timesharing quanta based on set load.
  */
 
 void
-pset_quanta_setup(
+timeshare_quanta_update(
 	processor_set_t		pset)
 {
-	register int	i, count = pset->processor_count;
+	int		pcount = pset->processor_count;
+	int		i = pset->runq.count;
 
-	for (i = 1; i <= count; i++)
-		pset->quantum_factors[i] = (count + (i / 2)) / i;
+	if (i >= pcount)
+		i = 1;
+	else
+	if (i <= 1)
+		i = pcount;
+	else
+		i = (pcount + (i / 2)) / i;
 
-	pset->quantum_factors[0] = pset->quantum_factors[1];
-
-	timeshare_quanta_update(pset);
+	pset->timeshare_quanta = i;
 }
 	    
 kern_return_t
 processor_set_create(
-	host_t	host,
-	processor_set_t	*new_set,
-	processor_set_t	*new_name)
+	__unused host_t		host,
+	__unused processor_set_t	*new_set,
+	__unused processor_set_t	*new_name)
 {
-#ifdef	lint
-	host++; new_set++; new_name++;
-#endif	/* lint */
 	return(KERN_FAILURE);
 }
 
 kern_return_t
 processor_set_destroy(
-	processor_set_t	pset)
+	__unused processor_set_t	pset)
 {
-#ifdef	lint
-	pset++;
-#endif	/* lint */
 	return(KERN_FAILURE);
 }
 
@@ -684,7 +707,7 @@ processor_set_info(
 			return(KERN_FAILURE);
 
 		ts_limit = (policy_timeshare_limit_t) info;
-		ts_limit->max_priority = MAXPRI_STANDARD;
+		ts_limit->max_priority = MAXPRI_KERNEL;
 
 		*count = POLICY_TIMESHARE_LIMIT_COUNT;
 		*host = &realhost;
@@ -697,7 +720,7 @@ processor_set_info(
 			return(KERN_FAILURE);
 
 		fifo_limit = (policy_fifo_limit_t) info;
-		fifo_limit->max_priority = MAXPRI_STANDARD;
+		fifo_limit->max_priority = MAXPRI_KERNEL;
 
 		*count = POLICY_FIFO_LIMIT_COUNT;
 		*host = &realhost;
@@ -710,7 +733,7 @@ processor_set_info(
 			return(KERN_FAILURE);
 
 		rr_limit = (policy_rr_limit_t) info;
-		rr_limit->max_priority = MAXPRI_STANDARD;
+		rr_limit->max_priority = MAXPRI_KERNEL;
 
 		*count = POLICY_RR_LIMIT_COUNT;
 		*host = &realhost;
@@ -781,9 +804,9 @@ processor_set_statistics(
  */
 kern_return_t
 processor_set_max_priority(
-	processor_set_t	pset,
-	int		max_priority,
-	boolean_t	change_threads)
+	__unused processor_set_t	pset,
+	__unused int			max_priority,
+	__unused boolean_t		change_threads)
 {
 	return (KERN_INVALID_ARGUMENT);
 }
@@ -796,8 +819,8 @@ processor_set_max_priority(
 
 kern_return_t
 processor_set_policy_enable(
-	processor_set_t	pset,
-	int		policy)
+	__unused processor_set_t	pset,
+	__unused int			policy)
 {
 	return (KERN_INVALID_ARGUMENT);
 }
@@ -810,9 +833,9 @@ processor_set_policy_enable(
  */
 kern_return_t
 processor_set_policy_disable(
-	processor_set_t	pset,
-	int		policy,
-	boolean_t	change_threads)
+	__unused processor_set_t	pset,
+	__unused int			policy,
+	__unused boolean_t		change_threads)
 {
 	return (KERN_INVALID_ARGUMENT);
 }
@@ -827,19 +850,20 @@ processor_set_policy_disable(
  */
 kern_return_t
 processor_set_things(
-	processor_set_t		pset,
-	mach_port_t		**thing_list,
+	processor_set_t			pset,
+	mach_port_t				**thing_list,
 	mach_msg_type_number_t	*count,
-	int			type)
+	int						type)
 {
 	unsigned int actual;	/* this many things */
-	int i;
+	unsigned int maxthings;
+	unsigned int i;
 
 	vm_size_t size, size_needed;
-	vm_offset_t addr;
+	void  *addr;
 
 	if (pset == PROCESSOR_SET_NULL)
-		return KERN_INVALID_ARGUMENT;
+		return (KERN_INVALID_ARGUMENT);
 
 	size = 0; addr = 0;
 
@@ -847,17 +871,18 @@ processor_set_things(
 		pset_lock(pset);
 		if (!pset->active) {
 			pset_unlock(pset);
-			return KERN_FAILURE;
+
+			return (KERN_FAILURE);
 		}
 
 		if (type == THING_TASK)
-			actual = pset->task_count;
+			maxthings = pset->task_count;
 		else
-			actual = pset->thread_count;
+			maxthings = pset->thread_count;
 
 		/* do we have the memory we need? */
 
-		size_needed = actual * sizeof(mach_port_t);
+		size_needed = maxthings * sizeof (mach_port_t);
 		if (size_needed <= size)
 			break;
 
@@ -872,60 +897,47 @@ processor_set_things(
 
 		addr = kalloc(size);
 		if (addr == 0)
-			return KERN_RESOURCE_SHORTAGE;
+			return (KERN_RESOURCE_SHORTAGE);
 	}
 
 	/* OK, have memory and the processor_set is locked & active */
 
+	actual = 0;
 	switch (type) {
-	    case THING_TASK: {
-		task_t *tasks = (task_t *) addr;
-		task_t task;
 
-		for (i = 0, task = (task_t) queue_first(&pset->tasks);
-		     !queue_end(&pset->tasks, (queue_entry_t) task);
-			 task = (task_t) queue_next(&task->pset_tasks)) {
-			
-			task_lock(task);
-			if (task->ref_count > 0) {
-				/* take ref for convert_task_to_port */
-				task_reference_locked(task);
-				tasks[i++] = task;
-			}
-			task_unlock(task);
+	case THING_TASK:
+	{
+		task_t		task, *tasks = (task_t *)addr;
+
+		for (task = (task_t)queue_first(&pset->tasks);
+				!queue_end(&pset->tasks, (queue_entry_t)task);
+					task = (task_t)queue_next(&task->pset_tasks)) {
+			task_reference_internal(task);
+			tasks[actual++] = task;
 		}
+
 		break;
-	    }
+	}
 
-	    case THING_THREAD: {
-		thread_act_t *thr_acts = (thread_act_t *) addr;
-		thread_t thread;
-		thread_act_t thr_act;
+	case THING_THREAD:
+	{
+		thread_t	thread, *threads = (thread_t *)addr;
 
-		for (i = 0, thread = (thread_t) queue_first(&pset->threads);
-			 !queue_end(&pset->threads, (queue_entry_t)thread);
-	    	 thread = (thread_t) queue_next(&thread->pset_threads)) {
-
-		  	thr_act = thread_lock_act(thread);
-			if (thr_act && thr_act->act_ref_count > 0) {
-				/* take ref for convert_act_to_port */
-				act_reference_locked(thr_act);
-				thr_acts[i++] = thr_act;
-			}
-			thread_unlock_act(thread);
+		for (i = 0, thread = (thread_t)queue_first(&pset->threads);
+				!queue_end(&pset->threads, (queue_entry_t)thread);
+					thread = (thread_t)queue_next(&thread->pset_threads)) {
+			thread_reference_internal(thread);
+			threads[actual++] = thread;
 		}
+
 		break;
-		}
+	}
 	}
 		
-	/* can unlock processor set now that we have the task/thread refs */
 	pset_unlock(pset);
 
-	if (i < actual) {
-		  	actual = i;
-			size_needed = actual * sizeof(mach_port_t);
-	}
-	assert(i == actual);
+	if (actual < maxthings)
+		size_needed = actual * sizeof (mach_port_t);
 
 	if (actual == 0) {
 		/* no things, so return null pointer and deallocate memory */
@@ -934,65 +946,73 @@ processor_set_things(
 
 		if (size != 0)
 			kfree(addr, size);
-	} else {
+	}
+	else {
 		/* if we allocated too much, must copy */
 
 		if (size_needed < size) {
-			vm_offset_t newaddr;
+			void *newaddr;
 
 			newaddr = kalloc(size_needed);
 			if (newaddr == 0) {
 				switch (type) {
-				    case THING_TASK: {
-					task_t *tasks = (task_t *) addr;
+
+				case THING_TASK:
+				{
+					task_t		*tasks = (task_t *)addr;
 
 					for (i = 0; i < actual; i++)
 						task_deallocate(tasks[i]);
 					break;
-				    }
+				}
 
-				    case THING_THREAD: {
-					thread_act_t *acts = (thread_act_t *) addr;
+				case THING_THREAD:
+				{
+					thread_t	*threads = (thread_t *)addr;
 
 					for (i = 0; i < actual; i++)
-						act_deallocate(acts[i]);
+						thread_deallocate(threads[i]);
 					break;
-				    }
 				}
+				}
+
 				kfree(addr, size);
-				return KERN_RESOURCE_SHORTAGE;
+				return (KERN_RESOURCE_SHORTAGE);
 			}
 
-			bcopy((char *) addr, (char *) newaddr, size_needed);
+			bcopy((void *) addr, (void *) newaddr, size_needed);
 			kfree(addr, size);
 			addr = newaddr;
 		}
 
-		*thing_list = (mach_port_t *) addr;
+		*thing_list = (mach_port_t *)addr;
 		*count = actual;
 
 		/* do the conversion that Mig should handle */
 
 		switch (type) {
-		    case THING_TASK: {
-			task_t *tasks = (task_t *) addr;
+
+		case THING_TASK:
+		{
+			task_t		*tasks = (task_t *)addr;
 
 			for (i = 0; i < actual; i++)
 				(*thing_list)[i] = convert_task_to_port(tasks[i]);
 			break;
-		    }
+		}
 
-		    case THING_THREAD: {
-			thread_act_t *thr_acts = (thread_act_t *) addr;
+		case THING_THREAD:
+		{
+			thread_t	*threads = (thread_t *)addr;
 
 			for (i = 0; i < actual; i++)
-			  	(*thing_list)[i] = convert_act_to_port(thr_acts[i]);
+			  	(*thing_list)[i] = convert_thread_to_port(threads[i]);
 			break;
-		    }
+		}
 		}
 	}
 
-	return(KERN_SUCCESS);
+	return (KERN_SUCCESS);
 }
 
 
@@ -1033,10 +1053,10 @@ processor_set_threads(
  */
 kern_return_t
 processor_set_base(
-	processor_set_t 	pset,
-	policy_t             	policy,
-        policy_base_t           base,
-	boolean_t       	change)
+	__unused processor_set_t 	pset,
+	__unused policy_t		policy,
+	__unused policy_base_t	base,
+	__unused boolean_t       	change)
 {
 	return (KERN_INVALID_ARGUMENT);
 }
@@ -1050,10 +1070,10 @@ processor_set_base(
  */
 kern_return_t
 processor_set_limit(
-	processor_set_t 	pset,
-	policy_t		policy,
-        policy_limit_t    	limit,
-	boolean_t       	change)
+	__unused processor_set_t 	pset,
+	__unused policy_t		policy,
+	__unused policy_limit_t    	limit,
+	__unused boolean_t       	change)
 {
 	return (KERN_POLICY_LIMIT);
 }
@@ -1067,11 +1087,11 @@ processor_set_limit(
  */
 kern_return_t
 processor_set_policy_control(
-	processor_set_t		pset,
-	int			flavor,
-	processor_set_info_t	policy_info,
-	mach_msg_type_number_t	count,
-	boolean_t		change)
+	__unused processor_set_t		pset,
+	__unused int				flavor,
+	__unused processor_set_info_t	policy_info,
+	__unused mach_msg_type_number_t	count,
+	__unused boolean_t			change)
 {
 	return (KERN_INVALID_ARGUMENT);
 }

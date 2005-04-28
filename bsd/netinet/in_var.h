@@ -64,7 +64,7 @@
 #include <sys/kern_event.h>
 #endif
 
-#ifdef __APPLE_API_UNSTABLE
+#ifdef PRIVATE
 
 /*
  * Interface address, Internet version.  One of these structures
@@ -88,6 +88,7 @@ struct in_ifaddr {
 #define	ia_broadaddr	ia_dstaddr
 	struct	sockaddr_in ia_sockmask; /* reserve space for general netmask */
 };
+#endif /* PRIVATE */
 
 struct	in_aliasreq {
 	char	ifra_name[IFNAMSIZ];		/* if name, e.g. "en0" */
@@ -100,7 +101,6 @@ struct	in_aliasreq {
 #endif
 };
 
-#ifdef __APPLE__
 /*
  * Event data, internet style.
  */
@@ -136,8 +136,8 @@ struct kev_in_collision {
 #define KEV_INET_SIFBRDADDR   5
 #define KEV_INET_SIFNETMASK   6
 #define KEV_INET_ARPCOLLISION 7	/* use kev_in_collision */
-#endif /* __APPLE__ */
 
+#ifdef KERNEL_PRIVATE
 /*
  * Given a pointer to an in_ifaddr (ifaddr),
  * return a pointer to the addr as a sockaddr_in.
@@ -148,14 +148,11 @@ struct kev_in_collision {
 #define IN_LNAOF(in, ifa) \
 	((ntohl((in).s_addr) & ~((struct in_ifaddr *)(ifa)->ia_subnetmask))
 
-#endif /* __APPLE_API_UNSTABLE */
-
-#ifdef	KERNEL
-#ifdef __APPLE_API_PRIVATE
 extern	TAILQ_HEAD(in_ifaddrhead, in_ifaddr) in_ifaddrhead;
 extern	struct	ifqueue	ipintrq;		/* ip packet input queue */
 extern	struct	in_addr zeroin_addr;
 extern	u_char	inetctlerrmap[];
+extern	lck_mtx_t *rt_mtx;
 
 /*
  * Macro for finding the interface (ifnet structure) corresponding to one
@@ -167,10 +164,13 @@ extern	u_char	inetctlerrmap[];
 { \
 	struct in_ifaddr *ia; \
 \
+	lck_mtx_assert(rt_mtx, LCK_MTX_ASSERT_NOTOWNED); \
+	lck_mtx_lock(rt_mtx); \
 	TAILQ_FOREACH(ia, &in_ifaddrhead, ia_link) \
 		if (IA_SIN(ia)->sin_addr.s_addr == (addr).s_addr) \
 			break; \
 	(ifp) = (ia == NULL) ? NULL : ia->ia_ifp; \
+	lck_mtx_unlock(rt_mtx); \
 }
 
 /*
@@ -181,15 +181,15 @@ extern	u_char	inetctlerrmap[];
 	/* struct ifnet *ifp; */ \
 	/* struct in_ifaddr *ia; */ \
 { \
+	lck_mtx_assert(rt_mtx, LCK_MTX_ASSERT_NOTOWNED); \
+	lck_mtx_lock(rt_mtx); \
 	for ((ia) = TAILQ_FIRST(&in_ifaddrhead); \
 	    (ia) != NULL && (ia)->ia_ifp != (ifp); \
 	    (ia) = TAILQ_NEXT((ia), ia_link)) \
 		continue; \
+	lck_mtx_unlock(rt_mtx); \
 }
-#endif /* __APPLE_API_PRIVATE */
-#endif
 
-#ifdef __APPLE_API_UNSTABLE
 /*
  * This information should be part of the ifnet structure but we don't wish
  * to change that - as it might break a number of things
@@ -219,10 +219,6 @@ struct in_multi {
 	u_int	inm_state;		/*  state of the membership */
 	struct	router_info *inm_rti;	/* router info*/
 };
-#endif /* __APPLE_API_UNSTABLE */
-
-#ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
 
 #ifdef SYSCTL_DECL
 SYSCTL_DECL(_net_inet_ip);
@@ -283,20 +279,19 @@ do { \
 } while(0)
 
 struct	route;
-struct	in_multi *in_addmulti __P((struct in_addr *, struct ifnet *));
-void	in_delmulti __P((struct in_multi *));
-int	in_control __P((struct socket *, u_long, caddr_t, struct ifnet *,
-			struct proc *));
-void	in_rtqdrain __P((void));
-void	ip_input __P((struct mbuf *));
-int	in_ifadown __P((struct ifaddr *ifa, int));
-void	in_ifscrub __P((struct ifnet *, struct in_ifaddr *));
-int	ipflow_fastforward __P((struct mbuf *));
-void	ipflow_create __P((const struct route *, struct mbuf *));
-void	ipflow_slowtimo __P((void));
+struct	in_multi *in_addmulti(struct in_addr *, struct ifnet *);
+void	in_delmulti(struct in_multi **);
+int	in_control(struct socket *, u_long, caddr_t, struct ifnet *,
+			struct proc *);
+void	in_rtqdrain(void);
+void	ip_input(struct mbuf *);
+int	in_ifadown(struct ifaddr *ifa, int);
+void	in_ifscrub(struct ifnet *, struct in_ifaddr *, int);
+int	ipflow_fastforward(struct mbuf *);
+void	ipflow_create(const struct route *, struct mbuf *);
+void	ipflow_slowtimo(void);
 
-#endif /* __APPLE_API_PRIVATE */
-#endif /* _KERNEL */
+#endif /* KERNEL_PRIVATE */
 
 /* INET6 stuff */
 #include <netinet6/in6_var.h>

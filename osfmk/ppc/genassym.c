@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -37,22 +37,19 @@
  * the values, but we cannot run anything on the target machine.
  */
 
-#include <cpus.h>
 #include <va_list.h>
 #include <types.h>
 
 #include <kern/task.h>
 #include <kern/thread.h>
-#include <kern/thread_act.h>
 #include <kern/host.h>
 #include <kern/lock.h>
+#include <kern/locks.h>
 #include <kern/processor.h>
-#include <kern/syscall_sw.h>
 #include <ppc/exception.h>
-#include <ppc/thread_act.h>
+#include <ppc/thread.h>
 #include <ppc/misc_protos.h>
 #include <kern/syscall_sw.h>
-#include <kern/ast.h>
 #include <ppc/low_trace.h>
 #include <ppc/PseudoKernel.h>
 #include <ppc/mappings.h>
@@ -79,21 +76,22 @@
 int main(int argc, char *argv[])
 {
 	/* Process Control Block */
-	DECLARE("ACT_MACT_KSP",	offsetof(thread_act_t, mact.ksp));
-	DECLARE("ACT_MACT_BEDA", offsetof(thread_act_t, mact.bbDescAddr));
-	DECLARE("ACT_MACT_BTS",	offsetof(thread_act_t, mact.bbTableStart));
-	DECLARE("ACT_MACT_BTE",	offsetof(thread_act_t, mact.bbTaskEnv));
-	DECLARE("ACT_MACT_SPF",	offsetof(thread_act_t, mact.specFlags));
-	DECLARE("ACT_PREEMPT_CNT",	offsetof(thread_act_t, mact.preemption_count));
-	DECLARE("qactTimer",	offsetof(thread_act_t, mact.qactTimer));
-	DECLARE("cioSpace",	offsetof(thread_act_t, mact.cioSpace));
-	DECLARE("cioRelo",	offsetof(thread_act_t, mact.cioRelo));
-	DECLARE("cioSwitchAway",	cioSwitchAway);
-	DECLARE("cioSwitchAwayb",	cioSwitchAwayb);
-	DECLARE("bbTrap",		offsetof(thread_act_t, mact.bbTrap));
-	DECLARE("bbSysCall",	offsetof(thread_act_t, mact.bbSysCall));
-	DECLARE("bbInterrupt",	offsetof(thread_act_t, mact.bbInterrupt));
-	DECLARE("bbPending",	offsetof(thread_act_t, mact.bbPending));
+	DECLARE("ACT_MACT_KSP",	offsetof(thread_t, machine.ksp));
+	DECLARE("ACT_MACT_BEDA", offsetof(thread_t, machine.bbDescAddr));
+	DECLARE("ACT_MACT_BTS",	offsetof(thread_t, machine.bbTableStart));
+	DECLARE("ACT_MACT_BTE",	offsetof(thread_t, machine.bbTaskEnv));
+	DECLARE("ACT_MACT_SPF",	offsetof(thread_t, machine.specFlags));
+	DECLARE("ACT_PREEMPT_CNT",	offsetof(thread_t, machine.preemption_count));
+	DECLARE("ACT_PER_PROC",	offsetof(thread_t, machine.PerProc));
+	DECLARE("qactTimer",	offsetof(thread_t, machine.qactTimer));
+	DECLARE("umwSpace",	offsetof(thread_t, machine.umwSpace));
+	DECLARE("umwRelo",	offsetof(thread_t, machine.umwRelo));
+	DECLARE("umwSwitchAway",	umwSwitchAway);
+	DECLARE("umwSwitchAwayb",	umwSwitchAwayb);
+	DECLARE("bbTrap",		offsetof(thread_t, machine.bbTrap));
+	DECLARE("bbSysCall",	offsetof(thread_t, machine.bbSysCall));
+	DECLARE("bbInterrupt",	offsetof(thread_t, machine.bbInterrupt));
+	DECLARE("bbPending",	offsetof(thread_t, machine.bbPending));
 	
 	DECLARE("floatUsed",	floatUsed);
 	DECLARE("vectorUsed",	vectorUsed);
@@ -127,7 +125,6 @@ int main(int argc, char *argv[])
 	/* Per Proc info structure */
 	DECLARE("PP_CPU_NUMBER",		offsetof(struct per_proc_info *, cpu_number));
 	DECLARE("PP_CPU_FLAGS",			offsetof(struct per_proc_info *, cpu_flags));
-	DECLARE("SleepState",			SleepState);
 	DECLARE("PP_ISTACKPTR",			offsetof(struct per_proc_info *, istackptr));
 	DECLARE("PP_INTSTACK_TOP_SS",	offsetof(struct per_proc_info *, intstack_top_ss));
 	DECLARE("PP_DEBSTACKPTR",		offsetof(struct per_proc_info *, debstackptr));
@@ -137,17 +134,13 @@ int main(int argc, char *argv[])
 	DECLARE("holdQFret",			offsetof(struct per_proc_info *, holdQFret));
 	DECLARE("rtcPop",				offsetof(struct per_proc_info *, rtcPop));
 
-	DECLARE("PP_SAVE_EXCEPTION_TYPE", offsetof(struct per_proc_info *, save_exception_type));
-	DECLARE("PP_NEED_AST", 			offsetof(struct per_proc_info *, need_ast));
+	DECLARE("PP_PENDING_AST",		offsetof(struct per_proc_info *, pending_ast));
 	DECLARE("quickfret", 			offsetof(struct per_proc_info *, quickfret));
 	DECLARE("lclfree", 				offsetof(struct per_proc_info *, lclfree));
 	DECLARE("lclfreecnt",			offsetof(struct per_proc_info *, lclfreecnt));
 	DECLARE("PP_INTS_ENABLED", 		offsetof(struct per_proc_info *, interrupts_enabled));
 	DECLARE("UAW", 					offsetof(struct per_proc_info *, Uassist));
 	DECLARE("next_savearea", 		offsetof(struct per_proc_info *, next_savearea));
-	DECLARE("PP_CPU_DATA", 			offsetof(struct per_proc_info *, pp_cpu_data));
-	DECLARE("PP_SIMPLE_LOCK_CNT",	offsetof(struct per_proc_info *, pp_simple_lock_count));
-	DECLARE("PP_INTERRUPT_LVL",		offsetof(struct per_proc_info *, pp_interrupt_level));
 	DECLARE("ppbbTaskEnv", 			offsetof(struct per_proc_info *, ppbbTaskEnv));
 	DECLARE("liveVRS", 				offsetof(struct per_proc_info *, liveVRSave));
 	DECLARE("spcFlags", 			offsetof(struct per_proc_info *, spcFlags));
@@ -257,7 +250,7 @@ int main(int argc, char *argv[])
 	DECLARE("VMMXAFlgs", 			offsetof(struct per_proc_info *, VMMXAFlgs));
 	DECLARE("FAMintercept", 		offsetof(struct per_proc_info *, FAMintercept));
 
-	DECLARE("ppCIOmp", 				offsetof(struct per_proc_info *, ppCIOmp));
+	DECLARE("ppUMWmp", 				offsetof(struct per_proc_info *, ppUMWmp));
 
 	DECLARE("tempr0", 				offsetof(struct per_proc_info *, tempr0));
 	DECLARE("tempr1", 				offsetof(struct per_proc_info *, tempr1));
@@ -362,6 +355,10 @@ int main(int argc, char *argv[])
 	DECLARE("empadvr", 				offsetof(struct per_proc_info *, empadvr));
 	DECLARE("skipListPrev", 		offsetof(struct per_proc_info *, skipListPrev));
 	DECLARE("ppSize",				sizeof(struct per_proc_info));
+	DECLARE("ppe_paddr", 				offsetof(struct per_proc_entry *, ppe_paddr));
+	DECLARE("ppe_vaddr", 				offsetof(struct per_proc_entry *, ppe_vaddr));
+	DECLARE("ppeSize",				sizeof(struct per_proc_entry));
+	DECLARE("MAX_CPUS",				MAX_CPUS);
 	DECLARE("patcharea", 			offsetof(struct per_proc_info *, patcharea));
 
 	DECLARE("hwCounts",				offsetof(struct per_proc_info *, hwCtr));
@@ -413,6 +410,11 @@ int main(int argc, char *argv[])
 	DECLARE("hwIgnored",			offsetof(struct per_proc_info *, hwCtr.hwIgnored));
 	DECLARE("hwhdec",				offsetof(struct per_proc_info *, hwCtr.hwhdec));
 	DECLARE("hwSteals",				offsetof(struct per_proc_info *, hwCtr.hwSteals));
+	
+	DECLARE("hwWalkPhys",			offsetof(struct per_proc_info *, hwCtr.hwWalkPhys));
+	DECLARE("hwWalkFull",			offsetof(struct per_proc_info *, hwCtr.hwWalkFull));
+	DECLARE("hwWalkMerge",			offsetof(struct per_proc_info *, hwCtr.hwWalkMerge));
+	DECLARE("hwWalkQuick",			offsetof(struct per_proc_info *, hwCtr.hwWalkQuick));
 
 	DECLARE("hwMckHang",			offsetof(struct per_proc_info *, hwCtr.hwMckHang));
 	DECLARE("hwMckSLBPE",			offsetof(struct per_proc_info *, hwCtr.hwMckSLBPE));
@@ -434,6 +436,9 @@ int main(int argc, char *argv[])
 
 	DECLARE("napStamp", 			offsetof(struct per_proc_info *, hwCtr.napStamp));
 	DECLARE("napTotal", 			offsetof(struct per_proc_info *, hwCtr.napTotal));
+	DECLARE("PP_PROCESSOR",			offsetof(struct per_proc_info *, processor[0]));
+	DECLARE("PP_PROCESSOR_SIZE",	sizeof(((struct per_proc_info *)0)->processor));
+	DECLARE("PROCESSOR_SIZE",		sizeof (struct processor));
 
 	DECLARE("patchAddr",			offsetof(struct patch_entry *, addr));
 	DECLARE("patchData",			offsetof(struct patch_entry *, data));
@@ -442,7 +447,7 @@ int main(int argc, char *argv[])
 	DECLARE("peSize", 				sizeof(patch_entry_t));
 	DECLARE("PATCH_PROCESSOR",		PATCH_PROCESSOR);
 	DECLARE("PATCH_FEATURE",		PATCH_FEATURE);
-	DECLARE("PATCH_TABLE_SIZE",		PATCH_TABLE_SIZE);
+    DECLARE("PATCH_END_OF_TABLE",   PATCH_END_OF_TABLE);
 	DECLARE("PatchExt32",			PatchExt32);
 	DECLARE("PatchExt32b",			PatchExt32b);
 	DECLARE("PatchLwsync",			PatchLwsync);
@@ -458,34 +463,29 @@ int main(int argc, char *argv[])
 #define IKSBASE (u_int)STACK_IKS(0)
 
 	/* values from kern/thread.h */
-	DECLARE("THREAD_TOP_ACT",		offsetof(thread_t, top_act));
-	DECLARE("THREAD_KERNEL_STACK",	offsetof(thread_act_t, kernel_stack));
-	DECLARE("THREAD_RECOVER",		offsetof(thread_act_t, recover));
+	DECLARE("THREAD_OPTIONS",		offsetof(thread_t, options));
+	DECLARE("TH_OPT_DELAYIDLE", 	TH_OPT_DELAYIDLE);
+	DECLARE("THREAD_KERNEL_STACK",	offsetof(thread_t, kernel_stack));
+	DECLARE("THREAD_RECOVER",		offsetof(thread_t, recover));
 	DECLARE("THREAD_FUNNEL_LOCK",
-			offsetof(thread_act_t, funnel_lock));
+			offsetof(thread_t, funnel_lock));
 	DECLARE("THREAD_FUNNEL_STATE",
-			offsetof(thread_act_t, funnel_state));
+			offsetof(thread_t, funnel_state));
 	DECLARE("LOCK_FNL_MUTEX",
 			offsetof(struct funnel_lock *, fnl_mutex));
-#if	MACH_LDEBUG
-	DECLARE("THREAD_MUTEX_COUNT",	offsetof(thread_t, mutex_count));
-#endif	/* MACH_LDEBUG */
 
-	/* values from kern/thread_act.h */
-	DECLARE("ACT_TASK",				offsetof(thread_act_t, task));
-	DECLARE("ACT_THREAD",			offsetof(thread_act_t, thread));
-	DECLARE("ACT_LOWER",			offsetof(thread_act_t, lower));
-	DECLARE("ACT_MACT_PCB",			offsetof(thread_act_t, mact.pcb));
-	DECLARE("ACT_MACT_UPCB",		offsetof(thread_act_t, mact.upcb));
-	DECLARE("ACT_AST",				offsetof(thread_act_t, ast));
-	DECLARE("ACT_VMMAP",			offsetof(thread_act_t, map));
-	DECLARE("vmmCEntry",			offsetof(thread_act_t, mact.vmmCEntry));
-	DECLARE("vmmControl",			offsetof(thread_act_t, mact.vmmControl));
-	DECLARE("curctx",				offsetof(thread_act_t, mact.curctx));
-	DECLARE("deferctx",				offsetof(thread_act_t, mact.deferctx));
-	DECLARE("facctx",				offsetof(thread_act_t, mact.facctx));
+	DECLARE("ACT_TASK",				offsetof(thread_t, task));
+	DECLARE("ACT_MACT_PCB",			offsetof(thread_t, machine.pcb));
+	DECLARE("ACT_MACT_UPCB",		offsetof(thread_t, machine.upcb));
+	DECLARE("ACT_AST",				offsetof(thread_t, ast));
+	DECLARE("ACT_VMMAP",			offsetof(thread_t, map));
+	DECLARE("vmmCEntry",			offsetof(thread_t, machine.vmmCEntry));
+	DECLARE("vmmControl",			offsetof(thread_t, machine.vmmControl));
+	DECLARE("curctx",				offsetof(thread_t, machine.curctx));
+	DECLARE("deferctx",				offsetof(thread_t, machine.deferctx));
+	DECLARE("facctx",				offsetof(thread_t, machine.facctx));
 #ifdef MACH_BSD
-	DECLARE("CTHREAD_SELF",			offsetof(thread_act_t, mact.cthread_self));
+	DECLARE("CTHREAD_SELF",			offsetof(thread_t, machine.cthread_self));
 #endif  
 
 	DECLARE("FPUsave",				offsetof(struct facility_context *,FPUsave));
@@ -518,8 +518,9 @@ int main(int argc, char *argv[])
 	DECLARE("kVmmProtectPage", 		kVmmProtectPage);
 	DECLARE("kVmmMapList", 			kVmmMapList);
 	DECLARE("kVmmUnmapList", 		kVmmUnmapList);
-	DECLARE("kVmmSetXA", 			kVmmSetXA);
-	DECLARE("kVmmGetXA", 			kVmmGetXA);
+	DECLARE("kVmmActivateXA", 		kVmmActivateXA);
+	DECLARE("kVmmDeactivateXA", 	kVmmDeactivateXA);
+	DECLARE("kVmmGetXA",			kVmmGetXA);
 	DECLARE("kVmmMapPage64", 		kVmmMapPage64);
 	DECLARE("kVmmGetPageMapping64",	kVmmGetPageMapping64);
 	DECLARE("kVmmUnmapPage64", 		kVmmUnmapPage64);
@@ -768,6 +769,10 @@ int main(int argc, char *argv[])
     DECLARE("pmapKeys",				pmapKeys);
     DECLARE("pmapKeyDef",			pmapKeyDef);
 	DECLARE("pmapSCSubTag",			offsetof(struct pmap *, pmapSCSubTag));
+	DECLARE("pmapVmmExt",			offsetof(struct pmap *, pmapVmmExt));
+	DECLARE("pmapVmmExtPhys",		offsetof(struct pmap *, pmapVmmExtPhys));
+	DECLARE("pmapVMhost",			pmapVMhost);
+	DECLARE("pmapVMgsaa",			pmapVMgsaa);
 	DECLARE("pmapSegCache",			offsetof(struct pmap *, pmapSegCache));
 	DECLARE("pmapCurLists",			offsetof(struct pmap *, pmapCurLists));
 	DECLARE("pmapRandNum",			offsetof(struct pmap *, pmapRandNum));
@@ -793,22 +798,71 @@ int main(int argc, char *argv[])
 
 	DECLARE("maxAdrSp",				maxAdrSp);
 	DECLARE("maxAdrSpb",			maxAdrSpb);
-
-	/* values from kern/processor.h */
-	DECLARE("psthreads",			offsetof(struct processor_set *, threads));
-	DECLARE("psthreadcnt",			offsetof(struct processor_set *, thread_count));
-
-	/* values from kern/processor.h */
-	DECLARE("psthreads",	offsetof(struct processor_set *, threads));
-	DECLARE("psthreadcnt",	offsetof(struct processor_set *, thread_count));
 	
+	DECLARE("cppvPsnkb",			cppvPsnkb);
+	DECLARE("cppvPsrcb",			cppvPsrcb);
+	DECLARE("cppvFsnkb",			cppvFsnkb);
+	DECLARE("cppvFsrcb",			cppvFsrcb);
+	DECLARE("cppvNoModSnkb",		cppvNoModSnkb);
+	DECLARE("cppvNoRefSrcb",		cppvNoRefSrcb);
+	DECLARE("cppvKmapb",			cppvKmapb);
+	
+	DECLARE("vmxSalt",				offsetof(struct pmap_vmm_ext *, vmxSalt));
+	DECLARE("vmxHostPmapPhys",		offsetof(struct pmap_vmm_ext *, vmxHostPmapPhys));
+	DECLARE("vmxHostPmap",			offsetof(struct pmap_vmm_ext *,	vmxHostPmap));
+	DECLARE("vmxHashPgIdx",			offsetof(struct pmap_vmm_ext *, vmxHashPgIdx));
+	DECLARE("vmxHashPgList",		offsetof(struct pmap_vmm_ext *, vmxHashPgList));
+	DECLARE("vmxStats",				offsetof(struct pmap_vmm_ext *, vmxStats));
+	DECLARE("vmxSize",				sizeof(struct pmap_vmm_ext));
+	DECLARE("VMX_HPIDX_OFFSET",		VMX_HPIDX_OFFSET);
+	DECLARE("VMX_HPLIST_OFFSET",	VMX_HPLIST_OFFSET);
+	DECLARE("VMX_ACTMAP_OFFSET",	VMX_ACTMAP_OFFSET);
+	DECLARE("vxsGpf",				offsetof(struct pmap_vmm_ext *, vmxStats.vxsGpf));
+	DECLARE("vxsGpfMiss",			offsetof(struct pmap_vmm_ext *, vmxStats.vxsGpfMiss));
+	DECLARE("vxsGrm",				offsetof(struct pmap_vmm_ext *, vmxStats.vxsGrm));
+	DECLARE("vxsGrmMiss",			offsetof(struct pmap_vmm_ext *, vmxStats.vxsGrmMiss));
+	DECLARE("vxsGrmActive",			offsetof(struct pmap_vmm_ext *, vmxStats.vxsGrmActive));
+	DECLARE("vxsGra",				offsetof(struct pmap_vmm_ext *, vmxStats.vxsGra));
+	DECLARE("vxsGraHits",			offsetof(struct pmap_vmm_ext *, vmxStats.vxsGraHits));
+	DECLARE("vxsGraActive",			offsetof(struct pmap_vmm_ext *, vmxStats.vxsGraActive));
+	DECLARE("vxsGrl",				offsetof(struct pmap_vmm_ext *, vmxStats.vxsGrl));
+	DECLARE("vxsGrlActive",			offsetof(struct pmap_vmm_ext *, vmxStats.vxsGrlActive));
+	DECLARE("vxsGrs",				offsetof(struct pmap_vmm_ext *, vmxStats.vxsGrs));
+	DECLARE("vxsGrsHitAct",			offsetof(struct pmap_vmm_ext *, vmxStats.vxsGrsHitAct));
+	DECLARE("vxsGrsHitSusp",		offsetof(struct pmap_vmm_ext *, vmxStats.vxsGrsHitSusp));
+	DECLARE("vxsGrsMissGV",			offsetof(struct pmap_vmm_ext *, vmxStats.vxsGrsMissGV));
+	DECLARE("vxsGrsHitPE",			offsetof(struct pmap_vmm_ext *, vmxStats.vxsGrsHitPE));
+	DECLARE("vxsGrsMissPE",			offsetof(struct pmap_vmm_ext *, vmxStats.vxsGrsMissPE));
+	DECLARE("vxsGad",				offsetof(struct pmap_vmm_ext *, vmxStats.vxsGad));
+	DECLARE("vxsGadHit",			offsetof(struct pmap_vmm_ext *, vmxStats.vxsGadHit));
+	DECLARE("vxsGadFree",			offsetof(struct pmap_vmm_ext *, vmxStats.vxsGadFree));
+	DECLARE("vxsGadDormant",		offsetof(struct pmap_vmm_ext *, vmxStats.vxsGadDormant));
+	DECLARE("vxsGadSteal",			offsetof(struct pmap_vmm_ext *, vmxStats.vxsGadSteal));
+	DECLARE("vxsGsu",				offsetof(struct pmap_vmm_ext *, vmxStats.vxsGsu));
+	DECLARE("vxsGsuHit",			offsetof(struct pmap_vmm_ext *, vmxStats.vxsGsuHit));
+	DECLARE("vxsGsuMiss",			offsetof(struct pmap_vmm_ext *, vmxStats.vxsGsuMiss));
+	DECLARE("vxsGtd",				offsetof(struct pmap_vmm_ext *, vmxStats.vxsGtd));
+	DECLARE("vxsGtdHit",			offsetof(struct pmap_vmm_ext *, vmxStats.vxsGtdHit));
+	DECLARE("vxsGtdMiss",			offsetof(struct pmap_vmm_ext *, vmxStats.vxsGtdMiss));
+
+	/* values from kern/timer.h */
+	DECLARE("TIMER_LOW",		offsetof(struct timer *, low_bits));
+	DECLARE("TIMER_HIGH",		offsetof(struct timer *, high_bits));
+	DECLARE("TIMER_HIGHCHK",	offsetof(struct timer *, high_bits_check));
+	DECLARE("TIMER_TSTAMP",		offsetof(struct timer *, tstamp));
+
+	DECLARE("CURRENT_TIMER",	offsetof(struct processor *, processor_data.current_timer));
+	DECLARE("SYSTEM_TIMER",		offsetof(struct thread *, system_timer));
+	DECLARE("USER_TIMER",		offsetof(struct thread *, user_timer));
 
 	/* Constants from pmap.h */
 	DECLARE("PPC_SID_KERNEL", PPC_SID_KERNEL);
 
 	/* values for accessing mach_trap table */
-	DECLARE("MACH_TRAP_OFFSET_POW2",	4);
-
+	DECLARE("MACH_TRAP_ARG_MUNGE32",
+		offsetof(mach_trap_t *, mach_trap_arg_munge32));
+	DECLARE("MACH_TRAP_ARG_MUNGE64",
+		offsetof(mach_trap_t *, mach_trap_arg_munge64));
 	DECLARE("MACH_TRAP_ARGC",
 		offsetof(mach_trap_t *, mach_trap_arg_count));
 	DECLARE("MACH_TRAP_FUNCTION",
@@ -822,28 +876,40 @@ int main(int argc, char *argv[])
 	DECLARE("AST_ALL", AST_ALL);
 	DECLARE("AST_URGENT", AST_URGENT);
 
-	/* Simple Lock structure */
-	DECLARE("SLOCK_ILK",	offsetof(usimple_lock_t, interlock));
-#if	MACH_LDEBUG
-	DECLARE("SLOCK_TYPE",	offsetof(usimple_lock_t, lock_type));
-	DECLARE("SLOCK_PC",	offsetof(usimple_lock_t, debug.lock_pc));
-	DECLARE("SLOCK_THREAD",	offsetof(usimple_lock_t, debug.lock_thread));
-	DECLARE("SLOCK_DURATIONH",offsetof(usimple_lock_t, debug.duration[0]));
-	DECLARE("SLOCK_DURATIONL",offsetof(usimple_lock_t, debug.duration[1]));
-	DECLARE("USLOCK_TAG",	USLOCK_TAG);
-#endif	/* MACH_LDEBUG */
+	/* Spin Lock structure */
+	DECLARE("SLOCK_ILK",	offsetof(lck_spin_t *, interlock));
 
 	/* Mutex structure */
-	DECLARE("LOCK_DATA",	offsetof(mutex_t *, interlock));
-	DECLARE("MUTEX_WAITERS",offsetof(mutex_t *, waiters));
-	DECLARE("MUTEX_PROMOTED_PRI",offsetof(mutex_t *, promoted_pri));
-#if	MACH_LDEBUG
-	DECLARE("MUTEX_TYPE",	offsetof(mutex_t *, type));
-	DECLARE("MUTEX_PC",	offsetof(mutex_t *, pc));
-	DECLARE("MUTEX_THREAD",	offsetof(mutex_t *, thread));
+	DECLARE("MUTEX_DATA",	offsetof(lck_mtx_t *, lck_mtx_data));
+	DECLARE("MUTEX_WAITERS",offsetof(lck_mtx_t *, lck_mtx_waiters));
+	DECLARE("MUTEX_PROMOTED_PRI",offsetof(lck_mtx_t *, lck_mtx_pri));
+	DECLARE("MUTEX_TYPE",	offsetof(lck_mtx_ext_t *, lck_mtx_deb.type));
+	DECLARE("MUTEX_STACK",	offsetof(lck_mtx_ext_t *, lck_mtx_deb.stack));
+	DECLARE("MUTEX_FRAMES",	LCK_FRAMES_MAX);
+	DECLARE("MUTEX_THREAD",	offsetof(lck_mtx_ext_t *, lck_mtx_deb.thread));
+	DECLARE("MUTEX_ATTR",	offsetof(lck_mtx_ext_t *, lck_mtx_attr));
+	DECLARE("MUTEX_ATTR_DEBUG", LCK_MTX_ATTR_DEBUG);
+	DECLARE("MUTEX_ATTR_DEBUGb", LCK_MTX_ATTR_DEBUGb);
+	DECLARE("MUTEX_ATTR_STAT", LCK_MTX_ATTR_STAT);
+	DECLARE("MUTEX_ATTR_STATb", LCK_MTX_ATTR_STATb);
+	DECLARE("MUTEX_GRP",	offsetof(lck_mtx_ext_t *, lck_mtx_grp));
 	DECLARE("MUTEX_TAG",	MUTEX_TAG);
-#endif	/* MACH_LDEBUG */
-						 
+	DECLARE("MUTEX_IND",	LCK_MTX_TAG_INDIRECT);
+	DECLARE("MUTEX_ITAG",offsetof(lck_mtx_t *, lck_mtx_tag));
+	DECLARE("MUTEX_PTR",offsetof(lck_mtx_t *, lck_mtx_ptr));
+	DECLARE("MUTEX_ASSERT_OWNED",	LCK_MTX_ASSERT_OWNED);
+	DECLARE("MUTEX_ASSERT_NOTOWNED",LCK_MTX_ASSERT_NOTOWNED);
+	DECLARE("GRP_MTX_STAT_UTIL",	offsetof(lck_grp_t *, lck_grp_stat.lck_grp_mtx_stat.lck_grp_mtx_util_cnt));
+	DECLARE("GRP_MTX_STAT_MISS",	offsetof(lck_grp_t *, lck_grp_stat.lck_grp_mtx_stat.lck_grp_mtx_miss_cnt));
+	DECLARE("GRP_MTX_STAT_WAIT",	offsetof(lck_grp_t *, lck_grp_stat.lck_grp_mtx_stat.lck_grp_mtx_wait_cnt));
+
+	/* RW lock structure */
+	DECLARE("RW_IND",	LCK_RW_TAG_INDIRECT);
+	DECLARE("RW_PTR",	offsetof(lck_rw_t *, lck_rw_ptr));
+	DECLARE("RW_SHARED",	LCK_RW_TYPE_SHARED);
+	DECLARE("RW_EXCL",	LCK_RW_TYPE_EXCLUSIVE);
+	DECLARE("RW_EVENT",	(((sizeof(lck_rw_t)-1))/sizeof(unsigned int))*sizeof(unsigned int));
+
 	/* values from low_trace.h */
 	DECLARE("LTR_cpu",	offsetof(struct LowTraceRecord *, LTR_cpu));
 	DECLARE("LTR_excpt",	offsetof(struct LowTraceRecord *, LTR_excpt));
@@ -875,27 +941,37 @@ int main(int argc, char *argv[])
 
 	DECLARE("mpFlags",		offsetof(struct mapping *, mpFlags));
 	DECLARE("mpBusy",		mpBusy);
+	DECLARE("mpPrevious",	mpPrevious);
+	DECLARE("mpNext",		mpNext);
 	DECLARE("mpPIndex",		mpPIndex);
-	DECLARE("mpSpecial",	mpSpecial);
-	DECLARE("mpSpecialb",	mpSpecialb);
+	DECLARE("mpType",		mpType);
+	DECLARE("mpNormal",		mpNormal);
+	DECLARE("mpBlock",		mpBlock);
+	DECLARE("mpMinSpecial",	mpMinSpecial);
+	DECLARE("mpNest",		mpNest);
+	DECLARE("mpLinkage",	mpLinkage);
+	DECLARE("mpACID",		mpACID);
+	DECLARE("mpGuest",		mpGuest);
 	DECLARE("mpFIP",		mpFIP);
 	DECLARE("mpFIPb",		mpFIPb);
-	DECLARE("mpRemovable",	mpRemovable);
-	DECLARE("mpRemovableb",	mpRemovableb);
-	DECLARE("mpNest",		mpNest);
-	DECLARE("mpNestb",		mpNestb);
-	DECLARE("mpPerm",		mpPerm);
-	DECLARE("mpPermb",		mpPermb);
-	DECLARE("mpBlock",		mpBlock);
-	DECLARE("mpBlockb",		mpBlockb);
+	DECLARE("mpPcfg",		mpPcfg);
+	DECLARE("mpPcfgb",		mpPcfgb);
 	DECLARE("mpRIP",		mpRIP);
 	DECLARE("mpRIPb",		mpRIPb);
-	DECLARE("mpRSVD1",		mpRSVD1);
+	DECLARE("mpPerm",		mpPerm);
+	DECLARE("mpPermb",		mpPermb);
+	DECLARE("mpBSu",		mpBSu);
+	DECLARE("mpBSub",		mpBSub);
 	DECLARE("mpLists",		mpLists);
 	DECLARE("mpListsb",		mpListsb);
+	DECLARE("mpgFlags",		mpgFlags);
+	DECLARE("mpgFree",		mpgFree);
+	DECLARE("mpgGlobal",	mpgGlobal);
+	DECLARE("mpgDormant",	mpgDormant);
 
 	DECLARE("mpSpace",		offsetof(struct mapping *, mpSpace));
-	DECLARE("mpBSize",		offsetof(struct mapping *, mpBSize));
+	DECLARE("mpBSize",		offsetof(struct mapping *, u.mpBSize));
+	DECLARE("mpgCursor",	offsetof(struct mapping *, u.mpgCursor));
 	DECLARE("mpPte",		offsetof(struct mapping *, mpPte));
 	DECLARE("mpHValid",		mpHValid);
 	DECLARE("mpHValidb",	mpHValidb);
@@ -903,8 +979,12 @@ int main(int argc, char *argv[])
 	DECLARE("mpPAddr",		offsetof(struct mapping *, mpPAddr));
 	DECLARE("mpVAddr",		offsetof(struct mapping *, mpVAddr));
 	DECLARE("mpHWFlags",	mpHWFlags);
+	DECLARE("mpHWFlagsb",	mpHWFlagsb);
+	DECLARE("mpN",			mpN);
+	DECLARE("mpNb",			mpNb);
 	DECLARE("mpPP",			mpPP);
 	DECLARE("mpPPb",		mpPPb);
+	DECLARE("mpPPe",		mpPPe);
 	DECLARE("mpKKN",		mpKKN);
 	DECLARE("mpKKNb",		mpKKNb);
 	DECLARE("mpWIMG",		mpWIMG);
@@ -933,22 +1013,38 @@ int main(int argc, char *argv[])
 	DECLARE("mbvrswap",		offsetof(struct mappingblok *, mapblokvrswap));
 	DECLARE("mbfree",		offsetof(struct mappingblok *, mapblokfree));
 	DECLARE("mapcsize",		sizeof(struct mappingctl));
+	
+	DECLARE("hwpPurgePTE",	hwpPurgePTE);
+	DECLARE("hwpMergePTE",	hwpMergePTE);
+	DECLARE("hwpNoopPTE",	hwpNoopPTE);
 
+// DANGER WIL ROBINSON!!! This wonderfully magical tool doesn't seem to handle 64-bit constants,
+// leaving us with only the cold ash of a zero. ppI, ppG, and who knows what else is affected.
 	DECLARE("ppLink",		offsetof(struct phys_entry *, ppLink));
 	DECLARE("ppLock",		ppLock);
-	DECLARE("ppN",			ppN);
 	DECLARE("ppFlags",		ppFlags);
-	DECLARE("ppI",			ppI);
+//	DECLARE("ppI",			ppI);
 	DECLARE("ppIb",			ppIb);
-	DECLARE("ppG",			ppG);
+//	DECLARE("ppG",			ppG);
 	DECLARE("ppGb",			ppGb);
 	DECLARE("ppR",			ppR);
 	DECLARE("ppRb",			ppRb);
 	DECLARE("ppC",			ppC);
 	DECLARE("ppCb",			ppCb);
-	DECLARE("ppPP",			ppPP);
-	DECLARE("ppPPb",		ppPPb);
-	DECLARE("ppPPe",		ppPPe);
+	DECLARE("physEntrySize",physEntrySize);
+	DECLARE("ppLFAmask",	ppLFAmask);
+	DECLARE("ppLFArrot",	ppLFArrot);
+
+	DECLARE("pcfFlags",		offsetof(struct pcfg *, pcfFlags));
+	DECLARE("pcfEncode",	offsetof(struct pcfg *, pcfEncode));
+	DECLARE("pcfPSize",		offsetof(struct pcfg *, pcfPSize));
+	DECLARE("pcfShift",		offsetof(struct pcfg *, pcfShift));
+	DECLARE("pcfValid",		pcfValid);
+	DECLARE("pcfLarge",		pcfLarge);
+	DECLARE("pcfDedSeg",	pcfDedSeg);
+	DECLARE("pcfSize",		sizeof(struct pcfg));
+	DECLARE("pcfDefPcfg",	pcfDefPcfg);
+	DECLARE("pcfLargePcfg",	pcfLargePcfg);
 
 	DECLARE("PCAallo",		offsetof(struct PCA *, flgs.PCAallo));
 	DECLARE("PCAfree",		offsetof(struct PCA *, flgs.PCAalflgs.PCAfree));
@@ -976,6 +1072,9 @@ int main(int argc, char *argv[])
 	DECLARE("mapRtNest",	mapRtNest);
 	DECLARE("mapRtRemove",	mapRtRemove);
 	DECLARE("mapRtMapDup",	mapRtMapDup);
+	DECLARE("mapRtGuest",	mapRtGuest);
+	DECLARE("mapRtEmpty",	mapRtEmpty);
+	DECLARE("mapRtSmash",	mapRtSmash);
 
 #if 0
 	DECLARE("MFpcaptr",		offsetof(struct mappingflush *, pcaptr));
@@ -983,6 +1082,34 @@ int main(int argc, char *argv[])
 	DECLARE("MFmapping",		offsetof(struct mappingflush *, mapping));
 	DECLARE("MFmappingSize", 	sizeof(struct mfmapping));
 #endif
+
+	DECLARE("GV_GROUPS_LG2",	GV_GROUPS_LG2);
+	DECLARE("GV_GROUPS",		GV_GROUPS);
+	DECLARE("GV_SLOT_SZ_LG2",	GV_SLOT_SZ_LG2);
+	DECLARE("GV_SLOT_SZ",		GV_SLOT_SZ);
+	DECLARE("GV_SLOTS_LG2",		GV_SLOTS_LG2);
+	DECLARE("GV_SLOTS",			GV_SLOTS);
+	DECLARE("GV_PGIDX_SZ_LG2",	GV_PGIDX_SZ_LG2);
+	DECLARE("GV_PAGE_SZ_LG2",	GV_PAGE_SZ_LG2);
+	DECLARE("GV_PAGE_SZ",		GV_PAGE_SZ);
+	DECLARE("GV_PAGE_MASK",		GV_PAGE_MASK);
+	DECLARE("GV_HPAGES",		GV_HPAGES);
+	DECLARE("GV_GRPS_PPG_LG2",	GV_GRPS_PPG_LG2);
+	DECLARE("GV_GRPS_PPG",		GV_GRPS_PPG);
+	DECLARE("GV_GRP_MASK",		GV_GRP_MASK);
+	DECLARE("GV_SLOT_MASK",		GV_SLOT_MASK);
+	DECLARE("GV_HPAGE_SHIFT",	GV_HPAGE_SHIFT);
+	DECLARE("GV_HPAGE_MASK",	GV_HPAGE_MASK);
+	DECLARE("GV_HGRP_SHIFT",	GV_HGRP_SHIFT);
+	DECLARE("GV_HGRP_MASK",		GV_HGRP_MASK);
+	DECLARE("GV_MAPWD_BITS_LG2",GV_MAPWD_BITS_LG2);
+	DECLARE("GV_MAPWD_SZ_LG2",	GV_MAPWD_SZ_LG2);
+	DECLARE("GV_MAP_WORDS",		GV_MAP_WORDS);
+	DECLARE("GV_MAP_MASK",		GV_MAP_MASK);
+	DECLARE("GV_MAP_SHIFT",		GV_MAP_SHIFT);
+	DECLARE("GV_BAND_SHIFT",	GV_BAND_SHIFT);
+	DECLARE("GV_BAND_SZ_LG2",	GV_BAND_SZ_LG2);
+	DECLARE("GV_BAND_MASK",		GV_BAND_MASK);
 
 #if 1
 	DECLARE("GDsave",		offsetof(struct GDWorkArea *, GDsave));
@@ -1018,8 +1145,8 @@ int main(int argc, char *argv[])
 	DECLARE("disLktypeb",	disLktypeb);
 	DECLARE("disLkThread",	disLkThread);
 	DECLARE("disLkThreadb",	disLkThreadb);
-	DECLARE("disLkNmSimp",	disLkNmSimp);
-	DECLARE("disLkNmSimpb",	disLkNmSimpb);
+	DECLARE("enaLkExtStck",	enaLkExtStck);
+	DECLARE("enaLkExtStckb",enaLkExtStckb);
 	DECLARE("disLkMyLck",	disLkMyLck);
 	DECLARE("disLkMyLckb",	disLkMyLckb);
 	DECLARE("dgMisc1",		offsetof(struct diagWork *, dgMisc1));
@@ -1240,6 +1367,9 @@ int main(int argc, char *argv[])
 
 	DECLARE("lgVerCode", 			offsetof(struct lowglo *, lgVerCode));
 	DECLARE("lgPPStart", 			offsetof(struct lowglo *, lgPPStart));
+	DECLARE("mckFlags", 			offsetof(struct lowglo *, lgMckFlags));
+	DECLARE("lgPMWvaddr",			offsetof(struct lowglo *, lgPMWvaddr));
+	DECLARE("lgUMWvaddr",			offsetof(struct lowglo *, lgUMWvaddr));
 	DECLARE("trcWork", 				offsetof(struct lowglo *, lgTrcWork));
 	DECLARE("traceMask",			offsetof(struct lowglo *, lgTrcWork.traceMask));
 	DECLARE("traceCurr",			offsetof(struct lowglo *, lgTrcWork.traceCurr));
@@ -1258,6 +1388,8 @@ int main(int argc, char *argv[])
 	DECLARE("SVadjust",				offsetof(struct lowglo *, lgSaveanchor.saveadjust));
 	DECLARE("SVinuse",				offsetof(struct lowglo *, lgSaveanchor.saveinuse));
 	DECLARE("SVtarget",				offsetof(struct lowglo *, lgSaveanchor.savetarget));
+	DECLARE("SVsaveinusesnapshot",		offsetof(struct lowglo *, lgSaveanchor.saveinusesnapshot));
+	DECLARE("SVsavefreesnapshot",		offsetof(struct lowglo *, lgSaveanchor.savefreesnapshot));
 	DECLARE("SVsize",				sizeof(struct Saveanchor));
 
 	DECLARE("tlbieLock", 			offsetof(struct lowglo *, lgTlbieLck));
@@ -1266,9 +1398,11 @@ int main(int argc, char *argv[])
 	DECLARE("dgLock",				offsetof(struct lowglo *, lgdgWork.dgLock));
 	DECLARE("dgMisc0",				offsetof(struct lowglo *, lgdgWork.dgMisc0));
 	
+	DECLARE("lglcksWork",			offsetof(struct lowglo *, lglcksWork));
 	DECLARE("lgKillResv",			offsetof(struct lowglo *, lgKillResv));
+	DECLARE("lgpPcfg",				offsetof(struct lowglo *, lgpPcfg));
 
-	
+
 	DECLARE("scomcpu",				offsetof(struct scomcomm *, scomcpu));
 	DECLARE("scomfunc",				offsetof(struct scomcomm *, scomfunc));
 	DECLARE("scomreg",				offsetof(struct scomcomm *, scomreg));

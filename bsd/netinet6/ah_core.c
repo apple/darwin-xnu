@@ -86,57 +86,46 @@
 
 #define	HMACSIZE	16
 
-static int ah_sumsiz_1216 __P((struct secasvar *));
-static int ah_sumsiz_zero __P((struct secasvar *));
-static int ah_none_mature __P((struct secasvar *));
-static int ah_none_init __P((struct ah_algorithm_state *, struct secasvar *));
-static void ah_none_loop __P((struct ah_algorithm_state *, caddr_t, size_t));
-static void ah_none_result __P((struct ah_algorithm_state *, caddr_t));
-static int ah_keyed_md5_mature __P((struct secasvar *));
-static int ah_keyed_md5_init __P((struct ah_algorithm_state *,
-	struct secasvar *));
-static void ah_keyed_md5_loop __P((struct ah_algorithm_state *, caddr_t,
-	size_t));
-static void ah_keyed_md5_result __P((struct ah_algorithm_state *, caddr_t));
-static int ah_keyed_sha1_mature __P((struct secasvar *));
-static int ah_keyed_sha1_init __P((struct ah_algorithm_state *,
-	struct secasvar *));
-static void ah_keyed_sha1_loop __P((struct ah_algorithm_state *, caddr_t,
-	size_t));
-static void ah_keyed_sha1_result __P((struct ah_algorithm_state *, caddr_t));
-static int ah_hmac_md5_mature __P((struct secasvar *));
-static int ah_hmac_md5_init __P((struct ah_algorithm_state *,
-	struct secasvar *));
-static void ah_hmac_md5_loop __P((struct ah_algorithm_state *, caddr_t,
-	size_t));
-static void ah_hmac_md5_result __P((struct ah_algorithm_state *, caddr_t));
-static int ah_hmac_sha1_mature __P((struct secasvar *));
-static int ah_hmac_sha1_init __P((struct ah_algorithm_state *,
-	struct secasvar *));
-static void ah_hmac_sha1_loop __P((struct ah_algorithm_state *, caddr_t,
-	size_t));
-static void ah_hmac_sha1_result __P((struct ah_algorithm_state *, caddr_t));
-static int ah_hmac_sha2_256_mature __P((struct secasvar *));
-static int ah_hmac_sha2_256_init __P((struct ah_algorithm_state *,
-	struct secasvar *));
-static void ah_hmac_sha2_256_loop __P((struct ah_algorithm_state *, caddr_t,
-	size_t));
-static void ah_hmac_sha2_256_result __P((struct ah_algorithm_state *, caddr_t));
-static int ah_hmac_sha2_384_mature __P((struct secasvar *));
-static int ah_hmac_sha2_384_init __P((struct ah_algorithm_state *,
-	struct secasvar *));
-static void ah_hmac_sha2_384_loop __P((struct ah_algorithm_state *, caddr_t,
-	size_t));
-static void ah_hmac_sha2_384_result __P((struct ah_algorithm_state *, caddr_t));
-static int ah_hmac_sha2_512_mature __P((struct secasvar *));
-static int ah_hmac_sha2_512_init __P((struct ah_algorithm_state *,
-	struct secasvar *));
-static void ah_hmac_sha2_512_loop __P((struct ah_algorithm_state *, caddr_t,
-	size_t));
-static void ah_hmac_sha2_512_result __P((struct ah_algorithm_state *, caddr_t));
+static int ah_sumsiz_1216(struct secasvar *);
+static int ah_sumsiz_zero(struct secasvar *);
+static int ah_none_mature(struct secasvar *);
+static int ah_none_init(struct ah_algorithm_state *, struct secasvar *);
+static void ah_none_loop(struct ah_algorithm_state *, caddr_t, size_t);
+static void ah_none_result(struct ah_algorithm_state *, caddr_t);
+static int ah_keyed_md5_mature(struct secasvar *);
+static int ah_keyed_md5_init(struct ah_algorithm_state *, struct secasvar *);
+static void ah_keyed_md5_loop(struct ah_algorithm_state *, caddr_t, size_t);
+static void ah_keyed_md5_result(struct ah_algorithm_state *, caddr_t);
+static int ah_keyed_sha1_mature(struct secasvar *);
+static int ah_keyed_sha1_init(struct ah_algorithm_state *, struct secasvar *);
+static void ah_keyed_sha1_loop(struct ah_algorithm_state *, caddr_t, size_t);
+static void ah_keyed_sha1_result(struct ah_algorithm_state *, caddr_t);
+static int ah_hmac_md5_mature(struct secasvar *);
+static int ah_hmac_md5_init(struct ah_algorithm_state *, struct secasvar *);
+static void ah_hmac_md5_loop(struct ah_algorithm_state *, caddr_t, size_t);
+static void ah_hmac_md5_result(struct ah_algorithm_state *, caddr_t);
+static int ah_hmac_sha1_mature(struct secasvar *);
+static int ah_hmac_sha1_init(struct ah_algorithm_state *, struct secasvar *);
+static void ah_hmac_sha1_loop(struct ah_algorithm_state *, caddr_t, size_t);
+static void ah_hmac_sha1_result(struct ah_algorithm_state *, caddr_t);
+static int ah_hmac_sha2_256_mature(struct secasvar *);
+static int ah_hmac_sha2_256_init(struct ah_algorithm_state *,
+	struct secasvar *);
+static void ah_hmac_sha2_256_loop(struct ah_algorithm_state *, caddr_t, size_t);
+static void ah_hmac_sha2_256_result(struct ah_algorithm_state *, caddr_t);
+static int ah_hmac_sha2_384_mature(struct secasvar *);
+static int ah_hmac_sha2_384_init(struct ah_algorithm_state *,
+	struct secasvar *);
+static void ah_hmac_sha2_384_loop(struct ah_algorithm_state *, caddr_t, size_t);
+static void ah_hmac_sha2_384_result(struct ah_algorithm_state *, caddr_t);
+static int ah_hmac_sha2_512_mature(struct secasvar *);
+static int ah_hmac_sha2_512_init(struct ah_algorithm_state *,
+	struct secasvar *);
+static void ah_hmac_sha2_512_loop(struct ah_algorithm_state *, caddr_t, size_t);
+static void ah_hmac_sha2_512_result(struct ah_algorithm_state *, caddr_t);
 
-static void ah_update_mbuf __P((struct mbuf *, int, int,
-	const struct ah_algorithm *, struct ah_algorithm_state *));
+static void ah_update_mbuf(struct mbuf *, int, int,
+	const struct ah_algorithm *, struct ah_algorithm_state *);
 
 const struct ah_algorithm *
 ah_algorithm_lookup(idx)

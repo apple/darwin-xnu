@@ -765,7 +765,7 @@ _prof_write(struct profile_vars *pv, struct callback *callback_ptr)
 
 /*
  * Update any statistics.  For the 386, calculate the hash table loading factor.
- * Also figure out how many overflows occured.
+ * Also figure out how many overflows occurred.
  */
 
 void

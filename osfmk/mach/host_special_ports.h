@@ -128,5 +128,4 @@
 #define host_set_user_notification_port(host, port)	\
 	(host_set_special_port((host), HOST_USER_NOTIFICATION_PORT, (port)))
 
-
 #endif	/* _MACH_HOST_SPECIAL_PORTS_H_ */

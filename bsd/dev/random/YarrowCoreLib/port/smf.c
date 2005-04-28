@@ -29,10 +29,12 @@
 
 #include <dev/random/YarrowCoreLib/src/smf.h>
 #include <sys/malloc.h>
+#include <sys/systm.h>
 
 
-SMFAPI void mmInit()
+SMFAPI void mmInit( void )
 {
+	return;
 }
 
 SMFAPI MMPTR mmMalloc(DWORD request)
@@ -62,8 +64,9 @@ SMFAPI LPVOID mmGetPtr(MMPTR ptrnum)
 	return (LPVOID)ptrnum;
 }
 
-SMFAPI void mmReturnPtr(MMPTR ptrnum)
+SMFAPI void mmReturnPtr(__unused MMPTR ptrnum)
 {
 	/* nothing */
+	return;
 }
 

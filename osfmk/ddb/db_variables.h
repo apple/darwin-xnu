@@ -169,7 +169,7 @@ struct db_var_aux_param {
 	short		level;			/* number of levels */
 	short		hidden_level;		/* hidden level */
 	short		suffix[DB_VAR_LEVEL];	/* suffix */
-	thread_act_t	thr_act;		/* target thr_act */
+	thread_t	thr_act;		/* target thr_act */
 };
 
 typedef struct db_var_aux_param	*db_var_aux_param_t;

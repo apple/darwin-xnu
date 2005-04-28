@@ -65,84 +65,15 @@
 #include <sys/vnode.h>
 #include <sys/mount.h>
 #include <sys/namei.h>
-#include <sys/buf.h>
 #include <sys/file.h>
 
 #include <isofs/cd9660/iso.h>
 #include <isofs/cd9660/cd9660_node.h>
 
-/*
- * Bmap converts the logical block number of a file to its physical block
- * number on the disk. The conversion is done by using the logical block
- * number to index into the data block (extent) for the file.
- */
-int
-cd9660_bmap(ap)
-	struct vop_bmap_args /* {
-		struct vnode *a_vp;
-		daddr_t  a_bn;
-		struct vnode **a_vpp;
-		daddr_t *a_bnp;
-		int *a_runp;
-	} */ *ap;
-{
-	struct iso_node *ip = VTOI(ap->a_vp);
-	daddr_t lblkno = ap->a_bn;
-	int bshift;
-
-	/*
-	 * Check for underlying vnode requests and ensure that logical
-	 * to physical mapping is requested.
-	 */
-	if (ap->a_vpp != NULL)
-		*ap->a_vpp = ip->i_devvp;
-	if (ap->a_bnp == NULL)
-		return (0);
-
-	/*
-	 * Associated files have an Apple Double header
-	 */
-	if ((ip->i_flag & ISO_ASSOCIATED) && (lblkno > (ADH_BLKS - 1))) {
-		lblkno -= ADH_BLKS;
-		*ap->a_bnp = (ip->iso_start + lblkno);
-		if (ap->a_runp)
-			*ap->a_runp = 0;
-		return (0);
-	}
-
-	/*
-	 * Compute the requested block number
-	 */
-	bshift = ip->i_mnt->im_bshift;
-	*ap->a_bnp = (ip->iso_start + lblkno);
-
-	/*
-	 * Determine maximum number of readahead blocks following the
-	 * requested block.
-	 */
-	if (ap->a_runp) {
-		int nblk;
-
-		nblk = (ip->i_size >> bshift) - (lblkno + 1);
-		if (nblk <= 0)
-			*ap->a_runp = 0;
-		else if (nblk >= (MAXBSIZE >> bshift))
-			*ap->a_runp = (MAXBSIZE >> bshift) - 1;
-		else
-			*ap->a_runp = nblk;
-	}
-
-	return (0);
-}
 
 /* blktooff converts a logical block number to a file offset */
 int
-cd9660_blktooff(ap)
-	struct vop_blktooff_args /* {
-		struct vnode *a_vp;
-		daddr_t a_lblkno;
-		off_t *a_offset;    
-	} */ *ap;
+cd9660_blktooff(struct vnop_blktooff_args *ap)
 {
 	register struct iso_node *ip;
 	register struct iso_mnt *imp;
@@ -159,12 +90,7 @@ cd9660_blktooff(ap)
 
 /* offtoblk converts a file offset to a logical block number */
 int
-cd9660_offtoblk(ap)
-struct vop_offtoblk_args /* {
-	struct vnode *a_vp;
-	off_t a_offset;    
-	daddr_t *a_lblkno;
-	} */ *ap;
+cd9660_offtoblk(struct vnop_offtoblk_args *ap)
 {
 	register struct iso_node *ip;
 	register struct iso_mnt *imp;
@@ -175,20 +101,12 @@ struct vop_offtoblk_args /* {
 	ip = VTOI(ap->a_vp);
 	imp = ip->i_mnt;
 
-	*ap->a_lblkno = (daddr_t)lblkno(imp, ap->a_offset);
+	*ap->a_lblkno = (daddr64_t)lblkno(imp, ap->a_offset);
 	return (0);
 }
 
 int
-cd9660_cmap(ap)
-struct vop_cmap_args /* {
-	struct vnode *a_vp;
-	off_t a_offset;    
-	size_t a_size;
-	daddr_t *a_bpn;
-	size_t *a_run;
-	void *a_poff;
-} */ *ap;
+cd9660_blockmap(struct vnop_blockmap_args *ap)
 {
 	struct iso_node *ip = VTOI(ap->a_vp);
 	size_t cbytes;
@@ -202,7 +120,7 @@ struct vop_cmap_args /* {
 	if (ap->a_bpn == NULL)
 		return (0);
 
-	VOP_DEVBLOCKSIZE(ip->i_devvp, &devBlockSize);
+	devBlockSize = vfs_devblocksize(vnode_mount(ap->a_vp));
 
 	/*
 	 * Associated files have an Apple Double header
@@ -211,14 +129,14 @@ struct vop_cmap_args /* {
 		if (offset < ADH_SIZE) {
 			if (ap->a_run)
 				*ap->a_run = 0;
-			*ap->a_bpn = -1;
+			*ap->a_bpn = (daddr64_t)-1;
 			goto out;
 		} else {
 			offset -= ADH_SIZE;
 		}
 	}
 
-	*ap->a_bpn = (daddr_t)(ip->iso_start + lblkno(ip->i_mnt, offset));
+	*ap->a_bpn = (daddr64_t)(ip->iso_start + lblkno(ip->i_mnt, offset));
 
 	/*
 	 * Determine maximum number of contiguous bytes following the

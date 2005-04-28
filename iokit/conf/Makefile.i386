@@ -2,6 +2,33 @@
 #BEGIN  Machine dependent Makefile fragment for i386
 ######################################################################
  
+# Enable -Werror for i386 builds
+CFLAGS+= $(WERROR)
+CWARNFLAGS= $(filter-out -Wbad-function-cast, $(CWARNFLAGS_STD))
+
+# Objects that don't compile cleanly:
+OBJS_NO_WERROR=				\
+	ioconf.o			\
+	UNDRequest.o			\
+	IOLib.o				\
+	IOStringFuncs.o			\
+	IOCPU.cpo			\
+	IOCommandPool.cpo		\
+	IOCommandQueue.cpo		\
+	IOKitBSDInit.cpo		\
+	IOInterruptController.cpo	\
+	IOInterruptEventSource.cpo	\
+	IOPMPowerStateQueue.cpo		\
+	IOPMchangeNoteList.cpo		\
+	IOPMrootDomain.cpo		\
+	IOServicePM.cpo			\
+	IOWorkLoop.cpo			\
+	RootDomainUserClient.cpo
+ 
+OBJS_WERROR=$(filter-out $(OBJS_NO_WERROR),$(OBJS))
+
+$(OBJS_WERROR):		WERROR=-Werror
+
 ######################################################################
 #END    Machine dependent Makefile fragment for i386
 ######################################################################

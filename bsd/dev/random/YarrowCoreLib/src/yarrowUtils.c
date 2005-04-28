@@ -36,6 +36,7 @@
 */
 
 #include "dev/random/YarrowCoreLib/include/yarrowUtils.h"
+#include <string.h>
 
 void 
 trashMemory(void* mem, int len)

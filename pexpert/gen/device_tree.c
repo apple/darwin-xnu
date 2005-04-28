@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -26,7 +26,12 @@
 #include <pexpert/protos.h>
 #include <pexpert/boot.h>
 #include <pexpert/device_tree.h>
+
+#include <mach/mach_types.h>
 #include <mach/machine/vm_types.h>
+#include <kern/kern_types.h>
+#include <kern/kalloc.h>
+
 #include <sys/types.h>
 #ifdef i386
 #include <i386/fakePPCStructs.h>
@@ -299,9 +304,9 @@ DTDisposeEntryIterator(DTEntryIterator iterator)
 
 	while ((scope = iter->savedScope) != NULL) {
 		iter->savedScope = scope->nextScope;
-		kfree((vm_offset_t) scope, sizeof(struct DTSavedScope));
+		kfree(scope, sizeof(struct DTSavedScope));
 	}
-	kfree((vm_offset_t) iterator, sizeof(struct OpaqueDTEntryIterator));
+	kfree(iterator, sizeof(struct OpaqueDTEntryIterator));
 	return kSuccess;
 }
 
@@ -344,7 +349,7 @@ DTExitEntry(DTEntryIterator iterator, DTEntry *currentPosition)
 	iter->currentIndex = newScope->index;
 	*currentPosition = iter->currentEntry;
 
-	kfree((vm_offset_t) newScope, sizeof(struct DTSavedScope));
+	kfree(newScope, sizeof(struct DTSavedScope));
 
 	return kSuccess;
 }
@@ -432,7 +437,7 @@ DTCreatePropertyIterator(const DTEntry entry, DTPropertyIterator *iterator)
 int
 DTDisposePropertyIterator(DTPropertyIterator iterator)
 {
-	kfree((vm_offset_t)iterator, sizeof(struct OpaqueDTPropertyIterator));
+	kfree(iterator, sizeof(struct OpaqueDTPropertyIterator));
 	return kSuccess;
 }
 

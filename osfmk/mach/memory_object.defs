@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -89,7 +89,7 @@ serverprefix dp_;
 routine	memory_object_init(
 		memory_object		: memory_object_t;
 		memory_control	: memory_object_control_t;
-		memory_object_page_size	: vm_size_t);
+		memory_object_page_size	: memory_object_cluster_size_t);
 
 
 /*
@@ -116,7 +116,7 @@ routine	memory_object_terminate(
 routine	memory_object_data_request(
 		memory_object		: memory_object_t;
 		offset			: memory_object_offset_t;
-		length			: vm_size_t;
+		length			: memory_object_cluster_size_t;
 		desired_access		: vm_prot_t);
 
 /*
@@ -133,9 +133,12 @@ routine	memory_object_data_request(
 routine   memory_object_data_return(
 		memory_object		: memory_object_t;
 		offset		 	: memory_object_offset_t;
-		size			: vm_size_t;
+		size			: memory_object_cluster_size_t;
+	out	resid_offset	 	: memory_object_offset_t;
+	out	io_error		: int;
 		dirty			: boolean_t;
-		kernel_copy		: boolean_t);
+		kernel_copy		: boolean_t;
+		upl_flags		: int);
 
 /*
  *	Provide initial data contents for this region of
@@ -148,7 +151,7 @@ routine   memory_object_data_return(
 routine	memory_object_data_initialize(
 		memory_object		: memory_object_t;
 		offset			: memory_object_offset_t;
-		size			: vm_size_t);
+		size			: memory_object_cluster_size_t);
 
 /*
  *	Request that the specified portion of this
@@ -161,7 +164,7 @@ routine	memory_object_data_initialize(
 routine	memory_object_data_unlock(
 		memory_object		: memory_object_t;
 		offset			: memory_object_offset_t;
-		size			: vm_size_t;
+		size			: memory_object_cluster_size_t;
 		desired_access		: vm_prot_t);
 
 
@@ -176,7 +179,7 @@ routine	memory_object_data_unlock(
 routine memory_object_synchronize(
 		memory_object           : memory_object_t;
 		offset          	: memory_object_offset_t;
-		size	          	: vm_size_t;
+		size	          	: memory_object_cluster_size_t;
 		sync_flags 	     	: vm_sync_t );
 
 /*

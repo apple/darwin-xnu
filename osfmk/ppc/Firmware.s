@@ -36,7 +36,6 @@
 
 */
 
-#include <cpus.h>
 #include <ppc/asm.h>
 #include <ppc/proc_reg.h>
 #include <ppc/spec_reg.h>
@@ -2179,7 +2178,7 @@ LEXT(stSpecrs)
 
 			mfmsr	r0								; Save the MSR
 			andc	r0,r0,r2						; Turn off VEC and FP
-			andc	r4,r0,r4						; And EE
+			andc	r4,r0,r4			; And EE
 			mtmsr	r4
 			isync
 			
@@ -2234,7 +2233,7 @@ LEXT(stSpecrs)
 			
 			mfsdr1	r4
 			stw		r4,88(r3)
-
+			
 			la		r4,92(r3)
 			li		r5,0
 			
@@ -2244,7 +2243,7 @@ stSnsr:		mfsrin	r6,r5
 			mr.		r5,r5
 			addi	r4,r4,4
 			bne+	stSnsr
-			
+
 			cmplwi	r12,PROCESSOR_VERSION_750
 			mfspr	r4,hid0
 			stw		r4,(39*4)(r3)

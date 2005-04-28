@@ -118,6 +118,21 @@ extern int ipsec_bypass;
 #define udp6stat	udpstat
 #define udp6s_opackets	udps_opackets
 
+static __inline__ u_int16_t
+get_socket_id(struct socket * s)
+{
+	u_int16_t 		val;
+
+	if (s == NULL) {
+	    return (0);
+	}
+	val = (u_int16_t)(((u_int32_t)s) / sizeof(struct socket));
+	if (val == 0) {
+		val = 0xffff;
+	}
+	return (val);
+}
+
 int
 udp6_output(in6p, m, addr6, control, p)
 	struct in6pcb *in6p;
@@ -138,10 +153,11 @@ udp6_output(in6p, m, addr6, control, p)
 	int af = AF_INET6, hlen = sizeof(struct ip6_hdr);
 	int flags;
 	struct sockaddr_in6 tmp;
+	struct	in6_addr storage;
 
 	priv = 0;
 #ifdef __APPLE__
-	if (p && !suser(p->p_ucred, &p->p_acflag))
+	if (p && !proc_suser(p))
 #else
 	if (p && !suser(p))
 #endif
@@ -208,7 +224,7 @@ udp6_output(in6p, m, addr6, control, p)
 			laddr = in6_selectsrc(sin6, in6p->in6p_outputopts,
 					      in6p->in6p_moptions,
 					      &in6p->in6p_route,
-					      &in6p->in6p_laddr, &error);
+					      &in6p->in6p_laddr, &storage, &error);
 		} else
 			laddr = &in6p->in6p_laddr;	/* XXX */
 		if (laddr == NULL) {
@@ -217,7 +233,7 @@ udp6_output(in6p, m, addr6, control, p)
 			goto release;
 		}
 		if (in6p->in6p_lport == 0 &&
-		    (error = in6_pcbsetport(laddr, in6p, p)) != 0)
+		    (error = in6_pcbsetport(laddr, in6p, p, 0)) != 0)
 			goto release;
 	} else {
 		if (IN6_IS_ADDR_UNSPECIFIED(&in6p->in6p_faddr)) {
@@ -300,8 +316,9 @@ udp6_output(in6p, m, addr6, control, p)
 			goto release;
 		}
 #endif /*IPSEC*/
+		m->m_pkthdr.socket_id = get_socket_id(in6p->in6p_socket);
 		error = ip6_output(m, in6p->in6p_outputopts, &in6p->in6p_route,
-		    flags, in6p->in6p_moptions, NULL);
+		    flags, in6p->in6p_moptions, NULL, 0);
 		break;
 	case AF_INET:
 		error = EAFNOSUPPORT;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -22,27 +22,11 @@
 /*
  * @OSF_COPYRIGHT@
  */
-/*
- * HISTORY
- * 
- * Revision 1.1.1.1  1998/09/22 21:05:30  wsanchez
- * Import of Mac OS X kernel (~semeria)
- *
- * Revision 1.1.1.1  1998/03/07 02:25:45  wsanchez
- * Import of OSF Mach kernel (~mburg)
- *
- * Revision 1.1.5.1  1995/01/06  19:50:20  devrcs
- * 	mk6 CR668 - 1.3b26 merge
- * 	new file for mk6
- * 	[1994/10/12  22:25:10  dwm]
- *
- * Revision 1.1.2.2  1993/10/20  19:09:29  gm
- * 	CR9913: Replacement for <sys/reboot.h> flags used in host_reboot()
- * 	calls.
- * 	[1993/10/13  17:21:14  gm]
- * 
- * $EndLog$
- */
+
+#ifndef _MACH_HOST_REBOOT_
+#define _MACH_HOST_REBOOT_
 
 #define HOST_REBOOT_HALT	0x8
 #define	HOST_REBOOT_DEBUGGER	0x1000
+
+#endif	/* _MACH_HOST_REBOOT_ */

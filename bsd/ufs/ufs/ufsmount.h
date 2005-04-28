@@ -67,7 +67,6 @@
  */
 struct ufs_args {
 	char	*fspec;			/* block special device to mount */
-	struct	export_args export;	/* network export information */
 };
 #endif /* __APPLE_API_UNSTABLE */
 
@@ -78,7 +77,6 @@ struct ufs_args {
  */
 struct mfs_args {
 	char	*fspec;			/* name to export for statfs */
-	struct	export_args export;	/* if exported MFSes are supported */
 	caddr_t	base;			/* base of file system in memory */
 	u_long	size;			/* size of file system */
 };
@@ -90,7 +88,6 @@ struct mfs_args {
 struct fs;
 struct mount;
 struct vnode;
-struct netexport;
 
 /* This structure describes the UFS specific mount structure data. */
 struct ufsmount {
@@ -107,7 +104,6 @@ struct ufsmount {
 	u_long	um_nindir;			/* indirect ptrs per block */
 	u_long	um_bptrtodb;			/* indir ptr to disk block */
 	u_long	um_seqinc;			/* inc between seq blocks */
-	struct	netexport um_export;		/* export information */
 	int64_t	um_savedmaxfilesize;		/* XXX - limit maxfilesize */
 };
 

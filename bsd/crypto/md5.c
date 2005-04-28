@@ -127,7 +127,7 @@ static const u_int8_t md5_paddat[MD5_BUFLEN] = {
 	0,	0,	0,	0,	0,	0,	0,	0,	
 };
 
-static void md5_calc __P((u_int8_t *, md5_ctxt *));
+static void md5_calc(u_int8_t *, md5_ctxt *);
 
 void md5_init(ctxt)
 	md5_ctxt *ctxt;

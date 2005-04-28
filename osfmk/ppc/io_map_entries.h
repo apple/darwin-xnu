@@ -23,6 +23,7 @@
  * @OSF_COPYRIGHT@
  * 
  */
+#ifdef	KERNEL_PRIVATE
 
 #ifndef	_PPC_IO_MAP_ENTRIES_H_
 #define	_PPC_IO_MAP_ENTRIES_H_
@@ -33,3 +34,5 @@ extern vm_offset_t	io_map(
 extern vm_offset_t io_map_spec(vm_offset_t phys_addr, vm_size_t size);
 
 #endif	/* _PPC_IO_MAP_ENTRIES_H_ */
+
+#endif	/* KERNEL_PRIVATE */

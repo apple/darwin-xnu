@@ -51,11 +51,9 @@
 /*
  */
 
-#include <cpus.h>
-
-#if	NCPUS > 1
 
 #include <kern/cpu_number.h>
+#include <kern/kalloc.h>
 #include <kern/cpu_data.h>
 #include <mach/machine.h>
 #include <vm/vm_kern.h>
@@ -64,6 +62,7 @@
 #include <i386/lock.h>
 #include <i386/misc_protos.h>
 #include <i386/mp.h>
+#include <i386/pmap.h>
 
 #include <kern/misc_protos.h>
 
@@ -76,27 +75,22 @@
  */
 
 /*
- * Addresses of bottom and top of interrupt stacks.
- */
-vm_offset_t	interrupt_stack[NCPUS];
-vm_offset_t	int_stack_top[NCPUS];
-
-/*
- * Barrier address.
- */
-vm_offset_t	int_stack_high;
-
-/*
  * First cpu`s interrupt stack.
  */
 extern char		intstack[];	/* bottom */
 extern char		eintstack[];	/* top */
 
 /*
- * We allocate interrupt stacks from physical memory.
+ * Per-cpu data area pointers.
+ * The master cpu (cpu 0) has its data area statically allocated;
+ * others are allocated dynamically and this array is updated at runtime.
  */
-extern
-vm_offset_t	avail_start;
+cpu_data_t	cpu_data_master;
+cpu_data_t	*cpu_data_ptr[MAX_CPUS] = { [0] &cpu_data_master };
+
+decl_simple_lock_data(,cpu_lock);	/* protects real_ncpus */
+unsigned int	real_ncpus = 1;
+unsigned int	max_ncpus = MAX_CPUS;
 
 /*
  * Multiprocessor i386/i486 systems use a separate copy of the
@@ -106,30 +100,6 @@ vm_offset_t	avail_start;
  * separate since each processor needs its own kernel stack,
  * and since using a TSS marks it busy.
  */
-
-/*
- * Allocated descriptor tables.
- */
-struct mp_desc_table	*mp_desc_table[NCPUS] = { 0 };
-
-/*
- * Pointer to TSS for access in load_context.
- */
-struct i386_tss		*mp_ktss[NCPUS] = { 0 };
-
-#if	MACH_KDB
-/*
- * Pointer to TSS for debugger use.
- */
-struct i386_tss		*mp_dbtss[NCPUS] = { 0 };
-#endif	/* MACH_KDB */
-
-/*
- * Pointer to GDT to reset the KTSS busy bit.
- */
-struct fake_descriptor	*mp_gdt[NCPUS] = { 0 };
-struct fake_descriptor	*mp_idt[NCPUS] = { 0 };
-struct fake_descriptor	*mp_ldt[NCPUS] = { 0 };
 
 /*
  * Allocate and initialize the per-processor descriptor tables.
@@ -155,32 +125,33 @@ struct fake_descriptor cpudata_desc_pattern = {
 	ACC_P|ACC_PL_K|ACC_DATA_W
 };
 
-struct mp_desc_table *
+void
 mp_desc_init(
-	int	mycpu)
+	cpu_data_t	*cdp,
+	boolean_t	is_boot_cpu)
 {
-	register struct mp_desc_table *mpt;
+	struct mp_desc_table	*mpt = cdp->cpu_desc_tablep;
+	cpu_desc_index_t	*cdt = &cdp->cpu_desc_index;
 
-	if (mycpu == master_cpu) {
+	if (is_boot_cpu) {
 	    /*
 	     * Master CPU uses the tables built at boot time.
 	     * Just set the TSS and GDT pointers.
 	     */
-	    mp_ktss[mycpu] = &ktss;
+	    cdt->cdi_ktss = &ktss;
 #if	MACH_KDB
-	    mp_dbtss[mycpu] = &dbtss;
+	    cdt->cdi_dbtss = &dbtss;
 #endif	/* MACH_KDB */
-	    mp_gdt[mycpu] = gdt;
-	    mp_idt[mycpu] = idt;
-	    mp_ldt[mycpu] = ldt;
-	    return 0;
-	}
-	else {
-	    mpt = mp_desc_table[mycpu];
-	    mp_ktss[mycpu] = &mpt->ktss;
-	    mp_gdt[mycpu] = mpt->gdt;
-	    mp_idt[mycpu] = mpt->idt;
-	    mp_ldt[mycpu] = mpt->ldt;
+	    cdt->cdi_gdt = gdt;
+	    cdt->cdi_idt = idt;
+	    cdt->cdi_ldt = ldt;
+
+	} else {
+
+	    cdt->cdi_ktss = &mpt->ktss;
+	    cdt->cdi_gdt = mpt->gdt;
+	    cdt->cdi_idt = mpt->idt;
+	    cdt->cdi_ldt = mpt->ldt;
 
 	    /*
 	     * Copy the tables
@@ -196,15 +167,9 @@ mp_desc_init(
 		  sizeof(ldt));
 	    bzero((char *)&mpt->ktss,
 		  sizeof(struct i386_tss));
-#if 0
-	    bzero((char *)&cpu_data[mycpu],
-		  sizeof(cpu_data_t));
-#endif
-	    /* I am myself */
-	    cpu_data[mycpu].cpu_number = mycpu;
 
 #if	MACH_KDB
-	    mp_dbtss[mycpu] = &mpt->dbtss;
+	    cdt->cdi_dbtss = &dbtss;
 	    bcopy((char *)&dbtss,
 		  (char *)&mpt->dbtss,
 		  sizeof(struct i386_tss));
@@ -215,106 +180,136 @@ mp_desc_init(
 	     * this LDT and this TSS.
 	     */
 	    mpt->gdt[sel_idx(KERNEL_LDT)] = ldt_desc_pattern;
-	    mpt->gdt[sel_idx(KERNEL_LDT)].offset =
-		LINEAR_KERNEL_ADDRESS + (unsigned int) mpt->ldt;
+	    mpt->gdt[sel_idx(KERNEL_LDT)].offset = (vm_offset_t) mpt->ldt;
 	    fix_desc(&mpt->gdt[sel_idx(KERNEL_LDT)], 1);
 
 	    mpt->gdt[sel_idx(KERNEL_TSS)] = tss_desc_pattern;
-	    mpt->gdt[sel_idx(KERNEL_TSS)].offset =
-		LINEAR_KERNEL_ADDRESS + (unsigned int) &mpt->ktss;
+	    mpt->gdt[sel_idx(KERNEL_TSS)].offset = (vm_offset_t) &mpt->ktss;
 	    fix_desc(&mpt->gdt[sel_idx(KERNEL_TSS)], 1);
 
-	    mpt->gdt[sel_idx(CPU_DATA)] = cpudata_desc_pattern;
-	    mpt->gdt[sel_idx(CPU_DATA)].offset =
-	    	LINEAR_KERNEL_ADDRESS + (unsigned int) &cpu_data[mycpu];
-	    fix_desc(&mpt->gdt[sel_idx(CPU_DATA)], 1);
+	    mpt->gdt[sel_idx(CPU_DATA_GS)] = cpudata_desc_pattern;
+	    mpt->gdt[sel_idx(CPU_DATA_GS)].offset = (vm_offset_t) cdp;
+	    fix_desc(&mpt->gdt[sel_idx(CPU_DATA_GS)], 1);
 
 #if	MACH_KDB
 	    mpt->gdt[sel_idx(DEBUG_TSS)] = tss_desc_pattern;
-	    mpt->gdt[sel_idx(DEBUG_TSS)].offset =
-		    LINEAR_KERNEL_ADDRESS + (unsigned int) &mpt->dbtss;
+	    mpt->gdt[sel_idx(DEBUG_TSS)].offset = (vm_offset_t) &mpt->dbtss;
 	    fix_desc(&mpt->gdt[sel_idx(DEBUG_TSS)], 1);
 
 	    mpt->dbtss.esp0 = (int)(db_task_stack_store +
-		    (INTSTACK_SIZE * (mycpu + 1)) - sizeof (natural_t));
+		    (INTSTACK_SIZE * (cpu + 1)) - sizeof (natural_t));
 	    mpt->dbtss.esp = mpt->dbtss.esp0;
 	    mpt->dbtss.eip = (int)&db_task_start;
 #endif	/* MACH_KDB */
 
 	    mpt->ktss.ss0 = KERNEL_DS;
 	    mpt->ktss.io_bit_map_offset = 0x0FFF;	/* no IO bitmap */
-
-	    return mpt;
 	}
 }
 
-/*
- * Called after all CPUs have been found, but before the VM system
- * is running.  The machine array must show which CPUs exist.
- */
-void
-interrupt_stack_alloc(void)
+cpu_data_t *
+cpu_data_alloc(boolean_t is_boot_cpu)
 {
-	register int		i;
-	int			cpu_count;
-	vm_offset_t		stack_start;
-	struct mp_desc_table 	*mpt;
+	int		ret;
+	cpu_data_t	*cdp;
 
-	/*
-	 * Number of CPUs possible.
-	 */
-	cpu_count = wncpu;
-
-	/*
-	 * Allocate an interrupt stack for each CPU except for
-	 * the master CPU (which uses the bootstrap stack)
-	 */
-	stack_start = phystokv(avail_start);
-	avail_start = round_page(avail_start + INTSTACK_SIZE*(cpu_count-1));
-	bzero((char *)stack_start, INTSTACK_SIZE*(cpu_count-1));
-
-	/*
-	 * Set up pointers to the top of the interrupt stack.
-	 */
-	for (i = 0; i < cpu_count; i++) {
-	    if (i == master_cpu) {
-		interrupt_stack[i] = (vm_offset_t) intstack;
-		int_stack_top[i]   = (vm_offset_t) eintstack;
-	    }
-	    else {
-		interrupt_stack[i] = stack_start;
-		int_stack_top[i]   = stack_start + INTSTACK_SIZE;
-
-		stack_start += INTSTACK_SIZE;
-	    }
+	if (is_boot_cpu) {
+		assert(real_ncpus == 1);
+		simple_lock_init(&cpu_lock, 0);
+		cdp = &cpu_data_master;
+		if (cdp->cpu_processor == NULL) {
+			cdp->cpu_processor = cpu_processor_alloc(TRUE);
+			cdp->cpu_pmap = pmap_cpu_alloc(TRUE);
+			cdp->cpu_this = cdp;
+			cdp->cpu_int_stack_top = (vm_offset_t) eintstack;
+			mp_desc_init(cdp, TRUE);
+		}
+		return cdp;
 	}
 
-	/*
-	 * Allocate descriptor tables for each CPU except for
-	 * the master CPU (which already has them initialized)
-	 */
-
-	mpt = (struct mp_desc_table *) phystokv(avail_start);
-	avail_start = round_page((vm_offset_t)avail_start +
-				 sizeof(struct mp_desc_table)*(cpu_count-1));
-	for (i = 0; i < cpu_count; i++)
-	    if (i != master_cpu)
-		mp_desc_table[i] = mpt++;
-
+	/* Check count before making allocations */
+	if (real_ncpus >= max_ncpus)
+		return NULL;
 
 	/*
-	 * Set up the barrier address.  All thread stacks MUST
-	 * be above this address.
+	 * Allocate per-cpu data:
 	 */
+	ret = kmem_alloc(kernel_map, 
+			 (vm_offset_t *) &cdp, sizeof(cpu_data_t));
+	if (ret != KERN_SUCCESS) {
+		printf("cpu_data_alloc() failed, ret=%d\n", ret);
+		goto abort;
+	}
+	bzero((void*) cdp, sizeof(cpu_data_t));
+	cdp->cpu_this = cdp;
+
 	/*
-	 * intstack is at higher addess than stack_start for AT mps
-	 * so int_stack_high must point at eintstack.
-	 * XXX
-	 * But what happens if a kernel stack gets allocated below
-	 * 1 Meg ? Probably never happens, there is only 640 K available
-	 * There.
+	 * Allocate interrupt stack:
 	 */
-	int_stack_high = (vm_offset_t) eintstack;
+	ret = kmem_alloc(kernel_map, 
+			 (vm_offset_t *) &cdp->cpu_int_stack_top,
+			 INTSTACK_SIZE);
+	if (ret != KERN_SUCCESS) {
+		printf("cpu_data_alloc() int stack failed, ret=%d\n", ret);
+		goto abort;
+	}
+	bzero((void*) cdp->cpu_int_stack_top, INTSTACK_SIZE);
+	cdp->cpu_int_stack_top += INTSTACK_SIZE;
+
+	/*
+	 * Allocate descriptor table:
+	 */
+	ret = kmem_alloc(kernel_map, 
+			 (vm_offset_t *) &cdp->cpu_desc_tablep,
+			 sizeof(struct mp_desc_table));
+	if (ret != KERN_SUCCESS) {
+		printf("cpu_data_alloc() desc_table failed, ret=%d\n", ret);
+		goto abort;
+	}
+
+	simple_lock(&cpu_lock);
+	if (real_ncpus >= max_ncpus) {
+		simple_unlock(&cpu_lock);
+		goto abort;
+	}
+	cpu_data_ptr[real_ncpus] = cdp;
+	cdp->cpu_number = real_ncpus;
+	real_ncpus++;
+	simple_unlock(&cpu_lock);
+	
+	kprintf("cpu_data_alloc(%d) 0x%x desc_table: 0x%x "
+		"int_stack: 0x%x-0x%x\n",
+		cdp->cpu_number, cdp, cdp->cpu_desc_tablep,
+		cdp->cpu_int_stack_top - INTSTACK_SIZE, cdp->cpu_int_stack_top);
+
+	return cdp;
+
+abort:
+	if (cdp) {
+		if (cdp->cpu_desc_tablep)
+			kfree((void *) cdp->cpu_desc_tablep,
+				sizeof(*cdp->cpu_desc_tablep));
+		if (cdp->cpu_int_stack_top)
+			kfree((void *) (cdp->cpu_int_stack_top - INTSTACK_SIZE),
+				INTSTACK_SIZE);
+		kfree((void *) cdp, sizeof(*cdp));
+	}
+	return NULL;
 }
 
-#endif /* NCPUS > 1 */
+boolean_t
+valid_user_segment_selectors(uint16_t cs,
+			     uint16_t ss,
+			     uint16_t ds,
+			     uint16_t es,
+			     uint16_t fs,
+			     uint16_t gs)
+{	
+	return valid_user_code_selector(cs)  &&
+	       valid_user_stack_selector(ss) &&
+	       valid_user_data_selector(ds)  &&
+	       valid_user_data_selector(es)  &&
+	       valid_user_data_selector(fs)  &&
+	       valid_user_data_selector(gs);
+}
+

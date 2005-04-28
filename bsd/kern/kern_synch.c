@@ -28,12 +28,11 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/proc.h>
+#include <sys/proc_internal.h>
 #include <sys/user.h>
-#include <sys/file.h>
+#include <sys/file_internal.h>
 #include <sys/vnode.h>
 #include <sys/kernel.h>
-#include <sys/buf.h>
 
 #include <machine/spl.h>
 
@@ -48,6 +47,8 @@
 
 #include <kern/task.h>
 #include <mach/time_value.h>
+#include <kern/lock.h>
+
 
 #if KTRACE
 #include <sys/uio.h>
@@ -55,19 +56,22 @@
 #endif 
 
 static void
-_sleep_continue(void)
+_sleep_continue(
+	void			*parameter,
+	wait_result_t	wresult)
 {
-	register struct proc *p;
-	register thread_t self = current_act();
+	register struct proc *p = current_proc();
+	register thread_t self  = current_thread();
 	struct uthread * ut;
 	int sig, catch;
 	int error = 0;
+	int dropmutex;
 
 	ut = get_bsdthread_info(self);
-	catch = ut->uu_pri & PCATCH;
-	p = current_proc();
+	catch     = ut->uu_pri & PCATCH;
+	dropmutex = ut->uu_pri & PDROP;
 
-	switch (get_thread_waitresult(self)) {
+	switch (wresult) {
 		case THREAD_TIMED_OUT:
 			error = EWOULDBLOCK;
 			break;
@@ -94,7 +98,10 @@ _sleep_continue(void)
 					if (thread_should_abort(self)) {
 						error = EINTR;
 					}
-				}
+				} else if( (ut->uu_flag & ( UT_CANCELDISABLE | UT_CANCEL | UT_CANCELED)) == UT_CANCEL) {
+                                        /* due to thread cancel */
+                                        error = EINTR;
+                                }
 			}  else
 				error = EINTR;
 			break;
@@ -103,13 +110,12 @@ _sleep_continue(void)
 	if (error == EINTR || error == ERESTART)
 		act_set_astbsd(self);
 
-	if (ut->uu_timo)
-		thread_cancel_timer();
-
 #if KTRACE
 	if (KTRPOINT(p, KTR_CSW))
-		ktrcsw(p->p_tracep, 0, 0, -1);
+		ktrcsw(p->p_tracep, 0, 0);
 #endif
+	if (ut->uu_mtx && !dropmutex)
+	        lck_mtx_lock(ut->uu_mtx);
 
 	unix_syscall_return((*ut->uu_continuation)(error));
 }
@@ -126,103 +132,115 @@ _sleep_continue(void)
  * Callers of this routine must be prepared for
  * premature return, and check that the reason for
  * sleeping has gone away.
+ *
+ * if msleep was the entry point, than we have a mutex to deal with
+ *
+ * The mutex is unlocked before the caller is blocked, and
+ * relocked before msleep returns unless the priority includes the PDROP
+ * flag... if PDROP is specified, _sleep returns with the mutex unlocked
+ * regardless of whether it actually blocked or not.
  */
 
 static int
 _sleep(
 	caddr_t		chan,
-	int			pri,
-	char		*wmsg,
+	int		pri,
+	const char	*wmsg,
 	u_int64_t	abstime,
-	int			(*continuation)(int))
+	int		(*continuation)(int),
+        lck_mtx_t	*mtx)
 {
 	register struct proc *p;
-	register thread_t self = current_act();
+	register thread_t self = current_thread();
 	struct uthread * ut;
 	int sig, catch = pri & PCATCH;
-	int sigttblock = pri & PTTYBLOCK;
+	int dropmutex  = pri & PDROP;
 	int wait_result;
 	int error = 0;
-	spl_t	s;
-
-	s = splhigh();
 
 	ut = get_bsdthread_info(self);
-	
+
 	p = current_proc();
 #if KTRACE
 	if (KTRPOINT(p, KTR_CSW))
-		ktrcsw(p->p_tracep, 1, 0, -1);
+		ktrcsw(p->p_tracep, 1, 0);
 #endif	
 	p->p_priority = pri & PRIMASK;
-		
-	if (chan != NULL)
-		assert_wait_prim(chan, NULL, abstime,
-							(catch) ? THREAD_ABORTSAFE : THREAD_UNINT);
-	else
-	if (abstime != 0)
-		thread_set_timer_deadline(abstime);
-
-	/*
-	 * We start our timeout
-	 * before calling CURSIG, as we could stop there, and a wakeup
-	 * or a SIGCONT (or both) could occur while we were stopped.
-	 * A SIGCONT would cause us to be marked as SSLEEP
-	 * without resuming us, thus we must be ready for sleep
-	 * when CURSIG is called.  If the wakeup happens while we're
-	 * stopped, p->p_wchan will be 0 upon return from CURSIG.
-	 */
-	if (catch) {
-		if (SHOULDissignal(p,ut)) {
-			if (sig = CURSIG(p)) {
-				if (clear_wait(self, THREAD_INTERRUPTED) == KERN_FAILURE)
-					goto block;
-				/* if SIGTTOU or SIGTTIN then block till SIGCONT */
-				if (sigttblock && ((sig == SIGTTOU) || (sig == SIGTTIN))) {
-					p->p_flag |= P_TTYSLEEP;
-					/* reset signal bits */
-					clear_procsiglist(p, sig);
-					assert_wait(&p->p_siglist, THREAD_ABORTSAFE);
-					/* assert wait can block and SIGCONT should be checked */
-					if (p->p_flag & P_TTYSLEEP)
-						thread_block(THREAD_CONTINUE_NULL);
-					/* return with success */
-					error = 0;
-					goto out;
-				}
-				if (p->p_sigacts->ps_sigintr & sigmask(sig))
-					error = EINTR;
-				else
-					error = ERESTART;
-				goto out;
-			}
-		}
-		if (thread_should_abort(self)) {
-			if (clear_wait(self, THREAD_INTERRUPTED) == KERN_FAILURE)
-				goto block;
-			error = EINTR;
-			goto out;
-		}
-		if (get_thread_waitresult(self) != THREAD_WAITING) {
-			/*already happened */
-			goto out;
-		}
-	}
-
-block:
-
-	splx(s);
 	p->p_stats->p_ru.ru_nvcsw++;
 
-	if ((thread_continue_t)continuation != THREAD_CONTINUE_NULL ) {
-	  ut->uu_continuation = continuation;
-	  ut->uu_pri = pri;
-	  ut->uu_timo = abstime? 1: 0;
-	  (void) thread_block(_sleep_continue);
-	  /* NOTREACHED */
-	}
+	if (mtx != NULL && chan != NULL && (thread_continue_t)continuation == THREAD_CONTINUE_NULL) {
 
-	wait_result = thread_block(THREAD_CONTINUE_NULL);
+		if (abstime)
+			wait_result = lck_mtx_sleep_deadline(mtx, (dropmutex) ? LCK_SLEEP_UNLOCK : 0,
+							     chan, (catch) ? THREAD_ABORTSAFE : THREAD_UNINT, abstime);
+		else
+			wait_result = lck_mtx_sleep(mtx, (dropmutex) ? LCK_SLEEP_UNLOCK : 0,
+							     chan, (catch) ? THREAD_ABORTSAFE : THREAD_UNINT);
+	}
+	else {
+		if (chan != NULL)
+			assert_wait_deadline(chan, (catch) ? THREAD_ABORTSAFE : THREAD_UNINT, abstime);
+		if (mtx)
+			lck_mtx_unlock(mtx);
+		if (catch) {
+			if (SHOULDissignal(p,ut)) {
+				if (sig = CURSIG(p)) {
+					if (clear_wait(self, THREAD_INTERRUPTED) == KERN_FAILURE)
+						goto block;
+					/* if SIGTTOU or SIGTTIN then block till SIGCONT */
+					if ((pri & PTTYBLOCK) && ((sig == SIGTTOU) || (sig == SIGTTIN))) {
+						p->p_flag |= P_TTYSLEEP;
+						/* reset signal bits */
+						clear_procsiglist(p, sig);
+						assert_wait(&p->p_siglist, THREAD_ABORTSAFE);
+						/* assert wait can block and SIGCONT should be checked */
+						if (p->p_flag & P_TTYSLEEP) {
+							thread_block(THREAD_CONTINUE_NULL);
+							
+							if (mtx && !dropmutex)
+		        					lck_mtx_lock(mtx);
+						}
+
+						/* return with success */
+						error = 0;
+						goto out;
+					}
+					if (p->p_sigacts->ps_sigintr & sigmask(sig))
+						error = EINTR;
+					else
+						error = ERESTART;
+					if (mtx && !dropmutex)
+		        			lck_mtx_lock(mtx);
+					goto out;
+				}
+			}
+			if (thread_should_abort(self)) {
+				if (clear_wait(self, THREAD_INTERRUPTED) == KERN_FAILURE)
+					goto block;
+				error = EINTR;
+
+				if (mtx && !dropmutex)
+				        lck_mtx_lock(mtx);
+				goto out;
+			}
+		}		
+
+
+block:
+		if ((thread_continue_t)continuation != THREAD_CONTINUE_NULL) {
+		        ut->uu_continuation = continuation;
+			ut->uu_pri  = pri;
+			ut->uu_timo = abstime? 1: 0;
+			ut->uu_mtx  = mtx;
+			(void) thread_block(_sleep_continue);
+			/* NOTREACHED */
+		}
+		
+		wait_result = thread_block(THREAD_CONTINUE_NULL);
+
+		if (mtx && !dropmutex)
+		        lck_mtx_lock(mtx);
+	}
 
 	switch (wait_result) {
 		case THREAD_TIMED_OUT:
@@ -241,7 +259,7 @@ block:
 			if (catch) {
 				if (thread_should_abort(self)) {
 					error = EINTR;
-				} else if (SHOULDissignal(p,ut)) {
+				} else if (SHOULDissignal(p, ut)) {
 					if (sig = CURSIG(p)) {
 						if (p->p_sigacts->ps_sigintr & sigmask(sig))
 							error = EINTR;
@@ -259,12 +277,10 @@ block:
 out:
 	if (error == EINTR || error == ERESTART)
 		act_set_astbsd(self);
-	if (abstime)
-		thread_cancel_timer();
-	(void) splx(s);
+
 #if KTRACE
 	if (KTRPOINT(p, KTR_CSW))
-		ktrcsw(p->p_tracep, 0, 0, -1);
+		ktrcsw(p->p_tracep, 0, 0);
 #endif
 	return (error);
 }
@@ -274,28 +290,74 @@ sleep(
 	void	*chan,
 	int		pri)
 {
-	return _sleep((caddr_t)chan, pri, (char *)NULL, 0, (int (*)(int))0);
+	return _sleep((caddr_t)chan, pri, (char *)NULL, 0, (int (*)(int))0, (lck_mtx_t *)0);
+}
+
+int
+msleep0(
+	void		*chan,
+	lck_mtx_t	*mtx,
+	int		pri,
+	const char	*wmsg,
+	int		timo,
+	int		(*continuation)(int))
+{
+	u_int64_t	abstime = 0;
+
+	if (timo)
+		clock_interval_to_deadline(timo, NSEC_PER_SEC / hz, &abstime);
+
+	return _sleep((caddr_t)chan, pri, wmsg, abstime, continuation, mtx);
+}
+
+int
+msleep(
+	void		*chan,
+	lck_mtx_t	*mtx,
+	int		pri,
+	const char	*wmsg,
+	struct timespec		*ts)
+{
+	u_int64_t	abstime = 0;
+
+	if (ts && (ts->tv_sec || ts->tv_nsec)) {
+		nanoseconds_to_absolutetime((uint64_t)ts->tv_sec * NSEC_PER_SEC + ts->tv_nsec,  &abstime );
+		clock_absolutetime_interval_to_deadline( abstime, &abstime );
+	}
+
+	return _sleep((caddr_t)chan, pri, wmsg, abstime, (int (*)(int))0, mtx);
+}
+
+int
+msleep1(
+	void		*chan,
+	lck_mtx_t	*mtx,
+	int		pri,
+	const char	*wmsg,
+	u_int64_t	abstime)
+{
+	return _sleep((caddr_t)chan, pri, wmsg, abstime, (int (*)(int))0, mtx);
 }
 
 int
 tsleep(
-	void	*chan,
+	void		*chan,
 	int		pri,
-	char	*wmsg,
+	const char	*wmsg,
 	int		timo)
 {
 	u_int64_t	abstime = 0;
 
 	if (timo)
 		clock_interval_to_deadline(timo, NSEC_PER_SEC / hz, &abstime);
-	return _sleep((caddr_t)chan, pri, wmsg, abstime, (int (*)(int))0);
+	return _sleep((caddr_t)chan, pri, wmsg, abstime, (int (*)(int))0, (lck_mtx_t *)0);
 }
 
 int
 tsleep0(
-	void	*chan,
+	void		*chan,
 	int		pri,
-	char	*wmsg,
+	const char	*wmsg,
 	int		timo,
 	int		(*continuation)(int))
 {			
@@ -303,18 +365,18 @@ tsleep0(
 
 	if (timo)
 		clock_interval_to_deadline(timo, NSEC_PER_SEC / hz, &abstime);
-	return _sleep((caddr_t)chan, pri, wmsg, abstime, continuation);
+	return _sleep((caddr_t)chan, pri, wmsg, abstime, continuation, (lck_mtx_t *)0);
 }
 
 int
 tsleep1(
 	void		*chan,
-	int			pri,
-	char		*wmsg,
+	int		pri,
+	const char	*wmsg,
 	u_int64_t	abstime,
-	int			(*continuation)(int))
+	int		(*continuation)(int))
 {			
-	return _sleep((caddr_t)chan, pri, wmsg, abstime, continuation);
+	return _sleep((caddr_t)chan, pri, wmsg, abstime, continuation, (lck_mtx_t *)0);
 }
 
 /*
@@ -366,10 +428,11 @@ static fixpt_t cexp[3] = {
 
 void
 compute_averunnable(
-	register int	nrun)
+	void 			*arg)
 {
-	register int		i;
+	unsigned int		nrun = *(unsigned int *)arg;
 	struct loadavg		*avg = &averunnable;
+	register int		i;
 
     for (i = 0; i < 3; i++)
         avg->ldavg[i] = (cexp[i] * avg->ldavg[i] +

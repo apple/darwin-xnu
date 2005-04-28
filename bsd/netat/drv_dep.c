@@ -68,6 +68,8 @@ static llc_header_t	snap_hdr_aarp = SNAP_HDR_AARP;
 static unsigned char snap_proto_ddp[5] = SNAP_PROTO_AT;
 static unsigned char snap_proto_aarp[5] = SNAP_PROTO_AARP;
 
+static void at_input_packet(protocol_family_t protocol, mbuf_t m);
+
 int pktsIn, pktsOut;
 
 struct ifqueue atalkintrq; 	/* appletalk and aarp packet input queue */
@@ -86,6 +88,7 @@ void atalk_load()
 {
 	extern int _ATsocket(), _ATgetmsg(), _ATputmsg();
 	extern int _ATPsndreq(), _ATPsndrsp(), _ATPgetreq(), _ATPgetrsp();
+	extern lck_mtx_t *domain_proto_mtx;
 
 	sys_ATsocket  = _ATsocket;
 	sys_ATgetmsg  = _ATgetmsg;
@@ -114,6 +117,9 @@ void atalk_load()
 		for 2225395
 		this happens in adsp_open and is undone on ADSP_UNLINK 
 */
+	lck_mtx_unlock(domain_proto_mtx);
+	proto_register_input(PF_APPLETALK, at_input_packet, NULL);
+	lck_mtx_lock(domain_proto_mtx);
 } /* atalk_load */
 
 /* Undo everything atalk_load() did. */
@@ -208,7 +214,9 @@ int pat_output(patp, mlist, dst_addr, type)
 			kprintf("po: mlen= %d, m2len= %d\n", m->m_len, 
 				(m->m_next)->m_len);
 #endif
-		dlil_output(patp->at_dl_tag, m, NULL, &dst, 0);
+		atalk_unlock();
+		dlil_output(patp->aa_ifp, PF_APPLETALK, m, NULL, &dst, 0);
+		atalk_lock();
 
 		pktsOut++;
 	}
@@ -216,44 +224,30 @@ int pat_output(patp, mlist, dst_addr, type)
 	return 0;
 } /* pat_output */
 
-void atalkintr()
+static void
+at_input_packet(
+	__unused protocol_family_t	protocol,
+	mbuf_t						m)
 {
-	struct mbuf *m, *m1, *mlist = NULL;
+	struct mbuf *m1;
 	struct ifnet *ifp;
-	int s;
 	llc_header_t *llc_header;
 	at_ifaddr_t *ifID;
 	char src[6];
 	enet_header_t *enet_header;
-		
-next:
-	s = splimp();
-	IF_DEQUEUE(&atalkintrq, m);
-	splx(s);	
 
-	if (m == 0) 
-		return;	
-
-	for ( ; m ; m = mlist) {
-	  mlist = m->m_nextpkt;
-#ifdef APPLETALK_DEBUG
-	  /* packet chains are not yet in use on input */
-	  if (mlist) kprintf("atalkintr: packet chain\n");
-#endif
-	  m->m_nextpkt = 0;
-
-	  if (!appletalk_inited) {
+	if (!appletalk_inited) {
 		m_freem(m);
-		continue;
-	  }
+		return;
+	}
 
-	  if ((m->m_flags & M_PKTHDR) == 0) {
+	if ((m->m_flags & M_PKTHDR) == 0) {
 #ifdef APPLETALK_DEBUG
-                kprintf("atalkintr: no HDR on packet received");
+		kprintf("atalkintr: no HDR on packet received");
 #endif
 		m_freem(m);
-		continue;
-	  }
+		return;
+	}
 
 	  /* make sure the interface this packet was received on is configured
 	     for AppleTalk */
@@ -265,7 +259,7 @@ next:
 	  /* if we didn't find a matching interface */
 	  if (!ifID) {
 		m_freem(m);
-		continue; /* was EAFNOSUPPORT */
+		return; /* was EAFNOSUPPORT */
 	  }
 
 	  /* make sure the entire packet header is in the current mbuf */
@@ -275,13 +269,15 @@ next:
 		kprintf("atalkintr: packet too small\n");
 #endif
 		m_freem(m);
-		continue;
+		return;
 	  }
 	  enet_header = mtod(m, enet_header_t *);
 
 	  /* Ignore multicast packets from local station */
 	  /* *** Note: code for IFTYPE_TOKENTALK may be needed here. *** */
-	  if (ifID->aa_ifp->if_type == IFT_ETHER) {
+	  if (ifID->aa_ifp->if_type == IFT_ETHER ||
+		ifID->aa_ifp->if_type == IFT_L2VLAN ||
+		ifID->aa_ifp->if_type == IFT_IEEE8023ADLAG) {
 		bcopy((char *)enet_header->src, src, sizeof(src));
 
 #ifdef COMMENT  /* In order to receive packets from the Blue Box, we cannot 
@@ -291,7 +287,7 @@ next:
 		    (bcmp(src, ifID->xaddr, sizeof(src)) == 0)) {
 		  /* Packet rejected: think it's a local mcast. */
 		  m_freem(m);
-		  continue; /* was EAFNOSUPPORT */
+		  return; /* was EAFNOSUPPORT */
 		}
 #endif /* COMMENT */
 
@@ -321,7 +317,7 @@ next:
 				    llc_header->protocol[4]);
 #endif
 			    m_freem(m);
-			    continue; /* was EAFNOSUPPORT */
+			    return; /* was EAFNOSUPPORT */
 			  }
 			}
 			MCHTYPE(m, MSG_DATA); /* set the mbuf type */
@@ -342,7 +338,5 @@ next:
 #endif
 			m_freem(m);
 		}
-	      }
 	}
-	goto next;
-} /* atalkintr */
+}

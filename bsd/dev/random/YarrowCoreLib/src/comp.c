@@ -32,24 +32,26 @@
 #ifdef	YARROW_KERNEL
 
 /* null compression */
-comp_error_status comp_init(COMP_CTX* ctx)
+comp_error_status comp_init(__unused COMP_CTX* ctx)
 {
 	return COMP_SUCCESS;
 }
 
 
-comp_error_status comp_add_data(COMP_CTX* ctx,Bytef* inp,uInt inplen)
+comp_error_status comp_add_data( __unused COMP_CTX* ctx, 
+								 __unused Bytef* inp, 
+								 __unused uInt inplen )
 {
 	return COMP_SUCCESS;
 }
 
-comp_error_status comp_get_ratio(COMP_CTX* ctx,float* out)
+comp_error_status comp_get_ratio( __unused COMP_CTX* ctx,float* out )
 {
 	*out = 1.0;
 	return COMP_SUCCESS;
 }
 
-comp_error_status comp_end(COMP_CTX* ctx)
+comp_error_status comp_end( __unused COMP_CTX* ctx )
 {
 	return COMP_SUCCESS;
 }

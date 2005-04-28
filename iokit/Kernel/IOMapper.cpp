@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -212,8 +212,10 @@ void IOMapper::FreeARTTable(OSData *artHandle, IOByteCount size)
     ARTTableData *dataP = getARTDataP(artHandle);
 
     int numupls = ((artHandle->getLength() - sizeof(*dataP)) / sizeof(upl_t));
-    for (int i = 0; i < numupls; i++)
-        kernel_upl_abort(dataP->u[i], 0);
+    for (int i = 0; i < numupls; i++) {
+        upl_abort(dataP->u[i], 0);
+        upl_deallocate(dataP->u[i]);
+    }
 
     if (dataP->v) {
         size = round_page_32(size);

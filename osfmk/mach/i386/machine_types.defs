@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -22,6 +22,7 @@
 /*
  * @OSF_COPYRIGHT@
  */
+
 /*
  *	Header file for basic, machine-dependent data types.  i386 version.
  */
@@ -64,6 +65,23 @@ type register_t = int32_t;
 type integer_t = int32_t;
 type natural_t = uint32_t;
 
+/*
+ * These are the VM types that scale with the address
+ * space size of a given process.
+ */
+type vm_address_t = natural_t;
+type vm_offset_t = natural_t;
+type vm_size_t = natural_t;
+
+/*
+ * The mach_vm_xxx_t types are sized to hold the
+ * maximum pointer, offset, etc... supported on the
+ * platform.
+ */
+type mach_vm_address_t = uint32_t;
+type mach_vm_offset_t = uint32_t;
+type mach_vm_size_t = uint32_t;
+
 #if	MACH_IPC_COMPAT
 /*
  * For the old IPC interface
@@ -71,6 +89,5 @@ type natural_t = uint32_t;
 #define	MSG_TYPE_PORT_NAME	natural_t
 
 #endif	/* MACH_IPC_COMPAT */
-
 
 #endif	/* _MACHINE_VM_TYPES_DEFS_ */

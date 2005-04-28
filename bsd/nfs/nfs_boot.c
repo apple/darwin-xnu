@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -92,12 +92,11 @@
 #include <sys/conf.h>
 #include <sys/ioctl.h>
 #include <sys/proc.h>
-#include <sys/mount.h>
-#include <sys/mbuf.h>
+#include <sys/mount_internal.h>
+#include <sys/kpi_mbuf.h>
 
 #include <sys/malloc.h>
 #include <sys/socket.h>
-#include <sys/reboot.h>
 
 #include <net/if.h>
 #include <net/if_dl.h>
@@ -119,21 +118,15 @@
 
 #include <libkern/libkern.h>
 
-extern char *strchr(const char *str, int ch);
 
 #if NETHER == 0
 
-int nfs_boot_init(nd, procp)
-	struct nfs_diskless *nd;
-	struct proc *procp;
+int nfs_boot_init(struct nfs_diskless *nd, proc_t procp)
 {
 	panic("nfs_boot_init: no ether");
 }
 
-int nfs_boot_getfh(nd, procp, v3)
-	struct nfs_diskless *nd;
-	struct proc *procp;
-	int v3;
+int nfs_boot_getfh(struct nfs_diskless *nd, proc_t procp, int v3, int sotype)
 {
 	panic("nfs_boot_getfh: no ether");
 }
@@ -161,17 +154,17 @@ int nfs_boot_getfh(nd, procp, v3)
  */
 
 /* bootparam RPC */
-static int bp_whoami __P((struct sockaddr_in *bpsin,
-	struct in_addr *my_ip, struct in_addr *gw_ip));
-static int bp_getfile __P((struct sockaddr_in *bpsin, char *key,
-	struct sockaddr_in *mdsin, char *servname, char *path));
+static int bp_whoami(struct sockaddr_in *bpsin,
+	struct in_addr *my_ip, struct in_addr *gw_ip);
+static int bp_getfile(struct sockaddr_in *bpsin, const char *key,
+	struct sockaddr_in *mdsin, char *servname, char *path);
 
 /* mountd RPC */
-static int md_mount __P((struct sockaddr_in *mdsin, char *path, int v3,
-	u_char *fhp, u_long *fhlenp));
+static int md_mount(struct sockaddr_in *mdsin, char *path, int v3, int sotype,
+	u_char *fhp, u_long *fhlenp);
 
 /* other helpers */
-static int get_file_handle __P((struct nfs_dlmount *ndmntp));
+static int get_file_handle(struct nfs_dlmount *ndmntp);
 
 
 #define IP_FORMAT	"%d.%d.%d.%d"
@@ -190,9 +183,7 @@ netboot_rootpath(struct in_addr * server_ip,
  * Called with an empty nfs_diskless struct to be filled in.
  */
 int
-nfs_boot_init(nd, procp)
-	struct nfs_diskless *nd;
-	struct proc *procp;
+nfs_boot_init(struct nfs_diskless *nd, __unused proc_t procp)
 {
 	struct sockaddr_in 	bp_sin;
 	boolean_t		do_bpwhoami = TRUE;
@@ -201,15 +192,24 @@ nfs_boot_init(nd, procp)
 	struct in_addr 		my_ip;
 	struct sockaddr_in *	sin_p;
 
+	/* make sure mbuf constants are set up */
+	if (!nfs_mbuf_mlen)
+		nfs_mbuf_init();
+
 	/* by this point, networking must already have been configured */
 	if (netboot_iaddr(&my_ip) == FALSE) {
 	    printf("nfs_boot: networking is not initialized\n");
 	    error = ENXIO;
-	    goto failed_noswitch;
+	    goto failed;
 	}
 
 	/* get the root path information */
 	MALLOC_ZONE(nd->nd_root.ndm_path, char *, MAXPATHLEN, M_NAMEI, M_WAITOK);
+	if (!nd->nd_root.ndm_path) {
+	    printf("nfs_boot: can't allocate root path buffer\n");
+	    error = ENOMEM;
+	    goto failed;
+	}
 	sin_p = &nd->nd_root.ndm_saddr;
 	bzero((caddr_t)sin_p, sizeof(*sin_p));
 	sin_p->sin_len = sizeof(*sin_p);
@@ -221,8 +221,6 @@ nfs_boot_init(nd, procp)
 	    do_bpwhoami = FALSE;
 	}
 	nd->nd_private.ndm_saddr.sin_addr.s_addr = 0;
-
-	thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
 
 	if (do_bpwhoami) {
 		struct in_addr router;
@@ -261,6 +259,11 @@ nfs_boot_init(nd, procp)
 #if !defined(NO_MOUNT_PRIVATE) 
 	if (do_bpgetfile) { /* get private path */
 		MALLOC_ZONE(nd->nd_private.ndm_path, char *, MAXPATHLEN, M_NAMEI, M_WAITOK);
+		if (!nd->nd_private.ndm_path) {
+			printf("nfs_boot: can't allocate private path buffer\n");
+			error = ENOMEM;
+			goto failed;
+		}
 		error = bp_getfile(&bp_sin, "private", 
 				   &nd->nd_private.ndm_saddr,
 				   nd->nd_private.ndm_host,
@@ -269,6 +272,11 @@ nfs_boot_init(nd, procp)
 			char * check_path = NULL;
 			
 			MALLOC_ZONE(check_path, char *, MAXPATHLEN, M_NAMEI, M_WAITOK);
+			if (!check_path) {
+				printf("nfs_boot: can't allocate check_path buffer\n");
+				error = ENOMEM;
+				goto failed;
+			}
 			snprintf(check_path, MAXPATHLEN, "%s/private", nd->nd_root.ndm_path);
 			if ((nd->nd_root.ndm_saddr.sin_addr.s_addr 
 			     == nd->nd_private.ndm_saddr.sin_addr.s_addr)
@@ -288,8 +296,6 @@ nfs_boot_init(nd, procp)
 	}
 #endif /* NO_MOUNT_PRIVATE */
 failed:
-	thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
-failed_noswitch:
 	return (error);
 }
 
@@ -298,16 +304,12 @@ failed_noswitch:
  * with file handles to be filled in.
  */
 int
-nfs_boot_getfh(nd, procp, v3)
-	struct nfs_diskless *nd;
-	struct proc *procp;
-	int v3;
+nfs_boot_getfh(struct nfs_diskless *nd, __unused proc_t procp, int v3, int sotype)
 {
 	int error = 0;
 
-	thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
-	
 	nd->nd_root.ndm_nfsv3 = v3;
+	nd->nd_root.ndm_sotype = sotype;
 	error = get_file_handle(&nd->nd_root);
 	if (error) {
 		printf("nfs_boot: get_file_handle(v%d) root failed, %d\n",
@@ -319,6 +321,7 @@ nfs_boot_getfh(nd, procp, v3)
 	if (nd->nd_private.ndm_saddr.sin_addr.s_addr) {
 		/* get private file handle */
 		nd->nd_private.ndm_nfsv3 = v3;
+		nd->nd_private.ndm_sotype = sotype;
 		error = get_file_handle(&nd->nd_private);
 		if (error) {
 			printf("nfs_boot: get_file_handle(v%d) private failed, %d\n",
@@ -327,8 +330,7 @@ nfs_boot_getfh(nd, procp, v3)
 		}
 	}
 #endif /* NO_MOUNT_PRIVATE */
- failed:
-	thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
+failed:
 	return (error);
 }
 
@@ -344,7 +346,7 @@ get_file_handle(ndmntp)
 	 * using RPC to mountd/mount
 	 */
 	error = md_mount(&ndmntp->ndm_saddr, ndmntp->ndm_path, ndmntp->ndm_nfsv3,
-			ndmntp->ndm_fh, &ndmntp->ndm_fhlen);
+			ndmntp->ndm_sotype, ndmntp->ndm_fh, &ndmntp->ndm_fhlen);
 	if (error)
 		return (error);
 
@@ -365,23 +367,25 @@ get_file_handle(ndmntp)
  * Get an mbuf with the given length, and
  * initialize the pkthdr length field.
  */
-static struct mbuf *
-m_get_len(int msg_len)
+static int
+mbuf_get_with_len(int msg_len, mbuf_t *m)
 {
-	struct mbuf *m;
-	m = m_gethdr(M_WAIT, MT_DATA);
-	if (m == NULL)
-		return NULL;
-	if (msg_len > MHLEN) {
-		if (msg_len > MCLBYTES)
+	int error;
+	error = mbuf_gethdr(MBUF_WAITOK, MBUF_TYPE_DATA, m);
+	if (error)
+		return (error);
+	if (msg_len > mbuf_maxlen(*m)) {
+		error = mbuf_mclget(MBUF_WAITOK, MBUF_TYPE_DATA, m);
+		if (error) {
+			mbuf_freem(*m);
+			return (error);
+		}
+		if (msg_len > mbuf_maxlen(*m))
 			panic("nfs_boot: msg_len > MCLBYTES");
-		MCLGET(m, M_WAIT);
-		if (m == NULL)
-			return NULL;
 	}
-	m->m_len = msg_len;
-	m->m_pkthdr.len = m->m_len;
-	return (m);
+	mbuf_setlen(*m, msg_len);
+	mbuf_pkthdr_setlen(*m, msg_len);
+	return (0);
 }
 
 
@@ -438,8 +442,8 @@ bp_whoami(bpsin, my_ip, gw_ip)
 
 	struct rpc_string *str;
 	struct bp_inaddr *bia;
-	struct mbuf *m;
-	struct sockaddr_in *sin;
+	mbuf_t m;
+	struct sockaddr_in sin;
 	int error, msg_len;
 	int cn_len, dn_len;
 	u_char *p;
@@ -449,14 +453,14 @@ bp_whoami(bpsin, my_ip, gw_ip)
 	 * Get message buffer of sufficient size.
 	 */
 	msg_len = sizeof(*call);
-	m = m_get_len(msg_len);
-	if (m == NULL)
-		return ENOBUFS;
+	error = mbuf_get_with_len(msg_len, &m);
+	if (error)
+		return error;
 
 	/*
 	 * Build request message for PMAPPROC_CALLIT.
 	 */
-	call = mtod(m, struct whoami_call *);
+	call = mbuf_data(m);
 	call->call_prog = htonl(BOOTPARAM_PROG);
 	call->call_vers = htonl(BOOTPARAM_VERS);
 	call->call_proc = htonl(BOOTPARAM_WHOAMI);
@@ -474,32 +478,31 @@ bp_whoami(bpsin, my_ip, gw_ip)
 	/* RPC: portmap/callit */
 	bpsin->sin_port = htons(PMAPPORT);
 
-	error = krpc_call(bpsin, PMAPPROG, PMAPVERS,
-			PMAPPROC_CALLIT, &m, &sin);
+	error = krpc_call(bpsin, SOCK_DGRAM, PMAPPROG, PMAPVERS, PMAPPROC_CALLIT, &m, &sin);
 	if (error)
 		return error;
 
 	/*
 	 * Parse result message.
 	 */
-	msg_len = m->m_len;
-	lp = mtod(m, long *);
+	msg_len = mbuf_len(m);
+	lp = mbuf_data(m);
 
 	/* bootparam server port (also grab from address). */
-	if (msg_len < sizeof(*lp))
+	if (msg_len < (int)sizeof(*lp))
 		goto bad;
 	msg_len -= sizeof(*lp);
 	bpsin->sin_port = htons((short)ntohl(*lp++));
-	bpsin->sin_addr.s_addr = sin->sin_addr.s_addr;
+	bpsin->sin_addr.s_addr = sin.sin_addr.s_addr;
 
 	/* length of encapsulated results */
-	if (msg_len < (ntohl(*lp) + sizeof(*lp)))
+	if (msg_len < (ntohl(*lp) + (int)sizeof(*lp)))
 		goto bad;
 	msg_len = ntohl(*lp++);
 	p = (char*)lp;
 
 	/* client name */
-	if (msg_len < sizeof(*str))
+	if (msg_len < (int)sizeof(*str))
 		goto bad;
 	str = (struct rpc_string *)p;
 	cn_len = ntohl(str->len);
@@ -514,7 +517,7 @@ bp_whoami(bpsin, my_ip, gw_ip)
 	msg_len -= RPC_STR_SIZE(cn_len);
 
 	/* domain name */
-	if (msg_len < sizeof(*str))
+	if (msg_len < (int)sizeof(*str))
 		goto bad;
 	str = (struct rpc_string *)p;
 	dn_len = ntohl(str->len);
@@ -529,7 +532,7 @@ bp_whoami(bpsin, my_ip, gw_ip)
 	msg_len -= RPC_STR_SIZE(dn_len);
 
 	/* gateway address */
-	if (msg_len < sizeof(*bia))
+	if (msg_len < (int)sizeof(*bia))
 		goto bad;
 	bia = (struct bp_inaddr *)p;
 	if (bia->atype != htonl(1))
@@ -546,10 +549,7 @@ bad:
 	error = EBADRPC;
 
 out:
-	if (sin)
-	    FREE(sin, M_SONAME);
-
-	m_freem(m);
+	mbuf_freem(m);
 	return(error);
 }
 
@@ -564,13 +564,13 @@ out:
 static int
 bp_getfile(bpsin, key, md_sin, serv_name, pathname)
 	struct sockaddr_in *bpsin;
-	char *key;
+	const char *key;
 	struct sockaddr_in *md_sin;
 	char *serv_name;
 	char *pathname;
 {
 	struct rpc_string *str;
-	struct mbuf *m;
+	mbuf_t m;
 	struct bp_inaddr *bia;
 	struct sockaddr_in *sin;
 	u_char *p, *q;
@@ -585,14 +585,14 @@ bp_getfile(bpsin, key, md_sin, serv_name, pathname)
 	msg_len = 0;
 	msg_len += RPC_STR_SIZE(cn_len);
 	msg_len += RPC_STR_SIZE(key_len);
-	m = m_get_len(msg_len);
-	if (m == NULL)
-		return ENOBUFS;
+	error = mbuf_get_with_len(msg_len, &m);
+	if (error)
+		return error;
 
 	/*
 	 * Build request message.
 	 */
-	p = mtod(m, u_char *);
+	p = mbuf_data(m);
 	bzero(p, msg_len);
 	/* client name (hostname) */
 	str = (struct rpc_string *)p;
@@ -605,7 +605,7 @@ bp_getfile(bpsin, key, md_sin, serv_name, pathname)
 	bcopy(key, str->data, key_len);
 
 	/* RPC: bootparam/getfile */
-	error = krpc_call(bpsin, BOOTPARAM_PROG, BOOTPARAM_VERS,
+	error = krpc_call(bpsin, SOCK_DGRAM, BOOTPARAM_PROG, BOOTPARAM_VERS,
 			BOOTPARAM_GETFILE, &m, NULL);
 	if (error)
 		return error;
@@ -613,11 +613,11 @@ bp_getfile(bpsin, key, md_sin, serv_name, pathname)
 	/*
 	 * Parse result message.
 	 */
-	p = mtod(m, u_char *);
-	msg_len = m->m_len;
+	p = mbuf_data(m);
+	msg_len = mbuf_len(m);
 
 	/* server name */
-	if (msg_len < sizeof(*str))
+	if (msg_len < (int)sizeof(*str))
 		goto bad;
 	str = (struct rpc_string *)p;
 	sn_len = ntohl(str->len);
@@ -631,7 +631,7 @@ bp_getfile(bpsin, key, md_sin, serv_name, pathname)
 	msg_len -= RPC_STR_SIZE(sn_len);
 
 	/* server IP address (mountd) */
-	if (msg_len < sizeof(*bia))
+	if (msg_len < (int)sizeof(*bia))
 		goto bad;
 	bia = (struct bp_inaddr *)p;
 	if (bia->atype != htonl(1))
@@ -649,7 +649,7 @@ bp_getfile(bpsin, key, md_sin, serv_name, pathname)
 	msg_len -= sizeof(*bia);
 
 	/* server pathname */
-	if (msg_len < sizeof(*str))
+	if (msg_len < (int)sizeof(*str))
 		goto bad;
 	str = (struct rpc_string *)p;
 	path_len = ntohl(str->len);
@@ -666,7 +666,7 @@ bad:
 	error = EBADRPC;
 
 out:
-	m_freem(m);
+	mbuf_freem(m);
 	return(0);
 }
 
@@ -677,10 +677,11 @@ out:
  * Also, sets sin->sin_port to the NFS service port.
  */
 static int
-md_mount(mdsin, path, v3, fhp, fhlenp)
+md_mount(mdsin, path, v3, sotype, fhp, fhlenp)
 	struct sockaddr_in *mdsin;		/* mountd server address */
 	char *path;
 	int v3;
+	int sotype;
 	u_char *fhp;
 	u_long *fhlenp;
 {
@@ -690,28 +691,38 @@ md_mount(mdsin, path, v3, fhp, fhlenp)
 		u_long	errno;
 		u_char	data[NFSX_V3FHMAX + sizeof(u_long)];
 	} *rdata;
-	struct mbuf *m;
+	mbuf_t m;
 	int error, mlen, slen;
 	int mntversion = v3 ? RPCMNT_VER3 : RPCMNT_VER1;
+	int proto = (sotype == SOCK_STREAM) ? IPPROTO_TCP : IPPROTO_UDP;
+	in_port_t mntport, nfsport;
 
 	/* Get port number for MOUNTD. */
-	error = krpc_portmap(mdsin, RPCPROG_MNT, mntversion,
-						 &mdsin->sin_port);
-	if (error) return error;
+	error = krpc_portmap(mdsin, RPCPROG_MNT, mntversion, proto, &mntport);
+	if (error)
+		return error;
+
+	/* Get port number for NFS use. */
+	/* (If NFS/proto unavailable, don't bother with the mount call) */
+	error = krpc_portmap(mdsin, NFS_PROG, v3 ? NFS_VER3 : NFS_VER2, proto, &nfsport);
+	if (error)
+		return error;
+
+	/* Set port number for MOUNTD */
+	mdsin->sin_port = mntport;
 
 	slen = strlen(path);
 	mlen = RPC_STR_SIZE(slen);
 
-	m = m_get_len(mlen);
-	if (m == NULL)
-		return ENOBUFS;
-	str = mtod(m, struct rpc_string *);
+	error = mbuf_get_with_len(mlen, &m);
+	if (error)
+		return error;
+	str = mbuf_data(m);
 	str->len = htonl(slen);
 	bcopy(path, str->data, slen);
 
 	/* Do RPC to mountd. */
-	error = krpc_call(mdsin, RPCPROG_MNT, mntversion,
-			RPCMNT_MOUNT, &m, NULL);
+	error = krpc_call(mdsin, sotype, RPCPROG_MNT, mntversion, RPCMNT_MOUNT, &m, NULL);
 	if (error)
 		return error;	/* message already freed */
 
@@ -720,41 +731,40 @@ md_mount(mdsin, path, v3, fhp, fhlenp)
 	 * + a v2 filehandle
 	 * + a v3 filehandle length + a v3 filehandle
 	 */
-	mlen = m->m_len;
-	if (mlen < sizeof(u_long))
+	mlen = mbuf_len(m);
+	if (mlen < (int)sizeof(u_long))
 		goto bad;
-	rdata = mtod(m, struct rdata *);
+	rdata = mbuf_data(m);
 	error = ntohl(rdata->errno);
 	if (error)
 		goto out;
 	if (v3) {
 		u_long fhlen;
 		u_char *fh;
-		if (mlen < sizeof(u_long)*2)
+		if (mlen < (int)sizeof(u_long)*2)
 			goto bad;
 		fhlen = ntohl(*(u_long*)rdata->data);
 		fh = rdata->data + sizeof(u_long);
-		if (mlen < (sizeof(u_long)*2 + fhlen))
+		if (mlen < (int)(sizeof(u_long)*2 + fhlen))
 			goto bad;
 		bcopy(fh, fhp, fhlen);
 		*fhlenp = fhlen;
 	} else {
-		if (mlen < (sizeof(u_long) + NFSX_V2FH))
+		if (mlen < ((int)sizeof(u_long) + NFSX_V2FH))
 			goto bad;
 		bcopy(rdata->data, fhp, NFSX_V2FH);
 		*fhlenp = NFSX_V2FH;
 	}
 
 	/* Set port number for NFS use. */
-	error = krpc_portmap(mdsin, NFS_PROG, v3 ? NFS_VER3 : NFS_VER2,
-						 &mdsin->sin_port);
+	mdsin->sin_port = nfsport;
 	goto out;
 
 bad:
 	error = EBADRPC;
 
 out:
-	m_freem(m);
+	mbuf_freem(m);
 	return error;
 }
 

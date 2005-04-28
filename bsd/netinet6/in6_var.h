@@ -95,7 +95,7 @@ struct in6_addrlifetime {
 	u_int32_t ia6t_pltime;	/* prefix lifetime */
 };
 
-#ifdef __APPLE_API_PRIVATE
+#ifdef PRIVATE
 struct	in6_ifaddr {
 	struct	ifaddr ia_ifa;		/* protocol-independent info */
 #define	ia_ifp		ia_ifa.ifa_ifp
@@ -115,12 +115,11 @@ struct	in6_ifaddr {
 				     * (for autoconfigured addresses only)
 				     */
 };
-#endif /* __APPLE_API_PRIVATE */
 
+#endif /* PRIVATE */
 /*
  * IPv6 interface statistics, as defined in RFC2465 Ipv6IfStatsEntry (p12).
  */
-#ifdef __APPLE_API_UNSTABLE
 struct in6_ifstat {
 	u_quad_t ifs6_in_receive;	/* # of total input datagram */
 	u_quad_t ifs6_in_hdrerr;	/* # of datagrams with invalid hdr */
@@ -236,7 +235,6 @@ struct icmp6_ifstat {
 	/* ipv6IfIcmpOutGroupMembReductions, # of output MLD done */
 	u_quad_t ifs6_out_mlddone;
 };
-#endif /* __APPLE_API_UNSTABLE */
 
 struct	in6_ifreq {
 	char	ifr_name[IFNAMSIZ];
@@ -345,7 +343,7 @@ struct	in6_rrenumreq {
 #define irr_rrf_decrvalid	irr_flags.prf_rr.decrvalid
 #define irr_rrf_decrprefd	irr_flags.prf_rr.decrprefd
 
-#ifdef __APPLE_API_PRIVATE
+#ifdef KERNEL_PRIVATE
 /*
  * Given a pointer to an in6_ifaddr (ifaddr),
  * return a pointer to the addr as a sockaddr_in6
@@ -359,9 +357,8 @@ struct	in6_rrenumreq {
 #define IFA_DSTIN6(x)	(&((struct sockaddr_in6 *)((x)->ifa_dstaddr))->sin6_addr)
 
 #define IFPR_IN6(x)	(&((struct sockaddr_in6 *)((x)->ifpr_prefix))->sin6_addr)
+#endif KERNEL_PRIVATE
 
-
-#ifdef __APPLE__
 /*
  * Event data, internet6 style.
  */
@@ -391,34 +388,26 @@ struct kev_in6_data {
 #define KEV_INET6_NEW_RTADV_ADDR 	5	/* Autoconf router advertised address has appeared */
 #define KEV_INET6_DEFROUTER 		6	/* Default router dectected by kernel */
 
-#ifdef KERNEL
+#ifdef KERNEL_PRIVATE
 /* Utility function used inside netinet6 kernel code for generating events */
 void in6_post_msg(struct ifnet *, u_long, struct in6_ifaddr *);
-#endif
-#endif /* __APPLE__ */
-#endif /* __APPLE_API_PRIVATE */
+#endif KERNEL_PRIVATE
 
-#ifdef KERNEL
 #define IN6_ARE_MASKED_ADDR_EQUAL(d, a, m)	(	\
 	(((d)->s6_addr32[0] ^ (a)->s6_addr32[0]) & (m)->s6_addr32[0]) == 0 && \
 	(((d)->s6_addr32[1] ^ (a)->s6_addr32[1]) & (m)->s6_addr32[1]) == 0 && \
 	(((d)->s6_addr32[2] ^ (a)->s6_addr32[2]) & (m)->s6_addr32[2]) == 0 && \
 	(((d)->s6_addr32[3] ^ (a)->s6_addr32[3]) & (m)->s6_addr32[3]) == 0 )
-#endif
 
 #define SIOCSIFADDR_IN6		 _IOW('i', 12, struct in6_ifreq)
 #define SIOCGIFADDR_IN6		_IOWR('i', 33, struct in6_ifreq)
 
-#ifdef KERNEL
-#ifdef __APPLE_API_OBSOLETE
 /*
  * SIOCSxxx ioctls should be unused (see comments in in6.c), but
  * we do not shift numbers for binary compatibility.
  */
 #define SIOCSIFDSTADDR_IN6	 _IOW('i', 14, struct in6_ifreq)
 #define SIOCSIFNETMASK_IN6	 _IOW('i', 22, struct in6_ifreq)
-#endif /* __APPLE_API_OBSOLETE */
-#endif
 
 #define SIOCGIFDSTADDR_IN6	_IOWR('i', 34, struct in6_ifreq)
 #define SIOCGIFNETMASK_IN6	_IOWR('i', 37, struct in6_ifreq)
@@ -467,7 +456,6 @@ void in6_post_msg(struct ifnet *, u_long, struct in6_ifaddr *);
 #define SIOCGETMIFCNT_IN6	_IOWR('u', 107, \
 				      struct sioc_mif_req6) /* get pkt cnt per if */
 
-#ifdef KERNEL_PRIVATE
 /*
  * temporary control calls to attach/detach IP to/from an ethernet interface 
  */
@@ -478,8 +466,6 @@ void in6_post_msg(struct ifnet *, u_long, struct in6_ifaddr *);
 #define SIOCLL_STOP _IOWR('i', 131, struct in6_ifreq)    /* deconfigure linklocal from interface */
 #define SIOCAUTOCONF_START _IOWR('i', 132, struct in6_ifreq)    /* accept rtadvd on this interface */
 #define SIOCAUTOCONF_STOP _IOWR('i', 133, struct in6_ifreq)    /* stop accepting rtadv for this interface */
-#endif KERNEL_PRIVATE
-
 
 #define IN6_IFF_ANYCAST		0x01	/* anycast address */
 #define IN6_IFF_TENTATIVE	0x02	/* tentative address */
@@ -503,9 +489,8 @@ void in6_post_msg(struct ifnet *, u_long, struct in6_ifaddr *);
 #define IN6_ARE_SCOPE_EQUAL(a,b) ((a)==(b))
 #endif
 
-#ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
-extern struct in6_ifaddr *in6_ifaddr;
+#ifdef KERNEL_PRIVATE
+extern struct in6_ifaddr *in6_ifaddrs;
 
 extern struct in6_ifstat **in6_ifstat;
 extern size_t in6_ifstatmax;
@@ -514,10 +499,11 @@ extern struct icmp6_ifstat **icmp6_ifstat;
 extern size_t icmp6_ifstatmax;
 #define in6_ifstat_inc(ifp, tag) \
 do {								\
-	if ((ifp) && (ifp)->if_index <= if_index		\
-	 && (ifp)->if_index < in6_ifstatmax			\
-	 && in6_ifstat && in6_ifstat[(ifp)->if_index]) {	\
-		in6_ifstat[(ifp)->if_index]->tag++;		\
+	int _z_index = ifp ? ifp->if_index : 0; \
+	if ((_z_index) && _z_index <= if_index		\
+	 && _z_index < in6_ifstatmax			\
+	 && in6_ifstat && in6_ifstat[_z_index]) {	\
+		in6_ifstat[_z_index]->tag++;		\
 	}							\
 } while (0)
 
@@ -527,7 +513,7 @@ extern u_char inet6ctlerrmap[];
 extern unsigned long in6_maxmtu;
 #ifdef MALLOC_DECLARE
 MALLOC_DECLARE(M_IPMADDR);
-#endif
+#endif MALLOC_DECLARE
 
 /*
  * Macro for finding the internet address structure (in6_ifaddr) corresponding
@@ -548,10 +534,6 @@ do {									\
 	(ia) = (struct in6_ifaddr *)ifa;				\
 } while (0)
 
-#endif /* __APPLE_API_PRIVATE */
-#endif /* KERNEL */
-
-#ifdef __APPLE_API_PRIVATE
 /*
  * Multi-cast membership entry.  One for each group/ifp that a PCB
  * belongs to.
@@ -570,10 +552,7 @@ struct	in6_multi {
 	u_int	in6m_state;		/* state of the membership */
 	u_int	in6m_timer;		/* MLD6 listener report timer */
 };
-#endif /* __APPLE_API_PRIVATE */
 
-#ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
 extern LIST_HEAD(in6_multihead, in6_multi) in6_multihead;
 
 /*
@@ -631,8 +610,8 @@ do { \
 } while(0)
 
 struct	in6_multi *in6_addmulti __P((struct in6_addr *, struct ifnet *,
-				     int *));
-void	in6_delmulti __P((struct in6_multi *));
+				     int *, int));
+void	in6_delmulti __P((struct in6_multi *, int));
 extern int in6_ifindex2scopeid __P((int));
 extern int in6_mask2len __P((struct in6_addr *, u_char *));
 extern void in6_len2mask __P((struct in6_addr *, int));
@@ -640,7 +619,7 @@ int	in6_control __P((struct socket *,
 			 u_long, caddr_t, struct ifnet *, struct proc *));
 int	in6_update_ifa __P((struct ifnet *, struct in6_aliasreq *,
 			    struct in6_ifaddr *));
-void	in6_purgeaddr __P((struct ifaddr *));
+void	in6_purgeaddr __P((struct ifaddr *, int));
 int	in6if_do_dad __P((struct ifnet *));
 void	in6_purgeif __P((struct ifnet *));
 void	in6_savemkludge __P((struct in6_ifaddr *));
@@ -669,7 +648,6 @@ int in6_embedscope __P((struct in6_addr *, const struct sockaddr_in6 *,
 int in6_recoverscope __P((struct sockaddr_in6 *, const struct in6_addr *,
 	struct ifnet *));
 void in6_clearscope __P((struct in6_addr *));
-#endif /* __APPLE_API_PRIVATE */
-#endif /* KERNEL */
+#endif KERNEL_PRIVATE
 
-#endif /* _NETINET6_IN6_VAR_H_ */
+#endif _NETINET6_IN6_VAR_H_

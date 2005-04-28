@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -55,11 +55,16 @@
  */
 
 #include "default_pager_internal.h"
+#include <default_pager/default_pager_object_server.h>
 #include <kern/host.h>
 #include <kern/ledger.h>
 #include <mach/host_info.h>
+#include <mach/host_priv.h>
+#include <mach/vm_map.h>
 #include <ipc/ipc_space.h>
 #include <vm/vm_kern.h>
+#include <vm/vm_map.h>
+#include <vm/vm_protos.h>
 
 char	my_name[] = "(default pager): ";
 
@@ -98,9 +103,9 @@ MACH_PORT_FACE default_pager_external_set; /* Port set for external objects. */
 /* Memory created by default_pager_object_create should mostly be resident. */
 #define DEFAULT_PAGER_EXTERNAL_COUNT	(2)
 
-unsigned int	default_pager_internal_count = DEFAULT_PAGER_INTERNAL_COUNT;
+int	default_pager_internal_count = DEFAULT_PAGER_INTERNAL_COUNT;
 /* Number of "internal" threads. */
-unsigned int	default_pager_external_count = DEFAULT_PAGER_EXTERNAL_COUNT;
+int	default_pager_external_count = DEFAULT_PAGER_EXTERNAL_COUNT;
 /* Number of "external" threads. */
 
 /*
@@ -116,9 +121,9 @@ default_pager_thread_t *start_default_pager_thread(int, boolean_t);
 void	default_pager(void);
 void	default_pager_thread(void *);
 void	default_pager_initialize(void);
-void	default_pager_set_policy(MACH_PORT_FACE);
 boolean_t	dp_parse_argument(char *);	/* forward; */
 unsigned int	d_to_i(char *);			/* forward; */
+boolean_t       strprefix(register const char *s1, register const char *s2);
 
 
 extern int vstruct_def_clshift;
@@ -131,8 +136,7 @@ void
 default_pager(void)
 {
 	int			i, id;
-	static char		here[] = "default_pager";
-	mach_msg_options_t 	server_options;
+	__unused static char here[] = "default_pager";
 	default_pager_thread_t	dpt;
 	kern_return_t kr;
 
@@ -164,7 +168,7 @@ default_pager(void)
 		if (dpt_array[id] == NULL)
 	 		Panic("alloc pager thread");
 		kr = vm_allocate(kernel_map, &((dpt_array[id])->dpt_buffer),
-				 vm_page_size << vstruct_def_clshift, TRUE);
+				 vm_page_size << vstruct_def_clshift, VM_FLAGS_ANYWHERE);
 		if (kr != KERN_SUCCESS)
 			Panic("alloc thread buffer");
 		kr = vm_map_wire(kernel_map, (dpt_array[id])->dpt_buffer, 
@@ -233,7 +237,7 @@ d_to_i(char * arg)
 boolean_t dp_parse_argument(char *av)
 {
 	char *rhs = av;
-	static char	here[] = "dp_parse_argument";
+	__unused static char	here[] = "dp_parse_argument";
 
 	/* Check for '-v' flag */
 
@@ -264,9 +268,8 @@ boolean_t dp_parse_argument(char *av)
 }
 
 int
-start_def_pager(char *bs_device)
+start_def_pager( __unused char *bs_device )
 {
-	int			my_node;
 /*
 	MACH_PORT_FACE		master_device_port;
 */
@@ -275,8 +278,7 @@ start_def_pager(char *bs_device)
 	MACH_PORT_FACE		root_ledger_wired;
 	MACH_PORT_FACE		root_ledger_paged;
 */
-	static char		here[] = "main";
-	int			need_dp_init = 1;
+	__unused static char here[] = "main";
 
 
 
@@ -301,7 +303,11 @@ start_def_pager(char *bs_device)
 	default_pager();
 	
 	/* start the backing store monitor, it runs on a callout thread */
-	thread_call_func(default_pager_backing_store_monitor, NULL, FALSE);
+	default_pager_backing_store_monitor_callout = 
+		thread_call_allocate(default_pager_backing_store_monitor, NULL);
+	if (!default_pager_backing_store_monitor_callout)
+		panic("can't start backing store monitor thread");
+	thread_call_enter(default_pager_backing_store_monitor_callout);
 }
 
 /*
@@ -340,11 +346,35 @@ default_pager_info(
 }
 
 
+kern_return_t
+default_pager_info_64(
+	memory_object_default_t	pager,
+	default_pager_info_64_t	*infop)
+{
+	vm_size_t	pages_total, pages_free;
+
+	if (pager != default_pager_object)
+		return KERN_INVALID_ARGUMENT; 
+
+	bs_global_info(&pages_total, &pages_free);
+
+	infop->dpi_total_space = ptoa_64(pages_total);
+	infop->dpi_free_space = ptoa_64(pages_free);
+	infop->dpi_page_size = vm_page_size;
+	infop->dpi_flags = 0;
+	if (dp_encryption_inited && dp_encryption == TRUE) {
+		infop->dpi_flags |= DPI_ENCRYPTED;
+	}
+
+	return KERN_SUCCESS;
+}
+
+
 void
 default_pager_initialize()
 {
 	kern_return_t		kr;
-	static char		here[] = "default_pager_initialize";
+	__unused static char	here[] = "default_pager_initialize";
 
 
 	/*

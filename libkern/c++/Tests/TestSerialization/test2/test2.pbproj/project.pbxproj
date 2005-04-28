@@ -3,12 +3,15 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 38;
+	objectVersion = 39;
 	objects = {
 		05D29F900382361902CA299A = {
+			fileEncoding = 30;
 			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.cpp.cpp;
 			path = test2_main.cpp;
 			refType = 4;
+			sourceTree = "<group>";
 		};
 		05D29F910382361902CA299A = {
 			fileRef = 05D29F900382361902CA299A;
@@ -30,11 +33,7 @@
 			buildActionMask = 2147483647;
 			files = (
 			);
-			generatedFileNames = (
-			);
 			isa = PBXShellScriptBuildPhase;
-			neededFileNames = (
-			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "script=\"${SYSTEM_DEVELOPER_DIR}/ProjectBuilder Extras/Kernel Extension Support/KEXTPostprocess\";\nif [ -x \"$script\" ]; then\n    . \"$script\"\nfi";
@@ -44,7 +43,12 @@
 			);
 			buildSettings = {
 				COPY_PHASE_STRIP = NO;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_ENABLE_FIX_AND_CONTINUE = YES;
+				GCC_GENERATE_DEBUGGING_SYMBOLS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
 				OPTIMIZATION_CFLAGS = "-O0";
+				ZERO_LINK = YES;
 			};
 			isa = PBXBuildStyle;
 			name = Development;
@@ -54,6 +58,8 @@
 			);
 			buildSettings = {
 				COPY_PHASE_STRIP = YES;
+				GCC_ENABLE_FIX_AND_CONTINUE = NO;
+				ZERO_LINK = NO;
 			};
 			isa = PBXBuildStyle;
 			name = Deployment;
@@ -62,11 +68,7 @@
 			buildActionMask = 2147483647;
 			files = (
 			);
-			generatedFileNames = (
-			);
 			isa = PBXShellScriptBuildPhase;
-			neededFileNames = (
-			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "script=\"${SYSTEM_DEVELOPER_DIR}/ProjectBuilder Extras/Kernel Extension Support/KEXTPreprocess\";\nif [ -x \"$script\" ]; then\n    . \"$script\"\nfi";
@@ -82,10 +84,13 @@
 //083
 //084
 		089C1669FE841209C02AAC07 = {
+			buildSettings = {
+			};
 			buildStyles = (
 				06AA1262FFB20DD611CA28AA,
 				06AA1263FFB20DD611CA28AA,
 			);
+			hasScannedForEncodings = 1;
 			isa = PBXProject;
 			mainGroup = 089C166AFE841209C02AAC07;
 			projectDirPath = "";
@@ -101,6 +106,7 @@
 			isa = PBXGroup;
 			name = test2;
 			refType = 4;
+			sourceTree = "<group>";
 		};
 		089C1673FE841209C02AAC07 = {
 			buildPhases = (
@@ -165,7 +171,6 @@
 </dict>
 </plist>
 ";
-			shouldUseHeadermap = 1;
 		};
 		089C1674FE841209C02AAC07 = {
 			buildActionMask = 2147483647;
@@ -214,9 +219,12 @@
 //0A3
 //0A4
 		0A5A7D55FFB780D811CA28AA = {
+			explicitFileType = wrapper.cfbundle;
+			fallbackIsa = PBXFileReference;
 			isa = PBXBundleReference;
 			path = test2.kext;
 			refType = 3;
+			sourceTree = BUILT_PRODUCTS_DIR;
 		};
 //0A0
 //0A1
@@ -235,6 +243,7 @@
 			isa = PBXGroup;
 			name = Products;
 			refType = 4;
+			sourceTree = "<group>";
 		};
 //190
 //191
@@ -254,6 +263,7 @@
 			name = Source;
 			path = "";
 			refType = 4;
+			sourceTree = "<group>";
 		};
 	};
 	rootObject = 089C1669FE841209C02AAC07;

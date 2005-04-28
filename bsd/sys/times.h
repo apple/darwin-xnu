@@ -63,25 +63,29 @@
 #ifndef	_SYS_TIMES_H_
 #define	_SYS_TIMES_H_
 
-#include <machine/ansi.h>
+#include <sys/appleapiopts.h>
+#include <sys/cdefs.h>
+#include <sys/_types.h>
 
-#ifndef	_BSD_CLOCK_T_DEFINED_
-#define	_BSD_CLOCK_T_DEFINED_
-typedef	_BSD_CLOCK_T_	clock_t;
+/* [XSI] The clock_t type shall be defined as described in <sys/types.h> */
+#ifndef	_CLOCK_T
+#define	_CLOCK_T
+typedef	__darwin_clock_t	clock_t;
 #endif
 
+/*
+ * [XSI] Structure whose address is passed as the first parameter to times()
+ */
 struct tms {
-	clock_t tms_utime;	/* User CPU time */
-	clock_t tms_stime;	/* System CPU time */
-	clock_t tms_cutime;	/* User CPU time of terminated child procs */
-	clock_t tms_cstime;	/* System CPU time of terminated child procs */
+	clock_t	tms_utime;	/* [XSI] User CPU time */
+	clock_t	tms_stime;	/* [XSI] System CPU time */
+	clock_t	tms_cutime;	/* [XSI] Terminated children user CPU time */
+	clock_t	tms_cstime;	/* [XSI] Terminated children System CPU time */
 };
 
 #ifndef KERNEL
-#include <sys/cdefs.h>
-
 __BEGIN_DECLS
-clock_t	times __P((struct tms *));
+clock_t	times(struct tms *);
 __END_DECLS
 #endif
 #endif /* !_SYS_TIMES_H_ */

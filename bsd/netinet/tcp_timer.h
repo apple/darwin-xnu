@@ -106,10 +106,11 @@
  * amount of time probing, then we drop the connection.
  */
 
+#ifdef PRIVATE
+
 /*
  * Time constants.
  */
-#ifdef __APPLE_API_PRIVATE
 #define	TCPTV_MSL	( 30*PR_SLOWHZ)		/* max seg lifetime (hah!) */
 #define	TCPTV_SRTTBASE	0			/* base roundtrip time;
 						   if 0, no idea yet */
@@ -140,6 +141,7 @@ static char *tcptimers[] =
     { "REXMT", "PERSIST", "KEEP", "2MSL" };
 #endif
 
+#ifdef KERNEL
 /*
  * Force a time value to be in a certain range.
  */
@@ -150,8 +152,6 @@ static char *tcptimers[] =
 	else if ((u_long)(tv) > (u_long)(tvmax)) \
 		(tv) = (tvmax); \
 } while(0)
-
-#ifdef KERNEL
 
 #define TCP_KEEPIDLE(tp) \
 	(tp->t_keepidle && (tp->t_inpcb->inp_socket->so_options & SO_KEEPALIVE) ? \
@@ -167,13 +167,13 @@ extern int tcp_msl;
 extern int tcp_ttl;			/* time to live for TCP segs */
 extern int tcp_backoff[];
 
-void	tcp_timer_2msl __P((void *xtp));
-void	tcp_timer_keep __P((void *xtp));
-void	tcp_timer_persist __P((void *xtp));
-void	tcp_timer_rexmt __P((void *xtp));
-void	tcp_timer_delack __P((void *xtp));
+void	tcp_timer_2msl(void *xtp);
+void	tcp_timer_keep(void *xtp);
+void	tcp_timer_persist(void *xtp);
+void	tcp_timer_rexmt(void *xtp);
+void	tcp_timer_delack(void *xtp);
 
 #endif /* KERNEL */
-#endif /* __APPLE_API_PRIVATE */
-
+#endif /* PRIVATE */
 #endif /* !_NETINET_TCP_TIMER_H_ */
+

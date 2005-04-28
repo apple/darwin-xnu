@@ -58,13 +58,10 @@
  *
  */
 
+#ifdef	XNU_KERNEL_PRIVATE
+
 #ifndef	_KERN_MACH_PARAM_H_
 #define _KERN_MACH_PARAM_H_
-
-#include <sys/appleapiopts.h>
-
-#ifdef	__APPLE_API_PRIVATE
-#ifdef	__APPLE_API_EVOLVING
 
 #define THREAD_MAX		2560	/* Max number of threads */
 #define THREAD_CHUNK	64		/* Allocation chunk */
@@ -86,7 +83,6 @@
 
 #define SEMAPHORE_MAX   (PORT_MAX >> 1)	/* Maximum number of semaphores */
 
-#endif	/* __APPLE_API_EVOLVING */
-#endif	/* __APPLE_API_PRIVATE */
-
 #endif	/* _KERN_MACH_PARAM_H_ */
+
+#endif	/* XNU_KERNEL_PRIVATE */

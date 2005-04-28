@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -60,15 +60,21 @@
  *	its kernel stack.  Some architectures may need
  *	to save more state in the pcb for these traps.
  */
+typedef	void	mach_munge_t(const void *, void *);
 
 typedef struct {
 	int			mach_trap_arg_count;
 	int			(*mach_trap_function)(void);
-	boolean_t	mach_trap_stack;
+#if defined(__i386__)
+	boolean_t		mach_trap_stack;
+#else 
+	mach_munge_t		*mach_trap_arg_munge32; /* system call arguments for 32-bit */
+	mach_munge_t		*mach_trap_arg_munge64; /* system call arguments for 64-bit */
+#endif
 #if	!MACH_ASSERT
 	int			mach_trap_unused;
 #else
-	char*		mach_trap_name;
+	const char*		mach_trap_name;
 #endif /* !MACH_ASSERT */
 } mach_trap_t;
 
@@ -76,15 +82,25 @@ typedef struct {
 
 
 extern mach_trap_t		mach_trap_table[];
-extern int				mach_trap_count;
-extern kern_return_t	kern_invalid(void);
+extern int			mach_trap_count;
 
+#if defined(__i386__)
 #if	!MACH_ASSERT
-#define	MACH_TRAP(name, arg_count)			\
+#define	MACH_TRAP(name, arg_count, munge32, munge64)	\
 		{ (arg_count), (int (*)(void)) (name), FALSE, 0 }
 #else
-#define MACH_TRAP(name, arg_count)			\
+#define MACH_TRAP(name, arg_count, munge32, munge64)		\
 		{ (arg_count), (int (*)(void)) (name), FALSE, #name }
 #endif /* !MACH_ASSERT */
+#else  /* !defined(__i386__) */
+#if	!MACH_ASSERT
+#define	MACH_TRAP(name, arg_count, munge32, munge64)	\
+		{ (arg_count), (int (*)(void)) (name), (munge32), (munge64), 0 }
+#else
+#define MACH_TRAP(name, arg_count, munge32, munge64)		\
+  		{ (arg_count), (int (*)(void)) (name), (munge32), (munge64), #name }
+#endif /* !MACH_ASSERT */
+
+#endif /* !defined(__i386__) */
 
 #endif	/* _KERN_SYSCALL_SW_H_ */

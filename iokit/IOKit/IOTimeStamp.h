@@ -147,10 +147,6 @@ IOTimeStamp(unsigned int csc,
 /* DBG_IOKIT/DBG_IOMDESC codes */
 
 /* DBG_IOKIT/DBG_IOPOWER codes */
-#define IOPOWER_ROOT	1	/* 0x05100004 */
-#define IOPOWER_WAKE	2	/* 0x05100008 */
-#define IOPOWER_STATE	3	/* 0x0510000c */
-#define IOPOWER_ACK	4	/* 0x05100010 */
-#define IOPOWER_CLIENT  5	/* 0x05100014 */
+// See IOKit/pwr_mgt/IOPMlog.h for the power management codes
 
 #endif /* ! IOKIT_IOTIMESTAMP_H */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2002-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -22,7 +22,7 @@
 #ifndef	_MACHINE_UCONTEXT_H_
 #define	_MACHINE_UCONTEXT_H_
 
-#if defined (__ppc__)
+#if defined (__ppc__) || defined (__ppc64__)
 #include "ppc/ucontext.h"
 #elif defined (__i386__)
 #include "i386/ucontext.h"

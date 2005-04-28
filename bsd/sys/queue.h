@@ -539,8 +539,8 @@ remque(void *a)
 
 #else /* !__GNUC__ */
 
-void	insque __P((void *a, void *b));
-void	remque __P((void *a));
+void	insque(void *a, void *b);
+void	remque(void *a);
 
 #endif /* __GNUC__ */
 

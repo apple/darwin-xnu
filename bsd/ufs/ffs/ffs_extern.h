@@ -80,13 +80,12 @@
 #endif /* __APPLE_API_UNSTABLE */
 
 struct buf;
-struct fid;
 struct fs;
 struct inode;
 struct mount;
 struct nameidata;
 struct proc;
-struct statfs;
+struct vfsstatfs;
 struct timeval;
 struct ucred;
 struct uio;
@@ -96,51 +95,46 @@ struct vfsconf;
 
 #ifdef __APPLE_API_PRIVATE
 __BEGIN_DECLS
-int	ffs_alloc __P((struct inode *,
-	    ufs_daddr_t, ufs_daddr_t, int, struct ucred *, ufs_daddr_t *));
-int	ffs_balloc __P((struct inode *,
-	    ufs_daddr_t, int, struct ucred *, struct buf **, int, int *));
-int	ffs_blkatoff __P((struct vop_blkatoff_args *));
-int	ffs_blkfree __P((struct inode *, ufs_daddr_t, long));
-ufs_daddr_t ffs_blkpref __P((struct inode *, ufs_daddr_t, int, ufs_daddr_t *));
-int	ffs_bmap __P((struct vop_bmap_args *));
-void	ffs_clrblock __P((struct fs *, u_char *, ufs_daddr_t));
-int	ffs_fhtovp __P((struct mount *, struct fid *, struct mbuf *,
-	    struct vnode **, int *, struct ucred **));
-void	ffs_fragacct __P((struct fs *, int, int32_t [], int));
-int	ffs_fsync __P((struct vop_fsync_args *));
-int	ffs_init __P((struct vfsconf *));
-int	ffs_isblock __P((struct fs *, u_char *, ufs_daddr_t));
-int	ffs_mount __P((struct mount *,
-	    char *, caddr_t, struct nameidata *, struct proc *));
-int	ffs_mountfs __P((struct vnode *, struct mount *, struct proc *));
-int	ffs_mountroot __P((void));
-int	ffs_read __P((struct vop_read_args *));
-int	ffs_reallocblks __P((struct vop_reallocblks_args *));
-int	ffs_realloccg __P((struct inode *,
-	    ufs_daddr_t, ufs_daddr_t, int, int, struct ucred *, struct buf **));
-int	ffs_reclaim __P((struct vop_reclaim_args *));
-void	ffs_setblock __P((struct fs *, u_char *, ufs_daddr_t));
-int	ffs_statfs __P((struct mount *, struct statfs *, struct proc *));
-int	ffs_sync __P((struct mount *, int, struct ucred *, struct proc *));
-int	ffs_sysctl __P((int *, u_int, void *, size_t *, void *, size_t,
-	    struct proc *));
-int	ffs_truncate __P((struct vop_truncate_args *));
-int	ffs_unmount __P((struct mount *, int, struct proc *));
-int	ffs_update __P((struct vop_update_args *));
-int	ffs_valloc __P((struct vop_valloc_args *));
-int	ffs_vfree __P((struct vop_vfree_args *));
-int	ffs_vget __P((struct mount *, void *, struct vnode **));
-int	ffs_vptofh __P((struct vnode *, struct fid *));
-int	ffs_write __P((struct vop_write_args *));
-int ffs_pagein __P((struct vop_pagein_args *));
-int ffs_pageout __P((struct vop_pageout_args *));
-int ffs_blktooff __P((struct vop_blktooff_args *));
-int ffs_offtoblk __P((struct vop_offtoblk_args *));
+int	ffs_fsync_internal(vnode_t, int);
 
-#if DIAGNOSTIC
-void	ffs_checkoverlap __P((struct buf *, struct inode *));
-#endif
+int	ffs_blkatoff(vnode_t, off_t, char **, buf_t *);
+
+int	ffs_alloc(struct inode *,
+	    ufs_daddr_t, ufs_daddr_t, int, struct ucred *, ufs_daddr_t *);
+int	ffs_balloc(struct inode *,
+	    ufs_daddr_t, int, struct ucred *, struct buf **, int, int *);
+void	ffs_blkfree(struct inode *, ufs_daddr_t, long);
+ufs_daddr_t ffs_blkpref(struct inode *, ufs_daddr_t, int, ufs_daddr_t *);
+void	ffs_clrblock(struct fs *, u_char *, ufs_daddr_t);
+int	ffs_fhtovp(struct mount *, int, unsigned char *, struct vnode **, vfs_context_t);
+void	ffs_fragacct(struct fs *, int, int32_t [], int);
+int	ffs_fsync(struct vnop_fsync_args *);
+int	ffs_init(struct vfsconf *);
+int	ffs_isblock(struct fs *, u_char *, ufs_daddr_t);
+int	ffs_mount(struct mount *, vnode_t , user_addr_t, vfs_context_t);
+int	ffs_mountfs(struct vnode *, struct mount *, vfs_context_t);
+int	ffs_mountroot(mount_t, vnode_t, vfs_context_t);
+int	ffs_read(struct vnop_read_args *);
+int	ffs_realloccg(struct inode *,
+	    ufs_daddr_t, ufs_daddr_t, int, int, struct ucred *, struct buf **);
+int	ffs_reclaim(struct vnop_reclaim_args *);
+void	ffs_setblock(struct fs *, u_char *, ufs_daddr_t);
+int	ffs_vfs_getattr(struct mount *, struct vfs_attr *, vfs_context_t);
+int	ffs_vfs_setattr(struct mount *, struct vfs_attr *, vfs_context_t);
+int	ffs_sync(struct mount *, int, vfs_context_t);
+int	ffs_sysctl(int *, u_int, user_addr_t, size_t *, user_addr_t, size_t, vfs_context_t);
+int	ffs_unmount(struct mount *, int, vfs_context_t);
+int	ffs_update(struct vnode *, struct timeval *, struct timeval *, int);
+int	ffs_valloc(vnode_t dvp, mode_t mode, kauth_cred_t cred, vnode_t *vpp);
+int	ffs_vfree(struct vnode *vp, ino_t ino, int mode);
+int	ffs_vget(struct mount *, ino64_t, struct vnode **, vfs_context_t);
+int	ffs_vptofh(struct vnode *, int *, unsigned char *, vfs_context_t);
+int	ffs_write(struct vnop_write_args *);
+int ffs_pagein(struct vnop_pagein_args *);
+int ffs_pageout(struct vnop_pageout_args *);
+int ffs_blktooff(struct vnop_blktooff_args *);
+int ffs_offtoblk(struct vnop_offtoblk_args *);
+
 __END_DECLS
 
 extern int (**ffs_vnodeop_p)(void *);

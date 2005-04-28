@@ -80,6 +80,6 @@ extern boolean_t selector_check(
 			int		sel,
 			int		type);
 extern void	user_ldt_free(
-			user_ldt_t	ldt);
+			user_ldt_t	uldt);
 
 #endif	/* _I386_USER_LDT_H_ */

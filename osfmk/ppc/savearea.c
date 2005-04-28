@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -24,7 +24,6 @@
  *
  */
 
-#include <cpus.h>
 #include <debug.h>
 #include <mach_kgdb.h>
 #include <mach_vm_debug.h>
@@ -204,7 +203,7 @@ void savearea_init(vm_offset_t addr) {
 /*
  * This will populate the local list  and get the first one for the system
  */ 	
-	per_proc_info[0].next_savearea = (vm_offset_t)save_get();
+	getPerProc()->next_savearea = (vm_offset_t)save_get();
 
 /*
  *	The system is now able to take interruptions
@@ -309,7 +308,7 @@ void save_adjust(void) {
 /*
  *		Fake up information to make the saveareas look like a zone
  */
-
+void
 save_fake_zone_info(int *count, vm_size_t *cur_size, vm_size_t *max_size, vm_size_t *elem_size,
 		    vm_size_t *alloc_size, int *collectable, int *exhaustable)
 {

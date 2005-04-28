@@ -23,7 +23,7 @@
 #include <pexpert/boot.h>
 
 typedef struct {
-    char *        name;
+    const char *  name;
     unsigned long length;
     void *        value;
 } prop_init;
@@ -40,15 +40,22 @@ typedef struct {
     long * address;
 } data_init;
 
+typedef struct {
+    long         two;
+    const char * name;
+    void *       data;
+} string_init;
+
 typedef union {
     prop_init propInit;
     node_init nodeInit;
     data_init dataInit;
+    string_init stringInit;
 } dt_init;
 
 typedef struct {
     long   length;
-    long * address;
+    void * address;
 } dt_data;
 
 extern boot_args fakePPCBootArgs;
@@ -58,19 +65,22 @@ void   printdt(void);
 void * createdt(dt_init * template, long * retSize);
 
 #define NODE(props,children)  \
-        {{(char *)0, props, (void *)children }}
+        { .nodeInit = {0, props, children }}
 
 #define INTPROP(name,value)   \
-        {{name, 4, (void *)value }}
+        { .propInit = {name, 4, (void *)(uintptr_t)value }}
 
 #define PROP(name,value)      \
-        {{name, sizeof( value), value }}
+        { .propInit = {name, sizeof( value), (void *)(uintptr_t)value }}
+
+#define STRINGPROP(name,value) \
+        { .stringInit = { 2, name, (void *)&(value) }}
 
 #define NULLPROP(name)        \
-        {{name, 0, (void *)0 }}
+        { propInit = {name, 0, (void *)0 }}
 
 #define DATAPROP(data)    \
-		{{(char *)1, (long)&((data).length), (void *)&((data).address) }}
+	{ .dataInit = {1, &((data).length), (long *) &((data).address) }}
         
 #define DATANODE(data)    \
-		{{(char *)1, (long)&((data).length), (void *)&((data).address) }}
+	{ .dataInit = {1, &((data).length), (long *)&((data).address) }}

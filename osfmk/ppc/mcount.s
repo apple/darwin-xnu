@@ -21,7 +21,6 @@
  */
 #include <ppc/asm.h>
 #include <ppc/proc_reg.h>
-#include <cpus.h>
 #include <assym.s>
 #include <debug.h>
 #include <mach/ppc/vm_param.h>
@@ -50,7 +49,8 @@ mcount:
 		rlwinm	r8,r9,0,MSR_EE_BIT+1,MSR_EE_BIT-1	; Turn off interruptions
 		mtmsr	r8									; Update msr	
 		isync		
-		mfsprg	r7,0								; Get per_proc
+		mfsprg	r7,1								; Get the current activation
+		lwz		r7,ACT_PER_PROC(r7)					; Get the per_proc block
 		lhz		r6,PP_CPU_FLAGS(r7)					; Get  cpu flags 
 		ori		r5,r6,mcountOff						; 
 		cmplw	r5,r6								; is mount off
@@ -60,7 +60,8 @@ mcount:
 		mr r4, r0
 		bl	_mcount									; Call the C routine
 		lwz	r9,FM_ARG0(r1)
-		mfsprg	r7,0								; Get per-proc block
+		mfsprg	r7,1								; Get the current activation
+		lwz		r7,ACT_PER_PROC(r7)					; Get the per_proc block
 		lhz		r6,PP_CPU_FLAGS(r7)					; Get CPU number 
 		li		r5,mcountOff						; 
 		andc		r6,r6,r5						; Clear mcount_off

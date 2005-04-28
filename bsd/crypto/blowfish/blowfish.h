@@ -80,9 +80,9 @@ typedef struct bf_key_st {
 	BF_LONG S[4*256];
 } BF_KEY;
 
-void BF_set_key __P((BF_KEY *, int, unsigned char *));
-void BF_encrypt __P((BF_LONG *, BF_KEY *));
-void BF_decrypt __P((BF_LONG *, BF_KEY *));
+void BF_set_key(BF_KEY *, int, unsigned char *);
+void BF_encrypt(BF_LONG *, BF_KEY *);
+void BF_decrypt(BF_LONG *, BF_KEY *);
 void BF_cbc_encrypt(const unsigned char *, unsigned char *, long,
 		    const BF_KEY *, unsigned char *, int);
 

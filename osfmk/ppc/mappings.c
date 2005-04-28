@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -30,31 +30,31 @@
  *
  */
 
-#include <cpus.h>
 #include <debug.h>
 #include <mach_kgdb.h>
 #include <mach_vm_debug.h>
 #include <db_machine_commands.h>
 
-#include <kern/thread.h>
-#include <kern/thread_act.h>
+#include <mach/mach_types.h>
 #include <mach/vm_attributes.h>
 #include <mach/vm_param.h>
+
+#include <kern/kern_types.h>
+#include <kern/thread.h>
+#include <kern/spl.h>
+#include <kern/misc_protos.h>
+
 #include <vm/vm_fault.h>
 #include <vm/vm_kern.h>
 #include <vm/vm_map.h>
 #include <vm/vm_page.h>
-#include <kern/spl.h>
+#include <vm/pmap.h>
 
-#include <kern/misc_protos.h>
 #include <ppc/exception.h>
 #include <ppc/misc_protos.h>
 #include <ppc/proc_reg.h>
-
-#include <vm/pmap.h>
 #include <ppc/pmap.h>
 #include <ppc/mem.h>
-
 #include <ppc/new_screen.h>
 #include <ppc/Firmware.h>
 #include <ppc/mappings.h>
@@ -74,21 +74,25 @@ int ppc_max_adrsp;									/* Maximum address spaces */
 addr64_t		*mapdebug;							/* (BRINGUP) */
 extern unsigned int DebugWork;						/* (BRINGUP) */
 						
-extern unsigned int	hash_table_size;						
-
 void mapping_verify(void);
 void mapping_phys_unused(ppnum_t pa);
 
 /*
- *	ppc_prot translates from the mach representation of protections to the PPC version.
- *  We also allow for a direct setting of the protection bits. This extends the mach
- *	concepts to allow the greater control we need for Virtual Machines (VMM).
- *	Calculation of it like this saves a memory reference - and maybe a couple of microseconds.
- *	It eliminates the used of this table.
- *	unsigned char ppc_prot[16] = { 0, 3, 2, 2, 3, 3, 2, 2, 0, 1, 2, 3, 0, 1, 2, 3 };
+ *  ppc_prot translates Mach's representation of protections to that of the PPC hardware.
+ *  For Virtual Machines (VMM), we also provide translation entries where the output is
+ *  the same as the input, allowing direct specification of PPC protections. Mach's 
+ *	representations are always in the range 0..7, so they always fall into the first
+ *	8 table entries; direct translations are placed in the range 8..16, so they fall into
+ *  the second half of the table.
+ *
+ *  ***NOTE*** I've commented out the Mach->PPC translations that would set page-level
+ *             no-execute, pending updates to the VM layer that will properly enable its
+ *             use.  Bob Abeles 08.02.04
  */
-
-#define ppc_prot(p) ((0xE4E4AFAC >> (p << 1)) & 3)
+ 
+//unsigned char ppc_prot[16] = { 4, 7, 6, 6, 3, 3, 2, 2,		/* Mach -> PPC translations */
+unsigned char ppc_prot[16] = { 0, 3, 2, 2, 3, 3, 2, 2,		/* Mach -> PPC translations */
+                               0, 1, 2, 3, 4, 5, 6, 7 };	/* VMM direct  translations */
 
 /*
  *			About PPC VSID generation:
@@ -155,15 +159,15 @@ void mapping_init(void) {
 	ppc_max_adrsp = maxAdrSp;									/* Set maximum address spaces */			
 	
 	maxeff = 32;												/* Assume 32-bit */
-	if(per_proc_info[0].pf.Available & pf64Bit) maxeff = 64;	/* Is this a 64-bit machine? */
+	if(PerProcTable[0].ppe_vaddr->pf.Available & pf64Bit) maxeff = 64;	/* Is this a 64-bit machine? */
 	
-	rwidth = per_proc_info[0].pf.pfMaxVAddr - maxAdrSpb;		/* Reduce address width by width of address space ID */
+	rwidth = PerProcTable[0].ppe_vaddr->pf.pfMaxVAddr - maxAdrSpb;		/* Reduce address width by width of address space ID */
 	if(rwidth > maxeff) rwidth = maxeff;						/* If we still have more virtual than effective, clamp at effective */
 	
 	vm_max_address = 0xFFFFFFFFFFFFFFFFULL >> (64 - rwidth);		/* Get maximum effective address supported */
-	vm_max_physical = 0xFFFFFFFFFFFFFFFFULL >> (64 - per_proc_info[0].pf.pfMaxPAddr);	/* Get maximum physical address supported */
+	vm_max_physical = 0xFFFFFFFFFFFFFFFFULL >> (64 - PerProcTable[0].ppe_vaddr->pf.pfMaxPAddr);	/* Get maximum physical address supported */
 	
-	if(per_proc_info[0].pf.Available & pf64Bit) {				/* Are we 64 bit? */
+	if(PerProcTable[0].ppe_vaddr->pf.Available & pf64Bit) {				/* Are we 64 bit? */
 		tmp = 12;												/* Size of hash space */
 	}
 	else {
@@ -197,27 +201,55 @@ void mapping_init(void) {
 addr64_t mapping_remove(pmap_t pmap, addr64_t va) {		/* Remove a single mapping for this VADDR 
 														   Returns TRUE if a mapping was found to remove */
 
-	mapping		*mp;
+	mapping_t	*mp;
 	addr64_t	nextva;
+	ppnum_t		pgaddr;
 	
-	disable_preemption();								/* Don't change threads */
-
-	while(1) {											/* Keep trying until we truely fail */
+	va &= ~PAGE_MASK;									/* Scrub noise bits */
+	
+	do {												/* Keep trying until we truely fail */
 		mp = hw_rem_map(pmap, va, &nextva);				/* Remove a mapping from this pmap */
-		if(((unsigned int)mp & mapRetCode) != mapRtRemove) break;	/* If it is gone, we are done */
-	}
-
-	enable_preemption();								/* Thread change ok */
-
-	if(!mp) return (nextva | 1);						/* Nothing found to unmap */
-
-	if((unsigned int)mp & mapRetCode) {					/* Was there a failure? */
+	} while (mapRtRemove == ((unsigned int)mp & mapRetCode));
 	
-		panic("mapping_remove: hw_rem_map failed - pmap = %08X, va = %016llX, code = %08X\n",
-			pmap, va, mp);
+	switch ((unsigned int)mp & mapRetCode) {
+		case mapRtOK:
+			break;										/* Mapping removed */
+		case mapRtNotFnd:
+			return (nextva | 1);						/* Nothing found to unmap */
+		default:
+			panic("mapping_remove: hw_rem_map failed - pmap = %08X, va = %016llX, code = %08X\n",
+				pmap, va, mp);
+			break;
 	}
+
+	pgaddr = mp->mpPAddr;								/* Get page number from mapping */
 	
 	mapping_free(mp);									/* Add mapping to the free list */
+	
+	if ((pmap->pmapFlags & pmapVMhost) && pmap->pmapVmmExt) {
+														/* If this is an assisted host, scrub any guest mappings */
+		unsigned int  idx;
+		phys_entry_t *physent = mapping_phys_lookup(pgaddr, &idx);
+														/* Get physent for our physical page */
+		if (!physent) {									/* No physent, could be in I/O area, so exit */
+			return (nextva);
+		}
+		
+		do {											/* Iterate 'till all guest mappings are gone */
+			mp = hw_scrub_guest(physent, pmap);			/* Attempt to scrub a guest mapping */
+			switch ((unsigned int)mp & mapRetCode) {
+				case mapRtGuest:						/* Found a guest mapping */
+				case mapRtNotFnd:						/* Mapping was there, but disappeared, must retry */
+				case mapRtEmpty:						/* No guest mappings left to scrub */
+					break;
+				default:
+					panic("mapping_remove: hw_scrub_guest failed - physent = %08X, code = %08X\n",
+						physent, mp);					/* Cry havoc, cry wrack,
+															at least we die with harness on our backs */
+					break;
+			}
+		} while (mapRtEmpty != ((unsigned int)mp & mapRetCode));
+	}
 
 	return nextva;										/* Tell them we did it */
 }
@@ -259,18 +291,34 @@ addr64_t mapping_remove(pmap_t pmap, addr64_t va) {		/* Remove a single mapping 
  
 addr64_t mapping_make(pmap_t pmap, addr64_t va, ppnum_t pa, unsigned int flags, unsigned int size, vm_prot_t prot) {	/* Make an address mapping */
 
-	register mapping *mp;
-	addr64_t colladdr;
-	unsigned int pindex, mflags, pattr, wimg;
-	phys_entry *physent;
-	int i, nlists;
-
-	disable_preemption();										/* Don't change threads */
+	register mapping_t *mp;
+	addr64_t colladdr, psmask;
+	unsigned int pindex, mflags, pattr, wimg, rc;
+	phys_entry_t *physent;
+	int nlists, pcf;
 
 	pindex = 0;
 	
 	mflags = 0x01000000;										/* Start building mpFlags field (busy count = 1) */
+
+	pcf = (flags & mmFlgPcfg) >> 24;							/* Get the physical page config index */
+	if(!(pPcfg[pcf].pcfFlags)) {								/* Validate requested physical page configuration */
+		panic("mapping_make: invalid physical page configuration request - pmap = %08X, va = %016llX, cfg = %d\n",
+			pmap, va, pcf);
+	}
 	
+	psmask = (1ULL << pPcfg[pcf].pcfPSize) - 1;					/* Mask to isolate any offset into a page */
+	if(va & psmask) {											/* Make sure we are page aligned on virtual */
+		panic("mapping_make: attempt to map unaligned vaddr - pmap = %08X, va = %016llX, cfg = %d\n",
+			pmap, va, pcf);
+	}
+	if(((addr64_t)pa << 12) & psmask) {							/* Make sure we are page aligned on physical */
+		panic("mapping_make: attempt to map unaligned paddr - pmap = %08X, pa = %016llX, cfg = %d\n",
+			pmap, pa, pcf);
+	}
+	
+	mflags |= (pcf << (31-mpPcfgb));							/* Insert physical page configuration index */
+
 	if(!(flags & mmFlgBlock)) {									/* Is this a block map? */
 
 		size = 1;												/* Set size to 1 page if not block */
@@ -278,11 +326,10 @@ addr64_t mapping_make(pmap_t pmap, addr64_t va, ppnum_t pa, unsigned int flags, 
 		physent = mapping_phys_lookup(pa, &pindex);				/* Get physical entry */
 		if(!physent) {											/* Did we find the physical page? */
 			mflags |= mpBlock;									/* Force this to a block if no physent */
-			size = 1;											/* Force size to 1 page */
 			pattr = 0;											/* Assume normal, non-I/O memory */
 			if((pa & 0xFFF80000) == 0x00080000) pattr = mmFlgCInhib | mmFlgGuarded;	/* If this page is in I/O range, set I/O attributes */
 		}
-		else pattr = ((physent->ppLink & (ppI | ppG)) >> 4);	/* Get the default attributes from physent */
+		else pattr = ((physent->ppLink & (ppI | ppG)) >> 60);	/* Get the default attributes from physent */
 		
 		if(flags & mmFlgUseAttr) pattr = flags & (mmFlgCInhib | mmFlgGuarded);	/* Use requested attributes */
 	}
@@ -310,40 +357,42 @@ addr64_t mapping_make(pmap_t pmap, addr64_t va, ppnum_t pa, unsigned int flags, 
                                                                 /* the mapping is zero except that the mpLists field is set */
 	mp->mpFlags |= mflags;										/* Add in the rest of the flags to mpLists */
 	mp->mpSpace = pmap->space;									/* Set the address space/pmap lookup ID */
-	mp->mpBSize = size;											/* Set the size */
+	mp->u.mpBSize = size;										/* Set the size */
 	mp->mpPte = 0;												/* Set the PTE invalid */
 	mp->mpPAddr = pa;											/* Set the physical page number */
-	mp->mpVAddr = (va & ~mpHWFlags) | (wimg << 3) | ppc_prot(prot);	/* Add the protection and attributes to the field */
+	mp->mpVAddr = (va & ~mpHWFlags) | (wimg << 3)				/* Add the protection and attributes to the field */
+		| ((PerProcTable[0].ppe_vaddr->pf.Available & pf64Bit)?
+			getProtPPC(prot) : (getProtPPC(prot) & 0x3));		/* Mask off no-execute control for 32-bit machines */			
 	
 	while(1) {													/* Keep trying... */
 		colladdr = hw_add_map(pmap, mp);						/* Go add the mapping to the pmap */
-		if(!colladdr) {											/* All is ok... */
-			enable_preemption();								/* Ok to switch around here */
-			return 0;											/* Return... */
+		rc = colladdr & mapRetCode;								/* Separate return code */
+		colladdr &= ~mapRetCode;								/* Clean up collision effective address */
+		
+		switch (rc) {
+			case mapRtOK:
+				return 0;										/* Mapping added successfully */
+				
+			case mapRtRemove:									/* Remove in progress */
+				(void)mapping_remove(pmap, colladdr);			/* Lend a helping hand to another CPU doing block removal */
+				continue;										/* Retry mapping add */
+				
+			case mapRtMapDup:									/* Identical mapping already present */
+				mapping_free(mp);								/* Free duplicate mapping */
+				return 0;										/* Return success */
+				
+			case mapRtSmash:									/* Mapping already present but does not match new mapping */
+				mapping_free(mp);								/* Free duplicate mapping */
+				return (colladdr | 1);							/* Return colliding address, with some dirt added to avoid
+																    confusion if effective address is 0 */
+			default:
+				panic("mapping_make: hw_add_map failed - collision addr = %016llX, code = %02X, pmap = %08X, va = %016llX, mapping = %08X\n",
+					colladdr, rc, pmap, va, mp);				/* Die dead */
 		}
 		
-		if((colladdr & mapRetCode) == mapRtRemove) {			/* Is our target being removed? */
-			(void)mapping_remove(pmap, colladdr);				/* Yes, go help out */
-			continue;											/* Try to add it now */
-		}
-		
-		if((colladdr & mapRetCode) == mapRtMapDup) {			/* Is our target already mapped (collision mapping must be identical)? */
-			mapping_free(mp);									/* Return mapping to the free list */
-			enable_preemption();								/* Ok to switch around here */
-			return 0;											/* Normal return */
-		}
-		
-		if(colladdr != mapRtBadLk) {							/* Did it collide? */
-			mapping_free(mp);									/* Yeah, toss the pending mapping */
-			enable_preemption();								/* Ok to switch around here */
-			return colladdr;									/* Pass back the overlapping address */
-		}
-			
-		panic("mapping_make: hw_add_map failed - code = %08X, pmap = %08X, va = %016llX, mapping = %08X\n",
-			colladdr, pmap, va, mp);							/* Die dead */
 	}
 	
-	return 1;													/* Leave... */
+	return 1;													/* Unreachable, but pleases compiler */
 }
 
 
@@ -364,16 +413,16 @@ addr64_t mapping_make(pmap_t pmap, addr64_t va, ppnum_t pa, unsigned int flags, 
  *
  */
  
-mapping *mapping_find(pmap_t pmap, addr64_t va, addr64_t *nextva, int full) {	/* Make an address mapping */
+mapping_t *mapping_find(pmap_t pmap, addr64_t va, addr64_t *nextva, int full) {	/* Make an address mapping */
 
-	register mapping *mp;
+	register mapping_t *mp;
 	addr64_t	curva;
 	pmap_t	curpmap;
 	int	nestdepth;
 
 	curpmap = pmap;												/* Remember entry */
 	nestdepth = 0;												/* Set nest depth */
-	curva = (addr64_t)va;											/* Set current va */
+	curva = (addr64_t)va;										/* Set current va */
 
 	while(1) {
 
@@ -382,9 +431,10 @@ mapping *mapping_find(pmap_t pmap, addr64_t va, addr64_t *nextva, int full) {	/*
 			panic("mapping_find: pmap lock failure - rc = %08X, pmap = %08X\n", mp, curpmap);	/* Die... */
 		}
 		
-		if(!mp || !(mp->mpFlags & mpNest) || !full) break;		/* Are we a nest or are we only going one deep? */
+		if(!mp || ((mp->mpFlags & mpType) < mpMinSpecial) || !full) break;		/* Are we done looking? */
 
-		if(mp->mpFlags & mpSpecial) {							/* Don't chain through a special mapping */
+		if((mp->mpFlags & mpType) != mpNest) {					/* Don't chain through anything other than a nested pmap */
+			mapping_drop_busy(mp);								/* We have everything we need from the mapping */
 			mp = 0;												/* Set not found */
 			break;
 		}
@@ -404,7 +454,7 @@ mapping *mapping_find(pmap_t pmap, addr64_t va, addr64_t *nextva, int full) {	/*
 }
 
 /*
- *		 kern_return_t mapping_protect(pmap_t pmap, addt_t va, vm_prot_t prot, addr64_t *nextva) - change the protection of a virtual page
+ *		void mapping_protect(pmap_t pmap, addt_t va, vm_prot_t prot, addr64_t *nextva) - change the protection of a virtual page
  *
  *		This routine takes a pmap and virtual address and changes
  *		the protection.  If there are PTEs associated with the mappings, they will be invalidated before
@@ -416,22 +466,19 @@ mapping *mapping_find(pmap_t pmap, addr64_t va, addr64_t *nextva, int full) {	/*
  *
  */
 
-int mapping_protect(pmap_t pmap, addr64_t va, vm_prot_t prot, addr64_t *nextva) {	/* Change protection of a virtual page */
+void
+mapping_protect(pmap_t pmap, addr64_t va, vm_prot_t prot, addr64_t *nextva) {	/* Change protection of a virtual page */
 
 	int	ret;
 	
-	ret = hw_protect(pmap, va, ppc_prot(prot), nextva);	/* Try to change the protect here */
+	ret = hw_protect(pmap, va, getProtPPC(prot), nextva);	/* Try to change the protect here */
 
 	switch (ret) {								/* Decode return code */
 	
 		case mapRtOK:							/* Changed */
 		case mapRtNotFnd:						/* Didn't find it */
-			return mapRtOK;						/* Ok, return... */
-			break;
-
 		case mapRtBlock:						/* Block map, just ignore request */
 		case mapRtNest:							/* Nested pmap, just ignore request */
-			return ret;							/* Pass back return code */
 			break;
 			
 		default:
@@ -457,14 +504,15 @@ int mapping_protect(pmap_t pmap, addr64_t va, vm_prot_t prot, addr64_t *nextva) 
 void mapping_protect_phys(ppnum_t pa, vm_prot_t prot) {	/* Change protection of all mappings to page */
 	
 	unsigned int pindex;
-	phys_entry *physent;
+	phys_entry_t *physent;
 	
 	physent = mapping_phys_lookup(pa, &pindex);					/* Get physical entry */
 	if(!physent) {												/* Did we find the physical page? */
 		panic("mapping_protect_phys: invalid physical page %08X\n", pa);
 	}
 
-	hw_walk_phys(physent, hwpSPrtPhy, hwpSPrtMap, hwpNoop, ppc_prot(prot));	/* Set the new protection for page and mappings */
+	hw_walk_phys(physent, hwpNoop, hwpSPrtMap, hwpNoop,
+	             getProtPPC(prot), hwpPurgePTE);				/* Set the new protection for page and mappings */
 
 	return;														/* Leave... */
 }
@@ -480,14 +528,15 @@ void mapping_protect_phys(ppnum_t pa, vm_prot_t prot) {	/* Change protection of 
 void mapping_clr_mod(ppnum_t pa) {								/* Clears the change bit of a physical page */
 
 	unsigned int pindex;
-	phys_entry *physent;
+	phys_entry_t *physent;
 	
 	physent = mapping_phys_lookup(pa, &pindex);					/* Get physical entry */
 	if(!physent) {												/* Did we find the physical page? */
 		panic("mapping_clr_mod: invalid physical page %08X\n", pa);
 	}
 
-	hw_walk_phys(physent, hwpNoop, hwpCCngMap, hwpCCngPhy, 0);	/* Clear change for page and mappings */
+	hw_walk_phys(physent, hwpNoop, hwpCCngMap, hwpCCngPhy,
+				 0, hwpPurgePTE);								/* Clear change for page and mappings */
 	return;														/* Leave... */
 }
 
@@ -502,14 +551,15 @@ void mapping_clr_mod(ppnum_t pa) {								/* Clears the change bit of a physical
 void mapping_set_mod(ppnum_t pa) {								/* Sets the change bit of a physical page */
 
 	unsigned int pindex;
-	phys_entry *physent;
+	phys_entry_t *physent;
 	
 	physent = mapping_phys_lookup(pa, &pindex);					/* Get physical entry */
 	if(!physent) {												/* Did we find the physical page? */
 		panic("mapping_set_mod: invalid physical page %08X\n", pa);
 	}
 
-	hw_walk_phys(physent, hwpNoop, hwpSCngMap, hwpSCngPhy, 0);	/* Set change for page and mappings */
+	hw_walk_phys(physent, hwpNoop, hwpSCngMap, hwpSCngPhy,
+				 0, hwpNoopPTE);								/* Set change for page and mappings */
 	return;														/* Leave... */
 }
 
@@ -524,14 +574,15 @@ void mapping_set_mod(ppnum_t pa) {								/* Sets the change bit of a physical p
 void mapping_clr_ref(ppnum_t pa) {								/* Clears the reference bit of a physical page */
 
 	unsigned int pindex;
-	phys_entry *physent;
+	phys_entry_t *physent;
 	
 	physent = mapping_phys_lookup(pa, &pindex);					/* Get physical entry */
 	if(!physent) {												/* Did we find the physical page? */
 		panic("mapping_clr_ref: invalid physical page %08X\n", pa);
 	}
 
-	hw_walk_phys(physent, hwpNoop, hwpCRefMap, hwpCRefPhy, 0);	/* Clear reference for page and mappings */
+	hw_walk_phys(physent, hwpNoop, hwpCRefMap, hwpCRefPhy,
+				 0, hwpPurgePTE);								/* Clear reference for page and mappings */
 	return;														/* Leave... */
 }
 
@@ -546,20 +597,21 @@ void mapping_clr_ref(ppnum_t pa) {								/* Clears the reference bit of a physi
 void mapping_set_ref(ppnum_t pa) {								/* Sets the reference bit of a physical page */
 
 	unsigned int pindex;
-	phys_entry *physent;
+	phys_entry_t *physent;
 	
 	physent = mapping_phys_lookup(pa, &pindex);					/* Get physical entry */
 	if(!physent) {												/* Did we find the physical page? */
 		panic("mapping_set_ref: invalid physical page %08X\n", pa);
 	}
 
-	hw_walk_phys(physent, hwpNoop, hwpSRefMap, hwpSRefPhy, 0);	/* Set reference for page and mappings */
+	hw_walk_phys(physent, hwpNoop, hwpSRefMap, hwpSRefPhy,
+				 0, hwpNoopPTE);								/* Set reference for page and mappings */
 	return;														/* Leave... */
 }
 
 
 /*
- *		void mapping_tst_mod(ppnum_t pa) - test the change bit of a physical page
+ *		boolean_t mapping_tst_mod(ppnum_t pa) - test the change bit of a physical page
  *
  *		This routine takes a physical entry and runs through all mappings attached to it and tests
  *		the changed bit. 
@@ -568,20 +620,21 @@ void mapping_set_ref(ppnum_t pa) {								/* Sets the reference bit of a physica
 boolean_t mapping_tst_mod(ppnum_t pa) {							/* Tests the change bit of a physical page */
 
 	unsigned int pindex, rc;
-	phys_entry *physent;
+	phys_entry_t *physent;
 	
 	physent = mapping_phys_lookup(pa, &pindex);					/* Get physical entry */
 	if(!physent) {												/* Did we find the physical page? */
 		panic("mapping_tst_mod: invalid physical page %08X\n", pa);
 	}
 
-	rc = hw_walk_phys(physent, hwpTCngPhy, hwpTCngMap, hwpNoop, 0);	/* Set change for page and mappings */
+	rc = hw_walk_phys(physent, hwpTCngPhy, hwpTCngMap, hwpNoop,
+					  0, hwpMergePTE);							/* Set change for page and mappings */
 	return ((rc & (unsigned long)ppC) != 0);					/* Leave with change bit */
 }
 
 
 /*
- *		void mapping_tst_ref(ppnum_t pa) - tests the reference bit of a physical page
+ *		boolean_t mapping_tst_ref(ppnum_t pa) - tests the reference bit of a physical page
  *
  *		This routine takes a physical entry and runs through all mappings attached to it and tests
  *		the reference bit. 
@@ -590,16 +643,70 @@ boolean_t mapping_tst_mod(ppnum_t pa) {							/* Tests the change bit of a physi
 boolean_t mapping_tst_ref(ppnum_t pa) {							/* Tests the reference bit of a physical page */
 
 	unsigned int pindex, rc;
-	phys_entry *physent;
+	phys_entry_t *physent;
 	
 	physent = mapping_phys_lookup(pa, &pindex);					/* Get physical entry */
 	if(!physent) {												/* Did we find the physical page? */
 		panic("mapping_tst_ref: invalid physical page %08X\n", pa);
 	}
 
-	rc = hw_walk_phys(physent, hwpTRefPhy, hwpTRefMap, hwpNoop, 0);	/* Test reference for page and mappings */
+	rc = hw_walk_phys(physent, hwpTRefPhy, hwpTRefMap, hwpNoop,
+	                  0, hwpMergePTE);							/* Test reference for page and mappings */
 	return ((rc & (unsigned long)ppR) != 0);					/* Leave with reference bit */
 }
+
+
+/*
+ *		unsigned int mapping_tst_refmod(ppnum_t pa) - tests the reference and change bits of a physical page
+ *
+ *		This routine takes a physical entry and runs through all mappings attached to it and tests
+ *		their reference and changed bits. 
+ */
+
+unsigned int mapping_tst_refmod(ppnum_t pa) {					/* Tests the reference and change bits of a physical page */
+	
+	unsigned int  pindex, rc;
+	phys_entry_t *physent;
+	
+	physent = mapping_phys_lookup(pa, &pindex);					/* Get physical entry */
+	if (!physent) {												/* Did we find the physical page? */
+		panic("mapping_tst_refmod: invalid physical page %08X\n", pa);
+	}
+
+	rc = hw_walk_phys(physent, hwpTRefCngPhy, hwpTRefCngMap, hwpNoop,
+					  0, hwpMergePTE);							/* Test reference and change bits in page and mappings */
+	return (((rc & ppC)? VM_MEM_MODIFIED : 0) | ((rc & ppR)? VM_MEM_REFERENCED : 0));
+																/* Convert bits to generic format and return */
+	
+}
+
+
+/*
+ *		void mapping_clr_refmod(ppnum_t pa, unsigned int mask) - clears the reference and change bits specified
+ *        by mask of a physical page
+ *
+ *		This routine takes a physical entry and runs through all mappings attached to it and turns
+ *		off all the reference and change bits.  
+ */
+
+void mapping_clr_refmod(ppnum_t pa, unsigned int mask) {		/* Clears the reference and change bits of a physical page */
+
+	unsigned int  pindex;
+	phys_entry_t *physent;
+	unsigned int  ppcMask;
+	
+	physent = mapping_phys_lookup(pa, &pindex);					/* Get physical entry */
+	if(!physent) {												/* Did we find the physical page? */
+		panic("mapping_clr_refmod: invalid physical page %08X\n", pa);
+	}
+
+	ppcMask = (((mask & VM_MEM_MODIFIED)? ppC : 0) | ((mask & VM_MEM_REFERENCED)? ppR : 0));
+																/* Convert mask bits to PPC-specific format */
+	hw_walk_phys(physent, hwpNoop, hwpCRefCngMap, hwpCRefCngPhy,
+	             ppcMask, hwpPurgePTE);							/* Clear reference and change bits for page and mappings */
+	return;														/* Leave... */
+}
+
 
 
 /*
@@ -610,9 +717,8 @@ boolean_t mapping_tst_ref(ppnum_t pa) {							/* Tests the reference bit of a ph
  *		the reference bit. 
  */
 
-phys_entry *mapping_phys_lookup(ppnum_t pp, unsigned int *pindex) {	/* Finds the physical entry for the page */
+phys_entry_t *mapping_phys_lookup(ppnum_t pp, unsigned int *pindex) {	/* Finds the physical entry for the page */
 
-	phys_entry *physent;
 	int i;
 	
 	for(i = 0; i < pmap_mem_regions_count; i++) {				/* Walk through the list */
@@ -624,7 +730,7 @@ phys_entry *mapping_phys_lookup(ppnum_t pp, unsigned int *pindex) {	/* Finds the
 		return &pmap_mem_regions[i].mrPhysTab[pp - pmap_mem_regions[i].mrStart];	/* Return the physent pointer */
 	}
 	
-	return (phys_entry *)0;										/* Shucks, can't find it... */
+	return (phys_entry_t *)0;										/* Shucks, can't find it... */
 	
 }
 
@@ -649,10 +755,9 @@ static thread_call_data_t	mapping_adjust_call_data;
 void mapping_adjust(void) {										/* Adjust free mappings */
 
 	kern_return_t	retr = KERN_SUCCESS;
-	mappingblok	*mb, *mbn;
+	mappingblok_t	*mb, *mbn;
 	spl_t			s;
-	int				allocsize, i;
-	extern int vm_page_free_count;
+	int				allocsize;
 
 	if(mapCtl.mapcmin <= MAPPERBLOK) {
 		mapCtl.mapcmin = (sane_size / PAGE_SIZE) / 16;
@@ -712,7 +817,7 @@ void mapping_adjust(void) {										/* Adjust free mappings */
 			break;												/* Fail to alocate, bail out... */
 		for(; allocsize > 0; allocsize -= MAPPERBLOK) {			/* Release one block at a time */
 			mapping_free_init((vm_offset_t)mbn, 0, 1);			/* Initialize a non-permanent block */
-			mbn = (mappingblok *)((unsigned int)mbn + PAGE_SIZE);	/* Point to the next slot */
+			mbn = (mappingblok_t *)((unsigned int)mbn + PAGE_SIZE);	/* Point to the next slot */
 		}
 
 		if ((mapCtl.mapcinuse + mapCtl.mapcfree + (mapCtl.mapcreln * (MAPPERBLOK + 1))) > mapCtl.mapcmaxalloc)
@@ -758,12 +863,12 @@ void mapping_adjust(void) {										/* Adjust free mappings */
 
 void mapping_free(struct mapping *mp) {							/* Release a mapping */
 
-	mappingblok	*mb, *mbn;
+	mappingblok_t	*mb, *mbn;
 	spl_t			s;
 	unsigned int	full, mindx, lists;
 
 	mindx = ((unsigned int)mp & (PAGE_SIZE - 1)) >> 6;			/* Get index to mapping */
-	mb = (mappingblok *)((unsigned int)mp & -PAGE_SIZE);		/* Point to the mapping block */
+	mb = (mappingblok_t *)((unsigned int)mp & -PAGE_SIZE);		/* Point to the mapping block */
     lists = (mp->mpFlags & mpLists);							/* get #lists */
     if ((lists == 0) || (lists > kSkipListMaxLists)) 			/* panic if out of range */
         panic("mapping_free: mpLists invalid\n");
@@ -771,7 +876,7 @@ void mapping_free(struct mapping *mp) {							/* Release a mapping */
 #if 0
 	mp->mpFlags = 0x99999999;									/* (BRINGUP) */	
 	mp->mpSpace = 0x9999;										/* (BRINGUP) */	
-	mp->mpBSize = 0x9999;										/* (BRINGUP) */	
+	mp->u.mpBSize = 0x9999;										/* (BRINGUP) */	
 	mp->mpPte   = 0x99999998;									/* (BRINGUP) */	
 	mp->mpPAddr = 0x99999999;									/* (BRINGUP) */	
 	mp->mpVAddr = 0x9999999999999999ULL;						/* (BRINGUP) */	
@@ -878,22 +983,19 @@ void mapping_free(struct mapping *mp) {							/* Release a mapping */
  *		we allocate a new block.
  *
  */
+decl_simple_lock_data(extern,free_pmap_lock)
 
-mapping *mapping_alloc(int lists) {								/* Obtain a mapping */
+mapping_t *
+mapping_alloc(int lists) {								/* Obtain a mapping */
 
-	register mapping *mp;
-	mappingblok	*mb, *mbn;
+	register mapping_t *mp;
+	mappingblok_t	*mb, *mbn;
 	spl_t			s;
 	int				mindx;
-	kern_return_t	retr;
     int				big = (lists > mpBasicLists);				/* set flag if big block req'd */
 	pmap_t			refpmap, ckpmap;
 	unsigned int	space, i;
-	int				ref_count;
 	addr64_t		va, nextva;
-	extern	pmap_t	free_pmap_list;
-	extern	int		free_pmap_count;
-	decl_simple_lock_data(extern,free_pmap_lock)
 	boolean_t		found_mapping;
 	boolean_t		do_rescan;
     
@@ -909,7 +1011,7 @@ mapping *mapping_alloc(int lists) {								/* Obtain a mapping */
  *		list.  If so, rescue one.  Otherwise, try to steal a couple blocks worth.
  */
 
-		if(mbn = mapCtl.mapcrel) {								/* Try to rescue a block from impending doom */
+		if((mbn = mapCtl.mapcrel) != 0) {						/* Try to rescue a block from impending doom */
 			mapCtl.mapcrel = mbn->nextblok;						/* Pop the queue */
 			mapCtl.mapcreln--;									/* Back off the count */
 			mapping_free_init((vm_offset_t)mbn, 0, 1);			/* Initialize a non-permanent block */
@@ -943,24 +1045,32 @@ mapping *mapping_alloc(int lists) {								/* Obtain a mapping */
 
 				ckpmap = (pmap_t)ckpmap->pmap_link.next;
 
-				if ((ckpmap->stats.resident_count != 0) && (ckpmap != kernel_pmap)) {
+				/* We don't steal mappings from the kernel pmap, a VMM host pmap, or a VMM guest pmap with guest
+				   shadow assist active.
+				 */
+				if ((ckpmap->stats.resident_count != 0) && (ckpmap != kernel_pmap)
+														&& !(ckpmap->pmapFlags & (pmapVMgsaa|pmapVMhost))) {
 					do_rescan = TRUE;
 					for (i=0;i<8;i++) {
 						mp = hw_purge_map(ckpmap, va, &nextva);
 
-						if((unsigned int)mp & mapRetCode) {
-							panic("mapping_alloc: hw_purge_map failed - pmap = %08X, va = %16llX, code = %08X\n", ckpmap, va, mp);
+						switch ((unsigned int)mp & mapRetCode) {
+							case mapRtOK:
+								mapping_free(mp);
+								found_mapping = TRUE;
+								break;
+							case mapRtNotFnd:
+								break;
+							default:
+								panic("mapping_alloc: hw_purge_map failed - pmap = %08X, va = %16llX, code = %08X\n", ckpmap, va, mp);
+								break;
 						}
 
-						if(!mp) { 
+						if (mapRtNotFnd == ((unsigned int)mp & mapRetCode)) 
 							if (do_rescan)
 								do_rescan = FALSE;
 							else
 								break;
-						} else {
-							mapping_free(mp);
-							found_mapping = TRUE;
-						}
 
 						va = nextva;
 					}
@@ -1048,7 +1158,7 @@ rescued:
  */
 
 	if(mapCtl.mapcfree < mapCtl.mapcmin) {						/* See if we need to replenish */
-		if(mbn = mapCtl.mapcrel) {								/* Try to rescue a block from impending doom */
+		if((mbn = mapCtl.mapcrel) != 0) {						/* Try to rescue a block from impending doom */
 			mapCtl.mapcrel = mbn->nextblok;						/* Pop the queue */
 			mapCtl.mapcreln--;									/* Back off the count */
 			mapping_free_init((vm_offset_t)mbn, 0, 1);			/* Initialize a non-permanent block */
@@ -1065,7 +1175,7 @@ rescued:
 	hw_lock_unlock((hw_lock_t)&mapCtl.mapclock);				/* Unlock our stuff */
 	splx(s);													/* Restore 'rupts */
 	
-	mp = &((mapping *)mb)[mindx];								/* Point to the allocated mapping */
+	mp = &((mapping_t *)mb)[mindx];								/* Point to the allocated mapping */
     mp->mpFlags = lists;										/* set the list count */
 
 
@@ -1074,7 +1184,7 @@ rescued:
 
 
 void
-consider_mapping_adjust()
+consider_mapping_adjust(void)
 {
 	spl_t			s;
 
@@ -1136,13 +1246,12 @@ void mapping_free_init(vm_offset_t mbl, int perm, boolean_t locked) {
 															   or goes straight to the release queue .
 															   locked indicates if the lock is held already */
 														   
-	mappingblok	*mb;
+	mappingblok_t	*mb;
 	spl_t		s;
-	int			i;
 	addr64_t	raddr;
 	ppnum_t		pp;
 
-	mb = (mappingblok *)mbl;								/* Start of area */	
+	mb = (mappingblok_t *)mbl;								/* Start of area */	
 	
 	if(perm >= 0) {											/* See if we need to initialize the block */
 		if(perm) {
@@ -1217,7 +1326,7 @@ void mapping_prealloc(unsigned int size) {					/* Preallocates mapppings for lar
 
 	int	nmapb, i;
 	kern_return_t	retr;
-	mappingblok	*mbn;
+	mappingblok_t	*mbn;
 	spl_t		s;
 
 	s = splhigh();											/* Don't bother from now on */
@@ -1295,11 +1404,11 @@ void mapping_free_prime(void) {									/* Primes the mapping block release list
 
 	int	nmapb, i;
 	kern_return_t	retr;
-	mappingblok	*mbn;
+	mappingblok_t	*mbn;
 	vm_offset_t     mapping_min;
 	
 	retr = kmem_suballoc(kernel_map, &mapping_min, sane_size / 16,
-			     FALSE, TRUE, &mapping_map);
+			     FALSE, VM_FLAGS_ANYWHERE, &mapping_map);
 
 	if (retr != KERN_SUCCESS)
 	        panic("mapping_free_prime: kmem_suballoc failed");
@@ -1325,7 +1434,7 @@ void mapping_free_prime(void) {									/* Primes the mapping block release list
 }
 
 
-
+void
 mapping_fake_zone_info(int *count, vm_size_t *cur_size, vm_size_t *max_size, vm_size_t *elem_size,
   		       vm_size_t *alloc_size, int *collectable, int *exhaustable)
 {
@@ -1352,9 +1461,9 @@ mapping_fake_zone_info(int *count, vm_size_t *cur_size, vm_size_t *max_size, vm_
 addr64_t	mapping_p2v(pmap_t pmap, ppnum_t pa) {				/* Finds first virtual mapping of a physical page in a space */
 
 	spl_t s;
-	mapping *mp;
+	mapping_t *mp;
 	unsigned int pindex;
-	phys_entry *physent;
+	phys_entry_t *physent;
 	addr64_t va;
 
 	physent = mapping_phys_lookup(pa, &pindex);					/* Get physical entry */
@@ -1364,7 +1473,7 @@ addr64_t	mapping_p2v(pmap_t pmap, ppnum_t pa) {				/* Finds first virtual mappin
 
 	s = splhigh();											/* Make sure interruptions are disabled */
 
-	mp = (mapping *) hw_find_space(physent, pmap->space);	/* Go find the first mapping to the page from the requested pmap */
+	mp = hw_find_space(physent, pmap->space);				/* Go find the first mapping to the page from the requested pmap */
 
 	if(mp) {												/* Did we find one? */
 		va = mp->mpVAddr & -4096;							/* If so, get the cleaned up vaddr */
@@ -1422,8 +1531,8 @@ vm_offset_t kvtophys(vm_offset_t va) {
 
 void ignore_zero_fault(boolean_t type) {				/* Sets up to ignore or honor any fault on page 0 access for the current thread */
 
-	if(type) current_act()->mact.specFlags |= ignoreZeroFault;	/* Ignore faults on page 0 */
-	else     current_act()->mact.specFlags &= ~ignoreZeroFault;	/* Honor faults on page 0 */
+	if(type) current_thread()->machine.specFlags |= ignoreZeroFault;	/* Ignore faults on page 0 */
+	else     current_thread()->machine.specFlags &= ~ignoreZeroFault;	/* Honor faults on page 0 */
 	
 	return;												/* Return the result or 0... */
 }
@@ -1433,10 +1542,10 @@ void ignore_zero_fault(boolean_t type) {				/* Sets up to ignore or honor any fa
  *		Copies data between a physical page and a virtual page, or 2 physical.  This is used to 
  *		move data from the kernel to user state. Note that the "which" parm
  *		says which of the parameters is physical and if we need to flush sink/source.  
- *		Note that both addresses may be physicical but only one may be virtual
+ *		Note that both addresses may be physical, but only one may be virtual.
  *
  *		The rules are that the size can be anything.  Either address can be on any boundary
- *		and span pages.  The physical data must be congiguous as must the virtual.
+ *		and span pages.  The physical data must be contiguous as must the virtual.
  *
  *		We can block when we try to resolve the virtual address at each page boundary.
  *		We don't check protection on the physical page.
@@ -1446,17 +1555,17 @@ void ignore_zero_fault(boolean_t type) {				/* Sets up to ignore or honor any fa
  *
  */
  
-kern_return_t copypv(addr64_t source, addr64_t sink, unsigned int size, int which) {
+kern_return_t hw_copypv_32(addr64_t source, addr64_t sink, unsigned int size, int which) {
  
 	vm_map_t map;
 	kern_return_t ret;
-	addr64_t pa, nextva, vaddr, paddr;
-	register mapping *mp;
+	addr64_t nextva, vaddr, paddr;
+	register mapping_t *mp;
 	spl_t s;
-	unsigned int sz, left, lop, csize;
+	unsigned int lop, csize;
 	int needtran, bothphys;
 	unsigned int pindex;
-	phys_entry *physent;
+	phys_entry_t *physent;
 	vm_prot_t prot;
 	int orig_which;
 
@@ -1470,11 +1579,11 @@ kern_return_t copypv(addr64_t source, addr64_t sink, unsigned int size, int whic
 	
 	bothphys = 1;									/* Assume both are physical */
 	
-	if(!(which & cppvPsnk)) {						/* Is there a virtual page here? */
+	if(!(which & cppvPsnk)) {						/* Is sink page virtual? */
 		vaddr = sink;								/* Sink side is virtual */
 		bothphys = 0;								/* Show both aren't physical */
 		prot = VM_PROT_READ | VM_PROT_WRITE;		/* Sink always must be read/write */
-	} else if(!(which & cppvPsrc)) {				/* Source side is virtual */
+	} else if (!(which & cppvPsrc)) {				/* Is source page virtual? */
 		vaddr = source;								/* Source side is virtual */
 		bothphys = 0;								/* Show both aren't physical */
 		prot = VM_PROT_READ; 						/* Virtual source is always read only */
@@ -1494,11 +1603,11 @@ kern_return_t copypv(addr64_t source, addr64_t sink, unsigned int size, int whic
 			while(1) {
 				mp = mapping_find(map->pmap, vaddr, &nextva, 1);	/* Find and busy the mapping */
 				if(!mp) {							/* Was it there? */
-					if(per_proc_info[cpu_number()].istackptr == 0)
+					if(getPerProc()->istackptr == 0)
 						panic("copypv: No vaild mapping on memory %s %x", "RD", vaddr);
 
 					splx(s);						/* Restore the interrupt level */
-					ret = vm_fault(map, trunc_page_32((vm_offset_t)vaddr), prot, FALSE, FALSE, NULL, 0);	/* Didn't find it, try to fault it in... */
+					ret = vm_fault(map, vm_map_trunc_page(vaddr), prot, FALSE, THREAD_UNINT, NULL, 0);	/* Didn't find it, try to fault it in... */
 				
 					if(ret != KERN_SUCCESS)return KERN_FAILURE;	/* Didn't find any, return no good... */
 					
@@ -1520,11 +1629,11 @@ kern_return_t copypv(addr64_t source, addr64_t sink, unsigned int size, int whic
 				if((which & cppvPsnk) || !(mp->mpVAddr & 1)) break;		/* We got it mapped R/W or the source is not virtual, leave... */
 			
 				mapping_drop_busy(mp);				/* Go ahead and release the mapping for now */
-				if(per_proc_info[cpu_number()].istackptr == 0)
+				if(getPerProc()->istackptr == 0)
 					panic("copypv: No vaild mapping on memory %s %x", "RDWR", vaddr);
 				splx(s);							/* Restore the interrupt level */
 				
-				ret = vm_fault(map, trunc_page_32((vm_offset_t)vaddr), VM_PROT_READ | VM_PROT_WRITE, FALSE, FALSE, NULL, 0);	/* check for a COW area */
+				ret = vm_fault(map, vm_map_trunc_page(vaddr), VM_PROT_READ | VM_PROT_WRITE, FALSE, THREAD_UNINT, NULL, 0);	/* check for a COW area */
 				if (ret != KERN_SUCCESS) return KERN_FAILURE;	/* We couldn't get it R/W, leave in disgrace... */
 				s = splhigh();						/* Don't bother me */
 			}
@@ -1543,7 +1652,7 @@ kern_return_t copypv(addr64_t source, addr64_t sink, unsigned int size, int whic
 		if(which & cppvFsrc) flush_dcache64(source, csize, 1);	/* If requested, flush source before move */
 		if(which & cppvFsnk) flush_dcache64(sink, csize, 1);	/* If requested, flush sink before move */
 
-		bcopy_physvir(source, sink, csize);			/* Do a physical copy, virtually */
+		bcopy_physvir_32(source, sink, csize);			/* Do a physical copy, virtually */
 		
 		if(which & cppvFsrc) flush_dcache64(source, csize, 1);	/* If requested, flush source after move */
 		if(which & cppvFsnk) flush_dcache64(sink, csize, 1);	/* If requested, flush sink after move */
@@ -1581,8 +1690,8 @@ kern_return_t copypv(addr64_t source, addr64_t sink, unsigned int size, int whic
 void mapping_verify(void) {
 
 	spl_t		s;
-	mappingblok	*mb, *mbn;
-	int			relncnt;
+	mappingblok_t	*mb, *mbn;
+	unsigned int	relncnt;
 	unsigned int	dumbodude;
 
 	dumbodude = 0;
@@ -1591,7 +1700,7 @@ void mapping_verify(void) {
 
 	mbn = 0;												/* Start with none */
 	for(mb = mapCtl.mapcnext; mb; mb = mb->nextblok) {		/* Walk the free chain */
-		if((mappingblok *)(mb->mapblokflags & 0x7FFFFFFF) != mb) {	/* Is tag ok? */
+		if((mappingblok_t *)(mb->mapblokflags & 0x7FFFFFFF) != mb) {	/* Is tag ok? */
 			panic("mapping_verify: flags tag bad, free chain; mb = %08X, tag = %08X\n", mb, mb->mapblokflags);
 		}
 		mbn = mb;											/* Remember the last one */
@@ -1619,23 +1728,19 @@ void mapping_verify(void) {
 void mapping_phys_unused(ppnum_t pa) {
 
 	unsigned int pindex;
-	phys_entry *physent;
+	phys_entry_t *physent;
 
 	physent = mapping_phys_lookup(pa, &pindex);				/* Get physical entry */
 	if(!physent) return;									/* Did we find the physical page? */
 
-	if(!(physent->ppLink & ~(ppLock | ppN | ppFlags))) return;	/* No one else is here */
+	if(!(physent->ppLink & ~(ppLock | ppFlags))) return;	/* No one else is here */
 	
 	panic("mapping_phys_unused: physical page (%08X) in use, physent = %08X\n", pa, physent);
 	
 }
 	
-	
-	
-	
-	
-	
-	
-	
-	
-	
+
+
+
+
+

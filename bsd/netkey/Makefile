@@ -20,7 +20,13 @@ EXPINC_SUBDIRS_PPC = \
 EXPINC_SUBDIRS_I386 = \
 
 DATAFILES = \
-	key.h key_debug.h keydb.h keysock.h keyv2.h key_var.h
+	keysock.h
+
+PRIVATE_DATAFILES = \
+	key_debug.h keydb.h key_var.h
+
+PRIVATE_KERNELFILES = \
+	 key.h
 
 INSTALL_MI_LIST	= ${DATAFILES}
 
@@ -30,6 +36,9 @@ EXPORT_MI_LIST	= ${DATAFILES}
 
 EXPORT_MI_DIR = netkey
 
+INSTALL_MI_LCL_LIST = ${DATAFILES} ${PRIVATE_DATAFILES}
+
+INSTALL_KF_MI_LCL_LIST = ${DATAFILES} ${PRIVATE_DATAFILES} ${PRIVATE_KERNELFILES}
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)

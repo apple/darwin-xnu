@@ -4,25 +4,21 @@
 installhdrs: exporthdrs installhdrs_mi installhdrs_md 
 	@echo "[ $(SRCROOT) ] make installhdrs installing Kernel.framework"; \
 	kincpath=$(DSTROOT)/$(KINCDIR);					\
+	krespath=$(DSTROOT)/$(KRESDIR);					\
 	kframepath=$(DSTROOT)/$(KINCFRAME);				\
-	$(MKDIR) $$kincpath;						\
-	chmod -R +w $$kincpath;						\
-	for i in $(COMPONENT_LIST); do					\
-	    if [ -d $(OBJROOT)/EXPORT_HDRS/$$i ]; then (		\
-		cd $(OBJROOT)/EXPORT_HDRS/$$i;				\
-		pax -ruw -s '/.*CVS.*//' . $$kincpath || true ;		\
-	    ) fi							\
-	done;								\
+	[ -d $$krespath ] || $(MKDIR) $$krespath;			\
+	[ -d $$kincpath ] || $(MKDIR) $$kincpath;			\
 	cd $(SRCROOT)/EXTERNAL_HEADERS;					\
-	    pax -ruw -s '/.*CVS.*//' . $$kincpath || true;		\
+		install $(FILE_INSTALL_FLAGS) Info.plist $$krespath;	\
+		$(SRCROOT)/config/newvers.pl $${krespath}/Info.plist;	\
 	cd $$kframepath/Versions;					\
 	    [ -L Current ] || $(LN) $(KINCVERS) Current;		\
 	cd $$kframepath;						\
 	    [ -L Headers ] || $(LN) Versions/Current/Headers Headers;	\
-	$(MKDIR) $(DSTROOT)/$(KPINCDIR);				\
+	    [ -L Resources ] || $(LN) Versions/Current/Resources Resources;	\
+	[ -d $(DSTROOT)/$(KPINCDIR) ] || $(MKDIR) $(DSTROOT)/$(KPINCDIR);	\
 	cd $$kframepath; [ -L PrivateHeaders ] ||		 	\
-	    $(LN) Versions/Current/PrivateHeaders PrivateHeaders;	\
-	find $$kframepath -type f | xargs -s 32000 chmod a-w
+	    $(LN) Versions/Current/PrivateHeaders PrivateHeaders;
 
 #
 # Install header files order
@@ -38,7 +34,7 @@ installhdrs_mi:
 	kernel_config=$(INSTALL_TYPE);					\
 	arch_config=$(INSTALL_ARCH_DEFAULT);					\
 	installinc_dir=${OBJROOT}/$${kernel_config}_$${arch_config}/$${rel_path};	\
-	$(MKDIR) $${installinc_dir};					\
+	[ -d $${installinc_dir} ] ||$(MKDIR) $${installinc_dir};	\
 	${MAKE} -C $${installinc_dir}					\
 		KERNEL_CONFIG=$${kernel_config}				\
 		ARCH_CONFIG=$${arch_config}				\
@@ -56,6 +52,7 @@ installhdrs_md:
 	kernel_config=$(INSTALL_TYPE);					\
 	for arch_config in $(INSTALL_ARCHS);				\
 	do								\
+	[ -d ${OBJROOT}/$${kernel_config}_$${arch_config}/$${rel_path} ] || \
 	$(MKDIR) ${OBJROOT}/$${kernel_config}_$${arch_config}/$${rel_path};	\
 	${MAKE} -C ${OBJROOT}/$${kernel_config}_$${arch_config}/$${rel_path}	\
 		KERNEL_CONFIG=$${kernel_config}				\
@@ -75,7 +72,7 @@ build_installhdrs_mi::
 	@echo "[ $(SOURCE) ] make build_installhdrs_mi $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)";	\
 	for installinc_subdir in $(INSTINC_SUBDIRS);			\
 	do								\
-		$(MKDIR) $${installinc_subdir};			\
+		[ -d $${installinc_subdir} ] || $(MKDIR) $${installinc_subdir};		\
 		${MAKE} -C $${installinc_subdir}			\
 			MAKEFILES=$(SOURCE)$${installinc_subdir}/Makefile	\
 			SOURCE=$(SOURCE)$${installinc_subdir}/		\
@@ -93,7 +90,7 @@ build_installhdrs_md::
 	@echo "[ $(SOURCE) ] make installhdrs_md $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)";	\
 	for installinc_subdir in $($(addprefix INSTINC_SUBDIRS_, $(ARCH_CONFIG)));		\
 	do								\
-		$(MKDIR) $${installinc_subdir};			\
+		[ -d $${installinc_subdir} ] || $(MKDIR) $${installinc_subdir};			\
 		${MAKE} -C $${installinc_subdir}			\
 			MAKEFILES=$(SOURCE)$${installinc_subdir}/Makefile	\
 			SOURCE=$(SOURCE)$${installinc_subdir}/		\
@@ -123,7 +120,7 @@ exporthdrs_mi:
 	kernel_config=$(INSTALL_TYPE);					\
 	arch_config=$(INSTALL_ARCH_DEFAULT);					\
 	exportinc_dir=${OBJROOT}/$${kernel_config}_$${arch_config}/$${rel_path};	\
-	$(MKDIR) $${exportinc_dir};					\
+	[ -d $${exportinc_dir} ] || $(MKDIR) $${exportinc_dir};					\
 	${MAKE} -C $${exportinc_dir}					\
 		KERNEL_CONFIG=$${kernel_config}				\
 		ARCH_CONFIG=$${arch_config}				\
@@ -142,7 +139,7 @@ exporthdrs_md:
 	for arch_config in $(ARCH_CONFIGS);				\
 	do								\
 	exportinc_dir=${OBJROOT}/$${kernel_config}_$${arch_config}/$${rel_path};	\
-	$(MKDIR) $${exportinc_dir};					\
+	[ -d $${exportinc_dir} ] || $(MKDIR) $${exportinc_dir};					\
 	${MAKE} -C $${exportinc_dir}					\
 		KERNEL_CONFIG=$${kernel_config}				\
 		ARCH_CONFIG=$${arch_config}				\
@@ -162,7 +159,7 @@ build_exporthdrs_mi:
 	_TMP_EXPINC_SUBDIRS="$(EXPINC_SUBDIRS)";			\
 	for exportinc_subdir in $${_TMP_EXPINC_SUBDIRS};		\
 	do								\
-		$(MKDIR) $${exportinc_subdir};				\
+		[ -d $${exportinc_subdir} ] || $(MKDIR) $${exportinc_subdir};				\
 		${MAKE} -C $${exportinc_subdir}				\
 			MAKEFILES=$(SOURCE)$${exportinc_subdir}/Makefile	\
 			SOURCE=$(SOURCE)$${exportinc_subdir}/		\
@@ -181,7 +178,7 @@ build_exporthdrs_md:
 	_TMP_exportinc_subdir="$($(addprefix EXPINC_SUBDIRS_, $(ARCH_CONFIG)))";	\
 	for exportinc_subdir in $${_TMP_exportinc_subdir};			\
 	do								\
-		$(MKDIR) $${exportinc_subdir};				\
+		[ -d $${exportinc_subdir} ] || $(MKDIR) $${exportinc_subdir};				\
 		${MAKE} -C $${exportinc_subdir}				\
 			MAKEFILES=$(SOURCE)$${exportinc_subdir}/Makefile	\
 			SOURCE=$(SOURCE)$${exportinc_subdir}/		\
@@ -201,7 +198,7 @@ setup:
 	for arch_config in $(ARCH_CONFIGS);				\
 	do								\
 	setup_subdir=${OBJROOT}/$${kernel_config}_$${arch_config}/$${rel_path}; \
-	$(MKDIR) $${setup_subdir};					\
+	[ -d $${setup_subdir} ] || $(MKDIR) $${setup_subdir};					\
 	${MAKE} -C $${setup_subdir}					\
 		KERNEL_CONFIG=$${kernel_config}				\
 		ARCH_CONFIG=$${arch_config}				\
@@ -219,7 +216,7 @@ build_setup:
 	_TMP_setup_subdir="$(SETUP_SUBDIRS) $($(addprefix SETUP_SUBDIRS_, $(ARCH_CONFIG)))";	\
 	for setup_subdir in $${_TMP_setup_subdir};		\
 	do							\
-	$(MKDIR) $${setup_subdir};				\
+	[ -d $${setup_subdir} ] || $(MKDIR) $${setup_subdir};				\
 	${MAKE} -C $${setup_subdir}				\
 		MAKEFILES=${SOURCE}/$${setup_subdir}/Makefile	\
 		SOURCE=${SOURCE}/$${setup_subdir}/		\
@@ -244,7 +241,7 @@ endif
 	for arch_config in $(ARCH_CONFIGS);				\
 	do								\
 	build_subdir=${OBJROOT}/$${kernel_config}_$${arch_config}/$${rel_path}; \
-	$(MKDIR) $${build_subdir};					\
+	[ -d $${build_subdir} ] || $(MKDIR) $${build_subdir};					\
 	${MAKE} -C $${build_subdir}					\
 		KERNEL_CONFIG=$${kernel_config}				\
 		ARCH_CONFIG=$${arch_config}				\
@@ -265,7 +262,7 @@ build_all:
 	_TMP_comp_subdir="$(COMP_SUBDIRS) $($(addprefix COMP_SUBDIRS_, $(ARCH_CONFIG)))";	\
 	for comp_subdir in $${_TMP_comp_subdir};			\
 	do								\
-		$(MKDIR) $${comp_subdir};				\
+		[ -d $${comp_subdir} ] || $(MKDIR) $${comp_subdir};				\
 		${MAKE} -C $${comp_subdir}				\
 			MAKEFILES=${SOURCE}/$${comp_subdir}/Makefile	\
 			SOURCE=${SOURCE}$${comp_subdir}/		\
@@ -276,7 +273,7 @@ build_all:
 	_TMP_comp_subdir="$(CONFIG_SUBDIRS) $($(addprefix CONFIG_SUBDIRS_, $(ARCH_CONFIG)))";	\
 	for comp_subdir in $${_TMP_comp_subdir};			\
 	do								\
-		$(MKDIR) $${comp_subdir};				\
+		[ -d $${comp_subdir} ] || $(MKDIR) $${comp_subdir};				\
 		${MAKE} -C $${comp_subdir}				\
 			MAKEFILES=${SOURCE}/$${comp_subdir}/Makefile	\
 			SOURCE=${SOURCE}$${comp_subdir}/		\
@@ -295,7 +292,7 @@ mach_kernel:
 	for arch_config in $(ARCH_CONFIGS);				\
 	do								\
 	build_subdir=${OBJROOT}/$${kernel_config}_$${arch_config};	\
-	$(MKDIR) $${build_subdir};					\
+	[ -d $${build_subdir} ] || $(MKDIR) $${build_subdir};					\
 	${MAKE} -C $${build_subdir}					\
 		KERNEL_CONFIG=$${kernel_config}				\
 		ARCH_CONFIG=$${arch_config}				\
@@ -334,7 +331,7 @@ install: installhdrs all installman
 	for arch_config in $(INSTALL_ARCHS);				\
 	do								\
 	install_subdir=${OBJROOT}/$${kernel_config}_$${arch_config}/$${rel_path};	\
-	$(MKDIR) $${install_subdir};					\
+	[ -d $${install_subdir} ] || $(MKDIR) $${install_subdir};					\
 	${MAKE} -C $${install_subdir}					\
 		KERNEL_CONFIG=$${kernel_config}				\
 		ARCH_CONFIG=$${arch_config}				\
@@ -358,7 +355,7 @@ build_install:
 	kernel_config=$(KERNEL_CONFIG);					\
 	for install_subdir in $(INST_SUBDIRS);				\
 	do								\
-		$(MKDIR) $${install_subdir};				\
+		[ -d $${install_subdir} ] || $(MKDIR) $${install_subdir};				\
 		${MAKE} -C $${install_subdir}				\
 			KERNEL_CONFIG=$${kernel_config}			\
 			MAKEFILES=${SOURCE}/$${install_subdir}/Makefile	\
@@ -423,7 +420,7 @@ tags: cscope.files
 installman:
 	@echo "[ $(SRCROOT) ] Installing man pages"; \
 	manpath=$(DSTROOT)/$(MANDIR);   \
-	$(MKDIR) $$manpath;             \
+	[ -d $$manpath ] || $(MKDIR) $$manpath;             \
 	${MAKE} MAKEFILES=${SOURCE}/Makefile \
 		SOURCE=${SOURCE}/ \
 		TARGET=${DSTROOT}/ \

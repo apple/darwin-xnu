@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -83,7 +83,7 @@ simpleroutine UNDCancelNotification_rpc(
  */
 simpleroutine UNDDisplayNoticeSimple_rpc(
 				server: UNDServerRef;
-                        in	timeout: int;
+                        in	rpctimeout: int;
                         in	flags: unsigned;
                         in	iconPath:UNDLabel;
                         in	soundPath:UNDLabel;
@@ -100,7 +100,7 @@ simpleroutine UNDDisplayNoticeSimple_rpc(
  */
 routine UNDDisplayAlertSimple_rpc(
 				server: UNDServerRef;
-                        in	timeout: int;
+                        in	rpctimeout: int;
                         in	flags: unsigned;
                         in	iconPath:UNDLabel;
                         in	soundPath:UNDLabel;
