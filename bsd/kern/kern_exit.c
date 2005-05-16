@@ -585,7 +585,8 @@ reap_child_process(struct proc *parent, struct proc *child)
 	leavepgrp(child);
 	LIST_REMOVE(child, p_list);	/* off zombproc */
 	LIST_REMOVE(child, p_sibling);
-	child->p_flag &= ~P_WAITING;
+	child->p_lflag &= ~P_LWAITING;
+	wakeup(&child->p_stat);
 
 	lck_mtx_destroy(&child->p_mlock, proc_lck_grp);
 	lck_mtx_destroy(&child->p_fdmlock, proc_lck_grp);
@@ -634,11 +635,11 @@ loop:
 
 		/* XXX This is racy because we don't get the lock!!!! */
 
-		if (p->p_flag & P_WAITING) {
+		if (p->p_lflag & P_LWAITING) {
 			(void)tsleep(&p->p_stat, PWAIT, "waitcoll", 0);
 			goto loop;
 		}
-		p->p_flag |= P_WAITING;   /* only allow single thread to wait() */
+		p->p_lflag |= P_LWAITING;   /* only allow single thread to wait() */
 
 		if (p->p_stat == SZOMB) {
 			retval[0] = p->p_pid;
@@ -648,7 +649,7 @@ loop:
 				   			uap->status,
 						    sizeof(status));
 				if (error) {
-					p->p_flag &= ~P_WAITING;
+					p->p_lflag &= ~P_LWAITING;
 					wakeup(&p->p_stat);
 					return (error);
 				}
@@ -672,18 +673,17 @@ loop:
 				}
 				/* information unavailable? */
 				if (error) {
-					p->p_flag &= ~P_WAITING;
+					p->p_lflag &= ~P_LWAITING;
 					wakeup(&p->p_stat);
 					return (error);
 				}
 			}
 
 			/* Clean up */
-			if (!reap_child_process(q, p))
-				p->p_flag &= ~P_WAITING;
-
-			/* Wake other wait'ers, if any */
-			wakeup(&p->p_stat);
+			if (!reap_child_process(q, p)) {
+				p->p_lflag &= ~P_LWAITING;
+				wakeup(&p->p_stat);
+			}
 
 			return (0);
 		}
@@ -698,11 +698,11 @@ loop:
 				    sizeof(status));
 			} else
 				error = 0;
-			p->p_flag &= ~P_WAITING;
+			p->p_lflag &= ~P_LWAITING;
 			wakeup(&p->p_stat);
 			return (error);
 		}
-		p->p_flag &= ~P_WAITING;
+		p->p_lflag &= ~P_LWAITING;
 		wakeup(&p->p_stat);
 	}
 	if (nfound == 0)
@@ -782,11 +782,11 @@ loop:
 		 * Wait collision; go to sleep and restart; used to maintain
 		 * the single return for waited process guarantee.
 		 */
-		if (p->p_flag & P_WAITING) {
+		if (p->p_lflag & P_LWAITING) {
 			(void)tsleep(&p->p_stat, PWAIT, "waitidcoll", 0);
 			goto loop;
 		}
-		p->p_flag |= P_WAITING;		/* mark busy */
+		p->p_lflag |= P_LWAITING;		/* mark busy */
 
 		nfound++;
 
@@ -823,7 +823,7 @@ loop:
 			}
 			/* information unavailable? */
 			if (error) {
-				p->p_flag &= ~P_WAITING;
+				p->p_lflag &= ~P_LWAITING;
 				wakeup(&p->p_stat);
 				return (error);
 			}
@@ -831,11 +831,10 @@ loop:
 			/* Prevent other process for waiting for this event? */
 			if (!(uap->options & WNOWAIT)) {
 				/* Clean up */
-				if (!reap_child_process(q, p))
-					p->p_flag &= ~P_WAITING;
-
-				/* Wake other wait'ers, if any */
-				wakeup(&p->p_stat);
+				if (!reap_child_process(q, p)) {
+					p->p_lflag &= ~P_LWAITING;
+					wakeup(&p->p_stat);
+				}
 			}
 
 			return (0);
@@ -886,7 +885,7 @@ loop:
 			}
 			/* information unavailable? */
 			if (error) {
-				p->p_flag &= ~P_WAITING;
+				p->p_lflag &= ~P_LWAITING;
 				wakeup(&p->p_stat);
 				return (error);
 			}
@@ -896,7 +895,7 @@ loop:
 				p->p_flag |= P_WAITED;
 			}
 
-			p->p_flag &= ~P_WAITING;
+			p->p_lflag &= ~P_LWAITING;
 			wakeup(&p->p_stat);
 			return (0);
 
@@ -936,7 +935,7 @@ loop:
 			}
 			/* information unavailable? */
 			if (error) {
-				p->p_flag &= ~P_WAITING;
+				p->p_lflag &= ~P_LWAITING;
 				wakeup(&p->p_stat);
 				return (error);
 			}
@@ -946,7 +945,7 @@ loop:
 				p->p_flag &= ~P_CONTINUED;
 			}
 
-			p->p_flag &= ~P_WAITING;
+			p->p_lflag &= ~P_LWAITING;
 			wakeup(&p->p_stat);
 			return (0);
 
@@ -955,7 +954,7 @@ loop:
 
 
 		/* Not a process we are interested in; go on to next child */
-		p->p_flag &= ~P_WAITING;
+		p->p_lflag &= ~P_LWAITING;
 		wakeup(&p->p_stat);
 	}
 

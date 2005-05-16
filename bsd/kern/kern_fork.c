@@ -567,6 +567,7 @@ again:
 	p2->p_vforkcnt = 0;
 	p2->p_vforkact = 0;
 	p2->p_lflag  = 0;
+	p2->p_ladvflag  = 0;
 	TAILQ_INIT(&p2->p_uthlist);
 	TAILQ_INIT(&p2->aio_activeq);
 	TAILQ_INIT(&p2->aio_doneq);

@@ -244,7 +244,7 @@ machine_thread_create(
 	 * at the base of the kernel stack (see stack_attach()).
 	 */
 
-	thread->machine.upcb = sv;									/* Set user pcb */
+	thread->machine.upcb = sv;								/* Set user pcb */
 	sv->save_srr1 = (uint64_t)MSR_EXPORT_MASK_SET;			/* Set the default user MSR */
 	if(task_has_64BitAddr(task)) sv->save_srr1 |= (uint64_t)MASK32(MSR_SF) << 32;	/* If 64-bit task, force 64-bit mode */
 	sv->save_fpscr = 0;										/* Clear all floating point exceptions */
@@ -269,6 +269,7 @@ machine_thread_destroy(
 	register savearea_fpu *fsv, *fpsv;
 	register savearea *svp;
 	register int i;
+ 	boolean_t intr;
 
 /*
  *	This function will release all context.
@@ -281,10 +282,12 @@ machine_thread_destroy(
  *	Walk through and release all floating point and vector contexts. Also kill live context.
  *
  */
- 
- 	toss_live_vec(thread->machine.curctx);						/* Dump live vectors */
 
-	vsv = thread->machine.curctx->VMXsave;						/* Get the top vector savearea */
+	intr = ml_set_interrupts_enabled(FALSE);				/* Disable for interruptions */
+ 
+ 	toss_live_vec(thread->machine.curctx);					/* Dump live vectors */
+
+	vsv = thread->machine.curctx->VMXsave;					/* Get the top vector savearea */
 	
 	while(vsv) {											/* Any VMX saved state? */
 		vpsv = vsv;											/* Remember so we can toss this */
@@ -292,11 +295,11 @@ machine_thread_destroy(
 		save_release((savearea *)vpsv);						/* Release it */
 	}
 	
-	thread->machine.curctx->VMXsave = 0;							/* Kill chain */
+	thread->machine.curctx->VMXsave = 0;					/* Kill chain */
  
- 	toss_live_fpu(thread->machine.curctx);						/* Dump live float */
+ 	toss_live_fpu(thread->machine.curctx);					/* Dump live float */
 
-	fsv = thread->machine.curctx->FPUsave;						/* Get the top float savearea */
+	fsv = thread->machine.curctx->FPUsave;					/* Get the top float savearea */
 	
 	while(fsv) {											/* Any float saved state? */
 		fpsv = fsv;											/* Remember so we can toss this */
@@ -304,13 +307,13 @@ machine_thread_destroy(
 		save_release((savearea *)fpsv);						/* Release it */
 	}
 	
-	thread->machine.curctx->FPUsave = 0;							/* Kill chain */
+	thread->machine.curctx->FPUsave = 0;					/* Kill chain */
 
 /*
  * free all regular saveareas.
  */
 
-	pcb = thread->machine.pcb;									/* Get the general savearea */
+	pcb = thread->machine.pcb;								/* Get the general savearea */
 	
 	while(pcb) {											/* Any float saved state? */
 		ppsv = pcb;											/* Remember so we can toss this */
@@ -319,6 +322,9 @@ machine_thread_destroy(
 	}
 	
 	hw_atomic_sub((uint32_t *)&saveanchor.savetarget, 4);	/* Unaccount for the number of saveareas we think we "need" */
+
+	(void) ml_set_interrupts_enabled(intr);					/* Restore interrupts if enabled */
+
 }
 
 /*
@@ -326,7 +332,9 @@ machine_thread_destroy(
  * release saveareas associated with an act. if flag is true, release
  * user level savearea(s) too, else don't
  *
- * this code cannot block so we call the proper save area free routine
+ * This code must run with interruptions disabled because an interrupt handler could use
+ * floating point and/or vectors.  If this happens and the thread we are blowing off owns
+ * the facility, we can deadlock.
  */
 void
 act_machine_sv_free(thread_t act)
@@ -336,6 +344,7 @@ act_machine_sv_free(thread_t act)
 	register savearea_fpu *fsv, *fpst, *fsvt;
 	register savearea *svp;
 	register int i;
+ 	boolean_t intr;
 
 /*
  *	This function will release all non-user state context.
@@ -355,22 +364,23 @@ act_machine_sv_free(thread_t act)
  *	Then we unlock.  Next, all of the old kernel contexts are released.
  *
  */
- 
+
+	intr = ml_set_interrupts_enabled(FALSE);				/* Disable for interruptions */
+
  	if(act->machine.curctx->VMXlevel) {						/* Is the current level user state? */
  		
  		toss_live_vec(act->machine.curctx);					/* Dump live vectors if is not user */
-
-		vsv = act->machine.curctx->VMXsave;					/* Get the top vector savearea */
 		
-		while(vsv && vsv->save_hdr.save_level) vsv = (savearea_vec *)vsv->save_hdr.save_prev;	/* Find user context if any */
-	
 		if(!hw_lock_to((hw_lock_t)&act->machine.curctx->VMXsync, LockTimeOut)) {	/* Get the sync lock */ 
 			panic("act_machine_sv_free - timeout getting VMX sync lock\n");	/* Tell all and die */
 		}
+	
+		vsv = act->machine.curctx->VMXsave;					/* Get the top vector savearea */
+		while(vsv && vsv->save_hdr.save_level) vsv = (savearea_vec *)vsv->save_hdr.save_prev;	/* Find user context if any */
 		
-		vsvt = act->machine.curctx->VMXsave;					/* Get the top of the chain */
+		vsvt = act->machine.curctx->VMXsave;				/* Get the top of the chain */
 		act->machine.curctx->VMXsave = vsv;					/* Point to the user context */
-		act->machine.curctx->VMXlevel = 0;						/* Set the level to user */
+		act->machine.curctx->VMXlevel = 0;					/* Set the level to user */
 		hw_lock_unlock((hw_lock_t)&act->machine.curctx->VMXsync);	/* Unlock */
 		
 		while(vsvt) {										/* Clear any VMX saved state */
@@ -386,17 +396,16 @@ act_machine_sv_free(thread_t act)
  		
  		toss_live_fpu(act->machine.curctx);					/* Dump live floats if is not user */
 
-		fsv = act->machine.curctx->FPUsave;					/* Get the top floats savearea */
-		
-		while(fsv && fsv->save_hdr.save_level) fsv = (savearea_fpu *)fsv->save_hdr.save_prev;	/* Find user context if any */
-	
 		if(!hw_lock_to((hw_lock_t)&act->machine.curctx->FPUsync, LockTimeOut)) {	/* Get the sync lock */ 
 			panic("act_machine_sv_free - timeout getting FPU sync lock\n");	/* Tell all and die */
 		}
 		
-		fsvt = act->machine.curctx->FPUsave;					/* Get the top of the chain */
+		fsv = act->machine.curctx->FPUsave;					/* Get the top floats savearea */
+		while(fsv && fsv->save_hdr.save_level) fsv = (savearea_fpu *)fsv->save_hdr.save_prev;	/* Find user context if any */
+		
+		fsvt = act->machine.curctx->FPUsave;				/* Get the top of the chain */
 		act->machine.curctx->FPUsave = fsv;					/* Point to the user context */
-		act->machine.curctx->FPUlevel = 0;						/* Set the level to user */
+		act->machine.curctx->FPUlevel = 0;					/* Set the level to user */
 		hw_lock_unlock((hw_lock_t)&act->machine.curctx->FPUsync);	/* Unlock */
 		
 		while(fsvt) {										/* Clear any VMX saved state */
@@ -426,18 +435,19 @@ act_machine_sv_free(thread_t act)
 	}
 	
 	act->machine.pcb = userpcb;								/* Chain in the user if there is one, or 0 if not */
-	
+	(void) ml_set_interrupts_enabled(intr);					/* Restore interrupts if enabled */
+
 }
 
 void
 machine_act_terminate(
 	thread_t	act)
 {
-	if(act->machine.bbDescAddr) {								/* Check if the Blue box assist is active */
+	if(act->machine.bbDescAddr) {							/* Check if the Blue box assist is active */
 		disable_bluebox_internal(act);						/* Kill off bluebox */
 	}
 	
-	if(act->machine.vmmControl) {								/* Check if VMM is active */
+	if(act->machine.vmmControl) {							/* Check if VMM is active */
 		vmm_tear_down_all(act);								/* Kill off all VMM contexts */
 	}
 }
@@ -649,7 +659,7 @@ machine_stack_handoff(
 	if (branch_tracing_enabled()) 
 		ppinfo->cpu_flags |= traceBE;
     
-	if(trcWork.traceMask) dbgTrace(0x12345678, (unsigned int)old, (unsigned int)new, 0);	/* Cut trace entry if tracing */    
+	if(trcWork.traceMask) dbgTrace(0x9903, (unsigned int)old, (unsigned int)new, 0, 0);	/* Cut trace entry if tracing */    
     
   return;
 }

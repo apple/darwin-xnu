@@ -118,13 +118,20 @@ struct cat_fork {
  *
  */
 struct directoryhint {
-	SLIST_ENTRY(directoryhint) dh_link; /* chain */
+	TAILQ_ENTRY(directoryhint) dh_link; /* chain */
 	int     dh_index;                   /* index into directory (zero relative) */
 	u_int32_t  dh_time;
 	struct  cat_desc  dh_desc;          /* entry's descriptor */
 };
 typedef struct directoryhint directoryhint_t;
 
+/* 
+ * HFS_MAXDIRHINTS cannot be larger than 63 without reducing
+ * HFS_INDEX_BITS, because given the 6-bit tag, at most 63 different
+ * tags can exist.  When HFS_MAXDIRHINTS is larger than 63, the same
+ * list may contain dirhints of the same tag, and a staled dirhint may
+ * be returned.
+ */
 #define HFS_MAXDIRHINTS 32
 #define HFS_DIRHINT_TTL 45
 

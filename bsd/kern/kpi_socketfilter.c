@@ -150,7 +150,7 @@ sflt_data_in(
 	int						 	filtered = 0;
 	int							error = 0;
 	
-	for (filter = so->so_filt; filter;
+	for (filter = so->so_filt; filter && (error == 0);
 		 filter = filter->sfe_next_onsocket) {
 		if (filter->sfe_filter->sf_filter.sf_data_in) {
 			if (filtered == 0) {

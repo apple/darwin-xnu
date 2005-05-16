@@ -347,6 +347,7 @@ loop_with_lock:
 	SET(ncp->c_hflag, H_ALLOC);
 	ncp->c_fileid = inum;
 	ncp->c_dev = dev;
+	TAILQ_INIT(&ncp->c_hintlist); /* make the list empty */
 
 	lck_rw_init(&ncp->c_rwlock, hfs_rwlock_group, hfs_lock_attr);
 	if (!skiplock)

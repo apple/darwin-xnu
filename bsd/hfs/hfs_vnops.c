@@ -2565,7 +2565,7 @@ hfs_vnop_readdir(ap)
 			if ( localhint.dh_desc.cd_parentcnid == cp->c_cnid) {
 				localhint.dh_index = index - 1;
 				localhint.dh_time = 0;
-				localhint.dh_link.sle_next = 0;
+				bzero(&localhint.dh_link, sizeof(localhint.dh_link));
 				dirhint = &localhint;  /* don't forget to release the descriptor */
 			} else {
 				cat_releasedesc(&localhint.dh_desc);
@@ -2948,6 +2948,9 @@ hfs_makenode(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp,
 	}
 	attr.ca_atime = attr.ca_ctime = attr.ca_itime = attr.ca_mtime;
 	attr.ca_atimeondisk = attr.ca_atime;
+	/* On HFS+ the ThreadExists flag must always be set for files. */
+	if (vnodetype != VDIR && (hfsmp->hfs_flags & HFS_STANDARD) == 0)
+		attr.ca_recflags = kHFSThreadExistsMask;
 
 	attr.ca_uid = vap->va_uid;
 	attr.ca_gid = vap->va_gid;

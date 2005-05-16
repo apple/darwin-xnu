@@ -230,6 +230,8 @@ __private_extern__ void link_rtrequest(int, struct rtentry *, struct sockaddr *)
 
 int dlil_expand_mcl;
 
+extern u_int32_t	inject_buckets;
+
 static const u_int32_t dlil_writer_waiting = 0x80000000;
 
 static __inline__ void*
@@ -713,9 +715,9 @@ dlil_input_thread_continue(
 		}
 		
 		proto_input_run();
-
+		
 		if (dlil_input_mbuf_head == NULL && 
-			dlil_input_loop_head == NULL) {
+			dlil_input_loop_head == NULL && inject_buckets == 0) {
 			assert_wait(&dlil_input_thread_wakeup, THREAD_UNINT);
 			(void) thread_block(dlil_input_thread_continue);
 			/* NOTREACHED */

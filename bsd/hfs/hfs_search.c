@@ -601,8 +601,11 @@ CheckAccess(ExtendedVCB *theVCBPtr, u_long searchBits, CatalogKey *theKeyPtr, st
 
 		myNodeID = cp->c_parentcnid;	/* move up the hierarchy */
 		hfs_unlock(VTOC(vp));
-		myErr = vnode_authorize(vp, NULL, (KAUTH_VNODE_SEARCH), &my_context);
-		//myErr = vnode_authorize(vp, NULL, (KAUTH_VNODE_SEARCH | KAUTH_VNODE_LIST_DIRECTORY), &my_context);
+		if (vp->v_type == VDIR) {
+		    myErr = vnode_authorize(vp, NULL, (KAUTH_VNODE_SEARCH | KAUTH_VNODE_LIST_DIRECTORY), &my_context);
+		} else {
+		    myErr = vnode_authorize(vp, NULL, (KAUTH_VNODE_SEARCH), &my_context);
+		}
 		vnode_put(vp);
 		vp = NULL;
 		if ( myErr ) {

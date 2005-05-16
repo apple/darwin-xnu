@@ -222,7 +222,8 @@ struct	proc {
 	unsigned int p_fdlock_pc[4];
 	unsigned int p_fdunlock_pc[4];
 	int		p_fpdrainwait;
-	int		p_lflag;		/* local flags */
+	unsigned int		p_lflag;		/* local flags */
+	unsigned int		p_ladvflag;		/* local adv flags*/
 #if DIAGNOSTIC
 #if SIGNAL_DEBUG
 	unsigned int lockpc[8];
@@ -232,11 +233,16 @@ struct	proc {
 };
 
 
+/* local flags */
 #define	P_LDELAYTERM		0x1	/* */
 #define	P_LNOZOMB		0x2	/* */
 #define P_LLOW_PRI_IO		0x4
 #define P_LPEXIT		0x8
 #define P_LBACKGROUND_IO	0x10
+#define P_LWAITING		0x20
+
+/* advisory flags in the proc */
+#define P_LADVLOCK		0x01
 
 // LP64todo - should this move?
 /* LP64 version of extern_proc.  all pointers 

@@ -332,6 +332,7 @@ LEXT(xLoadIBATsLL)
 
 /*
  *			This is the glue to call the CutTrace firmware call
+ *			dbgTrace(id, p1, p2, p3, p4)
  */
  			
 			.align	5
@@ -339,8 +340,13 @@ LEXT(xLoadIBATsLL)
 
 LEXT(dbgTrace)
 			
+			mr		r2,r3
+			mr		r3,r4
 			lis		r0,HIGH_ADDR(CutTrace)			/* Top half of CreateFakeIO firmware call number */
+			mr		r4,r5
+			mr		r5,r6
 			ori		r0,r0,LOW_ADDR(CutTrace)		/* Bottom half */
+			mr		r6,r7
 			sc										/* Do it to it */
 			blr										/* Bye bye, Birdie... */
 

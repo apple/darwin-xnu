@@ -496,7 +496,7 @@ hfs_getnewvnode(
 		lck_rw_init(&cp->c_truncatelock, hfs_rwlock_group, hfs_lock_attr);
 
 		/* Make sure its still valid (ie exists on disk). */
-		if (!hfs_valid_cnode(hfsmp, dvp, cnp, cp->c_fileid)) {
+		if (!hfs_valid_cnode(hfsmp, dvp, (wantrsrc ? NULL : cnp), cp->c_fileid)) {
 			hfs_chash_abort(cp);
 			hfs_reclaim_cnode(cp);
 			*vpp = NULL;

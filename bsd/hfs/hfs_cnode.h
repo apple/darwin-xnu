@@ -94,7 +94,7 @@ struct cnode {
 	u_long			c_childhint;	/* catalog hint for children */
 	struct cat_desc		c_desc;		/* cnode's descriptor */
 	struct cat_attr		c_attr;		/* cnode's attributes */
-	SLIST_HEAD(hfs_hinthead, directoryhint) c_hintlist;  /* directory hint list */
+	TAILQ_HEAD(hfs_hinthead, directoryhint) c_hintlist;  /* directory hint list */
   	int16_t			c_dirhinttag;	/* directory hint tag */
 	union {
 	    int16_t     cu_dirhintcnt;          /* directory hint count */

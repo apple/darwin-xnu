@@ -988,7 +988,7 @@ nfs_mount(mount_t mp, vnode_t vp, user_addr_t data, vfs_context_t context)
 		}
 	}
 
-	if (args.fhsize > NFSX_V3FHMAX)
+	if (args.fhsize < 0 || args.fhsize > NFSX_V3FHMAX)
 		return (EINVAL);
 	error = copyin(args.fh, (caddr_t)nfh, args.fhsize);
 	if (error)

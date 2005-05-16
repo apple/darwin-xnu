@@ -50,6 +50,7 @@
 
 #define VERIFYSAVE 0
 #define FPVECDBG 0
+#define FPFLOOD 0
 #define INSTRUMENT 0
 
 /*
@@ -198,6 +199,10 @@ tvecoff:	stw		r26,FM_BACKPTR(r1)				; Link back to the previous frame
 
 .L_call_trap:	
 
+#if FPFLOOD
+			stfd	f31,emfp31(r25)					; (TEST/DEBUG)
+#endif
+			
 			bl	EXT(trap)
 
 			lis		r10,hi16(MASK(MSR_VEC))			; Get the vector enable
@@ -396,6 +401,11 @@ noassist:	cmplwi	r15,0x7000						; Do we have a fast path trap?
 			mr      r4,r13							; current activation
 			addi    r7,r7,1							; Bump it
 			stw     r7,TASK_SYSCALLS_UNIX(r8)		; Save it
+
+#if FPFLOOD
+			stfd	f31,emfp31(r25)					; (TEST/DEBUG)
+#endif
+
 			bl      EXT(unix_syscall)				; Check out unix...
 
 .L_call_server_syscall_exception:		
@@ -552,11 +562,11 @@ ksystrace:
 
 			lwz		r7,TASK_SYSCALLS_MACH(r10)	; Get the current count
 			neg		r31,r0						; Make this positive
-			mr 		r3,r31					; save it
-			slwi		r27,r3,4					; multiply by 16
-			slwi		r3,r3,2					; and the original by 4
+			mr 		r3,r31						; save it
+			slwi	r27,r3,4					; multiply by 16
+			slwi	r3,r3,2						; and the original by 4
 			ori		r28,r28,lo16(EXT(mach_trap_table))	; Get address of table
-			add		r27,r27,r3				; for a total of 20x (5 words/entry)
+			add		r27,r27,r3					; for a total of 20x (5 words/entry)
 			addi	r7,r7,1						; Bump TASK_SYSCALLS_MACH count
 			cmplwi	r8,0						; Is kdebug_enable non-zero
 			stw		r7,TASK_SYSCALLS_MACH(r10)	; Save count
@@ -575,7 +585,7 @@ ksystrace:
 
 .L_kernel_syscall_munge:
 			cmplwi	r0,0							; test for null munger
-			mtctr	r0							; Set the function call address
+			mtctr	r0								; Set the function call address
 			addi	r3,r30,saver3						; Pointer to args from save area
 			addi	r4,r1,FM_ARG0+ARG_SIZE				; Pointer for munged args
 			beq--	.L_kernel_syscall_trapcall		;   null munger - skip to trap call
@@ -585,6 +595,11 @@ ksystrace:
 			lwz	r0,MACH_TRAP_FUNCTION(r31)			; Pick up the function address
 			mtctr	r0							; Set the function call address
 			addi	r3,r1,FM_ARG0+ARG_SIZE				; Pointer to munged args
+
+#if FPFLOOD
+			stfd	f31,emfp31(r25)					; (TEST/DEBUG)
+#endif
+
 			bctrl
 
 
@@ -942,7 +957,11 @@ ihbootnover:										; (TEST/DEBUG)
 			mr		r4,r30
 			lwz		r5,savedsisr(r30)				; Get the DSISR
 			lwz		r6,savedar+4(r30)				; Get the DAR 
-			
+
+#if FPFLOOD
+			stfd	f31,emfp31(r25)					; (TEST/DEBUG)
+#endif
+
 			bl	EXT(interrupt)
 
 
@@ -1159,7 +1178,10 @@ fpuhasdfrd:
 			lwz		r24,FPUsave(r26)				; (TEST/DEBUG) Get the first savearea
 			mr.		r23,r23							; (TEST/DEBUG) Should be level 0
 			beq++	fpulvl0							; (TEST/DEBUG) Yes...
-			BREAKPOINT_TRAP							; (TEST/DEBUG)
+
+			lis		r0,hi16(Choke)					; (TEST/DEBUG) Choke code
+			ori		r0,r0,lo16(Choke)				; (TEST/DEBUG) and the rest
+			sc										; (TEST/DEBUG) System ABEND
 			
 fpulvl0:	mr.		r24,r24							; (TEST/DEBUG) Any context?
 			beq		fpunusrstt						; (TEST/DEBUG) No...
@@ -1167,11 +1189,17 @@ fpulvl0:	mr.		r24,r24							; (TEST/DEBUG) Any context?
 			lwz		r21,SAVprev+4(r24)				; (TEST/DEBUG) Get previous pointer
 			mr.		r23,r23							; (TEST/DEBUG) Is this our user context?
 			beq++	fpulvl0b						; (TEST/DEBUG) Yes...
-			BREAKPOINT_TRAP							; (TEST/DEBUG)
+
+			lis		r0,hi16(Choke)					; (TEST/DEBUG) Choke code
+			ori		r0,r0,lo16(Choke)				; (TEST/DEBUG) and the rest
+			sc										; (TEST/DEBUG) System ABEND
 			
 fpulvl0b:	mr.		r21,r21							; (TEST/DEBUG) Is there a forward chain?
 			beq++	fpunusrstt						; (TEST/DEBUG) Nope...
-			BREAKPOINT_TRAP							; (TEST/DEBUG)
+
+			lis		r0,hi16(Choke)					; (TEST/DEBUG) Choke code
+			ori		r0,r0,lo16(Choke)				; (TEST/DEBUG) and the rest
+			sc										; (TEST/DEBUG) System ABEND
 						
 fpunusrstt:											; (TEST/DEBUG)
 #endif				
@@ -1191,6 +1219,7 @@ fpunusrstt:											; (TEST/DEBUG)
 			beq++	fpuena							; Nope...
 			lwz		r25,SAVlevel(r24)				; Get the level of savearea
 			lwz		r0,SAVprev+4(r24)				; Get the previous
+
 			cmplw	r30,r25							; Is savearea for the level we are launching?
 			bne++	fpuena							; No, just go enable...
 			

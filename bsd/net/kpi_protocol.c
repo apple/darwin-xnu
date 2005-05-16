@@ -58,7 +58,7 @@ struct proto_input_entry {
 static struct proto_input_entry	*proto_hash[PROTO_HASH_SLOTS];
 static struct proto_input_entry *proto_input_add_list;
 static lck_mtx_t				*proto_input_lock = 0;
-static u_int32_t				inject_buckets = 0;
+__private_extern__ u_int32_t	inject_buckets = 0;
 
 extern thread_t	dlil_input_thread_ptr;
 extern int		dlil_input_thread_wakeup;

@@ -82,6 +82,7 @@ extern unsigned int memcpy_nop_if_32bit;
 extern unsigned int xsum_nop_if_32bit;
 extern unsigned int uft_nop_if_32bit;
 extern unsigned int uft_uaw_nop_if_32bit;
+extern unsigned int uft_cuttrace;
 
 int forcenap = 0;
 int wcte = 0;				/* Non-cache gather timer disabled */
@@ -113,6 +114,7 @@ patch_entry_t patch_table[] = {
 	{&xsum_nop_if_32bit,	0x60000000,	PATCH_FEATURE,		PatchExt32},
 	{&uft_nop_if_32bit,		0x60000000,	PATCH_FEATURE,		PatchExt32},
 	{&uft_uaw_nop_if_32bit,	0x60000000,	PATCH_FEATURE,		PatchExt32},
+	{&uft_cuttrace,			0x60000000,	PATCH_FEATURE,		PatchExt32},
     {NULL,                  0x00000000, PATCH_END_OF_TABLE, 0}
 	};
 

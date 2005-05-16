@@ -739,7 +739,7 @@ ipc_kmsg_get(
 	trailer->msgh_trailer_size = MACH_MSG_TRAILER_MINIMUM_SIZE;
 	
 #ifdef ppc
-	if(trcWork.traceMask) dbgTrace((unsigned int)kmsg->ikm_header->msgh_id, 
+	if(trcWork.traceMask) dbgTrace(0x1100, (unsigned int)kmsg->ikm_header->msgh_id, 
 		(unsigned int)kmsg->ikm_header->msgh_remote_port, 
 		(unsigned int)kmsg->ikm_header->msgh_local_port, 0); 
 #endif

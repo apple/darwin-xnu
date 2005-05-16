@@ -644,9 +644,10 @@ extern char *trap_type[];
 #define	failSkipLists 7
 #define	failUnalignedStk 8
 #define	failPmap 9
+#define	failTimeout 10
 
 /* Always must be last - update failNames table in model_dep.c as well */
-#define failUnknown 10
+#define failUnknown 11
 
 #ifndef ASSEMBLER
 

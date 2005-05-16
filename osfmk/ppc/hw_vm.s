@@ -2263,7 +2263,7 @@ hsg64Hit:	bl		mapPhysUnlock				; Unlock physent chain
 			
 			.align	5
 hsg64Miss:	bl		mapPhysUnlock				; Unlock physent chain
-			mtmsr	r11							; Restore 'rupts, translation
+			mtmsrd	r11							; Restore 'rupts, translation
 			li		r3,mapRtEmpty				; No mappings found matching specified criteria
 			b		hrmRetnCmn					; Exit through common epilog
 

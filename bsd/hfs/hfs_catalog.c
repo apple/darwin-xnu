@@ -2751,6 +2751,9 @@ getbsdattr(struct hfsmount *hfsmp, const struct HFSPlusCatalogFile *crp, struct 
 		/* get total blocks (both forks) */
 		attrp->ca_blocks = crp->dataFork.totalBlocks + crp->resourceFork.totalBlocks;
 		attrp->ca_attrblks = crp->attrBlocks;
+		/* On HFS+ the ThreadExists flag must always be set. */
+		if ((hfsmp->hfs_flags & HFS_STANDARD) == 0)
+			attrp->ca_recflags |= kHFSThreadExistsMask;
 	}
 	
 	attrp->ca_fileid = crp->fileID;

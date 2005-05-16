@@ -1540,45 +1540,57 @@ directoryhint_t *
 hfs_getdirhint(struct cnode *dcp, int index)
 {
 	struct timeval tv;
-	directoryhint_t *hint, *next, *oldest;
+	directoryhint_t *hint;
+	boolean_t need_remove, need_init;
 	char * name;
 
-	oldest = NULL;
 	microuptime(&tv);
 
-	/* Look for an existing hint first */
-	for(hint = dcp->c_hintlist.slh_first; hint != NULL; hint = next) {
-		next = hint->dh_link.sle_next;
-		if (hint->dh_index == index) {
-			goto out;
-		} else if (oldest == NULL || (hint->dh_time < oldest->dh_time)) {
-			oldest = hint;
-		}
+	/*
+	 *  Look for an existing hint first.  If not found, create a new one (when
+	 *  the list is not full) or recycle the oldest hint.  Since new hints are
+	 *  always added to the head of the list, the last hint is always the
+	 *  oldest.
+	 */
+	TAILQ_FOREACH(hint, &dcp->c_hintlist, dh_link) {
+		if (hint->dh_index == index)
+			break;
 	}
-	/* Recycle one if we have too many already. */
-	if ((dcp->c_dirhintcnt >= HFS_MAXDIRHINTS) && (oldest != NULL)) {
-		hint = oldest;
-		if ((name = hint->dh_desc.cd_nameptr)) {
-			hint->dh_desc.cd_nameptr = NULL;
-			vfs_removename(name);
+	if (hint != NULL) { /* found an existing hint */
+		need_init = false;
+		need_remove = true;
+	} else { /* cannot find an existing hint */
+		need_init = true;
+		if (dcp->c_dirhintcnt < HFS_MAXDIRHINTS) { /* we don't need recycling */
+			/* Create a default directory hint */
+			MALLOC_ZONE(hint, directoryhint_t *, sizeof(directoryhint_t), M_HFSDIRHINT, M_WAITOK);
+			++dcp->c_dirhintcnt;
+			need_remove = false;
+		} else {				/* recycle the last (i.e., the oldest) hint */
+			hint = TAILQ_LAST(&dcp->c_hintlist, hfs_hinthead);
+			if ((name = hint->dh_desc.cd_nameptr)) {
+				hint->dh_desc.cd_nameptr = NULL;
+				vfs_removename(name);
+			}
+			need_remove = true;
 		}
-		goto init;
 	}
 
-	/* Create a default directory hint */
-	MALLOC_ZONE(hint, directoryhint_t *, sizeof(directoryhint_t), M_HFSDIRHINT, M_WAITOK);
-	SLIST_INSERT_HEAD(&dcp->c_hintlist, hint, dh_link);
-	++dcp->c_dirhintcnt;
-init:
-	hint->dh_index = index;
-	hint->dh_desc.cd_flags = 0;
-	hint->dh_desc.cd_encoding = 0;
-	hint->dh_desc.cd_namelen = 0;
-	hint->dh_desc.cd_nameptr = NULL;
-	hint->dh_desc.cd_parentcnid = dcp->c_cnid;
-	hint->dh_desc.cd_hint = dcp->c_childhint;
-	hint->dh_desc.cd_cnid = 0;
-out:
+	if (need_remove)
+		TAILQ_REMOVE(&dcp->c_hintlist, hint, dh_link);
+
+	TAILQ_INSERT_HEAD(&dcp->c_hintlist, hint, dh_link);
+
+	if (need_init) {
+		hint->dh_index = index;
+		hint->dh_desc.cd_flags = 0;
+		hint->dh_desc.cd_encoding = 0;
+		hint->dh_desc.cd_namelen = 0;
+		hint->dh_desc.cd_nameptr = NULL;
+		hint->dh_desc.cd_parentcnid = dcp->c_cnid;
+		hint->dh_desc.cd_hint = dcp->c_childhint;
+		hint->dh_desc.cd_cnid = 0;
+	}
 	hint->dh_time = tv.tv_sec;
 	return (hint);
 }
@@ -1592,22 +1604,16 @@ __private_extern__
 void
 hfs_reldirhint(struct cnode *dcp, directoryhint_t * relhint)
 {
-	directoryhint_t *hint;
 	char * name;
 
-	SLIST_FOREACH(hint, &dcp->c_hintlist, dh_link) {
-		if (hint == relhint) {
-			SLIST_REMOVE(&dcp->c_hintlist, hint, directoryhint, dh_link);
-			name = hint->dh_desc.cd_nameptr;
-			if (name != NULL) {
-				hint->dh_desc.cd_nameptr = NULL;
-				vfs_removename(name);
-			}
-			FREE_ZONE(hint, sizeof(directoryhint_t), M_HFSDIRHINT);
-			--dcp->c_dirhintcnt;
-			break;
-		}
+	TAILQ_REMOVE(&dcp->c_hintlist, relhint, dh_link);
+	name = relhint->dh_desc.cd_nameptr;
+	if (name != NULL) {
+		relhint->dh_desc.cd_nameptr = NULL;
+		vfs_removename(name);
 	}
+	FREE_ZONE(relhint, sizeof(directoryhint_t), M_HFSDIRHINT);
+	--dcp->c_dirhintcnt;
 }
 
 /*
@@ -1620,32 +1626,26 @@ void
 hfs_reldirhints(struct cnode *dcp, int stale_hints_only)
 {
 	struct timeval tv;
-	directoryhint_t *hint, *next;
+	directoryhint_t *hint, *prev;
 	char * name;
 
 	if (stale_hints_only)
 		microuptime(&tv);
-	else
-		tv.tv_sec = 0;
 
-	for (hint = dcp->c_hintlist.slh_first; hint != NULL; hint = next) {
-		next = hint->dh_link.sle_next;
-		if (stale_hints_only) {
-			/* Skip over newer entries. */
-			if ((tv.tv_sec - hint->dh_time) < HFS_DIRHINT_TTL)
-				continue;
-			SLIST_REMOVE(&dcp->c_hintlist, hint, directoryhint, dh_link);
-		}
+	/* searching from the oldest to the newest, so we can stop early when releasing stale hints only */
+	for (hint = TAILQ_LAST(&dcp->c_hintlist, hfs_hinthead); hint != NULL; hint = prev) {
+		if (stale_hints_only && (tv.tv_sec - hint->dh_time) < HFS_DIRHINT_TTL)
+			break;  /* stop here if this entry is too new */
 		name = hint->dh_desc.cd_nameptr;
 		if (name != NULL) {
 			hint->dh_desc.cd_nameptr = NULL;
 			vfs_removename(name);
 		}
+		prev = TAILQ_PREV(hint, hfs_hinthead, dh_link); /* must save this pointer before calling FREE_ZONE on this node */
+		TAILQ_REMOVE(&dcp->c_hintlist, hint, dh_link);
 		FREE_ZONE(hint, sizeof(directoryhint_t), M_HFSDIRHINT);
 		--dcp->c_dirhintcnt;
 	}
-	if (!stale_hints_only)
-		dcp->c_hintlist.slh_first = NULL;
 }
 
 

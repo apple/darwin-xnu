@@ -1595,16 +1595,18 @@ void act_thread_catt(void *ctx) {
 
 	thread = current_thread();
 
-	toss_live_fpu(thread->machine.curctx);				/* Toss my floating point if live anywhere */
-	toss_live_vec(thread->machine.curctx);				/* Toss my vector if live anywhere */
+	act_machine_sv_free(thread);					/* Blow away any current kernel FP or vector.
+													   We do not support those across a vfork */
+	toss_live_fpu(thread->machine.curctx);			/* Toss my floating point if live anywhere */
+	toss_live_vec(thread->machine.curctx);			/* Toss my vector if live anywhere */
 		
 	sv->save_hdr.save_misc2 = 0;					/* Eye catcher for debug */
 	sv->save_hdr.save_misc3 = 0;					/* Eye catcher for debug */
 	sv->save_hdr.save_act = thread;
 	
-	spc = (unsigned int)thread->map->pmap->space;		/* Get the space we're in */
+	spc = (unsigned int)thread->map->pmap->space;	/* Get the space we're in */
 	
-	osv = thread->machine.pcb;							/* Get the top general savearea */
+	osv = thread->machine.pcb;						/* Get the top general savearea */
 	psv = 0;
 	while(osv) {									/* Any saved state? */
 		if(osv->save_srr1 & MASK(MSR_PR)) break;	/* Leave if this is user state */
@@ -1635,21 +1637,24 @@ void act_thread_catt(void *ctx) {
 	
 	if(ovsv) {										/* Did we find one? */
 		if(pvsv) pvsv->save_hdr.save_prev = 0;		/* Yes, clear pointer to it (it should always be last) or */	
-		else thread->machine.curctx->VMXsave = 0;			/* to the start if the only one */
+		else thread->machine.curctx->VMXsave = 0;	/* to the start if the only one */
 
 		save_release((savearea *)ovsv);				/* Nope, release it */
 	}
 	
 	if(vsv) {										/* Are we sticking any vector on this one? */
 		if(pvsv) pvsv->save_hdr.save_prev = (addr64_t)((uintptr_t)vsv);	/* Yes, chain us to the end or */
-		else thread->machine.curctx->VMXsave = vsv;		/* to the start if the only one */
+		else {
+			thread->machine.curctx->VMXsave = vsv;	/* to the start if the only one */
+			thread->machine.curctx->VMXlevel = 0;	/* Insure that we don't have a leftover level */
+		}
 
 		vsv->save_hdr.save_misc2 = 0;				/* Eye catcher for debug */
 		vsv->save_hdr.save_misc3 = 0;				/* Eye catcher for debug */
 		vsv->save_hdr.save_act = thread;
 	}
 	
-	ofsv = thread->machine.curctx->FPUsave;				/* Get the top float savearea */
+	ofsv = thread->machine.curctx->FPUsave;			/* Get the top float savearea */
 	
 	pfsv = 0;
 	while(ofsv) {									/* Any float saved state? */
@@ -1660,14 +1665,17 @@ void act_thread_catt(void *ctx) {
 	
 	if(ofsv) {										/* Did we find one? */
 		if(pfsv) pfsv->save_hdr.save_prev = 0;		/* Yes, clear pointer to it (it should always be last) or */	
-		else thread->machine.curctx->FPUsave = 0;			/* to the start if the only one */
+		else thread->machine.curctx->FPUsave = 0;	/* to the start if the only one */
 
 		save_release((savearea *)ofsv);				/* Nope, release it */
 	}
 	
 	if(fsv) {										/* Are we sticking any vector on this one? */
 		if(pfsv) pfsv->save_hdr.save_prev = (addr64_t)((uintptr_t)fsv);	/* Yes, chain us to the end or */
-		else thread->machine.curctx->FPUsave = fsv;		/* to the start if the only one */
+		else {
+			thread->machine.curctx->FPUsave = fsv;	/* to the start if the only one */
+			thread->machine.curctx->FPUlevel = 0;	/* Insure that we don't have a leftover level */
+		}
 
 		fsv->save_hdr.save_misc2 = 0;				/* Eye catcher for debug */
 		fsv->save_hdr.save_misc3 = 0;				/* Eye catcher for debug */

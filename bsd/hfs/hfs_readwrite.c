@@ -1228,11 +1228,7 @@ hfs_vnop_ioctl( struct vnop_ioctl_args /* {
 
 			    hfs_unlock(VTOC(vp));
 			    if (vnode_vtype(vp) == VDIR) {
-				myErr = vnode_authorize(vp, NULL, KAUTH_VNODE_SEARCH, &my_context);
-				if (myErr) {
-				    // try again with just read-access
-				    myErr = vnode_authorize(vp, NULL, KAUTH_VNODE_READ_DATA, &my_context);
-				}
+				myErr = vnode_authorize(vp, NULL, (KAUTH_VNODE_SEARCH | KAUTH_VNODE_LIST_DIRECTORY), &my_context);
 			    } else {
 				myErr = vnode_authorize(vp, NULL, KAUTH_VNODE_READ_DATA, &my_context);
 			    }

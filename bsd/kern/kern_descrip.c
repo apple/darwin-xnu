@@ -90,6 +90,7 @@
 #include <sys/pipe.h>
 #include <kern/kern_types.h>
 #include <kern/kalloc.h>
+#include <libkern/OSAtomic.h>
 
 struct psemnode;
 struct pshmnode;
@@ -489,7 +490,7 @@ fcntl(p, uap, retval)
 				error = EBADF;
 				goto outdrop;
 			}
-			p->p_flag |= P_ADVLOCK;
+			OSBitOrAtomic(P_LADVLOCK, &p->p_ladvflag);
 			error = VNOP_ADVLOCK(vp, (caddr_t)p, F_SETLK, &fl, flg, &context);
 			(void)vnode_put(vp);
 			goto outdrop;
@@ -500,7 +501,7 @@ fcntl(p, uap, retval)
 				error = EBADF;
 				goto outdrop;
 			}
-			p->p_flag |= P_ADVLOCK;
+			OSBitOrAtomic(P_LADVLOCK, &p->p_ladvflag);
 			error = VNOP_ADVLOCK(vp, (caddr_t)p, F_SETLK, &fl, flg, &context);
 			(void)vnode_put(vp);
 			goto outdrop;
@@ -2265,7 +2266,7 @@ closef_locked(fp, fg, p)
 	 * If the descriptor was in a message, POSIX-style locks
 	 * aren't passed with the descriptor.
 	 */
-	if (p && (p->p_flag & P_ADVLOCK) && fg->fg_type == DTYPE_VNODE) {
+	if (p && (p->p_ladvflag & P_LADVLOCK) && fg->fg_type == DTYPE_VNODE) {
 		proc_fdunlock(p);
 
 		lf.l_whence = SEEK_SET;

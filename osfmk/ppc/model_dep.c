@@ -183,6 +183,7 @@ char *failNames[] = {
 	"Corrupt skip lists",		/* failSkipLists */
 	"Unaligned stack",			/* failUnalignedStk */
 	"Invalid pmap",				/* failPmap */
+	"Lock timeout",				/* failTimeout */
 	"Unknown failure code"		/* Unknown failure code - must always be last */
 };
 

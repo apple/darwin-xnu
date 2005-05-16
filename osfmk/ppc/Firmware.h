@@ -55,10 +55,11 @@ void fwEmMck(unsigned int, unsigned int, unsigned int, unsigned int, unsigned in
 void fwSCOM(scomcomm *);	/* Read/Write SCOM */ 
 void setPmon(unsigned int, unsigned int);	/* Set perf mon stuff */ 
 
-extern void dbgTrace(unsigned int item1, unsigned int item2, unsigned int item3, unsigned int item4);
+extern void dbgTrace(unsigned int id, unsigned int item1, unsigned int item2, unsigned int item3, unsigned int item4);
 #if 0		/* (TEST/DEBUG) - eliminate inline */
-extern __inline__ void dbgTrace(unsigned int item1, unsigned int item2, unsigned int item3, unsigned int item4) {
+extern __inline__ void dbgTrace(unsigned int id, unsigned int item1, unsigned int item2, unsigned int item3, unsigned int item4) {
  
+ 		__asm__ volatile("mr   r2,%0" : : "r" (id) : "r2");
  		__asm__ volatile("mr   r3,%0" : : "r" (item1) : "r3");
  		__asm__ volatile("mr   r4,%0" : : "r" (item2) : "r4");
  		__asm__ volatile("mr   r5,%0" : : "r" (item3) : "r5");
