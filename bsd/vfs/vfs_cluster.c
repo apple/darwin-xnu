@@ -83,7 +83,6 @@
 #include <sys/kdebug.h>
 
 
-
 #define CL_READ      0x01
 #define CL_ASYNC     0x02
 #define CL_COMMIT    0x04
@@ -978,7 +977,7 @@ start_io:
 				        buf_biowait(cbp);
 
 				if ((error = cluster_iodone(cbp_head, (void *)&dummy))) {
-				        if ((flags & (CL_PAGEOUT | CL_KEEPCACHED) == CL_PAGEOUT) && (error == ENXIO))
+				        if (((flags & (CL_PAGEOUT | CL_KEEPCACHED)) == CL_PAGEOUT) && (error == ENXIO))
 						error = 0;	/* drop the error */
 					else {
 					        if (retval == 0)
@@ -1384,28 +1383,24 @@ cluster_write(vnode_t vp, struct uio *uio, off_t oldEOF, off_t newEOF, off_t hea
 #endif /* LP64_DEBUG */
 	
 	while (uio_resid(uio) && uio->uio_offset < newEOF && retval == 0) {
-	  	u_int64_t	iov_len;
-	  	u_int64_t	iov_base;
+	  	user_size_t	iov_len;
+	  	user_addr_t	iov_base;
 
 		/*
 		 * we know we have a resid, so this is safe
 		 * skip over any emtpy vectors
 		 */
-		iov_len = uio_iov_len(uio);
+		uio_update(uio, (user_size_t)0);
 
-		while (iov_len == 0) {
-		        uio_next_iov(uio);
-			uio->uio_iovcnt--;
-			iov_len = uio_iov_len(uio);
-		}
-		iov_base = uio_iov_base(uio);
+		iov_len  = uio_curriovlen(uio);
+		iov_base = uio_curriovbase(uio);
 
 		upl_size  = PAGE_SIZE;
 		upl_flags = UPL_QUERY_OBJECT_TYPE;
 
 		// LP64todo - fix this!
 		if ((vm_map_get_upl(current_map(),
-				    CAST_DOWN(vm_offset_t, iov_base) & ~PAGE_MASK,
+				    (vm_map_offset_t)(iov_base & ~((user_addr_t)PAGE_MASK)),
 				    &upl_size, &upl, NULL, NULL, &upl_flags, 0)) != KERN_SUCCESS) {
 		        /*
 			 * the user app must have passed in an invalid address
@@ -1550,7 +1545,7 @@ cluster_nocopy_write(vnode_t vp, struct uio *uio, off_t newEOF)
 	int              error  = 0;
 	struct clios     iostate;
 	struct cl_writebehind *wbp;
-	struct iovec     *iov;
+
 
 	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 75)) | DBG_FUNC_START,
 		     (int)uio->uio_offset, (int)uio_resid(uio), 
@@ -1574,21 +1569,23 @@ cluster_nocopy_write(vnode_t vp, struct uio *uio, off_t newEOF)
 	iostate.io_error = 0;
 	iostate.io_wanted = 0;
 
-	iov = uio->uio_iov;
-
 	while (uio_resid(uio) && uio->uio_offset < newEOF && error == 0) {
+	  	user_addr_t	iov_base;
+
 	        io_size = uio_resid(uio);
 
 		if (io_size > (MAX_UPL_TRANSFER * PAGE_SIZE))
 		        io_size = MAX_UPL_TRANSFER * PAGE_SIZE;
 
+		iov_base = uio_curriovbase(uio);
+
 		// LP64todo - fix this!
-		upl_offset = CAST_DOWN(vm_offset_t, iov->iov_base) & PAGE_MASK;
+		upl_offset = CAST_DOWN(vm_offset_t, iov_base) & PAGE_MASK;
 		
 		upl_needed_size = (upl_offset + io_size + (PAGE_SIZE -1)) & ~PAGE_MASK;
 
 		KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 76)) | DBG_FUNC_START,
-			     (int)upl_offset, upl_needed_size, (int)iov->iov_base, io_size, 0);
+			     (int)upl_offset, upl_needed_size, (int)iov_base, io_size, 0);
 
 		for (force_data_sync = 0; force_data_sync < 3; force_data_sync++) {
 		        pages_in_pl = 0;
@@ -1598,7 +1595,7 @@ cluster_nocopy_write(vnode_t vp, struct uio *uio, off_t newEOF)
 
 			// LP64todo - fix this!
 			kret = vm_map_get_upl(current_map(),
-					      CAST_DOWN(vm_offset_t, iov->iov_base) & ~PAGE_MASK,
+					      (vm_map_offset_t)(iov_base & ~((user_addr_t)PAGE_MASK)),
 					      &upl_size,
 					      &upl, 
 					      NULL, 
@@ -1656,7 +1653,7 @@ cluster_nocopy_write(vnode_t vp, struct uio *uio, off_t newEOF)
 		        io_size = (upl_size - (int)upl_offset) & ~PAGE_MASK;
 
 		KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 76)) | DBG_FUNC_END,
-			     (int)upl_offset, upl_size, (int)iov->iov_base, io_size, 0);		       
+			     (int)upl_offset, upl_size, (int)iov_base, io_size, 0);		       
 
 		if (io_size == 0) {
 		        ubc_upl_abort_range(upl, (upl_offset & ~PAGE_MASK), upl_size, 
@@ -1711,10 +1708,7 @@ cluster_nocopy_write(vnode_t vp, struct uio *uio, off_t newEOF)
 		error = cluster_io(vp, upl, upl_offset, uio->uio_offset,
 				   io_size, io_flag, (buf_t)NULL, &iostate);
 
-		iov->iov_len    -= io_size;
-		((u_int32_t)iov->iov_base)   += io_size;
-		uio_setresid(uio, (uio_resid(uio) - io_size));
-		uio->uio_offset += io_size;
+		uio_update(uio, (user_size_t)io_size);
 
 		KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 77)) | DBG_FUNC_END,
 			     (int)upl_offset, (int)uio->uio_offset, (int)uio_resid(uio), error, 0);
@@ -1759,7 +1753,7 @@ cluster_phys_write(vnode_t vp, struct uio *uio, off_t newEOF)
 	int              upl_flags;
 	kern_return_t    kret;
 	int              error  = 0;
-	u_int64_t	 iov_base;
+	user_addr_t	 iov_base;
 	int		 devblocksize;
 	struct cl_writebehind *wbp;
 
@@ -1782,8 +1776,9 @@ cluster_phys_write(vnode_t vp, struct uio *uio, off_t newEOF)
 #endif /* LP64_DEBUG */
 
 	// LP64todo - fix this!
-	io_size = uio_iov_len(uio);
-	iov_base = uio_iov_base(uio);
+	io_size = (int)uio_curriovlen(uio);
+	iov_base = uio_curriovbase(uio);
+
 	upl_offset = CAST_DOWN(upl_offset_t, iov_base) & PAGE_MASK;
 	upl_needed_size = upl_offset + io_size;
 
@@ -1794,7 +1789,7 @@ cluster_phys_write(vnode_t vp, struct uio *uio, off_t newEOF)
 
 	// LP64todo - fix this!
 	kret = vm_map_get_upl(current_map(),
-			      CAST_DOWN(upl_offset_t, iov_base) & ~PAGE_MASK,
+			      (vm_map_offset_t)(iov_base & ~((user_addr_t)PAGE_MASK)),
 			      &upl_size, &upl, NULL, &pages_in_pl, &upl_flags, 0);
 
 	if (kret != KERN_SUCCESS) {
@@ -1814,7 +1809,7 @@ cluster_phys_write(vnode_t vp, struct uio *uio, off_t newEOF)
 	}
 	pl = ubc_upl_pageinfo(upl);
 
-	src_paddr = ((addr64_t)upl_phys_page(pl, 0) << 12) + ((addr64_t)(iov_base & PAGE_MASK));
+	src_paddr = ((addr64_t)upl_phys_page(pl, 0) << 12) + (addr64_t)upl_offset;
 
 	while (((uio->uio_offset & (devblocksize - 1)) || io_size < devblocksize) && io_size) {
 	        int   head_size;
@@ -1850,11 +1845,9 @@ cluster_phys_write(vnode_t vp, struct uio *uio, off_t newEOF)
 		 * The cluster_io write completed successfully,
 		 * update the uio structure
 		 */
-		uio_setresid(uio, (uio_resid(uio) - io_size));
-		uio_iov_len_add(uio, -io_size);
-		uio_iov_base_add(uio, io_size);
-		uio->uio_offset += io_size;
-		src_paddr       += io_size;
+	        uio_update(uio, (user_size_t)io_size);
+
+		src_paddr += io_size;
 
 		if (tail_size)
 		        error = cluster_align_phys_io(vp, uio, src_paddr, tail_size, 0);
@@ -2591,27 +2584,24 @@ cluster_read(vnode_t vp, struct uio *uio, off_t filesize, int xflags)
 #endif /* LP64_DEBUG */
 
 	while (uio_resid(uio) && uio->uio_offset < filesize && retval == 0) {
-	  	u_int64_t	iov_len;
-	  	u_int64_t	iov_base;
+	  	user_size_t	iov_len;
+	  	user_addr_t	iov_base;
 
 		/*
 		 * we know we have a resid, so this is safe
 		 * skip over any emtpy vectors
 		 */
-		iov_len = uio_iov_len(uio);
+		uio_update(uio, (user_size_t)0);
 
-		while (iov_len == 0) {
-		        uio_next_iov(uio);
-			uio->uio_iovcnt--;
-			iov_len = uio_iov_len(uio);
-		}
-		iov_base = uio_iov_base(uio);
+		iov_len  = uio_curriovlen(uio);
+		iov_base = uio_curriovbase(uio);
+
 		upl_size  = PAGE_SIZE;
 		upl_flags = UPL_QUERY_OBJECT_TYPE;
   
 		// LP64todo - fix this!
 		if ((vm_map_get_upl(current_map(),
-				    CAST_DOWN(vm_offset_t, iov_base) & ~PAGE_MASK,
+				    (vm_map_offset_t)(iov_base & ~((user_addr_t)PAGE_MASK)),
 				    &upl_size, &upl, NULL, NULL, &upl_flags, 0)) != KERN_SUCCESS) {
 		        /*
 			 * the user app must have passed in an invalid address
@@ -3165,7 +3155,6 @@ cluster_nocopy_read(vnode_t vp, struct uio *uio, off_t filesize)
 	int              pages_in_pl;
 	int              upl_flags;
 	kern_return_t    kret;
-	struct iovec     *iov;
 	int              i;
 	int              force_data_sync;
 	int              retval = 0;
@@ -3191,16 +3180,15 @@ cluster_nocopy_read(vnode_t vp, struct uio *uio, off_t filesize)
 	iostate.io_error = 0;
 	iostate.io_wanted = 0;
 
-	iov = uio->uio_iov;
-
 	while (uio_resid(uio) && uio->uio_offset < filesize && retval == 0) {
+	  	user_addr_t	iov_base;
 
 	        if (cluster_hard_throttle_on(vp)) {
 		        max_rd_size  = HARD_THROTTLE_MAXSIZE;
 			max_rd_ahead = HARD_THROTTLE_MAXSIZE - 1;
 		} else {
 		        max_rd_size  = MAX_UPL_TRANSFER * PAGE_SIZE;
-			max_rd_ahead = MAX_UPL_TRANSFER * PAGE_SIZE * 2;
+			max_rd_ahead = MAX_UPL_TRANSFER * PAGE_SIZE * 8;
 		}
 	        max_io_size = filesize - uio->uio_offset;
 
@@ -3251,13 +3239,15 @@ cluster_nocopy_read(vnode_t vp, struct uio *uio, off_t filesize)
 			 * to complete before returning
 			 */
 			goto wait_for_reads;
+		
+		iov_base = uio_curriovbase(uio);
 
 		// LP64todo - fix this!
-		upl_offset = CAST_DOWN(vm_offset_t, iov->iov_base) & PAGE_MASK;
+		upl_offset = CAST_DOWN(vm_offset_t, iov_base) & PAGE_MASK;
 		upl_needed_size = (upl_offset + io_size + (PAGE_SIZE -1)) & ~PAGE_MASK;
 
 		KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 72)) | DBG_FUNC_START,
-			     (int)upl_offset, upl_needed_size, (int)iov->iov_base, io_size, 0);
+			     (int)upl_offset, upl_needed_size, (int)iov_base, io_size, 0);
 
 		if (upl_offset == 0 && ((io_size & PAGE_MASK) == 0)) {
 		        no_zero_fill = 1;
@@ -3278,7 +3268,7 @@ cluster_nocopy_read(vnode_t vp, struct uio *uio, off_t filesize)
 
 			// LP64todo - fix this!
 			kret = vm_map_create_upl(current_map(),
-					      (vm_map_offset_t)(CAST_DOWN(vm_offset_t, iov->iov_base) & ~PAGE_MASK),
+						 (vm_map_offset_t)(iov_base & ~((user_addr_t)PAGE_MASK)),
 						 &upl_size, &upl, NULL, &pages_in_pl, &upl_flags);
 
 			if (kret != KERN_SUCCESS) {
@@ -3360,10 +3350,7 @@ cluster_nocopy_read(vnode_t vp, struct uio *uio, off_t filesize)
 		/*
 		 * update the uio structure
 		 */
-		((u_int32_t)iov->iov_base)   += io_size;
-		iov->iov_len    -= io_size;
-		uio_setresid(uio, (uio_resid(uio) - io_size));
-		uio->uio_offset += io_size;
+		uio_update(uio, (user_size_t)io_size);
 
 		KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 73)) | DBG_FUNC_END,
 			     (int)upl, (int)uio->uio_offset, (int)uio_resid(uio), retval, 0);
@@ -3401,15 +3388,9 @@ cluster_phys_read(vnode_t vp, struct uio *uio, off_t filesize)
 	vm_offset_t      upl_offset;
 	addr64_t	 dst_paddr;
 	off_t            max_size;
-#if LP64KERN
-	int64_t			 io_size;
-	u_int64_t		 iov_len;
-	u_int64_t		 iov_base;
-#else
-	int			 io_size;
-	uint			 iov_len;
-	uint			 iov_base;
-#endif
+	int		 io_size;
+	user_size_t	 iov_len;
+	user_addr_t	 iov_base;
 	int              tail_size;
 	int              upl_size;
 	int              upl_needed_size;
@@ -3433,8 +3414,8 @@ cluster_phys_read(vnode_t vp, struct uio *uio, off_t filesize)
 	}
 #endif /* LP64_DEBUG */
 
-	iov_len = uio_iov_len(uio);
-	iov_base = uio_iov_base(uio);
+	iov_len = uio_curriovlen(uio);
+	iov_base = uio_curriovbase(uio);
 
 	max_size = filesize - uio->uio_offset;
 
@@ -3454,7 +3435,7 @@ cluster_phys_read(vnode_t vp, struct uio *uio, off_t filesize)
 	upl_flags = UPL_FILE_IO | UPL_NO_SYNC | UPL_CLEAN_IN_PLACE | UPL_SET_INTERNAL | UPL_SET_LITE | UPL_SET_IO_WIRE;
 
 	kret = vm_map_get_upl(current_map(),
-			      CAST_DOWN(vm_offset_t, iov_base) & ~PAGE_MASK,
+			      (vm_map_offset_t)(iov_base & ~((user_addr_t)PAGE_MASK)),
 			      &upl_size, &upl, NULL, &pages_in_pl, &upl_flags, 0);
 
 	if (kret != KERN_SUCCESS) {
@@ -3473,7 +3454,7 @@ cluster_phys_read(vnode_t vp, struct uio *uio, off_t filesize)
 	}
 	pl = ubc_upl_pageinfo(upl);
 
-	dst_paddr = ((addr64_t)upl_phys_page(pl, 0) << 12) + ((addr64_t)(iov_base & PAGE_MASK));
+	dst_paddr = ((addr64_t)upl_phys_page(pl, 0) << 12) + (addr64_t)upl_offset;
 
 	while (((uio->uio_offset & (devblocksize - 1)) || io_size < devblocksize) && io_size) {
 	        int   head_size;
@@ -3519,7 +3500,7 @@ cluster_phys_read(vnode_t vp, struct uio *uio, off_t filesize)
 		 */
 		lck_mtx_lock(cl_mtxp);
 
-		while ((iostate.io_issued - iostate.io_completed) > (2 * MAX_UPL_TRANSFER * PAGE_SIZE)) {
+		while ((iostate.io_issued - iostate.io_completed) > (8 * MAX_UPL_TRANSFER * PAGE_SIZE)) {
 	                iostate.io_wanted = 1;
 			msleep((caddr_t)&iostate.io_wanted, cl_mtxp, PRIBIO + 1, "cluster_phys_read", 0);
 		}	
@@ -3533,13 +3514,11 @@ cluster_phys_read(vnode_t vp, struct uio *uio, off_t filesize)
 		 * update the uio structure
 		 */
 		if (error == 0) {
-			uio_setresid(uio, (uio_resid(uio) - xsize));
-			uio_iov_base_add(uio, xsize);
-			uio_iov_len_add(uio, -xsize);
-			uio->uio_offset += xsize;
-			dst_paddr       += xsize;
-			upl_offset      += xsize;
-			io_size         -= xsize;
+		        uio_update(uio, (user_size_t)xsize);
+
+			dst_paddr  += xsize;
+			upl_offset += xsize;
+			io_size    -= xsize;
 		}
 	}
 	/*
@@ -4273,7 +4252,6 @@ sparse_cluster_add(struct cl_writebehind *wbp, vnode_t vp, struct cl_extent *cl,
 static int
 cluster_align_phys_io(vnode_t vp, struct uio *uio, addr64_t usr_paddr, int xsize, int flags)
 {
-        struct iovec     *iov;
         upl_page_info_t  *pl;
         upl_t            upl;
         addr64_t	 ubc_paddr;
@@ -4282,8 +4260,6 @@ cluster_align_phys_io(vnode_t vp, struct uio *uio, addr64_t usr_paddr, int xsize
 	int		 did_read = 0;
 	int		 abort_flags;
 	int		 upl_flags;
-
-        iov = uio->uio_iov;
 
 	upl_flags = UPL_SET_LITE;
 	if (! (flags & CL_READ)) {
@@ -4340,12 +4316,9 @@ cluster_align_phys_io(vnode_t vp, struct uio *uio, addr64_t usr_paddr, int xsize
 		error = cluster_io(vp, upl, 0, uio->uio_offset & ~PAGE_MASK_64, PAGE_SIZE,
 					0, (buf_t)NULL, (struct clios *)NULL);
 	}
-	if (error == 0) {
-		uio->uio_offset += xsize;
-		uio_iov_base_add(uio, xsize);
-		uio_iov_len_add(uio, -xsize);
-		uio_setresid(uio, (uio_resid(uio) - xsize));
-	}
+	if (error == 0)
+	        uio_update(uio, (user_size_t)xsize);
+
 	if (did_read)
 	        abort_flags = UPL_ABORT_FREE_ON_EMPTY;
 	else

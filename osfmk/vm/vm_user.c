@@ -1888,7 +1888,7 @@ vm_upl_unmap(
 kern_return_t
 vm_map_get_upl(
 	vm_map_t		map,
-	vm_address_t		offset,
+	vm_map_offset_t		map_offset,
 	upl_size_t		*upl_size,
 	upl_t			*upl,
 	upl_page_info_array_t	page_list,
@@ -1896,14 +1896,12 @@ vm_map_get_upl(
 	int			*flags,
 	int             	force_data_sync)
 {
-	vm_map_offset_t map_offset;
 	int 		map_flags;
 	kern_return_t	kr;
 
 	if (VM_MAP_NULL == map)
 		return KERN_INVALID_ARGUMENT;
 
-	map_offset = (vm_map_offset_t)offset;
 	map_flags = *flags & ~UPL_NOZEROFILL;
 	if (force_data_sync)
 		map_flags |= UPL_FORCE_DATA_SYNC;

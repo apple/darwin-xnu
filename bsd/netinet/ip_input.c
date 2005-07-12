@@ -1678,7 +1678,7 @@ nosourcerouting:
 			 * locate outgoing interface; if we're the destination,
 			 * use the incoming interface (should be same).
 			 */
-			if ((ia = (INA)ifa_ifwithaddr((SA)&ipaddr)) != 0) {
+			if ((ia = (INA)ifa_ifwithaddr((SA)&ipaddr)) == 0) {
 				if ((ia = ip_rtaddr(ipaddr.sin_addr, ipforward_rt)) == 0) {
 					type = ICMP_UNREACH;
 					code = ICMP_UNREACH_HOST;

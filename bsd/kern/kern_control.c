@@ -637,6 +637,8 @@ ctl_ctloutput(struct socket *so, struct sockopt *sopt)
 				MALLOC(data, void *, sopt->sopt_valsize, M_TEMP, M_WAITOK);
 				if (data == NULL)
 					return(ENOMEM);
+				/* 4108337 - copy in data for get socket option */
+				error = sooptcopyin(sopt, data, sopt->sopt_valsize, sopt->sopt_valsize);
 			}
 			len = sopt->sopt_valsize;
 			socket_unlock(so, 0);

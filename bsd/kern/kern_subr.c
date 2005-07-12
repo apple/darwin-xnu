@@ -1091,6 +1091,8 @@ __private_extern__ void uio_calculateresid( uio_t a_uio )
  *	and increments the current iovec base address and offset value. 
  *	If the current iovec length is 0 then advance to the next
  *	iovec (if any).
+ * 	If the a_count passed in is 0, than only do the advancement
+ *	over any 0 length iovec's.
  */
 void uio_update( uio_t a_uio, user_size_t a_count )
 {
@@ -1108,42 +1110,49 @@ void uio_update( uio_t a_uio, user_size_t a_count )
 	}
 
 	if (UIO_IS_64_BIT_SPACE(a_uio)) {
-		if (a_count > a_uio->uio_iovs.uiovp->iov_len) {
-			a_uio->uio_iovs.uiovp->iov_base += a_uio->uio_iovs.uiovp->iov_len;
-			a_uio->uio_iovs.uiovp->iov_len = 0;
-		}
-		else {
-			a_uio->uio_iovs.uiovp->iov_base += a_count;
-			a_uio->uio_iovs.uiovp->iov_len -= a_count;
-		}
+	        /*
+		 * if a_count == 0, then we are asking to skip over
+		 * any empty iovs
+		 */
+	        if (a_count) {
+		        if (a_count > a_uio->uio_iovs.uiovp->iov_len) {
+			        a_uio->uio_iovs.uiovp->iov_base += a_uio->uio_iovs.uiovp->iov_len;
+				a_uio->uio_iovs.uiovp->iov_len = 0;
+			}
+			else {
+			        a_uio->uio_iovs.uiovp->iov_base += a_count;
+				a_uio->uio_iovs.uiovp->iov_len -= a_count;
+			}
 #if 1 // LP64todo - remove this temp workaround once we go live with uio KPI
-		if (a_uio->uio_resid < 0) {
-			a_uio->uio_resid = 0;
-		}
-		if (a_count > (user_size_t)a_uio->uio_resid) {
-			a_uio->uio_offset += a_uio->uio_resid;
-			a_uio->uio_resid = 0;
-		}
-		else {
-			a_uio->uio_offset += a_count;
-			a_uio->uio_resid -= a_count;
-		}
+			if (a_uio->uio_resid < 0) {
+			        a_uio->uio_resid = 0;
+			}
+			if (a_count > (user_size_t)a_uio->uio_resid) {
+			        a_uio->uio_offset += a_uio->uio_resid;
+				a_uio->uio_resid = 0;
+			}
+			else {
+			        a_uio->uio_offset += a_count;
+				a_uio->uio_resid -= a_count;
+			}
 #else
-		if (a_uio->uio_resid_64 < 0) {
-			a_uio->uio_resid_64 = 0;
-		}
-		if (a_count > (user_size_t)a_uio->uio_resid_64) {
-			a_uio->uio_offset += a_uio->uio_resid_64;
-			a_uio->uio_resid_64 = 0;
-		}
-		else {
-			a_uio->uio_offset += a_count;
-			a_uio->uio_resid_64 -= a_count;
-		}
+			if (a_uio->uio_resid_64 < 0) {
+			        a_uio->uio_resid_64 = 0;
+			}
+			if (a_count > (user_size_t)a_uio->uio_resid_64) {
+			        a_uio->uio_offset += a_uio->uio_resid_64;
+				a_uio->uio_resid_64 = 0;
+			}
+			else {
+			        a_uio->uio_offset += a_count;
+				a_uio->uio_resid_64 -= a_count;
+			}
 #endif // LP64todo
-			
-		/* advance to next iovec if current one is totally consumed */
-		while (a_uio->uio_iovcnt > 0  && a_uio->uio_iovs.uiovp->iov_len == 0) {
+		}
+		/*
+		 * advance to next iovec if current one is totally consumed
+		 */
+		while (a_uio->uio_iovcnt > 0 && a_uio->uio_iovs.uiovp->iov_len == 0) {
 			a_uio->uio_iovcnt--;
 			if (a_uio->uio_iovcnt > 0) {
 				a_uio->uio_iovs.uiovp++;
@@ -1151,28 +1160,35 @@ void uio_update( uio_t a_uio, user_size_t a_count )
 		}
 	}
 	else {
-		if (a_count > a_uio->uio_iovs.kiovp->iov_len) {
-			a_uio->uio_iovs.kiovp->iov_base += a_uio->uio_iovs.kiovp->iov_len;
-			a_uio->uio_iovs.kiovp->iov_len = 0;
+	        /*
+		 * if a_count == 0, then we are asking to skip over
+		 * any empty iovs
+		 */
+	        if (a_count) {
+		        if (a_count > a_uio->uio_iovs.kiovp->iov_len) {
+			        a_uio->uio_iovs.kiovp->iov_base += a_uio->uio_iovs.kiovp->iov_len;
+				a_uio->uio_iovs.kiovp->iov_len = 0;
+			}
+			else {
+			        a_uio->uio_iovs.kiovp->iov_base += a_count;
+				a_uio->uio_iovs.kiovp->iov_len -= a_count;
+			}
+			if (a_uio->uio_resid < 0) {
+			        a_uio->uio_resid = 0;
+			}
+			if (a_count > (user_size_t)a_uio->uio_resid) {
+			        a_uio->uio_offset += a_uio->uio_resid;
+				a_uio->uio_resid = 0;
+			}
+			else {
+			        a_uio->uio_offset += a_count;
+				a_uio->uio_resid -= a_count;
+			}
 		}
-		else {
-			a_uio->uio_iovs.kiovp->iov_base += a_count;
-			a_uio->uio_iovs.kiovp->iov_len -= a_count;
-		}
-		if (a_uio->uio_resid < 0) {
-			a_uio->uio_resid = 0;
-		}
-		if (a_count > (user_size_t)a_uio->uio_resid) {
-			a_uio->uio_offset += a_uio->uio_resid;
-			a_uio->uio_resid = 0;
-		}
-		else {
-			a_uio->uio_offset += a_count;
-			a_uio->uio_resid -= a_count;
-		}
-		
-		/* advance to next iovec if current one is totally consumed */
-		while (a_uio->uio_iovcnt > 0  && a_uio->uio_iovs.kiovp->iov_len == 0) {
+		/*
+		 * advance to next iovec if current one is totally consumed
+		 */
+		while (a_uio->uio_iovcnt > 0 && a_uio->uio_iovs.kiovp->iov_len == 0) {
 			a_uio->uio_iovcnt--;
 			if (a_uio->uio_iovcnt > 0) {
 				a_uio->uio_iovs.kiovp++;

@@ -641,12 +641,15 @@ sbappend(sb, m)
 	register struct mbuf *n, *sb_first;
 	int result = 0;
 	int error = 0;
+	int	filtered = 0;
 
 
 	KERNEL_DEBUG((DBG_FNC_SBAPPEND | DBG_FUNC_START), sb, m->m_len, 0, 0, 0);
 
 	if (m == 0)
 		return 0;
+	
+again:
 	sb_first = n = sb->sb_mb;
 	if (n) {
 		while (n->m_nextpkt)
@@ -660,21 +663,22 @@ sbappend(sb, m)
 		} while (n->m_next && (n = n->m_next));
 	}
 	
-	if ((sb->sb_flags & SB_RECV) != 0) {
-		error = sflt_data_in(sb->sb_so, NULL, &m, NULL, 0);
+	if (!filtered && (sb->sb_flags & SB_RECV) != 0) {
+		error = sflt_data_in(sb->sb_so, NULL, &m, NULL, 0, &filtered);
 		if (error) {
 			/* no data was appended, caller should not call sowakeup */
 			return 0;
 		}
-	}
-	
-	/* 3962537 - sflt_data_in may drop the lock, need to validate state again */
-	if (sb_first != sb->sb_mb) {
-		n = sb->sb_mb;
-		if (n) {
-			while (n->m_nextpkt)
-				n = n->m_nextpkt;
-		}
+		
+		/*
+		  If we any filters, the socket lock was dropped. n and sb_first
+		  cached data from the socket buffer. This cache is not valid
+		  since we dropped the lock. We must start over. Since filtered
+		  is set we won't run through the filters a second time. We just
+		  set n and sb_start again.
+		*/
+		if (filtered)
+			goto again;
 	}
 
 	result = sbcompress(sb, m, n);
@@ -736,7 +740,7 @@ sbappendrecord(sb, m0)
 		return 0;
     
 	if ((sb->sb_flags & SB_RECV) != 0) {
-		int error = sflt_data_in(sb->sb_so, NULL, &m0, NULL, sock_data_filt_flag_record);
+		int error = sflt_data_in(sb->sb_so, NULL, &m0, NULL, sock_data_filt_flag_record, NULL);
 		if (error != 0) {
 			if (error != EJUSTRETURN)
 				m_freem(m0);
@@ -784,7 +788,7 @@ sbinsertoob(sb, m0)
 	
 	if ((sb->sb_flags & SB_RECV) != 0) {
 		int error = sflt_data_in(sb->sb_so, NULL, &m0, NULL,
-								 sock_data_filt_flag_oob);
+								 sock_data_filt_flag_oob, NULL);
 		
 		if (error) {
 			if (error != EJUSTRETURN) {
@@ -895,7 +899,7 @@ sbappendaddr(
 	/* Call socket data in filters */
 	if ((sb->sb_flags & SB_RECV) != 0) {
 		int error;
-		error = sflt_data_in(sb->sb_so, asa, &m0, &control, 0);
+		error = sflt_data_in(sb->sb_so, asa, &m0, &control, 0, NULL);
 		if (error) {
 			if (error != EJUSTRETURN) {
 				if (m0) m_freem(m0);
@@ -964,7 +968,7 @@ sbappendcontrol(
 	
 	if (sb->sb_flags & SB_RECV) {
 		int error;
-		error = sflt_data_in(sb->sb_so, NULL, &m0, &control, 0);
+		error = sflt_data_in(sb->sb_so, NULL, &m0, &control, 0, NULL);
 		if (error) {
 			if (error != EJUSTRETURN) {
 				if (m0) m_freem(m0);

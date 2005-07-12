@@ -78,7 +78,7 @@ void	sflt_use(struct socket *so);
 void	sflt_unuse(struct socket *so);
 void	sflt_notify(struct socket *so, sflt_event_t event, void *param);
 int		sflt_data_in(struct socket *so, const struct sockaddr *from, mbuf_t *data,
-					 mbuf_t *control, sflt_data_flag_t flags);
+					 mbuf_t *control, sflt_data_flag_t flags, int *filtered);
 int		sflt_attach_private(struct socket *so, struct socket_filter *filter, sflt_handle handle, int locked);
 void	sflt_detach_private(struct socket_filter_entry *entry, int filter_detached);
 

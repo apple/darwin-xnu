@@ -688,6 +688,11 @@ icmp_reflect(m)
 	 */
 	if (ia == (struct in_ifaddr *)0) {
 		ia = in_ifaddrhead.tqh_first;
+		if (ia == (struct in_ifaddr *)0) {/* no address yet, bail out */
+			m_freem(m);
+			lck_mtx_unlock(rt_mtx);
+			goto done;
+		}
 		ifaref(&ia->ia_ifa);
 	}
 	lck_mtx_unlock(rt_mtx);

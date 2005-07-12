@@ -889,7 +889,7 @@ extern kern_return_t vm_map_region_replace(
 
 extern kern_return_t vm_map_get_upl(
 				vm_map_t		target_map,
-				vm_address_t		address,
+				vm_map_offset_t		map_offset,
 				vm_size_t		*size,
 				upl_t			*upl,
 				upl_page_info_array_t	page_info,

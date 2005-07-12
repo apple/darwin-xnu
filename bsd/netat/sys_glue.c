@@ -280,18 +280,18 @@ int _ATclose(fg, proc)
 	return err;
 }
 
-int _ATrw(fp, rw, uio, ext)
+int _ATrw(fp, rw, uio, p)
      void *fp;
      enum uio_rw rw;
      struct uio *uio;
-     int ext;
+     struct proc *p;
 {
     int s, err, len, clen = 0, res;
     gref_t *gref;
     gbuf_t *m, *mhead, *mprev;
 
 	/* no need to get/drop iocount as the fp already has one */
-    if ((err = atalk_getref_locked(fp, 0, &gref, 0, 1)) != 0)
+    if ((err = atalk_getref_locked(fp, 0, &gref, p, 1)) != 0)
     	return err;
 
 	// LP64todo - fix this!
@@ -414,7 +414,7 @@ int _ATread(fp, uio, cred, flags, p)
      int stat;
 
 	atalk_lock();
-	stat = _ATrw(fp, UIO_READ, uio, 0);
+	stat = _ATrw(fp, UIO_READ, uio, p);
 	atalk_unlock();
 	return stat;
 }
@@ -429,7 +429,7 @@ int _ATwrite(fp, uio, cred, flags, p)
      int stat;
 
 	atalk_lock();
-	stat = _ATrw(fp, UIO_WRITE, uio, 0);
+	stat = _ATrw(fp, UIO_WRITE, uio, p);
 	atalk_unlock();
 
 	return stat;
@@ -633,11 +633,18 @@ int _ATselect(fp, which, wql, proc)
 	int s, err, rc = 0;
 	gref_t *gref;
 
+	/* Radar 4128949: Drop the proc_fd lock here to avoid lock inversion issues with the other AT calls
+      * select() is already holding a reference on the fd, so it won't go away during the time it is unlocked.
+      */
+	proc_fdunlock(proc);
+
 	atalk_lock();
 	/* no need to drop the iocount as select covers that */
 	err = atalk_getref_locked(fp, 0, &gref, 0, 0);
 	atalk_unlock();
 
+	/* Safe to re-grab the proc_fdlock at that point */
+	proc_fdlock(proc);
 	if (err != 0)
 		rc = 1;
 	else {

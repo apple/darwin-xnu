@@ -99,6 +99,16 @@ unix_syscall(struct savearea	*regs)
 	else
 		proc = current_proc();
 
+	/* Make sure there is a process associated with this task */
+	if (proc == NULL) {
+		regs->save_r3 = (long long)EPERM;
+		/* set the "pc" to execute cerror routine */
+		regs->save_srr0 -= 4;
+		task_terminate_internal(current_task());
+		thread_exception_return();
+		/* NOTREACHED */
+	}
+
 	/*
 	 * Delayed binding of thread credential to process credential, if we
 	 * are not running with an explicitly set thread credential.

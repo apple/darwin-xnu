@@ -171,7 +171,7 @@ IOMapper::NewARTTable(IOByteCount size,
         vm_size_t iopl_size = size;
 
         kr = vm_map_get_upl(kernel_map,
-                            startUpl,
+                            (vm_map_offset_t)startUpl,
                             &iopl_size,
                             &iopl,
                             0,

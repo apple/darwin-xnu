@@ -101,8 +101,6 @@ static int hfs_vnop_setattr(struct vnop_setattr_args*);
 
 int hfs_write_access(struct vnode *vp, kauth_cred_t cred, struct proc *p, Boolean considerFlags);
 
-int hfs_chflags(struct vnode *vp, uint32_t flags, kauth_cred_t cred,
-			struct proc *p);
 int hfs_chmod(struct vnode *vp, int mode, kauth_cred_t cred,
 			struct proc *p);
 int hfs_chown(struct vnode *vp, uid_t uid, gid_t gid,
@@ -534,9 +532,10 @@ hfs_vnop_setattr(ap)
 	 * current securelevel are being changed.
 	 */
 	VATTR_SET_SUPPORTED(vap, va_flags);
-	if (VATTR_IS_ACTIVE(vap, va_flags) &&
-	    ((error = hfs_chflags(vp, vap->va_flags, cred, p)) != 0))
-	    goto out;
+	if (VATTR_IS_ACTIVE(vap, va_flags)) {
+		cp->c_flags = vap->va_flags;
+		cp->c_touch_chgtime = TRUE;
+	}
 
 	/*
 	 * If the file's extended security data is being changed, we
@@ -702,25 +701,6 @@ hfs_write_access(struct vnode *vp, kauth_cred_t cred, struct proc *p, Boolean co
  
 	/* Otherwise, check everyone else. */
 	return ((cp->c_mode & S_IWOTH) == S_IWOTH ? 0 : EACCES);
-}
-
-
-
-/*
- * Change the flags on a file or directory.
- * cnode must be locked before calling.
- */
-__private_extern__
-int
-hfs_chflags(struct vnode *vp, uint32_t flags, __unused kauth_cred_t cred, __unused struct proc *p)
-{
-	register struct cnode *cp = VTOC(vp);
-
-	cp->c_flags &= SF_SETTABLE;
-	cp->c_flags |= (flags & UF_SETTABLE);
-	cp->c_touch_chgtime = TRUE;
-
-	return (0);
 }
 
 

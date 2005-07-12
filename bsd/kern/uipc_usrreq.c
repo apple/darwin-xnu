@@ -698,6 +698,7 @@ unp_connect(
 
 	context.vc_proc = p;
 	context.vc_ucred = p->p_ucred;	/* XXX kauth_cred_get() ??? proxy */
+	so2 = so3 = NULL;
 
 	len = nam->sa_len - offsetof(struct sockaddr_un, sun_path);
 	if (len <= 0)

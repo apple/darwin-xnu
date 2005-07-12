@@ -646,6 +646,8 @@ sofreelastref(so, dealloc)
 #ifdef __APPLE__
 		selthreadclear(&so->so_snd.sb_sel);
 		selthreadclear(&so->so_rcv.sb_sel);
+		so->so_rcv.sb_flags &= ~SB_UPCALL;
+		so->so_snd.sb_flags &= ~SB_UPCALL;
 #endif
 		return;
 	}
@@ -664,6 +666,8 @@ sofreelastref(so, dealloc)
 #ifdef __APPLE__
 			selthreadclear(&so->so_snd.sb_sel);
 			selthreadclear(&so->so_rcv.sb_sel);
+			so->so_rcv.sb_flags &= ~SB_UPCALL;
+			so->so_snd.sb_flags &= ~SB_UPCALL;
 #endif
 			socket_unlock(head, 1);
 			return;

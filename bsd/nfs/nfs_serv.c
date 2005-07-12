@@ -147,7 +147,7 @@ nfsrv3_access(nfsd, slp, procp, mrq)
 	mbuf_t mrep = nfsd->nd_mrep, md = nfsd->nd_md;
 	mbuf_t nam = nfsd->nd_nam;
 	caddr_t dpos = nfsd->nd_dpos;
-	vnode_t vp, dvp;
+	vnode_t vp;
 	struct nfs_filehandle nfh;
 	u_long *tl;
 	long t1;
@@ -234,18 +234,17 @@ nfsrv3_access(nfsd, slp, procp, mrq)
 		if (nfsrv_authorize(vp, NULL, testaction, &context, nxo, 0))
 			nfsmode &= ~NFSV3ACCESS_EXTEND;
 	}
-	dvp = NULLVP;
+
 	/*
-	 * For hard links, this answer may be wrong if the vnode
+	 * Note concerning NFSV3ACCESS_DELETE:
+	 * For hard links, the answer may be wrong if the vnode
 	 * has multiple parents with different permissions.
+	 * Also, some clients (e.g. MacOSX 10.3) may incorrectly
+	 * interpret the missing/cleared DELETE bit.
+	 * So we'll just leave the DELETE bit alone.  At worst,
+	 * we're telling the client it might be able to do
+	 * something it really can't.
 	 */
-	if ((nfsmode & NFSV3ACCESS_DELETE) &&
-	    (((dvp = vnode_getparent(vp)) == NULL) ||
-	     nfsrv_authorize(vp, dvp, KAUTH_VNODE_DELETE, &context, nxo, 0))) {
-		nfsmode &= ~NFSV3ACCESS_DELETE;
-	}
-	if (dvp != NULLVP)
-	        vnode_put(dvp);
 
 	if ((nfsmode & NFSV3ACCESS_EXECUTE) &&
 	    (vnode_isdir(vp) ||
@@ -2996,6 +2995,8 @@ nfsrv_symlink(nfsd, slp, procp, mrq)
 			VATTR_SET(vap, va_gid, kauth_cred_getgid(nfsd->nd_cr));
 	}
 	VATTR_SET(vap, va_type, VLNK);
+	VATTR_CLEAR_ACTIVE(vap, va_data_size);
+	VATTR_CLEAR_ACTIVE(vap, va_access_time);
 
 	/* authorize before creating */
 	error = nfsrv_authorize(dvp, NULL, KAUTH_VNODE_ADD_FILE, &context, nxo, 0);

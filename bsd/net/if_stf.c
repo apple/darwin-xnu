@@ -427,8 +427,10 @@ stf_pre_output(
 
 	if (m->m_len < sizeof(*ip6)) {
 		m = m_pullup(m, sizeof(*ip6));
-		if (!m)
+		if (!m) {
+			*m0 = NULL; /* makes sure this won't be double freed */
 			return ENOBUFS;
+		}
 	}
 	ip6 = mtod(m, struct ip6_hdr *);
 	tos = (ntohl(ip6->ip6_flow) >> 20) & 0xff;
@@ -466,8 +468,10 @@ stf_pre_output(
 	M_PREPEND(m, sizeof(struct ip), M_DONTWAIT);
 	if (m && m->m_len < sizeof(struct ip))
 		m = m_pullup(m, sizeof(struct ip));
-	if (m == NULL)
+	if (m == NULL) {
+		*m0 = NULL; 
 		return ENOBUFS;
+	}
 	ip = mtod(m, struct ip *);
 
 	bzero(ip, sizeof(*ip));
@@ -507,6 +511,7 @@ stf_pre_output(
 	if (error == 0)
 		return EJUSTRETURN;
 
+	*m0 = NULL; 
 	return error;
 }
 

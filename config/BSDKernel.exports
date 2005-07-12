@@ -28,6 +28,7 @@ _buf_bwrite
 _buf_callback
 _buf_clear
 _buf_clearflags
+_buf_clone
 _buf_count
 _buf_dataptr
 _buf_device

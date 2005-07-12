@@ -144,17 +144,22 @@ sflt_data_in(
 	const struct sockaddr	*from,
 	mbuf_t					*data,
 	mbuf_t					*control,
-	sflt_data_flag_t		flags)
+	sflt_data_flag_t		flags,
+	int						*filtered)
 {
 	struct socket_filter_entry	*filter;
-	int						 	filtered = 0;
 	int							error = 0;
+	int							filtered_storage;
+	
+	if (filtered == NULL)
+		filtered = &filtered_storage;
+	*filtered = 0;
 	
 	for (filter = so->so_filt; filter && (error == 0);
 		 filter = filter->sfe_next_onsocket) {
 		if (filter->sfe_filter->sf_filter.sf_data_in) {
-			if (filtered == 0) {
-				filtered = 1;
+			if (*filtered == 0) {
+				*filtered = 1;
 				sflt_use(so);
 				socket_unlock(so, 0);
 			}
@@ -163,7 +168,7 @@ sflt_data_in(
 		}
 	}
 	
-	if (filtered != 0) {
+	if (*filtered != 0) {
 		socket_lock(so, 0);
 		sflt_unuse(so);
 	}

@@ -1361,17 +1361,18 @@ sysctl_rtsock SYSCTL_HANDLER_ARGS
 	w.w_arg = name[2];
 	w.w_req = req;
 
-	lck_mtx_lock(rt_mtx);
 	switch (w.w_op) {
 
 	case NET_RT_DUMP:
 	case NET_RT_DUMP2:
 	case NET_RT_FLAGS:
+		lck_mtx_lock(rt_mtx);
 		for (i = 1; i <= AF_MAX; i++)
 			if ((rnh = rt_tables[i]) && (af == 0 || af == i) &&
 			    (error = rnh->rnh_walktree(rnh,
 							sysctl_dumpentry, &w)))
 				break;
+		lck_mtx_unlock(rt_mtx);
 		break;
 	case NET_RT_IFLIST:
 		error = sysctl_iflist(af, &w);
@@ -1386,7 +1387,6 @@ sysctl_rtsock SYSCTL_HANDLER_ARGS
 		error = sysctl_rttrash(req);
 		break;
 	}
-	lck_mtx_unlock(rt_mtx);
 	if (w.w_tmem)
 		FREE(w.w_tmem, M_RTABLE);
 	return (error);
