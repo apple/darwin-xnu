@@ -701,6 +701,27 @@ fcntl(p, uap, retval)
 		}
 		goto outdrop;
 
+	case F_GLOBAL_NOCACHE:
+		if (fp->f_type != DTYPE_VNODE) {
+			error = EBADF;
+			goto out;
+		}
+		vp = (struct vnode *)fp->f_data;
+		proc_fdunlock(p);
+
+		if ( (error = vnode_getwithref(vp)) == 0 ) {
+
+		        *retval = vnode_isnocache(vp);
+
+		        if (uap->arg)
+			        vnode_setnocache(vp);
+			else
+			        vnode_clearnocache(vp);
+
+			(void)vnode_put(vp);
+		}
+		goto outdrop;
+
 	case F_RDADVISE: {
 		struct radvisory ra_struct;
 

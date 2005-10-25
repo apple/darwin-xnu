@@ -462,12 +462,26 @@ extern void in_delayed_cksum_offset(struct mbuf *m, int ip_offset);
 void
 mbuf_outbound_finalize(mbuf_t mbuf, u_long protocol_family, size_t protocol_offset)
 {
-	if ((mbuf->m_pkthdr.csum_flags & (CSUM_DELAY_DATA | CSUM_DELAY_IP)) == 0)
+	if ((mbuf->m_pkthdr.csum_flags &
+		 (CSUM_DELAY_DATA | CSUM_DELAY_IP | CSUM_TCP_SUM16)) == 0)
 		return;
 	
 	/* Generate the packet in software, client needs it */
 	switch (protocol_family) {
 		case PF_INET:
+			if (mbuf->m_pkthdr.csum_flags & CSUM_TCP_SUM16) {
+				/*
+				 * If you're wondering where this lovely code comes
+				 * from, we're trying to undo what happens in ip_output.
+				 * Look for CSUM_TCP_SUM16 in ip_output.
+				 */
+				u_int16_t	first, second;
+				mbuf->m_pkthdr.csum_flags &= ~CSUM_TCP_SUM16;
+				mbuf->m_pkthdr.csum_flags |= CSUM_TCP;
+				first = mbuf->m_pkthdr.csum_data >> 16;
+				second = mbuf->m_pkthdr.csum_data & 0xffff;
+				mbuf->m_pkthdr.csum_data = first - second;
+			}
 			if (mbuf->m_pkthdr.csum_flags & CSUM_DELAY_DATA) {
 				in_delayed_cksum_offset(mbuf, protocol_offset);
 			}

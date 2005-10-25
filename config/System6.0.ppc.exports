@@ -208,3 +208,8 @@ _ml_mem_backoff
 _pe_do_clock_test
 _pe_run_clock_test
 _scc
+_pmsStart
+_pmsPark
+_pmsRun
+_pmsRunLocal
+_pmsBuild

@@ -642,6 +642,9 @@ sofreelastref(so, dealloc)
 
 	/*### Assume socket is locked */
 
+	/* Remove any filters - may be called more than once */
+	sflt_termsock(so);
+	
 	if ((!(so->so_flags & SOF_PCBCLEARING)) || ((so->so_state & SS_NOFDREF) == 0)) {
 #ifdef __APPLE__
 		selthreadclear(&so->so_snd.sb_sel);
@@ -1029,13 +1032,28 @@ sosendcheck(
 {
 	int error = 0;
 	long space;
+	int	assumelock = 0;
 
 restart:
 	if (*sblocked == 0) {
-		error = sblock(&so->so_snd, SBLOCKWAIT(flags));
-		if (error)
-			return error;
-		*sblocked = 1;
+		if ((so->so_snd.sb_flags & SB_LOCK) != 0 &&
+			so->so_send_filt_thread != 0 &&
+			so->so_send_filt_thread == current_thread()) {
+			/*
+			 * We're being called recursively from a filter,
+			 * allow this to continue. Radar 4150520.
+			 * Don't set sblocked because we don't want
+			 * to perform an unlock later.
+			 */
+			assumelock = 1;
+		}
+		else {
+			error = sblock(&so->so_snd, SBLOCKWAIT(flags));
+			if (error) {
+				return error;
+			}
+			*sblocked = 1;
+		}
 	}
 	
 	if (so->so_state & SS_CANTSENDMORE) 
@@ -1070,8 +1088,9 @@ restart:
 		return EMSGSIZE;
 	if (space < resid + clen && 
 		(atomic || space < so->so_snd.sb_lowat || space < clen)) {
-		if ((so->so_state & SS_NBIO) || (flags & MSG_NBIO))
+		if ((so->so_state & SS_NBIO) || (flags & MSG_NBIO) || assumelock) {
 			return EWOULDBLOCK;
+		}
 		sbunlock(&so->so_snd, 1);
 		error = sbwait(&so->so_snd);
 		if (error) {
@@ -1164,12 +1183,7 @@ sosend(so, addr, uio, top, control, flags)
 	do {
 		error = sosendcheck(so, addr, resid, clen, atomic, flags, &sblocked);
 		if (error) {
-			if (sblocked)
-				goto release;
-			else {
-				socket_unlock(so, 1);
-				goto out;
-			}
+			goto release;
 		}
 		mp = &top;
 		space = sbspace(&so->so_snd) - clen + ((flags & MSG_OOB) ? 1024 : 0);
@@ -1237,12 +1251,7 @@ sosend(so, addr, uio, top, control, flags)
 						if (freelist == NULL) {
 							error = ENOBUFS;
 							socket_lock(so, 0);
-							if (sblocked) {
-								goto release;
-							} else {
-								socket_unlock(so, 1);
-								goto out;
-							}
+							goto release;
 						}
 						/*
 						 * For datagram protocols, leave room
@@ -1294,25 +1303,28 @@ sosend(so, addr, uio, top, control, flags)
 			}
             
 		    if (flags & (MSG_HOLD|MSG_SEND))
-		    {	/* Enqueue for later, go away if HOLD */
-			register struct mbuf *mb1;
-			if (so->so_temp && (flags & MSG_FLUSH))
-			{	m_freem(so->so_temp);
-				so->so_temp = NULL;
-			}
-			if (so->so_temp)
-				so->so_tail->m_next = top;
-			else
-				so->so_temp = top;
-			mb1 = top;
-			while (mb1->m_next)
-		    		mb1 = mb1->m_next;
-			so->so_tail = mb1;
-			if (flags&MSG_HOLD)
-			{	top = NULL;
-				goto release;
-			}
-			top = so->so_temp;
+		    {
+				/* Enqueue for later, go away if HOLD */
+				register struct mbuf *mb1;
+				if (so->so_temp && (flags & MSG_FLUSH))
+				{
+					m_freem(so->so_temp);
+					so->so_temp = NULL;
+				}
+				if (so->so_temp)
+					so->so_tail->m_next = top;
+				else
+					so->so_temp = top;
+				mb1 = top;
+				while (mb1->m_next)
+						mb1 = mb1->m_next;
+				so->so_tail = mb1;
+				if (flags & MSG_HOLD)
+				{
+					top = NULL;
+					goto release;
+				}
+				top = so->so_temp;
 		    }
 		    if (dontroute)
 			    so->so_options |= SO_DONTROUTE;
@@ -1345,12 +1357,7 @@ sosend(so, addr, uio, top, control, flags)
 						int so_flags = 0;
 						if (filtered == 0) {
 							filtered = 1;
-							/*
-							 * We don't let sbunlock unlock the socket because
-							 * we don't want it to decrement the usecount.
-							 */
-							sbunlock(&so->so_snd, 1);
-							sblocked = 0;
+							so->so_send_filt_thread = current_thread();
 							socket_unlock(so, 0);
 							so_flags = (sendflags & MSG_OOB) ? sock_data_filt_flag_oob : 0;
 						}
@@ -1365,33 +1372,16 @@ sosend(so, addr, uio, top, control, flags)
 					 * The socket is unlocked as is the socket buffer.
 					 */
 					socket_lock(so, 0);
-					if (error == EJUSTRETURN) {
-						error = 0;
-						clen = 0;
-						control = 0;
-						top = 0;
-						socket_unlock(so, 1);
-						goto out;
-					}
-					else if (error) {
-						socket_unlock(so, 1);
-						goto out;
-					}
-					
-					
-					/* Verify our state again, this will lock the socket buffer */
-					error = sosendcheck(so, addr, top->m_pkthdr.len,
-								control ? control->m_pkthdr.len : 0,
-								atomic, flags, &sblocked);
+					so->so_send_filt_thread = 0;
 					if (error) {
-						if (sblocked) {
-							/* sbunlock at release will unlock the socket */
-							goto release;
+						if (error == EJUSTRETURN) {
+							error = 0;
+							clen = 0;
+							control = 0;
+							top = 0;
 						}
-						else {
-							socket_unlock(so, 1);
-							goto out;
-						}
+						
+						goto release;
 					}
 				}
 			}
@@ -1423,7 +1413,10 @@ sosend(so, addr, uio, top, control, flags)
 	} while (resid);
 
 release:
-	sbunlock(&so->so_snd, 0);	/* will unlock socket */
+	if (sblocked)
+		sbunlock(&so->so_snd, 0);	/* will unlock socket */
+	else
+		socket_unlock(so, 1);
 out:
 	if (top)
 		m_freem(top);
@@ -2929,9 +2922,6 @@ sofree(so)
 	else  
 		mutex_held = so->so_proto->pr_domain->dom_mtx;
 	lck_mtx_assert(mutex_held, LCK_MTX_ASSERT_OWNED);
-	
-	/* Remove the filters */
-	sflt_termsock(so);
 	
 	sofreelastref(so, 0);
 }

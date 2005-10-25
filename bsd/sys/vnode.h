@@ -415,6 +415,7 @@ extern int		vttoif_tab[];
 /* VNOP_READDIR flags: */
 #define VNODE_READDIR_EXTENDED    0x0001   /* use extended directory entries */
 #define VNODE_READDIR_REQSEEKOFF  0x0002   /* requires seek offset (cookies) */
+#define VNODE_READDIR_SEEKOFF32   0x0004   /* seek offset values should fit in 32 bits */
 
 
 #define	NULLVP	((struct vnode *)NULL)

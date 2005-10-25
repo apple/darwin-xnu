@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -65,7 +65,7 @@ ppc_trap(CHUDCall,0x6009)
 ppc_trap(ppcNull,0x600A)	
 ppc_trap(perfmon_control,0x600B)	
 ppc_trap(ppcNullinst,0x600C)	
-
+ppc_trap(pmsCntrl,0x600D)	
 #endif /* _MACH_SYSCALL_SW_H_ */
 
 #endif	/* _MACH_PPC_SYSCALL_SW_H_ */

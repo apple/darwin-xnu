@@ -905,6 +905,7 @@ unp_pcblist SYSCTL_HANDLER_ARGS
 	gencnt = unp_gencnt;
 	n = unp_count;
 
+	bzero(&xug, sizeof(xug));
 	xug.xug_len = sizeof xug;
 	xug.xug_count = n;
 	xug.xug_gen = gencnt;
@@ -941,6 +942,8 @@ unp_pcblist SYSCTL_HANDLER_ARGS
 		unp = unp_list[i];
 		if (unp->unp_gencnt <= gencnt) {
 			struct xunpcb xu;
+
+			bzero(&xu, sizeof(xu));
 			xu.xu_len = sizeof xu;
 			xu.xu_unpp = (struct  unpcb_compat *)unp;
 			/*
@@ -967,6 +970,8 @@ unp_pcblist SYSCTL_HANDLER_ARGS
 		 * while we were processing this request, and it
 		 * might be necessary to retry.
 		 */
+		bzero(&xug, sizeof(xug));
+		xug.xug_len = sizeof xug;
 		xug.xug_gen = unp_gencnt;
 		xug.xug_sogen = so_gencnt;
 		xug.xug_count = unp_count;

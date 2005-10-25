@@ -402,9 +402,6 @@ OSStatus	GetMapNode				(BTreeControlBlockPtr	 btreePtr,
 
 //// Node Buffer Operations
 
-OSStatus	CheckNode				(BTreeControlBlockPtr	 btreePtr,
-									 NodeDescPtr			 node );
-
 void		ClearNode				(BTreeControlBlockPtr	 btreePtr,
 									 NodeDescPtr			 node );
 

@@ -860,6 +860,7 @@ hfs_mountfs(struct vnode *devvp, struct mount *mp, struct hfs_mount_args *args,
 	lck_mtx_init(&hfsmp->hfs_mutex, hfs_mutex_group, hfs_lock_attr);
 	lck_mtx_init(&hfsmp->hfc_mutex, hfs_mutex_group, hfs_lock_attr);
 	lck_rw_init(&hfsmp->hfs_global_lock, hfs_rwlock_group, hfs_lock_attr);
+	lck_rw_init(&hfsmp->hfs_insync, hfs_rwlock_group, hfs_lock_attr);
 
 	vfs_setfsprivate(mp, hfsmp);
 	hfsmp->hfs_mp = mp;			/* Make VFSTOHFS work */
@@ -1655,6 +1656,10 @@ hfs_sync(struct mount *mp, int waitfor, vfs_context_t context)
 	if (hfsmp->hfs_flags & HFS_READ_ONLY)
 		return (EROFS);
 
+	/* skip over frozen volumes */
+	if (!lck_rw_try_lock_shared(&hfsmp->hfs_insync))
+		return 0;
+
 	args.cred = vfs_context_proc(context);
 	args.waitfor = waitfor;
 	args.p = p;
@@ -1734,7 +1739,8 @@ hfs_sync(struct mount *mp, int waitfor, vfs_context_t context)
 	if (hfsmp->jnl) {
 	    journal_flush(hfsmp->jnl);
 	}
-	
+
+	lck_rw_unlock_shared(&hfsmp->hfs_insync);	
 	return (allerror);
 }
 

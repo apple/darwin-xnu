@@ -213,6 +213,7 @@ typedef __darwin_pid_t	pid_t;
 #define F_PATHPKG_CHECK 52              /* find which component (if any) is a package */
 #define F_FREEZE_FS     53              /* "freeze" all fs operations */
 #define F_THAW_FS       54              /* "thaw" all fs operations */
+#define F_GLOBAL_NOCACHE 55		/* turn data caching off/on (globally) for this file */
 
 // FS-specific fcntl()'s numbers begin at 0x00010000 and go up
 #define FCNTL_FS_SPECIFIC_BASE  0x00010000

@@ -206,7 +206,7 @@ struct socket {
 	u_int32_t	so_filteruse; /* usecount for the socket filters */
 	void	*reserved3;		/* Temporarily in use/debug: last socket lock LR */
 	void	*reserved4;		/* Temporarily in use/debug: last socket unlock LR */
-
+	thread_t	so_send_filt_thread;
 #endif
 };
 #endif /* KERNEL_PRIVATE */

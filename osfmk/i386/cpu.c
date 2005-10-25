@@ -134,7 +134,13 @@ cpu_machine_init(
 
 	cpu = get_cpu_number();
 	PE_cpu_machine_init(cpu_datap(cpu)->cpu_id, TRUE);
-
+#if 0
+	if (cpu_datap(cpu)->hibernate)
+	{
+	    cpu_datap(cpu)->hibernate = 0;
+	    hibernate_machine_init();
+	}
+#endif
 	ml_init_interrupt();
 }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -775,7 +775,7 @@ ipc_kmsg_get_from_kernel(
 	ipc_port_t	dest_port;
 
 	assert(size >= sizeof(mach_msg_header_t));
-	assert((size & 3) == 0);
+//	assert((size & 3) == 0);
 
 	assert(IP_VALID((ipc_port_t) msg->msgh_remote_port));
 	dest_port = (ipc_port_t)msg->msgh_remote_port;

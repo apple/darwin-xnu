@@ -34,10 +34,9 @@ OBJS_WERROR=$(filter-out $(OBJS_NO_WERROR),$(OBJS))
 
 $(OBJS_WERROR):		WERROR=-Werror
 
-
-
 # Files that must go in the __HIB segment:
 HIB_FILES=                              \
+           hibernate_restore.o          \
            gdt.o                        \
            idt.o
 

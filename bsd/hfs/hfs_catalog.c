@@ -1784,7 +1784,12 @@ struct packdirentry_state {
 	linkinfo_t *   cbs_linkinfo;
 	struct cat_desc * cbs_desc;
 //	struct dirent  * cbs_stdentry;
+	// followign fields are only used for NFS readdir, which uses the next file id as the seek offset of each entry
 	struct direntry * cbs_direntry;
+	struct direntry * cbs_prevdirentry;
+	u_int32_t      cbs_previlinkref;
+	Boolean        cbs_hasprevdirentry;
+	Boolean        cbs_eof;
 };
 
 static int
@@ -1798,7 +1803,8 @@ cat_packdirentry(const CatalogKey *ckp, const CatalogRecord *crp,
 	struct dirent catent;
 	struct direntry * entry = NULL;
 	time_t itime;
-	u_long ilinkref = 0;
+	u_int32_t ilinkref = 0;
+	u_int32_t curlinkref = 0;
 	cnid_t  cnid;
 	int hide = 0;
 	u_int8_t type;
@@ -1809,6 +1815,7 @@ cat_packdirentry(const CatalogKey *ckp, const CatalogRecord *crp,
 	size_t maxnamelen;
 	size_t uiosize = 0;
 	caddr_t uioaddr;
+	Boolean stop_after_pack = false;
 	
 	hfsmp = state->cbs_hfsmp;
 
@@ -1819,8 +1826,18 @@ cat_packdirentry(const CatalogKey *ckp, const CatalogRecord *crp,
 
 	/* We're done when parent directory changes */
 	if (state->cbs_parentID != curID) {
-		state->cbs_result = ENOENT;
-		return (0);	/* stop */
+		if (state->cbs_extended) {
+			if (state->cbs_hasprevdirentry) { /* the last record haven't been returned yet, so we want to stop after
+											   * packing the last item */
+				stop_after_pack = true;
+			} else {
+				state->cbs_result = ENOENT;
+				return (0);	/* stop */
+			}				
+		} else {
+			state->cbs_result = ENOENT;
+			return (0);	/* stop */
+		}
 	}
 
 	if (state->cbs_extended) {
@@ -1832,95 +1849,93 @@ cat_packdirentry(const CatalogKey *ckp, const CatalogRecord *crp,
 		maxnamelen = NAME_MAX;
 	}
 
-	if (!(hfsmp->hfs_flags & HFS_STANDARD)) {
-		switch(crp->recordType) {
-		case kHFSPlusFolderRecord:
-			type = DT_DIR;
-			cnid = crp->hfsPlusFolder.folderID;
-			/* Hide our private meta data directory */
-			if ((curID == kHFSRootFolderID) &&
-			    (cnid == hfsmp->hfs_privdir_desc.cd_cnid)) {
-				hide = 1;
-			}
+	if (state->cbs_extended && stop_after_pack) {
+		cnid = INT_MAX;			/* the last item returns a non-zero invalid cookie */
+	} else {
+		if (!(hfsmp->hfs_flags & HFS_STANDARD)) {
+			switch(crp->recordType) {
+			case kHFSPlusFolderRecord:
+				type = DT_DIR;
+				cnid = crp->hfsPlusFolder.folderID;
+				/* Hide our private meta data directory */
+				if ((curID == kHFSRootFolderID) &&
+					(cnid == hfsmp->hfs_privdir_desc.cd_cnid)) {
+					hide = 1;
+				}
 
-			break;
-		case kHFSPlusFileRecord:
-			itime = to_bsd_time(crp->hfsPlusFile.createDate);
+				break;
+			case kHFSPlusFileRecord:
+				itime = to_bsd_time(crp->hfsPlusFile.createDate);
+				/*
+				 * When a hardlink link is encountered save its link ref.
+				 */
+				if ((SWAP_BE32(crp->hfsPlusFile.userInfo.fdType) == kHardLinkFileType) &&
+					(SWAP_BE32(crp->hfsPlusFile.userInfo.fdCreator) == kHFSPlusCreator) &&
+					((itime == (time_t)hfsmp->hfs_itime) ||
+					 (itime == (time_t)hfsmp->hfs_metadata_createdate))) {
+					ilinkref = crp->hfsPlusFile.bsdInfo.special.iNodeNum;
+				}
+				type = MODE_TO_DT(crp->hfsPlusFile.bsdInfo.fileMode);
+				cnid = crp->hfsPlusFile.fileID;
+				/* Hide the journal files */
+				if ((curID == kHFSRootFolderID) &&
+					(hfsmp->jnl) &&
+					((cnid == hfsmp->hfs_jnlfileid) ||
+					 (cnid == hfsmp->hfs_jnlinfoblkid))) {
+					hide = 1;
+				}
+				break;
+			default:
+				return (0);	/* stop */
+			};
+
+			cnp = (CatalogName*) &ckp->hfsPlus.nodeName;
+			result = utf8_encodestr(cnp->ustr.unicode, cnp->ustr.length * sizeof(UniChar),
+									nameptr, &namelen, maxnamelen + 1, ':', 0);
+			if (result == ENAMETOOLONG) {
+				result = ConvertUnicodeToUTF8Mangled(cnp->ustr.length * sizeof(UniChar),
+													 cnp->ustr.unicode, maxnamelen + 1,
+													 (ByteCount*)&namelen, nameptr,
+													 cnid);		
+				is_mangled = 1;
+			}
+		} else { /* hfs */
+			switch(crp->recordType) {
+			case kHFSFolderRecord:
+				type = DT_DIR;
+				cnid = crp->hfsFolder.folderID;
+				break;
+			case kHFSFileRecord:
+				type = DT_REG;
+				cnid = crp->hfsFile.fileID;
+				break;
+			default:
+				return (0);	/* stop */
+			};
+
+			cnp = (CatalogName*) ckp->hfs.nodeName;
+			result = hfs_to_utf8(hfsmp, cnp->pstr, maxnamelen + 1,
+								 (ByteCount *)&namelen, nameptr);
 			/*
-			 * When a hardlink link is encountered save its link ref.
+			 * When an HFS name cannot be encoded with the current
+			 * volume encoding we use MacRoman as a fallback.
 			 */
-			if ((SWAP_BE32(crp->hfsPlusFile.userInfo.fdType) == kHardLinkFileType) &&
-			    (SWAP_BE32(crp->hfsPlusFile.userInfo.fdCreator) == kHFSPlusCreator) &&
-			    ((itime == (time_t)hfsmp->hfs_itime) ||
-			     (itime == (time_t)hfsmp->hfs_metadata_createdate))) {
-				ilinkref = crp->hfsPlusFile.bsdInfo.special.iNodeNum;
-			}
-			type = MODE_TO_DT(crp->hfsPlusFile.bsdInfo.fileMode);
-			cnid = crp->hfsPlusFile.fileID;
-			/* Hide the journal files */
-			if ((curID == kHFSRootFolderID) &&
-			    (hfsmp->jnl) &&
-			    ((cnid == hfsmp->hfs_jnlfileid) ||
-			     (cnid == hfsmp->hfs_jnlinfoblkid))) {
-				hide = 1;
-			}
-			break;
-		default:
-			return (0);	/* stop */
-		};
-
-		cnp = (CatalogName*) &ckp->hfsPlus.nodeName;
-		result = utf8_encodestr(cnp->ustr.unicode, cnp->ustr.length * sizeof(UniChar),
-					nameptr, &namelen, maxnamelen + 1, ':', 0);
-		if (result == ENAMETOOLONG) {
-			result = ConvertUnicodeToUTF8Mangled(cnp->ustr.length * sizeof(UniChar),
-							     cnp->ustr.unicode, maxnamelen + 1,
-							     (ByteCount*)&namelen, nameptr,
-							     cnid);		
-			is_mangled = 1;
+			if (result)
+				result = mac_roman_to_utf8(cnp->pstr, maxnamelen + 1,
+										   (ByteCount *)&namelen, nameptr);
 		}
-	} else { /* hfs */
-		switch(crp->recordType) {
-		case kHFSFolderRecord:
-			type = DT_DIR;
-			cnid = crp->hfsFolder.folderID;
-			break;
-		case kHFSFileRecord:
-			type = DT_REG;
-			cnid = crp->hfsFile.fileID;
-			break;
-		default:
-			return (0);	/* stop */
-		};
-
-		cnp = (CatalogName*) ckp->hfs.nodeName;
-		result = hfs_to_utf8(hfsmp, cnp->pstr, maxnamelen + 1,
-				    (ByteCount *)&namelen, nameptr);
-		/*
-		 * When an HFS name cannot be encoded with the current
-		 * volume encoding we use MacRoman as a fallback.
-		 */
-		if (result)
-			result = mac_roman_to_utf8(cnp->pstr, maxnamelen + 1,
-				    (ByteCount *)&namelen, nameptr);
 	}
 
 	if (state->cbs_extended) {
-		entry->d_type = type;
-		entry->d_namlen = namelen;
-		entry->d_reclen = uiosize = EXT_DIRENT_LEN(namelen);
-		if (hide)
-			entry->d_fileno = 0;  /* file number = 0 means skip entry */
-		else
-			entry->d_fileno = cnid;
-
 		/*
 		 * The index is 1 relative and includes "." and ".."
 		 *
-		 * Also stuff the cnid in the upper 32 bits of the cookie.
+		 * Also stuff the cnid in the upper 32 bits of the cookie.  The cookie is stored to the previous entry, which
+		 * will be packed and copied this time
 		 */
-		entry->d_seekoff = (state->cbs_index + 3) | ((u_int64_t)cnid << 32);
-		uioaddr = (caddr_t) entry;
+		state->cbs_prevdirentry->d_seekoff = (state->cbs_index + 3) | ((u_int64_t)cnid << 32);
+		uiosize = state->cbs_prevdirentry->d_reclen;
+		uioaddr = (caddr_t) state->cbs_prevdirentry;
 	} else {
 		catent.d_type = type;
 		catent.d_namlen = namelen;
@@ -1941,58 +1956,89 @@ cat_packdirentry(const CatalogKey *ckp, const CatalogRecord *crp,
 		return (0);	/* stop */
 	}
 
-	state->cbs_result = uiomove(uioaddr, uiosize, state->cbs_uio);
-	if (state->cbs_result == 0) {
-		++state->cbs_index;
+	if (!state->cbs_extended || state->cbs_hasprevdirentry) {
+		state->cbs_result = uiomove(uioaddr, uiosize, state->cbs_uio);
+		if (state->cbs_result == 0) {
+			++state->cbs_index;
 
-		/* Remember previous entry */
-		state->cbs_desc->cd_cnid = cnid;
-		if (type == DT_DIR) {
-			state->cbs_desc->cd_flags |= CD_ISDIR;
-		} else {
-			state->cbs_desc->cd_flags &= ~CD_ISDIR;
-		}
-		if (state->cbs_desc->cd_nameptr != NULL) {
-			vfs_removename(state->cbs_desc->cd_nameptr);
-		}
+			/* Remember previous entry */
+			state->cbs_desc->cd_cnid = cnid;
+			if (type == DT_DIR) {
+				state->cbs_desc->cd_flags |= CD_ISDIR;
+			} else {
+				state->cbs_desc->cd_flags &= ~CD_ISDIR;
+			}
+			if (state->cbs_desc->cd_nameptr != NULL) {
+				vfs_removename(state->cbs_desc->cd_nameptr);
+			}
 #if 0
-		state->cbs_desc->cd_encoding = xxxx;
+			state->cbs_desc->cd_encoding = xxxx;
 #endif
-		if (!is_mangled) {
-			state->cbs_desc->cd_namelen = namelen;
-			state->cbs_desc->cd_nameptr = vfs_addname(nameptr, namelen, 0, 0);
-		} else {
-			/* Store unmangled name for the directory hint else it will 
-			 * restart readdir at the last location again 
-		 	 */
-			char *new_nameptr;
-			size_t bufsize;
+			if (!is_mangled) {
+				state->cbs_desc->cd_namelen = namelen;
+				state->cbs_desc->cd_nameptr = vfs_addname(nameptr, namelen, 0, 0);
+			} else {
+				/* Store unmangled name for the directory hint else it will 
+				 * restart readdir at the last location again 
+				 */
+				char *new_nameptr;
+				size_t bufsize;
+				size_t tmp_namelen = 0;
 			
-			cnp = (CatalogName *)&ckp->hfsPlus.nodeName;
-			bufsize = 1 + utf8_encodelen(cnp->ustr.unicode,
-		        	                     cnp->ustr.length * sizeof(UniChar),
-		                	             ':', 0);
-			MALLOC(new_nameptr, char *, bufsize, M_TEMP, M_WAITOK);
-			result = utf8_encodestr(cnp->ustr.unicode,
-		    	                    cnp->ustr.length * sizeof(UniChar),
-		        	                new_nameptr, &namelen,
-		            	            bufsize, ':', 0);
+				cnp = (CatalogName *)&ckp->hfsPlus.nodeName;
+				bufsize = 1 + utf8_encodelen(cnp->ustr.unicode,
+											 cnp->ustr.length * sizeof(UniChar),
+											 ':', 0);
+				MALLOC(new_nameptr, char *, bufsize, M_TEMP, M_WAITOK);
+				result = utf8_encodestr(cnp->ustr.unicode,
+										cnp->ustr.length * sizeof(UniChar),
+										new_nameptr, &tmp_namelen,
+										bufsize, ':', 0);
 			
-			state->cbs_desc->cd_namelen = namelen;
-			state->cbs_desc->cd_nameptr = vfs_addname(new_nameptr, namelen, 0, 0);
+				state->cbs_desc->cd_namelen = tmp_namelen;
+				state->cbs_desc->cd_nameptr = vfs_addname(new_nameptr, tmp_namelen, 0, 0);
 			
-			FREE(new_nameptr, M_TEMP);
-		} 
+				FREE(new_nameptr, M_TEMP);
+			} 
+		}
+		if (state->cbs_hasprevdirentry) {
+			curlinkref = ilinkref;               /* save current */
+			ilinkref = state->cbs_previlinkref;  /* use previous */
+		}
+		/*
+		 * Record any hard links for post processing.
+		 */
+		if ((ilinkref != 0) &&
+			(state->cbs_result == 0) &&
+			(state->cbs_nlinks < state->cbs_maxlinks)) {
+			state->cbs_linkinfo[state->cbs_nlinks].dirent_addr = uiobase;
+			state->cbs_linkinfo[state->cbs_nlinks].link_ref = ilinkref;
+			state->cbs_nlinks++;
+		}
+		if (state->cbs_hasprevdirentry) {
+			ilinkref = curlinkref;   /* restore current */
+		}
 	}
-	/*
-	 * Record any hard links for post processing.
-	 */
-	if ((ilinkref != 0) &&
-	    (state->cbs_result == 0) &&
-	    (state->cbs_nlinks < state->cbs_maxlinks)) {
-		state->cbs_linkinfo[state->cbs_nlinks].dirent_addr = uiobase;
-		state->cbs_linkinfo[state->cbs_nlinks].link_ref = ilinkref;
-		state->cbs_nlinks++;
+
+	if (state->cbs_extended) {	/* fill the direntry to be used the next time */
+		if (stop_after_pack) {
+			state->cbs_eof = true;
+			return (0);	/* stop */
+		}
+		entry->d_type = type;
+		entry->d_namlen = namelen;
+		entry->d_reclen = EXT_DIRENT_LEN(namelen);
+		if (hide)
+			entry->d_fileno = 0;  /* file number = 0 means skip entry */
+		else
+			entry->d_fileno = cnid;
+		/* swap the current and previous entry */
+		struct direntry * tmp;
+		tmp = state->cbs_direntry;
+		state->cbs_direntry = state->cbs_prevdirentry;
+		state->cbs_prevdirentry = tmp;
+		state->cbs_hasprevdirentry = true;
+		state->cbs_previlinkref = ilinkref;
 	}
 
 	/* Continue iteration if there's room */
@@ -2007,7 +2053,7 @@ cat_packdirentry(const CatalogKey *ckp, const CatalogRecord *crp,
 __private_extern__
 int
 cat_getdirentries(struct hfsmount *hfsmp, int entrycnt, directoryhint_t *dirhint,
-		uio_t uio, int extended, int * items)
+				  uio_t uio, int extended, int * items, int * eofflag)
 {
 	FCB* fcb;
 	BTreeIterator * iterator;
@@ -2022,16 +2068,20 @@ cat_getdirentries(struct hfsmount *hfsmp, int entrycnt, directoryhint_t *dirhint
 	
 	fcb = GetFileControlBlock(hfsmp->hfs_catalog_vp);
 
-	/* Get a buffer for collecting link info and for a btree iterator */
+	/*
+	 * Get a buffer for link info array, btree iterator and a direntry:
+	 */
 	maxlinks = MIN(entrycnt, uio_resid(uio) / SMALL_DIRENTRY_SIZE);
 	bufsize = (maxlinks * sizeof(linkinfo_t)) + sizeof(*iterator);
 	if (extended) {
-		bufsize += sizeof(struct direntry);
+		bufsize += 2*sizeof(struct direntry);
 	}
 	MALLOC(buffer, void *, bufsize, M_TEMP, M_WAITOK);
 	bzero(buffer, bufsize);
 
 	state.cbs_extended = extended;
+	state.cbs_hasprevdirentry = false;
+	state.cbs_previlinkref = 0;
 	state.cbs_nlinks = 0;
 	state.cbs_maxlinks = maxlinks;
 	state.cbs_linkinfo = (linkinfo_t *) buffer;
@@ -2041,7 +2091,9 @@ cat_getdirentries(struct hfsmount *hfsmp, int entrycnt, directoryhint_t *dirhint
 	have_key = 0;
 	index = dirhint->dh_index + 1;
 	if (extended) {
-		state.cbs_direntry = (struct direntry *)((char *)buffer + sizeof(BTreeIterator));
+		state.cbs_direntry = (struct direntry *)((char *)iterator + sizeof(BTreeIterator));
+		state.cbs_prevdirentry = state.cbs_direntry + 1;
+		state.cbs_eof = false;
 	}
 	/*
 	 * Attempt to build a key from cached filename
@@ -2100,15 +2152,25 @@ cat_getdirentries(struct hfsmount *hfsmp, int entrycnt, directoryhint_t *dirhint
 	state.cbs_result = 0;
 	state.cbs_parentID = dirhint->dh_desc.cd_parentcnid;
 
+	enum BTreeIterationOperations op;
+	if (extended && index != 0 && have_key)
+		op = kBTreeCurrentRecord;
+	else
+		op = kBTreeNextRecord;
+
 	/*
 	 * Process as many entries as possible starting at iterator->key.
 	 */
-	result = BTIterateRecords(fcb, kBTreeNextRecord, iterator,
+	result = BTIterateRecords(fcb, op, iterator,
 	                          (IterateCallBackProcPtr)cat_packdirentry, &state);
 
 	/* Note that state.cbs_index is still valid on errors */
 	*items = state.cbs_index - index;
 	index = state.cbs_index;
+
+	if (state.cbs_eof) {
+		*eofflag = 1;
+	}
 	
 	/* Finish updating the catalog iterator. */
 	dirhint->dh_desc.cd_hint = iterator->hint.nodeNum;

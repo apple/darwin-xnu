@@ -238,7 +238,6 @@ SYSCTL_INT(_net_inet_ip_fw, OID_AUTO, dyn_keepalive, CTLFLAG_RW,
 #endif /* SYSCTL_NODE */
 
 
-extern lck_mtx_t *ip_mutex;
 static ip_fw_chk_t	ipfw_chk;
 
 /* firewall lock */
@@ -1305,18 +1304,14 @@ send_reject(struct ip_fw_args *args, int code, int offset, int ip_len)
 			ip->ip_len = ntohs(ip->ip_len);
 			ip->ip_off = ntohs(ip->ip_off);
 		}
-		lck_mtx_unlock(ip_mutex);
 		icmp_error(args->m, ICMP_UNREACH, code, 0L, 0);
-		lck_mtx_lock(ip_mutex);
 	} else if (offset == 0 && args->f_id.proto == IPPROTO_TCP) {
 		struct tcphdr *const tcp =
 		    L3HDR(struct tcphdr, mtod(args->m, struct ip *));
 		if ( (tcp->th_flags & TH_RST) == 0) {
-			lck_mtx_unlock(ip_mutex);
 			send_pkt(&(args->f_id), ntohl(tcp->th_seq),
 				ntohl(tcp->th_ack),
 				tcp->th_flags | TH_RST);
-			lck_mtx_lock(ip_mutex);
 		}
 		m_freem(args->m);
 	} else

@@ -6,6 +6,11 @@ OPTIONS/kdebug						optional kdebug
 # libIOKit
 
 
+iokit/Kernel/WKdmCompress.c				optional iokitcpp
+iokit/Kernel/WKdmDecompress.c				optional iokitcpp
+iokit/Kernel/IOHibernateIO.cpp				optional iokitcpp
+iokit/Kernel/IOHibernateRestoreKernel.c			optional iokitcpp
+
 iokit/Kernel/IOLib.c					optional iokitcpp
 iokit/Kernel/IOLocks.cpp				optional iokitcpp
 iokit/Kernel/IOConditionLock.cpp			optional iokitcpp

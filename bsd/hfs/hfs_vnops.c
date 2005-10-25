@@ -43,6 +43,7 @@
 #include <machine/spl.h>
 
 #include <sys/kdebug.h>
+#include <sys/sysctl.h>
 
 #include "hfs.h"
 #include "hfs_catalog.h"
@@ -65,6 +66,9 @@
 
 /* Global vfs data structures for hfs */
 
+/* Always F_FULLFSYNC? 1=yes,0=no (default due to "various" reasons is 'no') */
+int always_do_fullfsync = 0;
+SYSCTL_INT (_kern, OID_AUTO, always_do_fullfsync, CTLFLAG_RW, &always_do_fullfsync, 0, "always F_FULLFSYNC when fsync is called");
 
 extern unsigned long strtoul(const char *, char **, int);
 
@@ -236,6 +240,7 @@ hfs_vnop_close(ap)
 	if (hfsmp->hfs_freezing_proc == p && proc_exiting(p)) {
 	    hfsmp->hfs_freezing_proc = NULL;
 	    hfs_global_exclusive_lock_release(hfsmp);
+	    lck_rw_unlock_exclusive(&hfsmp->hfs_insync);
 	}
 
 	busy = vnode_isinuse(vp, 1);
@@ -962,6 +967,7 @@ hfs_vnop_exchange(ap)
 	from_cp->c_uid = to_cp->c_uid;
 	from_cp->c_flags = to_cp->c_flags;
 	from_cp->c_mode = to_cp->c_mode;
+	from_cp->c_attr.ca_recflags = to_cp->c_attr.ca_recflags;
 	bcopy(to_cp->c_finderinfo, from_cp->c_finderinfo, 32);
 
 	bcopy(&tempdesc, &to_cp->c_desc, sizeof(struct cat_desc));
@@ -975,6 +981,7 @@ hfs_vnop_exchange(ap)
 	to_cp->c_uid = tempattr.ca_uid;
 	to_cp->c_flags = tempattr.ca_flags;
 	to_cp->c_mode = tempattr.ca_mode;
+	to_cp->c_attr.ca_recflags = tempattr.ca_recflags;
 	bcopy(tempattr.ca_finderinfo, to_cp->c_finderinfo, 32);
 
 	/* Rehash the cnodes using their new file IDs */
@@ -1137,7 +1144,7 @@ metasync:
 		cp->c_touch_acctime = FALSE;
 		cp->c_touch_chgtime = FALSE;
 		cp->c_touch_modtime = FALSE;
-	} else /* User file */ {
+	} else if ( !(vp->v_flag & VSWAP) ) /* User file */ {
 		retval = hfs_update(vp, wait);
 
 		/* When MNT_WAIT is requested push out any delayed meta data */
@@ -1150,7 +1157,7 @@ metasync:
 		// fsync() and if so push out any pending transactions 
 		// that this file might is a part of (and get them on
 		// stable storage).
-		if (fullsync) {
+		if (fullsync || always_do_fullfsync) {
 		    if (hfsmp->jnl) {
 			journal_flush(hfsmp->jnl);
 		    } else {
@@ -2441,6 +2448,10 @@ hfs_vnop_readdir(ap)
 	if (nfs_cookies) {
 		cnid_hint = (cnid_t)(uio_offset(uio) >> 32);
 		uio_setoffset(uio, uio_offset(uio) & 0x00000000ffffffffLL);
+		if (cnid_hint == INT_MAX) { /* searching pass the last item */
+			eofflag = 1;
+			goto out;
+		}
 	}
 	/*
 	 * Synthesize entries for "." and ".."
@@ -2565,7 +2576,7 @@ hfs_vnop_readdir(ap)
 	}
 	
 	/* Pack the buffer with dirent entries. */
-	error = cat_getdirentries(hfsmp, cp->c_entries, dirhint, uio, extended, &items);
+	error = cat_getdirentries(hfsmp, cp->c_entries, dirhint, uio, extended, &items, &eofflag);
 
 	hfs_systemfile_unlock(hfsmp, lockflags);
 

@@ -67,7 +67,7 @@ typedef struct savearea_comm {
     
                                                 /* offset 0x040 */
 	uint64_t		save_misc0;					/* Various stuff */
-	uint64_t		save_misc1;					/* Various stuff */
+	uint64_t		save_misc1;					/* Various stuff - snapshot chain during hibernation */
 	unsigned int	sac_alloc;					/* Bitmap of allocated slots */
     unsigned int	save_054;
     unsigned int	save_misc2;

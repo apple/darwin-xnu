@@ -113,6 +113,7 @@ extern struct sysctl_oid sysctl__kern_posix;
 extern struct sysctl_oid sysctl__kern_posix_sem;
 extern struct sysctl_oid sysctl__kern_posix_sem_max;
 extern struct sysctl_oid sysctl__kern_sugid_scripts;
+extern struct sysctl_oid sysctl__kern_always_do_fullfsync;
 extern struct sysctl_oid sysctl__net_inet_icmp_icmplim;
 extern struct sysctl_oid sysctl__net_inet_icmp_maskrepl;
 extern struct sysctl_oid sysctl__net_inet_icmp_timestamp;
@@ -523,6 +524,7 @@ struct sysctl_oid *newsysctl_list[] =
     ,&sysctl__kern_ipc_maxsockets
 
     ,&sysctl__kern_sugid_scripts
+    ,&sysctl__kern_always_do_fullfsync
 
     ,&sysctl__hw_machine
     ,&sysctl__hw_model

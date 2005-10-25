@@ -30,7 +30,7 @@ EXPINC_SUBDIRS_I386 = ${INSTINC_SUBDIRS_I386}
 
 NOT_EXPORT_HEADERS = 
 
-NOT_KF_MI_HEADERS  = $(NOT_EXPORT_HEADERS) IOKitKeysPrivate.h IOCPU.h IOPolledInterface.h
+NOT_KF_MI_HEADERS  = $(NOT_EXPORT_HEADERS) IOKitKeysPrivate.h IOCPU.h IOHibernatePrivate.h IOPolledInterface.h
 
 NOT_LOCAL_HEADERS = 
 
@@ -40,7 +40,7 @@ INSTALL_MI_LIST	= IOBSD.h IOKitKeys.h IOKitServer.h IOReturn.h\
 		  IOSharedLock.h IOTypes.h OSMessageNotification.h\
 		  IODataQueueShared.h IOMessage.h
                   
-INSTALL_MI_LCL_LIST = IOKitKeysPrivate.h
+INSTALL_MI_LCL_LIST = IOKitKeysPrivate.h IOHibernatePrivate.h
 
 INSTALL_MI_DIR = .
 

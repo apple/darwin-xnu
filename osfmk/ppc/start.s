@@ -425,6 +425,13 @@ noVector:
 			bt		bootCPU,run32					
 
 			mfsprg	r30,0								; Phys per proc
+			lwz		r29,PP_HIBERNATE(r30)
+            andi.	r29, r29, 1
+			beq		noHashTableInit						; Skip following if not waking from from hibernate
+			bl		EXT(hw_clear_maps)					; Mark all maps as absent from hash table
+			bl		EXT(hw_hash_init)					; Clear hash table
+			bl		EXT(save_snapshot_restore)			; Reset save area chains
+noHashTableInit:
 			bl	EXT(hw_setup_trans)						; Set up hardware needed for translation
 			bl	EXT(hw_start_trans)						; Start translating 
 

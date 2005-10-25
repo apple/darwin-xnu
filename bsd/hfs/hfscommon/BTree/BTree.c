@@ -315,15 +315,12 @@ OSStatus BTOpenPath(FCB *filePtr, KeyCompareProcPtr keyCompareProc)
 		}
 	}
 
-	// if nodeSize Matches then we don't need to release, just CheckNode
-	if ( btreePtr->nodeSize == nodeRec.blockSize )
-	{
-		err = CheckNode (btreePtr, nodeRec.buffer);
-		if (err)
-			VTOVCB(btreePtr->fileRefNum)->vcbFlags |= kHFS_DamagedVolume;
-		M_ExitOnError (err);
-	}
-	else
+	/*
+	 * If the actual node size is different than the amount we read,
+	 * then release and trash this block, and re-read with the correct
+	 * node size.
+	 */
+	if ( btreePtr->nodeSize != nodeRec.blockSize )
 	{
 		err = SetBTreeBlockSize (btreePtr->fileRefNum, btreePtr->nodeSize, 32);
 		M_ExitOnError (err);
@@ -336,7 +333,7 @@ OSStatus BTOpenPath(FCB *filePtr, KeyCompareProcPtr keyCompareProc)
 		++btreePtr->numReleaseNodes;
 		M_ExitOnError (err);
 
-		err = GetNode (btreePtr, kHeaderNodeNum, &nodeRec );		// calls CheckNode...
+		err = GetNode (btreePtr, kHeaderNodeNum, &nodeRec );
 		M_ExitOnError (err);
 	}
 
@@ -1286,14 +1283,18 @@ OSStatus	BTInsertRecord		(FCB						*filePtr,
 									goto ErrorExit;
 								}
 
-								err = UpdateNode (btreePtr, &nodeRec, 0, kLockTransaction);
-								M_ExitOnError (err);
-
-								// update BTreeControlBlock
+								/*
+								 * Update the B-tree control block.  Do this before
+								 * calling UpdateNode since it will compare the node's
+								 * height with treeDepth.
+								 */
 								btreePtr->treeDepth	 		= 1;
 								btreePtr->rootNode	 		= insertNodeNum;
 								btreePtr->firstLeafNode		= insertNodeNum;
 								btreePtr->lastLeafNode		= insertNodeNum;
+
+								err = UpdateNode (btreePtr, &nodeRec, 0, kLockTransaction);
+								M_ExitOnError (err);
 
 								M_BTreeHeaderDirty (btreePtr);
 

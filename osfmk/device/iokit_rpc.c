@@ -457,7 +457,7 @@ kern_return_t IOMapPages(vm_map_t map, vm_offset_t va, vm_offset_t pa,
 #if __ppc__
 
     // Set up a block mapped area
-    pmap_map_block(pmap, (addr64_t)va, (ppnum_t)(pa >> 12), length, prot, flags, 0);
+    pmap_map_block(pmap, (addr64_t)va, (ppnum_t)(pa >> 12), (uint32_t)(length >> 12), prot, flags, 0);
 
 #else
 //  enter each page's physical address in the target map

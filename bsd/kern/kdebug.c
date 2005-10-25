@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @Apple_LICENSE_HEADER_START@
  * 
@@ -94,10 +94,6 @@ unsigned int kd_maptomem = 0;
 pid_t global_state_pid = -1;       /* Used to control exclusive use of kd_buffer */
 
 #define DBG_FUNC_MASK 0xfffffffc
-
-#ifdef ppc
-extern natural_t rtclock_decrementer_min;
-#endif /* ppc */
 
 /* task to string structure */
 struct tts
@@ -774,7 +770,7 @@ kdbg_setpidex(kd_regtype *kdr)
   return(ret);
 }
 
-/* This is for setting a minimum decrementer value */
+/* This is for setting a maximum decrementer value */
 kdbg_setrtcdec(kd_regtype *kdr)
 {
   int ret=0;
@@ -783,13 +779,17 @@ kdbg_setrtcdec(kd_regtype *kdr)
   decval = (natural_t)kdr->value1;
 
   if (decval && decval < KDBG_MINRTCDEC)
-      ret = EINVAL;
+	ret = EINVAL;
 #ifdef ppc
-  else
-      rtclock_decrementer_min = decval;
+	else {
+
+		extern uint32_t maxDec;
+
+		maxDec = decval ? decval : 0x7FFFFFFF;	/* Set or reset the max decrementer */
+	}
 #else
-  else
-    ret = ENOTSUP;
+	else
+		ret = ENOTSUP;
 #endif /* ppc */
 
   return(ret);

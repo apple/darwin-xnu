@@ -172,15 +172,20 @@ EXT(dbspecrs):
  *		Boot processor Interrupt and debug stacks go here.
  */
 
+                /* in the __HIB section since the hibernate restore code uses this stack. */
 		.section __HIB, __data
 
 		.align  PPC_PGSHIFT
      
 	 	.globl  EXT(intstack)
 EXT(intstack):
+	 	.globl  EXT(gIOHibernateRestoreStack)
+EXT(gIOHibernateRestoreStack):
 
 		.set	.,.+INTSTACK_SIZE
 
+	 	.globl  EXT(gIOHibernateRestoreStackEnd)
+EXT(gIOHibernateRestoreStackEnd):
 
                 /* back to the regular __DATA section. */
 

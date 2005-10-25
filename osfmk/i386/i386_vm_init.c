@@ -263,6 +263,8 @@ i386_vm_init(unsigned int maxmem, KernelBootArgs_t *args)
 
           // save other regions
           if (kMemoryRangeNVS == mptr->type) {
+              // Mark this as a memory range (for hibernation),
+              // but don't count as usable memory
               pmptr->base = base;
               pmptr->end = ((mptr->base + mptr->length + I386_PGBYTES - 1) >> I386_PGSHIFT) - 1;
               pmptr->alloc = pmptr->end;

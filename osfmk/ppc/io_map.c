@@ -68,7 +68,7 @@ io_map(phys_addr, size)
 		
 		(void)mapping_make(kernel_pmap, (addr64_t)start, (ppnum_t)(phys_addr >> 12), 
 			(mmFlgBlock | mmFlgUseAttr | mmFlgCInhib | mmFlgGuarded),	/* Map as I/O page */
-			size >> 12, VM_PROT_READ|VM_PROT_WRITE);
+			(size >> 12), VM_PROT_READ|VM_PROT_WRITE);
 
 		return (start + (phys_addr & PAGE_MASK));	/* Pass back the physical address */
 	
@@ -117,7 +117,7 @@ vm_offset_t io_map_spec(vm_offset_t phys_addr, vm_size_t size)
 
 	(void)mapping_make(kernel_pmap, (addr64_t)start, (ppnum_t)(phys_addr >> 12), 
 		(mmFlgBlock | mmFlgUseAttr | mmFlgCInhib | mmFlgGuarded),	/* Map as I/O page */
-		size >> 12, VM_PROT_READ|VM_PROT_WRITE);
+		(size >> 12), VM_PROT_READ|VM_PROT_WRITE);
 
 	return (start + (phys_addr & PAGE_MASK));
 }

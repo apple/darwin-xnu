@@ -552,7 +552,7 @@ m_tag_copy(struct m_tag *t, int how)
 	struct m_tag *p;
 
 	KASSERT(t, ("m_tag_copy: null tag"));
-	p = m_tag_alloc(t->m_tag_type, t->m_tag_id, t->m_tag_len, how);
+	p = m_tag_alloc(t->m_tag_id, t->m_tag_type, t->m_tag_len, how);
 	if (p == NULL)
 		return (NULL);
 	bcopy(t + 1, p + 1, t->m_tag_len); /* Copy the data */

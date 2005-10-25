@@ -269,7 +269,8 @@ extern int cat_getdirentries(
 			directoryhint_t *dirhint,
 			uio_t uio,
 			int extended,
-			int * items);
+			int * items,
+			int * eofflag);
 
 extern int cat_insertfilethread (
 			struct hfsmount *hfsmp,

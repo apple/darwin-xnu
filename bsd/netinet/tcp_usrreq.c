@@ -754,9 +754,11 @@ tcp_connect(tp, nam, p)
 
 	tcp_lock(inp->inp_socket, 0, 0);
 	if (oinp) {
-		tcp_lock(oinp->inp_socket, 1, 0);
+		if (oinp != inp) /* 4143933: avoid deadlock if inp == oinp */
+			tcp_lock(oinp->inp_socket, 1, 0);
 		if (in_pcb_checkstate(oinp, WNT_RELEASE, 1) == WNT_STOPUSING) {
-			tcp_unlock(oinp->inp_socket, 1, 0);
+			if (oinp != inp)
+				tcp_unlock(oinp->inp_socket, 1, 0);
 			goto skip_oinp;
 		}
 
@@ -767,10 +769,12 @@ tcp_connect(tp, nam, p)
 			otp = tcp_close(otp);
 		else {
 			printf("tcp_connect: inp=%x err=EADDRINUSE\n", inp);
-			tcp_unlock(oinp->inp_socket, 1, 0);
+			if (oinp != inp)
+				tcp_unlock(oinp->inp_socket, 1, 0);
 			return EADDRINUSE;
 		}
-		tcp_unlock(oinp->inp_socket, 1, 0);
+		if (oinp != inp)
+			tcp_unlock(oinp->inp_socket, 1, 0);
 	}
 skip_oinp:
 	if ((inp->inp_laddr.s_addr == INADDR_ANY ? ifaddr->sin_addr.s_addr :

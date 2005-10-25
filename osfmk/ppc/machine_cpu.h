@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -36,7 +36,7 @@ extern void	cpu_doshutdown(
 extern void	cpu_signal_handler(
 	void);
 
-typedef void (*broadcastFunc) (int);
+typedef void (*broadcastFunc) (uint32_t);
 
 int32_t cpu_broadcast(uint32_t *, broadcastFunc, uint32_t);
 

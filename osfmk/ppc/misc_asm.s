@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -255,6 +255,12 @@ ENTRY(mfsia, TAG_NO_FRAME_USED)
 
 ENTRY(mfsda, TAG_NO_FRAME_USED)
 	mfspr	r3,sda
+	blr
+
+	.globl	EXT(hid1get)
+LEXT(hid1get)
+
+	mfspr	r3,hid1					; Get the HID1
 	blr
 
 	.globl	EXT(hid0get64)

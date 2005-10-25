@@ -2298,6 +2298,35 @@ nfsrv_export(struct user_nfs_export_args *unxa, struct vfs_context *ctx)
 	char path[MAXPATHLEN];
 	int expisroot;
 
+	if (unxa->nxa_flags & NXA_DELETE_ALL) {
+		/* delete all exports on all file systems */
+		lck_rw_lock_exclusive(&nfs_export_rwlock);
+		while ((nxfs = LIST_FIRST(&nfs_exports))) {
+			mp = vfs_getvfs_by_mntonname(nxfs->nxfs_path);
+			if (mp)
+				mp->mnt_flag &= ~MNT_EXPORTED;
+			/* delete all exports on this file system */
+			while ((nx = LIST_FIRST(&nxfs->nxfs_exports))) {
+				LIST_REMOVE(nx, nx_next);
+				LIST_REMOVE(nx, nx_hash);
+				/* delete all netopts for this export */
+				nfsrv_free_addrlist(nx);
+				nx->nx_flags &= ~NX_DEFAULTEXPORT;
+				if (nx->nx_defopt.nxo_cred) {
+					kauth_cred_rele(nx->nx_defopt.nxo_cred);
+					nx->nx_defopt.nxo_cred = NULL;
+				}
+				FREE(nx->nx_path, M_TEMP);
+				FREE(nx, M_TEMP);
+			}
+			LIST_REMOVE(nxfs, nxfs_next);
+			FREE(nxfs->nxfs_path, M_TEMP);
+			FREE(nxfs, M_TEMP);
+		}
+		lck_rw_done(&nfs_export_rwlock);
+		return (0);
+	}
+
 	error = copyinstr(unxa->nxa_fspath, path, MAXPATHLEN, (size_t *)&pathlen);
 	if (error)
 		return (error);

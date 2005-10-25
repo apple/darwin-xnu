@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -31,6 +31,7 @@
 #include <pexpert/pe_images.h>
 #include <kern/debug.h>
 #include <kern/sched_prim.h>
+
 
 /* extern references */
 void pe_identify_machine(void);
@@ -148,7 +149,13 @@ void PE_init_iokit(void)
 
 void PE_init_platform(boolean_t vm_initialized, void *_args)
 {
-        boot_args *args = (boot_args *)_args;
+	DTEntry dsouth, dnorth, root, dcpu;
+	char *model;
+	int msize, size;
+	uint32_t *south, *north, *pdata, *ddata;
+	int i;
+	
+	boot_args *args = (boot_args *)_args;
 
 	if (PE_state.initialized == FALSE)
 	{
@@ -179,6 +186,7 @@ void PE_init_platform(boolean_t vm_initialized, void *_args)
 	else
 	{
 	    pe_init_debug();
+	
 	}
 }
 

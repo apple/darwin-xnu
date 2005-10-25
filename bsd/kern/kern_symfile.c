@@ -71,6 +71,7 @@
 #include <kern/kalloc.h>
 #include <vm/vm_kern.h>
 #include <pexpert/pexpert.h>
+#include <IOKit/IOHibernatePrivate.h>
 
 extern unsigned char 	rootdevice[];
 extern struct mach_header _mh_execute_header;
@@ -341,3 +342,230 @@ int get_kernel_symfile(struct proc *p, char **symfile)
     return error_code;
 }
 
+struct kern_direct_file_io_ref_t
+{
+    struct vfs_context		context;
+    struct vnode		*vp;
+};
+
+
+static int file_ioctl(void * p1, void * p2, int theIoctl, caddr_t result)
+{
+    dev_t device = (dev_t) p1;
+
+    return ((*bdevsw[major(device)].d_ioctl)
+		    (device, theIoctl, result, S_IFBLK, p2));
+}
+
+static int device_ioctl(void * p1, __unused void * p2, int theIoctl, caddr_t result)
+{
+    return (VNOP_IOCTL(p1, theIoctl, result, 0, p2));
+}
+
+struct kern_direct_file_io_ref_t *
+kern_open_file_for_direct_io(const char * name, 
+			     kern_get_file_extents_callback_t callback, 
+			     void * callback_ref,
+			     dev_t * device_result,
+                             uint64_t * partitionbase_result,
+                             uint64_t * maxiocount_result)
+{
+    struct kern_direct_file_io_ref_t * ref;
+
+    struct proc 		*p;
+    struct ucred 		*cred;
+    struct vnode_attr		va;
+    int				error;
+    off_t			f_offset;
+    uint32_t			blksize;
+    uint64_t			size;
+    dev_t			device;
+    off_t 			maxiocount, count;
+
+    int (*do_ioctl)(void * p1, void * p2, int theIoctl, caddr_t result);
+    void * p1;
+    void * p2;
+
+    error = EFAULT;
+
+    ref = (struct kern_direct_file_io_ref_t *) kalloc(sizeof(struct kern_direct_file_io_ref_t));
+    if (!ref)
+    {
+	error = EFAULT;
+    	goto out;
+    }
+
+    ref->vp = NULL;
+    p = current_proc();		// kernproc;
+    cred = p->p_ucred;
+    ref->context.vc_proc = p;
+    ref->context.vc_ucred = cred;
+
+    if ((error = vnode_open(name, (O_CREAT | FWRITE), (0), 0, &ref->vp, &ref->context)))
+        goto out;
+
+    VATTR_INIT(&va);
+    VATTR_WANTED(&va, va_rdev);
+    VATTR_WANTED(&va, va_fsid);
+    VATTR_WANTED(&va, va_data_size);
+    VATTR_WANTED(&va, va_nlink);
+    error = EFAULT;
+    if (vnode_getattr(ref->vp, &va, &ref->context))
+    	goto out;
+
+    kprintf("vp va_rdev major %d minor %d\n", major(va.va_rdev), minor(va.va_rdev));
+    kprintf("vp va_fsid major %d minor %d\n", major(va.va_fsid), minor(va.va_fsid));
+    kprintf("vp size %qd\n", va.va_data_size);
+
+    if (ref->vp->v_type == VREG)
+    {
+	/* Don't dump files with links. */
+	if (va.va_nlink != 1)
+	    goto out;
+
+        device = va.va_fsid;
+        p1 = (void *) device;
+        p2 = p;
+        do_ioctl = &file_ioctl;
+    }
+    else if ((ref->vp->v_type == VBLK) || (ref->vp->v_type == VCHR))
+    {
+	/* Partition. */
+        device = va.va_rdev;
+
+        p1 = ref->vp;
+        p2 = &ref->context;
+        do_ioctl = &device_ioctl;
+    }
+    else
+    {
+	/* Don't dump to non-regular files. */
+	error = EFAULT;
+        goto out;
+    }
+
+    // get partition base
+
+    error = do_ioctl(p1, p2, DKIOCGETBASE, (caddr_t) partitionbase_result);
+    if (error)
+        goto out;
+
+    // get block size & constraints
+
+    error = do_ioctl(p1, p2, DKIOCGETBLOCKSIZE, (caddr_t) &blksize);
+    if (error)
+        goto out;
+
+    maxiocount = 1*1024*1024*1024;
+
+    error = do_ioctl(p1, p2, DKIOCGETMAXBLOCKCOUNTREAD, (caddr_t) &count);
+    if (error)
+        count = 0;
+    count *= blksize;
+    if (count && (count < maxiocount))
+        maxiocount = count;
+
+    error = do_ioctl(p1, p2, DKIOCGETMAXBLOCKCOUNTWRITE, (caddr_t) &count);
+    if (error)
+        count = 0;
+    count *= blksize;
+    if (count && (count < maxiocount))
+        maxiocount = count;
+
+    error = do_ioctl(p1, p2, DKIOCGETMAXBYTECOUNTREAD, (caddr_t) &count);
+    if (error)
+        count = 0;
+    if (count && (count < maxiocount))
+        maxiocount = count;
+
+    error = do_ioctl(p1, p2, DKIOCGETMAXBYTECOUNTWRITE, (caddr_t) &count);
+    if (error)
+        count = 0;
+    if (count && (count < maxiocount))
+        maxiocount = count;
+
+    error = do_ioctl(p1, p2, DKIOCGETMAXSEGMENTBYTECOUNTREAD, (caddr_t) &count);
+    if (error)
+        count = 0;
+    if (count && (count < maxiocount))
+        maxiocount = count;
+
+    error = do_ioctl(p1, p2, DKIOCGETMAXSEGMENTBYTECOUNTWRITE, (caddr_t) &count);
+    if (error)
+        count = 0;
+    if (count && (count < maxiocount))
+        maxiocount = count;
+
+    kprintf("max io 0x%qx bytes\n", maxiocount);
+    if (maxiocount_result)
+        *maxiocount_result = maxiocount;
+
+    // generate the block list
+
+    error = 0;
+    if (ref->vp->v_type == VREG)
+    {
+	f_offset = 0;
+	while(f_offset < (off_t) va.va_data_size) 
+	{
+	    size_t io_size = 1*1024*1024*1024;
+	    daddr64_t blkno;
+
+	    error = VNOP_BLOCKMAP(ref->vp, f_offset, io_size, &blkno, (size_t *)&io_size, NULL, 0, NULL);
+	    if (error)
+		goto out;
+	    callback(callback_ref, ((uint64_t) blkno) * blksize, (uint64_t) io_size);
+	    f_offset += io_size;
+	}
+	callback(callback_ref, 0ULL, 0ULL);
+    }
+    else if ((ref->vp->v_type == VBLK) || (ref->vp->v_type == VCHR))
+    {
+        error = do_ioctl(p1, p2, DKIOCGETBLOCKCOUNT, (caddr_t) &size);
+        if (error)
+            goto out;
+	size *= blksize;
+	callback(callback_ref, 0ULL, size);
+	callback(callback_ref, size, 0ULL);
+    }
+
+    if (device_result)
+        *device_result = device;
+
+out:
+    kprintf("kern_open_file_for_direct_io(%d)\n", error);
+
+    if (error && ref) {
+	if (ref->vp)
+	    vnode_close(ref->vp, FWRITE, &ref->context);
+
+	kfree(ref, sizeof(struct kern_direct_file_io_ref_t));
+    }
+
+    return(ref);
+}
+
+int
+kern_write_file(struct kern_direct_file_io_ref_t * ref, off_t offset, caddr_t addr, vm_size_t len)
+{
+    return (vn_rdwr(UIO_WRITE, ref->vp,
+			addr, len, offset,
+			UIO_SYSSPACE32, IO_SYNC|IO_NODELOCKED|IO_UNIT, 
+                        ref->context.vc_ucred, (int *) 0, ref->context.vc_proc));
+}
+
+void
+kern_close_file_for_direct_io(struct kern_direct_file_io_ref_t * ref)
+{
+    kprintf("kern_close_file_for_direct_io\n");
+
+    if (ref) {
+	int                error;
+
+	if (ref->vp) {
+	    error = vnode_close(ref->vp, FWRITE, &ref->context);
+	    kprintf("vnode_close(%d)\n", error);
+	}
+	kfree(ref, sizeof(struct kern_direct_file_io_ref_t));
+    }
+}

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -54,7 +54,7 @@ PPCcallEnt	PPCcalls[] = {
 	PPCcall(ppcNull),				/* 0x600A Null PPC syscall */
 	PPCcall(perfmon_control),		/* 0x600B performance monitor */
 	PPCcall(ppcNullinst),			/* 0x600C Instrumented Null PPC syscall */
-	PPCcall(dis),					/* 0x600D disabled */
+	PPCcall(pmsCntrl),				/* 0x600D Power Management Stepper */
 	PPCcall(dis),					/* 0x600E disabled */
 	PPCcall(dis),					/* 0x600F disabled */
 	PPCcall(dis),					/* 0x6010 disabled */

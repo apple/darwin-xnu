@@ -1492,7 +1492,7 @@ short MacToVFSError(OSErr err)
 		return EOVERFLOW;
 	
 	case btBadNode:			/* -32731 */
-		return EBADF;
+		return EIO;
 	
 	case memFullErr:		/*  -108 */
 		return ENOMEM;		/*   +12 */

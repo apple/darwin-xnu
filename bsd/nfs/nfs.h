@@ -457,6 +457,7 @@ struct user_nfs_export_args {
 #define NXA_DELETE		0x0001	/* delete the specified export(s) */
 #define NXA_ADD			0x0002	/* add the specified export(s) */
 #define NXA_REPLACE		0x0003	/* delete and add the specified export(s) */
+#define NXA_DELETE_ALL		0x0004	/* delete all exports */
 
 /* export option flags */
 #define NX_READONLY		0x0001	/* exported read-only */
@@ -464,6 +465,7 @@ struct user_nfs_export_args {
 #define NX_MAPROOT		0x0004	/* map root access to anon credential */
 #define NX_MAPALL		0x0008	/* map all access to anon credential */
 #define NX_KERB			0x0010	/* exported with Kerberos uid mapping */
+#define NX_32BITCLIENTS		0x0020	/* restrict directory cookies to 32 bits */
 
 #ifdef KERNEL
 struct nfs_exportfs;

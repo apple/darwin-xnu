@@ -128,7 +128,7 @@ typedef struct cpu_data
 	int			cpu_kdb_is_slave;
 	int			cpu_kdb_active;
 #endif /* MACH_KDB */
-        int                     cpu_reserved1;
+        int                     cpu_hibernate;
 } cpu_data_t;
 
 extern cpu_data_t	*cpu_data_ptr[];  

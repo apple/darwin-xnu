@@ -990,6 +990,8 @@ hfs_vnop_ioctl( struct vnop_ioctl_args /* {
 
 		if (!(hfsmp->jnl))
 			return (ENOTSUP);
+
+		lck_rw_lock_exclusive(&hfsmp->hfs_insync);
  
 		task = current_task();
 		task_working_set_disable(task);
@@ -1001,9 +1003,9 @@ hfs_vnop_ioctl( struct vnop_ioctl_args /* {
 		vnode_iterate(mp, 0, hfs_freezewrite_callback, NULL);
 		hfs_global_exclusive_lock_acquire(hfsmp);
 		journal_flush(hfsmp->jnl);
+
 		// don't need to iterate on all vnodes, we just need to
 		// wait for writes to the system files and the device vnode
-		// vnode_iterate(mp, 0, hfs_freezewrite_callback, NULL);
 		if (HFSTOVCB(hfsmp)->extentsRefNum)
 		    vnode_waitforwrites(HFSTOVCB(hfsmp)->extentsRefNum, 0, 0, 0, "hfs freeze");
 		if (HFSTOVCB(hfsmp)->catalogRefNum)
@@ -1026,7 +1028,7 @@ hfs_vnop_ioctl( struct vnop_ioctl_args /* {
 		// if we're not the one who froze the fs then we
 		// can't thaw it.
 		if (hfsmp->hfs_freezing_proc != current_proc()) {
-		    return EINVAL;
+		    return EPERM;
 		}
 
 		// NOTE: if you add code here, also go check the
@@ -1034,6 +1036,7 @@ hfs_vnop_ioctl( struct vnop_ioctl_args /* {
 		//
 		hfsmp->hfs_freezing_proc = NULL;
 		hfs_global_exclusive_lock_release(hfsmp);
+		lck_rw_unlock_exclusive(&hfsmp->hfs_insync);
 
 		return (0);
 	}
@@ -1262,13 +1265,18 @@ hfs_vnop_ioctl( struct vnop_ioctl_args /* {
 	case HFS_SETACLSTATE: {
 		int state;
 
-		if (!is_suser()) {
-			return (EPERM);
-		}
 		if (ap->a_data == NULL) {
 			return (EINVAL);
 		}
+
+		vfsp = vfs_statfs(HFSTOVFS(hfsmp));
 		state = *(int *)ap->a_data;
+
+		// super-user can enable or disable acl's on a volume.
+		// the volume owner can only enable acl's
+		if (!is_suser() && (state == 0 || kauth_cred_getuid(cred) != vfsp->f_owner)) {
+			return (EPERM);
+		}
 		if (state == 0 || state == 1)
 			return hfs_setextendedsecurity(hfsmp, state);
 		else
@@ -1604,6 +1612,11 @@ hfs_vnop_blockmap(struct vnop_blockmap_args *ap)
 	enum rl_overlaptype overlaptype;
 	int started_tr = 0;
 	int tooklock = 0;
+
+	/* Do not allow blockmap operation on a directory */
+	if (vnode_isdir(vp)) {
+		return (ENOTSUP);
+	}
 
 	/*
 	 * Check for underlying vnode requests and ensure that logical
@@ -2106,6 +2119,7 @@ hfs_truncate(struct vnode *vp, off_t length, int flags, int skipsetsize,
 	off_t filebytes;
 	u_long fileblocks;
 	int blksize, error = 0;
+	struct cnode *cp = VTOC(vp);
 
 	if (vnode_isdir(vp))
 		return (EISDIR);	/* cannot truncate an HFS directory! */
@@ -2125,6 +2139,7 @@ hfs_truncate(struct vnode *vp, off_t length, int flags, int skipsetsize,
 			} else {
 		    		filebytes = length;
 			}
+			cp->c_flag |= C_FORCEUPDATE;
 			error = do_hfs_truncate(vp, filebytes, flags, skipsetsize, context);
 			if (error)
 				break;
@@ -2136,6 +2151,7 @@ hfs_truncate(struct vnode *vp, off_t length, int flags, int skipsetsize,
 			} else {
 				filebytes = length;
 			}
+			cp->c_flag |= C_FORCEUPDATE;
 			error = do_hfs_truncate(vp, filebytes, flags, skipsetsize, context);
 			if (error)
 				break;
@@ -2516,7 +2532,6 @@ hfs_vnop_bwrite(struct vnop_bwrite_args *ap)
 	int retval = 0;
 	register struct buf *bp = ap->a_bp;
 	register struct vnode *vp = buf_vnode(bp);
-#if BYTE_ORDER == LITTLE_ENDIAN
 	BlockDescriptor block;
 
 	/* Trap B-Tree writes */
@@ -2524,22 +2539,29 @@ hfs_vnop_bwrite(struct vnop_bwrite_args *ap)
 	    (VTOC(vp)->c_fileid == kHFSCatalogFileID) ||
 	    (VTOC(vp)->c_fileid == kHFSAttributesFileID)) {
 
-		/* Swap if the B-Tree node is in native byte order */
+		/* 
+		 * Swap and validate the node if it is in native byte order.
+		 * This is always be true on big endian, so we always validate
+		 * before writing here.  On little endian, the node typically has
+		 * been swapped and validatated when it was written to the journal,
+		 * so we won't do anything here.
+		 */
 		if (((UInt16 *)((char *)buf_dataptr(bp) + buf_count(bp) - 2))[0] == 0x000e) {
 			/* Prepare the block pointer */
 			block.blockHeader = bp;
 			block.buffer = (char *)buf_dataptr(bp);
+			block.blockNum = buf_lblkno(bp);
 			/* not found in cache ==> came from disk */
 			block.blockReadFromDisk = (buf_fromcache(bp) == 0);
 			block.blockSize = buf_count(bp);
     
 			/* Endian un-swap B-Tree node */
-			SWAP_BT_NODE (&block, ISHFSPLUS (VTOVCB(vp)), VTOC(vp)->c_fileid, 1);
+			retval = hfs_swap_BTNode (&block, vp, kSwapBTNodeHostToBig);
+			if (retval)
+				panic("hfs_vnop_bwrite: about to write corrupt node!\n");
 		}
-
-		/* We don't check to make sure that it's 0x0e00 because it could be all zeros */
 	}
-#endif
+
 	/* This buffer shouldn't be locked anymore but if it is clear it */
 	if ((buf_flags(bp) & B_LOCKED)) {
 	        // XXXdbg

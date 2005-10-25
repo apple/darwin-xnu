@@ -567,6 +567,7 @@ div_pcblist SYSCTL_HANDLER_ARGS
 	gencnt = divcbinfo.ipi_gencnt;
 	n = divcbinfo.ipi_count;
 
+	bzero(&xig, sizeof(xig));
 	xig.xig_len = sizeof xig;
 	xig.xig_count = n;
 	xig.xig_gen = gencnt;
@@ -599,6 +600,8 @@ div_pcblist SYSCTL_HANDLER_ARGS
 		inp = inp_list[i];
 		if (inp->inp_gencnt <= gencnt && inp->inp_state != INPCB_STATE_DEAD) {
 			struct xinpcb xi;
+
+			bzero(&xi, sizeof(xi));
 			xi.xi_len = sizeof xi;
 			/* XXX should avoid extra copy */
 			inpcb_to_compat(inp, &xi.xi_inp);
@@ -615,6 +618,8 @@ div_pcblist SYSCTL_HANDLER_ARGS
 		 * while we were processing this request, and it
 		 * might be necessary to retry.
 		 */
+		bzero(&xig, sizeof(xig));
+		xig.xig_len = sizeof xig;
 		xig.xig_gen = divcbinfo.ipi_gencnt;
 		xig.xig_sogen = so_gencnt;
 		xig.xig_count = divcbinfo.ipi_count;

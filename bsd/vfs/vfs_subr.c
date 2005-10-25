@@ -1023,7 +1023,7 @@ insmntque(vnode_t vp, mount_t mp)
 	/*
 	 * Delete from old mount point vnode list, if on one.
 	 */
-	if ( (lmp = vp->v_mount) != NULL) {
+	if ( (lmp = vp->v_mount) != NULL && lmp != dead_mountp) {
 		if ((vp->v_lflag & VNAMED_MOUNT) == 0)
 			panic("insmntque: vp not in mount vnode list");
 		vp->v_lflag &= ~VNAMED_MOUNT;
@@ -1619,10 +1619,8 @@ loop:
 				vnode_unlock(vp);
 			} else {
 				vclean(vp, 0, p);
-				vp->v_mount = 0;	/*override any dead_mountp */
 				vp->v_lflag &= ~VL_DEAD;
 				vp->v_op = spec_vnodeop_p;
-				insmntque(vp, (struct mount *)0);
 				vnode_unlock(vp);
 			}
 			mount_lock(mp);
@@ -3915,6 +3913,7 @@ vnode_open(const char *path, int fmode, int cmode, int flags, vnode_t *vpp, vfs_
 	struct vfs_context context2;
 	vfs_context_t ctx = context;
 	u_long ndflags = 0;
+	int lflags = flags;
 
 	if (context == NULL) {		/* XXX technically an error */
 		context2.vc_proc = current_proc();
@@ -3922,14 +3921,17 @@ vnode_open(const char *path, int fmode, int cmode, int flags, vnode_t *vpp, vfs_
 		ctx = &context2;
 	}
 
-	if (flags & VNODE_LOOKUP_NOFOLLOW)
+	if (fmode & O_NOFOLLOW)
+		lflags |= VNODE_LOOKUP_NOFOLLOW;
+
+	if (lflags & VNODE_LOOKUP_NOFOLLOW)
 		ndflags = NOFOLLOW;
 	else
 		ndflags = FOLLOW;
 
-	if (flags & VNODE_LOOKUP_NOCROSSMOUNT)
+	if (lflags & VNODE_LOOKUP_NOCROSSMOUNT)
 		ndflags |= NOCROSSMOUNT;
-	if (flags & VNODE_LOOKUP_DOWHITEOUT)
+	if (lflags & VNODE_LOOKUP_DOWHITEOUT)
 		ndflags |= DOWHITEOUT;
 	
 	/* XXX AUDITVNPATH1 needed ? */

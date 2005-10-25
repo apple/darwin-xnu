@@ -5305,7 +5305,7 @@ vm_paging_map_object(
 			pmap_map_block(kernel_pmap,
 				       page_map_offset,
 				       page->phys_page,
-				       PAGE_SIZE,
+				       1,						/* Size is number of 4k pages */
 				       VM_PROT_DEFAULT,
 				       ((int) page->object->wimg_bits &
 					VM_WIMG_MASK),

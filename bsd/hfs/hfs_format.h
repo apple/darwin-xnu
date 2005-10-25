@@ -458,18 +458,19 @@ union HFSPlusAttrRecord {
 typedef union HFSPlusAttrRecord HFSPlusAttrRecord;
 
 /* Attribute key */
+enum { kHFSMaxAttrNameLen = 127 };
 struct HFSPlusAttrKey {
 	u_int16_t     keyLength;       /* key length (in bytes) */
 	u_int16_t     pad;	       /* set to zero */
 	u_int32_t     fileID;          /* file associated with attribute */
 	u_int32_t     startBlock;      /* first attribue allocation block number for extents */
 	u_int16_t     attrNameLen;     /* number of unicode characters */
-	u_int16_t     attrName[127];   /* attribute name (Unicode) */
+	u_int16_t     attrName[kHFSMaxAttrNameLen];   /* attribute name (Unicode) */
 };
 typedef struct HFSPlusAttrKey HFSPlusAttrKey;
 
 #define kHFSPlusAttrKeyMaximumLength   (sizeof(HFSPlusAttrKey) - sizeof(u_int16_t))
-#define kHFSPlusAttrKeyMinimumLength   (kHFSPlusAttrKeyMaximumLength - (127 * sizeof(u_int16_t)))
+#define kHFSPlusAttrKeyMinimumLength   (kHFSPlusAttrKeyMaximumLength - kHFSMaxAttrNameLen*sizeof(u_int16_t))
 
 #endif /* __APPLE_API_UNSTABLE */
 

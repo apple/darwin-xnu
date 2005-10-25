@@ -92,16 +92,21 @@ EXT(_kick_buffer_):
 /*
  * Interrupt and bootup stack for initial processor.
  */
+        /* in the __HIB section since the hibernate restore code uses this stack. */
         .section __HIB, __data
 	.align	ALIGN
 
 	.globl	EXT(intstack)
 EXT(intstack):
+	.globl  EXT(gIOHibernateRestoreStack)
+EXT(gIOHibernateRestoreStack):
 
 	.set	., .+INTSTACK_SIZE
 
 	.globl	EXT(eintstack)
 EXT(eintstack:)
+	.globl  EXT(gIOHibernateRestoreStackEnd)
+EXT(gIOHibernateRestoreStackEnd):
 
 /*
  * Pointers to GDT and IDT.  These contain linear addresses.

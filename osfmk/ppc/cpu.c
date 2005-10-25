@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -33,6 +33,7 @@
 #include <kern/processor.h>
 
 #include <vm/pmap.h>
+#include <IOKit/IOHibernatePrivate.h>
 
 #include <ppc/proc_reg.h>
 #include <ppc/misc_protos.h>
@@ -47,6 +48,8 @@
 #include <ppc/Diagnostics.h>
 #include <ppc/trap.h>
 #include <ppc/machine_cpu.h>
+#include <ppc/pms.h>
+#include <ppc/rtclock.h>
 
 decl_mutex_data(static,ppt_lock);
 
@@ -117,6 +120,8 @@ cpu_init(
 		mttbu(proc_info->save_tbu);
 		mttb(proc_info->save_tbl);
 	}
+	
+	setTimerReq();				/* Now that the time base is sort of correct, request the next timer pop */
 
 	proc_info->cpu_type = CPU_TYPE_POWERPC;
 	proc_info->cpu_subtype = (cpu_subtype_t)proc_info->pf.rptdProc;
@@ -150,6 +155,24 @@ cpu_machine_init(
 
 	PE_cpu_machine_init(proc_info->cpu_id, !(proc_info->cpu_flags & BootDone));
 
+	if (proc_info->hibernate) {
+		uint32_t	tbu, tbl;
+
+		do {
+			tbu = mftbu();
+			tbl = mftb();
+		} while (mftbu() != tbu);
+
+	    proc_info->hibernate = 0;
+	    hibernate_machine_init();
+
+		// hibernate_machine_init() could take minutes and we don't want timeouts
+		// to fire as soon as scheduling starts. Reset timebase so it appears
+		// no time has elapsed, as it would for regular sleep.
+		mttb(0);
+		mttbu(tbu);
+		mttb(tbl);
+	}
 
 	if (proc_info != mproc_info) {
 	while (!((mproc_info->cpu_flags) & SignalReady)) 
@@ -167,6 +190,7 @@ cpu_machine_init(
 			thread_wakeup(&proc_info->cpu_flags);
 		}
 		simple_unlock(&SignalReadyLock);
+		pmsPark();						/* Timers should be cool now, park the power management stepper */
 	}
 }
 
@@ -183,30 +207,29 @@ cpu_per_proc_alloc(
 	void			*interrupt_stack=0;
 	void			*debugger_stack=0;
 
-	if ((proc_info = (struct per_proc_info*)kalloc(PAGE_SIZE)) == (struct per_proc_info*)0)
-		return (struct per_proc_info *)NULL;;
+	if ((proc_info = (struct per_proc_info*)kalloc(sizeof(struct per_proc_info))) == (struct per_proc_info*)0)
+		return (struct per_proc_info *)NULL;
 	if ((interrupt_stack = kalloc(INTSTACK_SIZE)) == 0) {
-		kfree(proc_info, PAGE_SIZE);
-		return (struct per_proc_info *)NULL;;
+		kfree(proc_info, sizeof(struct per_proc_info));
+		return (struct per_proc_info *)NULL;
 	}
-#if     MACH_KDP || MACH_KDB
+
 	if ((debugger_stack = kalloc(KERNEL_STACK_SIZE)) == 0) {
-		kfree(proc_info, PAGE_SIZE);
+		kfree(proc_info, sizeof(struct per_proc_info));
 		kfree(interrupt_stack, INTSTACK_SIZE);
-		return (struct per_proc_info *)NULL;;
+		return (struct per_proc_info *)NULL;
 	}
-#endif
 
 	bzero((void *)proc_info, sizeof(struct per_proc_info));
 
+	proc_info->pp2ndPage = (addr64_t)pmap_find_phys(kernel_pmap, (addr64_t)proc_info + 0x1000) << PAGE_SHIFT;	/* Set physical address of the second page */
 	proc_info->next_savearea = (uint64_t)save_get_init();
 	proc_info->pf = BootProcInfo.pf;
 	proc_info->istackptr = (vm_offset_t)interrupt_stack + INTSTACK_SIZE - FM_SIZE;
 	proc_info->intstack_top_ss = proc_info->istackptr;
-#if     MACH_KDP || MACH_KDB
 	proc_info->debstackptr = (vm_offset_t)debugger_stack + KERNEL_STACK_SIZE - FM_SIZE;
 	proc_info->debstack_top_ss = proc_info->debstackptr;
-#endif  /* MACH_KDP || MACH_KDB */
+
 	return proc_info;
 
 }
@@ -225,7 +248,7 @@ cpu_per_proc_free(
 		return;
 	kfree((void *)(proc_info->intstack_top_ss - INTSTACK_SIZE + FM_SIZE), INTSTACK_SIZE);
 	kfree((void *)(proc_info->debstack_top_ss -  KERNEL_STACK_SIZE + FM_SIZE), KERNEL_STACK_SIZE);
-	kfree((void *)proc_info, PAGE_SIZE);
+	kfree((void *)proc_info, sizeof(struct per_proc_info));			/* Release the per_proc */
 }
 
 
@@ -248,7 +271,7 @@ cpu_per_proc_register(
 	cpu = real_ncpus;
 	proc_info->cpu_number = cpu;
 	PerProcTable[cpu].ppe_vaddr = proc_info;
-	PerProcTable[cpu].ppe_paddr = ((addr64_t)pmap_find_phys(kernel_pmap, (vm_offset_t)proc_info)) << PAGE_SHIFT;
+	PerProcTable[cpu].ppe_paddr = (addr64_t)pmap_find_phys(kernel_pmap, (addr64_t)proc_info) << PAGE_SHIFT;
 	eieio();
 	real_ncpus++;
 	mutex_unlock(&ppt_lock);
@@ -281,7 +304,13 @@ cpu_start(
 		proc_info->interrupts_enabled = 0;
 		proc_info->pending_ast = AST_NONE;
 		proc_info->istackptr = proc_info->intstack_top_ss;
-		proc_info->rtcPop = 0xFFFFFFFFFFFFFFFFULL;
+		proc_info->rtcPop = EndOfAllTime;
+		proc_info->FPU_owner = 0;
+		proc_info->VMX_owner = 0;
+		proc_info->pms.pmsStamp = 0;									/* Dummy transition time */
+		proc_info->pms.pmsPop = EndOfAllTime;							/* Set the pop way into the future */
+		proc_info->pms.pmsState = pmsParked;							/* Park the stepper */
+		proc_info->pms.pmsCSetCmd = pmsCInit;							/* Set dummy initial hardware state */
 		mp = (mapping_t *)(&proc_info->ppUMWmp);
 		mp->mpFlags = 0x01000000 | mpLinkage | mpPerm | 1;
 		mp->mpSpace = invalSpace;
@@ -697,6 +726,8 @@ cpu_sync_timebase(
 	while (*(volatile int *)&(syncClkSpot.done) == FALSE)
 		continue;
 
+	setTimerReq();									/* Start the timer */
+	
 	(void)ml_set_interrupts_enabled(intr);
 }
 

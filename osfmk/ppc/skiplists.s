@@ -149,34 +149,26 @@ mapSrch64d:
             ; never for the most-common case of finding a scalar mapping.  The full searches
             ; must check _in_ the inner loop, to get the prev ptrs right.
 
-            mr.		r9,r9					; was there a prev ptr?
-            li		r3,0					; assume we are going to return null
-            ld		r4,pmapSkipLists(r6)	; assume prev ptr null... so next is first
-            beq--	mapSrch64Exit			; prev ptr was null, search failed
-            lwz		r0,mpFlags(r9)			; get flag bits from prev mapping
-            ld		r10,mpVAddr(r9)			; re-fetch base address of prev ptr
-            ld		r4,mpList0(r9)			; get 64-bit ptr to next mapping, if any
-            lhz		r11,mpBSize(r9)			; get #pages/#segments in block/submap mapping
-            
-            rlwinm	r0,r0,0,mpType			; isolate mapping type code
-            cmplwi	cr1,r0,mpBlock			; cr1_eq <- block type?
-            cmplwi	r0,mpNest				; cr0_eq <- nested type?
-            cror	cr0_eq,cr1_eq,cr0_eq	; cr0_eq <- block or nested type?
-            cmplwi	cr5,r0,mpLinkage		; cr5_eq <- linkage type?
-            cror	cr0_eq,cr5_eq,cr0_eq	; cr0_eq <- block or nested or linkage type?
-            
-            rldicr	r10,r10,0,51			; zero low 12 bits of mapping va
-            bne		mapSrch64Exit			; prev mapping was just a scalar page, search failed
-            sldi	r0,r11,12				; assume block mapping, get size in bytes - 4k
-            beq		cr1,mapSrch64f			; we guessed right, it was a block mapping
-            addi	r11,r11,1				; mpBSize is 1 too low
-            sldi	r11,r11,28				; in a nested pmap, mpBSize is in units of segments
-            subi	r0,r11,4096				; get address of last page in submap
-mapSrch64f:
-            add		r10,r10,r0				; r10 <- last page in this mapping
-            cmpld	r5,r10					; does this mapping cover our page?
-            bgt		mapSrch64Exit			; no, search failed
-            mr		r3,r9					; yes, we found it
+			mr.		r9,r9					; was there a prev ptr?
+			li		r3,0					; assume we are going to return null
+			ld		r4,pmapSkipLists(r6)	; assume prev ptr null... so next is first
+			beq--	mapSrch64Exit			; prev ptr was null, search failed
+			lwz		r0,mpFlags(r9)			; get flag bits from prev mapping
+			lhz		r11,mpBSize(r9)			; get #pages/#segments in block/submap mapping
+			
+			rlwinm	r0,r0,mpBSub+1,31,31	; 0 if 4K bsu or 1 if 32MB bsu
+			ld		r10,mpVAddr(r9)			; re-fetch base address of prev ptr
+			ori		r0,r0,0x3216			; OR in 0x00003216 (0x3200 and a base rotate of 22)
+			addi	r11,r11,1				; Convert 0-based to 1-based
+			rlwnm	r0,r0,r0,27,31			; Rotate to get 12 or 25
+			ld		r4,mpList0(r9)			; get 64-bit ptr to next mapping, if any
+			sld		r11,r11,r0				; Get the length in bytes
+			rldicr	r10,r10,0,51			; zero low 12 bits of mapping va
+			subi	r0,r11,4096				; get offset last page in mapping
+			add		r10,r10,r0				; r10 <- last page in this mapping
+			cmpld	r5,r10					; does this mapping cover our page?
+			bgt		mapSrch64Exit			; no, search failed
+			mr		r3,r9					; yes, we found it
 
             ; found the mapping
             ;   r2 = count of nodes visited
@@ -245,34 +237,26 @@ mapSrch32d:
             ; never for the most-common case of finding a scalar mapping.  The full searches
             ; must check _in_ the inner loop, to get the prev ptrs right.
 
-            mr.		r9,r9					; was there a prev ptr?
-            li		r3,0					; assume we are going to return null
-            lwz		r4,pmapSkipLists+4(r6)	; assume prev ptr null... so next is first
-            beq-	mapSrch32Exit			; prev ptr was null, search failed
-            lwz		r0,mpFlags(r9)			; get flag bits from prev mapping
-            lwz		r10,mpVAddr+4(r9)		; re-fetch base address of prev ptr
-            lwz		r4,mpList0+4(r9)		; get ptr to next mapping, if any
-
-            rlwinm	r0,r0,0,mpType			; isolate mapping type code
-            cmplwi	cr1,r0,mpBlock			; cr1_eq <- block type?
-            cmplwi	r0,mpNest				; cr0_eq <- nested type?
-            cror	cr0_eq,cr1_eq,cr0_eq	; cr0_eq <- block or nested type?
-            cmplwi	cr5,r0,mpLinkage		; cr5_eq <- linkage type?
-            cror	cr0_eq,cr5_eq,cr0_eq	; cr0_eq <- block or nested or linkage type?
-
-            bne		mapSrch32Exit			; prev mapping was just a scalar page, search failed
-            lhz		r11,mpBSize(r9)			; get #pages/#segments in block/submap mapping
-            rlwinm	r10,r10,0,0,19			; zero low 12 bits of block mapping va
-            slwi	r0,r11,12				; assume block mapping, get size in bytes - 4k
-            beq		cr1,mapSrch32f			; we guessed right, it was a block mapping
-            addi	r11,r11,1				; mpBSize is 1 too low
-            slwi	r11,r11,28				; in a nested pmap, mpBSize is in units of segments
-            subi	r0,r11,4096				; get address of last page in submap
-mapSrch32f:
-            add		r10,r10,r0				; r10 <- last page in this mapping
-            cmplw	r5,r10					; does this mapping cover our page?
-            bgt		mapSrch32Exit			; no, search failed
-            mr		r3,r9					; yes, we found it
+			mr.		r9,r9					; was there a prev ptr?
+			li		r3,0					; assume we are going to return null
+			lwz		r4,pmapSkipLists+4(r6)	; assume prev ptr null... so next is first
+			beq-	mapSrch32Exit			; prev ptr was null, search failed
+			lwz		r0,mpFlags(r9)			; get flag bits from prev mapping
+			lhz		r11,mpBSize(r9)			; get #pages/#segments in block/submap mapping
+			lwz		r10,mpVAddr+4(r9)		; re-fetch base address of prev ptr
+			
+			rlwinm	r0,r0,mpBSub+1,31,31	; Rotate to get 0 if 4K bsu or 1 if 32MB bsu
+			addi	r11,r11,1				; Convert 0-based to 1-based
+			ori		r0,r0,0x3216			; OR in 0x00003216 (0x3200 and a base rotate of 22)
+			rlwnm	r0,r0,r0,27,31			; Rotate to get 12 or 25
+			lwz		r4,mpList0+4(r9)		; get ptr to next mapping, if any
+			slw		r11,r11,r0				; Get length in bytes
+			rlwinm	r10,r10,0,0,19			; zero low 12 bits of block mapping va
+			subi	r0,r11,4096				; get address of last page in submap
+			add		r10,r10,r0				; r10 <- last page in this mapping
+			cmplw	r5,r10					; does this mapping cover our page?
+			bgt		mapSrch32Exit			; no, search failed
+			mr		r3,r9					; yes, we found it
 
             ; found the mapping
             ;   r2 = count of nodes visited
@@ -378,35 +362,36 @@ LEXT(mapSearchFull)
             ;	r7 = current skip list number * 8
             ;	r8 = ptr to skip list vector of mapping pointed to by r9
             ;	r9 = prev ptr, ie highest mapping that comes before search target (initially the pmap)
-            ;  r10 = prev mappings va, or 0 if r9==pmap 
+            ;  r10 = lowest expected next va, 0 at the beginning of the search 
             ;  r12 = ptr to the skipListPrev vector in the per-proc
             
             .align	5
 mapSrchFull64a:								; loop over each mapping
-            ld		r4,mpVAddr(r3)			; get va for this mapping (plus flags in low 12 bits)
-            addi	r2,r2,1					; count mappings visited
-            lwz		r0,mpFlags(r3)			; get mapping flag bits
-            
-            cmpld	cr0,r10,r4				; make sure VAs come in strictly ascending order
-            rldicr	r4,r4,0,51				; zero low 12 bits of mapping va
-            cmpld	cr1,r5,r4				; compare the vas
-            bge--	cr0,mapSkipListPanic	; die if keys are out of order
+			addi	r2,r2,1					; count mappings visited
+			lwz		r0,mpFlags(r3)			; get mapping flag bits
+			lhz		r11,mpBSize(r3)			; get #pages/#segments in block/submap mapping
+			ld		r4,mpVAddr(r3)			; get va for this mapping (plus flags in low 12 bits)
 
-            rlwinm	r0,r0,0,mpType			; isolate mapping type code
-            cmplwi	r0,mpNest				; cr0_eq <- nested type?
-            cmplwi	cr5,r0,mpLinkage		; cr5_eq <- linkage type?
-            cror	cr0_eq,cr5_eq,cr0_eq	; cr0_eq <- nested type or linkage type?
-            cmplwi	cr5,r0,mpBlock			; cr5_eq <- block type?
-            cror	cr0_eq,cr5_eq,cr0_eq	; cr0_eq <- block or nested or linkage type?
+			rlwinm	r0,r0,mpBSub+1,31,31	; Rotate to get 0 if 4K bsu or 1 if 32MB bsu
+			addi	r11,r11,1				; Convert 0-based to 1-based
+			ori		r0,r0,0x3216			; OR in 0x00003216 (0x3200 and a base rotate of 22)
+			rlwnm	r0,r0,r0,27,31			; Rotate to get 12 or 25
+			sld		r11,r11,r0				; Get the length in bytes
+            rldicr	r4,r4,0,51				; zero low 12 bits of mapping va
+            addic.	r0,r11,-4096			; get offset last page in mapping (set cr0_eq if 1 page)
+
+            cmpld	cr5,r10,r4				; make sure VAs come in strictly ascending order
+            cmpld	cr1,r5,r4				; compare the vas
+            bgt--	cr5,mapSkipListPanic	; die if keys are out of order
 
             blt		cr1,mapSrchFull64d		; key is less, try next list
             beq		cr1,mapSrchFull64Found	; this is the correct mapping
-            beq--	cr0,mapSrchFull64e		; handle block mapping or nested pmap
+            bne--	cr0,mapSrchFull64e		; handle mapping larger than one page
 mapSrchFull64b:
             la		r8,mpList0(r3)			; point to skip list vector in this mapping
             mr		r9,r3					; current becomes previous
             ldx		r3,r7,r8				; get ptr to next mapping in current list
-            mr		r10,r4					; remember prev ptrs VA
+            addi	r10,r4,0x1000			; Get the lowest VA we can get next
 mapSrchFull64c:
             mr.		r3,r3					; was there another mapping on current list?
             bne++	mapSrchFull64a			; was another, so loop
@@ -427,13 +412,6 @@ mapSrchFull64d:
             ; the end of the block to see if key fits within it.
 
 mapSrchFull64e:            
-            lhz		r11,mpBSize(r3)			; get #pages/#segments in block/submap mapping (if nonscalar)
-            sldi	r0,r11,12				; assume block mapping, get size in bytes - 4k
-            beq		cr5,mapSrchFull64f		; we guessed right, it was a block mapping
-            addi	r11,r11,1				; mpBSize is 1 too low
-            sldi	r11,r11,28				; in a nested pmap, mpBSize is in units of segments
-            subi	r0,r11,4096				; get address of last page in submap
-mapSrchFull64f:
             add		r4,r4,r0				; r4 <- last page in this mapping
             cmpld	r5,r4					; does this mapping cover our page?
             bgt		mapSrchFull64b			; no, try next mapping (r4 is advanced to end of range)
@@ -467,35 +445,36 @@ mapSrchFull64Found:							; WARNING: can drop down to here
             ;	r7 = current skip list number * 8
             ;	r8 = ptr to skip list vector of mapping pointed to by r9
             ;	r9 = prev ptr, ie highest mapping that comes before search target (initially the pmap)
-            ;  r10 = prev mappings va, or 0 if r9==pmap 
+            ;  r10 = lowest expected next va, 0 at the beginning of the search 
             ;  r12 = ptr to the skipListPrev vector in the per-proc
             
             .align	4
 mapSrchFull32a:								; loop over each mapping
-            lwz		r4,mpVAddr+4(r3)		; get va for this mapping (plus flags in low 12 bits)
-            addi	r2,r2,1					; count mappings visited
-            lwz		r0,mpFlags(r3)			; get mapping flag bits
-                        
-            cmplw	cr0,r10,r4				; make sure VAs come in strictly ascending order
-            rlwinm	r4,r4,0,0,19			; zero low 12 bits of mapping va
-            cmplw	cr1,r5,r4				; compare the vas
-            bge-	cr0,mapSkipListPanic	; die if keys are out of order
+			addi	r2,r2,1					; count mappings visited
+			lwz		r0,mpFlags(r3)			; get mapping flag bits
+			lhz		r11,mpBSize(r3)			; get #pages/#segments in block/submap mapping
+			lwz		r4,mpVAddr+4(r3)		; get va for this mapping (plus flags in low 12 bits)
+						
+			rlwinm	r0,r0,mpBSub+1,31,31	; Rotate to get 0 if 4K bsu or 1 if 32MB bsu
+			addi	r11,r11,1				; Convert 0-based to 1-based
+			ori		r0,r0,0x3216			; OR in 0x00003216 (0x3200 and a base rotate of 22)
+			rlwnm	r0,r0,r0,27,31			; Rotate to get 12 or 25
+			slw		r11,r11,r0				; Get the length in bytes
+			rlwinm	r4,r4,0,0,19			; zero low 12 bits of mapping va
+            addic.	r0,r11,-4096			; get offset last page in mapping (set cr0_eq if 1 page)
 
-            rlwinm	r0,r0,0,mpType			; isolate mapping type code
-            cmplwi	cr5,r0,mpLinkage		; cr5_eq <- linkage type?
-            cmplwi	r0,mpNest				; cr0_eq <- nested type?
-            cror	cr0_eq,cr5_eq,cr0_eq	; cr0_eq <- linkage type or nested type?
-            cmplwi	cr5,r0,mpBlock			; cr5_eq <- block type?
-            cror	cr0_eq,cr5_eq,cr0_eq	; cr0_eq <- block or nested or linkage type?
-
-            blt		cr1,mapSrchFull32d		; key is less than this va, try next list
-            beq-	cr1,mapSrchFull32Found	; this is the correct mapping
-            beq-	cr0,mapSrchFull32e		; handle block mapping or nested pmap
+			cmplw	cr0,r10,r4				; make sure VAs come in strictly ascending order
+			cmplw	cr1,r5,r4				; compare the vas
+			bgt-	cr0,mapSkipListPanic	; die if keys are out of order
+			
+			blt		cr1,mapSrchFull32d		; key is less than this va, try next list
+			beq		cr1,mapSrchFull32Found	; this is the correct mapping
+			bne-	cr0,mapSrchFull32e		; handle mapping larger than one page
 mapSrchFull32b:
             la		r8,mpList0+4(r3)		; point to skip list vector in this mapping
             mr		r9,r3					; current becomes previous
             lwzx	r3,r7,r8				; get ptr to next mapping in current list
-            mr		r10,r4					; remember prev ptrs VA
+            addi	r10,r4,0x1000			; Get the lowest VA we can get next
 mapSrchFull32c:
             mr.		r3,r3					; next becomes current
             bne+	mapSrchFull32a			; was another, so loop
@@ -516,13 +495,6 @@ mapSrchFull32d:
             ; the end of the block to see if our key fits within it.
 
 mapSrchFull32e:            
-            lhz		r11,mpBSize(r3)			; get #pages/#segments in block/submap mapping (if nonscalar)
-            slwi	r0,r11,12				; assume block mapping, get size in bytes - 4k
-            beq		cr5,mapSrchFull32f		; we guessed right, it was a block mapping
-            addi	r11,r11,1				; mpBSize is 1 too low
-            slwi	r11,r11,28				; in a nested pmap, mpBSize is in units of segments
-            subi	r0,r11,4096				; get address of last page in submap
-mapSrchFull32f:
             add		r4,r4,r0				; r4 <- last page in this mapping
             cmplw	r5,r4					; does this mapping cover our page?
             bgt		mapSrchFull32b			; no, try next mapping
@@ -1089,25 +1061,17 @@ mapVer64a:
             ; Do some additional checks (so we only do them once per mapping.)
             ; First, if a block mapping or nested pmap, compute block end.
             
-            rlwinm	r29,r29,0,mpType		; isolate mapping type code
-            cmplwi	r29,mpNest				; cr0_eq <- nested type?
-            cmplwi	cr1,r29,mpLinkage		; cr1_eq <- linkage type?
-            cror	cr0_eq,cr1_eq,cr0_eq	; cr0_eq <- linkage type or nested type?
-            cmplwi	cr1,r29,mpBlock			; cr1_eq <- block type?
-            cror	cr0_eq,cr1_eq,cr0_eq	; cr0_eq <- block or nested or linkage type?
-            
-            subi	r21,r21,1				; count mappings in this pmap
-            bne++	mapVer64b				; not nested or pmap
-            lhz		r27,mpBSize(r26)		; get #pages or #segments
-            sldi	r29,r27,12				; assume block mapping, units are (pages-1)
-            beq		cr1,mapVer64b			; guessed correctly
-            addi	r27,r27,1				; units of nested pmap are (#segs-1)
-            sldi	r29,r27,28				; convert to #bytes
-            subi	r29,r29,4096			; get offset to last byte in nested pmap
+			lhz		r27,mpBSize(r26)		; get #pages or #segments
+			rlwinm	r29,r29,mpBSub+1,31,31	; Rotate to get 0 if 4K bsu or 1 if 32MB bsu
+			addi	r27,r27,1				; units of nested pmap are (#segs-1)
+			ori		r29,r29,0x3216			; OR in 0x00003216 (0x3200 and a base rotate of 22)
+			rlwnm	r29,r29,r29,27,31		; Rotate to get 12 or 25
+			subi	r21,r21,1				; count mappings in this pmap
+			sld		r29,r27,r29				; Get the length in bytes
+			subi	r29,r29,4096			; get offset to last byte in nested pmap
             
             ; Here with r29 = size of block - 4k, or 0 if mapping is a scalar page.
 
-mapVer64b:
             add		r24,r28,r29				; r24 <- address of last valid page in this mapping
             la		r28,mpList0(r26)		; get base of this mappings vector            
             lwz		r27,mpFlags(r26)		; Get the number of lists
@@ -1213,32 +1177,22 @@ mapVer32a:
             ; Do some additional checks (so we only do them once per mapping.)
             ; First, make sure upper words of the mpList vector are 0.
 
-            subi	r21,r21,1				; count mappings in this pmap
+			lhz		r27,mpBSize(r26)		; get #blocks
+			rlwinm	r29,r29,mpBSub+1,31,31	; Rotate to get 0 if 4K bsu or 1 if 32MB bsu
+			addi	r27,r27,1				; units of nested pmap are (#segs-1)
+			ori		r29,r29,0x3216			; OR in 0x00003216 (0x3200 and a base rotate of 22)
+			rlwnm	r29,r29,r29,27,31		; Rotate to get 12 or 25
+			subi	r21,r21,1				; count mappings in this pmap
+			slw		r29,r27,r29				; Get the length in bytes
+			subi	r29,r29,4096			; get offset to last byte in nested pmap
+
             lwz		r24,mpFlags(r26)		; Get number of lists
             la		r30,mpList0(r26)		; point to base of skiplist vector
 			andi.	r24,r24,mpLists			; Clean the number of lists
 			bl		mapVerUpperWordsAre0	; make sure upper words are all 0 (uses r24 and r27)
-            
-            ; Then, if a block mapping or nested pmap, compute block end.
-            
-            rlwinm	r29,r29,0,mpType		; isolate mapping type code
-            cmplwi	cr1,r29,mpLinkage		; cr1_eq <- linkage type?
-            cmplwi	r29,mpNest				; cr0_eq <- nested type?
-            cror	cr0_eq,cr1_eq,cr0_eq	; cr0_eq <- linkage type or nested type?
-            cmplwi	cr1,r29,mpBlock			; cr1_eq <- block type?
-            cror	cr0_eq,cr1_eq,cr0_eq	; cr0_eq <- block or nested or linkage type?
-            
-            bne+	mapVer32b				; not block or nested type
-            lhz		r27,mpBSize(r26)		; get #pages or #segments
-            slwi	r29,r27,12				; assume block mapping, units are pages
-            beq		cr1,mapVer32b			; guessed correctly
-            addi	r27,r27,1				; units of nested pmap are (#segs-1)
-            slwi	r29,r27,28				; convert to #bytes
-            subi	r29,r29,4096			; get offset to last byte in nested pmap
-            
+                        
             ; Here with r29 = size of block - 4k, or 0 if mapping is a scalar page.
 
-mapVer32b:
             add		r24,r28,r29				; r24 <- address of last valid page in this mapping
             la		r28,mpList0+4(r26)		; get base of this mappings vector            
             lwz		r27,mpFlags(r26)		; Get the number of lists

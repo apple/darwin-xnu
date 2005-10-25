@@ -305,7 +305,11 @@ void
 machine_init(void)
 {
 	clock_config();
+/*	Note that we must initialize the stepper tables AFTER the clock is configured!!!!! */
+	if(pmsExperimental & 1) pmsCPUConf();	/* (EXPERIMENTAL) Initialize the stepper tables */
 	perfmon_init();
+	return;
+
 }
 
 void slave_machine_init(void)

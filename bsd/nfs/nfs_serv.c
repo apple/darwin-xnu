@@ -3486,6 +3486,8 @@ nfsrv_readdir(nfsd, slp, procp, mrq)
 	}
 	context.vc_proc = procp;
 	context.vc_ucred = nfsd->nd_cr;
+	if (!v3 || (nxo->nxo_flags & NX_32BITCLIENTS))
+		vnopflag |= VNODE_READDIR_SEEKOFF32;
 	if (v3) {
 		nfsm_srv_vattr_init(&at, v3);
 		error = getret = vnode_getattr(vp, &at, &context);
@@ -3655,6 +3657,8 @@ again:
 			/* Finish off the record with the cookie */
 			nfsm_clget;
 			if (v3) {
+				if (vnopflag & VNODE_READDIR_SEEKOFF32)
+					dp->d_seekoff &= 0x00000000ffffffffULL;
 				txdr_hyper(&dp->d_seekoff, &tquad);
 				*tl = tquad.nfsuquad[0];
 				bp += NFSX_UNSIGNED;
@@ -3762,6 +3766,8 @@ nfsrv_readdirplus(nfsd, slp, procp, mrq)
 	}
 	context.vc_proc = procp;
 	context.vc_ucred = nfsd->nd_cr;
+	if (nxo->nxo_flags & NX_32BITCLIENTS)
+		vnopflag |= VNODE_READDIR_SEEKOFF32;
 	nfsm_srv_vattr_init(&at, 1);
 	error = getret = vnode_getattr(vp, &at, &context);
 	if (!error && toff && verf && verf != at.va_filerev)
@@ -3932,6 +3938,8 @@ again:
 			fl.fl_fhsize = txdr_unsigned(nfhp->nfh_len);
 			fl.fl_fhok = nfs_true;
 			fl.fl_postopok = nfs_true;
+			if (vnopflag & VNODE_READDIR_SEEKOFF32)
+				dp->d_seekoff &= 0x00000000ffffffffULL;
 			txdr_hyper(&dp->d_seekoff, &fl.fl_off);
 
 			nfsm_clget;

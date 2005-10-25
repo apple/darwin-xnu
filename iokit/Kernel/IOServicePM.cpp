@@ -2264,14 +2264,21 @@ bool IOService::notifyChild ( IOPowerConnection * theNub, bool is_prechange )
 {
     IOReturn                            k = IOPMAckImplied;
     unsigned long                       childPower;
-    IOService                           *theChild = (IOService *)(theNub->copyChildEntry(gIOPowerPlane));
-
-    theNub->setAwaitingAck(true);					// in case they don't ack
+    IOService                           *theChild;
     
-    if ( ! theChild ) 
+    theChild = (IOService *)(theNub->copyChildEntry(gIOPowerPlane));
+    if(!theChild) 
     {
+        // The child has been detached since we grabbed the child iterator.
+        // Decrement pending_acks, already incremented in notifyAll,
+        // to account for this unexpected departure.
+        priv->head_note_pendingAcks--;
         return true;
     }
+    
+    // Unless the child handles the notification immediately and returns
+    // kIOPMAckImplied, we'll be awaiting their acknowledgement later.
+    theNub->setAwaitingAck(true);
     
     if ( is_prechange ) 
     {
@@ -2284,7 +2291,7 @@ bool IOService::notifyChild ( IOPowerConnection * theNub, bool is_prechange )
     if ( k == IOPMAckImplied ) 
     {
         // yes
-        priv->head_note_pendingAcks -=1;
+        priv->head_note_pendingAcks--;
         theNub->setAwaitingAck(false);
         childPower = theChild->currentPowerConsumption();
         if ( childPower == kIOPMUnknown ) 

@@ -28,6 +28,8 @@
 #include <i386/mp.h>
 
 #include <kern/cpu_data.h>
+
+#include <IOKit/IOHibernatePrivate.h>
 #include <IOKit/IOPlatformExpert.h>
 
 extern void	acpi_sleep_cpu(acpi_sleep_callback, void * refcon);
@@ -54,16 +56,21 @@ acpi_install_wake_handler(void)
 	return ACPI_WAKE_ADDR;
 }
 
-typedef struct acpi_sleep_callback_data {
+typedef struct acpi_hibernate_callback_data {
     acpi_sleep_callback func;
     void *refcon;
-} acpi_sleep_callback_data;
+} acpi_hibernate_callback_data;
 
 static void
-acpi_sleep_do_callback(void *refcon)
+acpi_hibernate(void *refcon)
 {
-    acpi_sleep_callback_data *data = (acpi_sleep_callback_data *)refcon;
+    boolean_t hib;
 
+    acpi_hibernate_callback_data *data = (acpi_hibernate_callback_data *)refcon;
+
+    if (current_cpu_datap()->cpu_hibernate) {
+        hib = hibernate_write_image();
+    }
 
     (data->func)(data->refcon);
 
@@ -73,7 +80,8 @@ acpi_sleep_do_callback(void *refcon)
 void
 acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 {
-    acpi_sleep_callback_data data;
+    acpi_hibernate_callback_data data;
+    boolean_t did_hibernate;
 
 	/* shutdown local APIC before passing control to BIOS */
 	lapic_shutdown();
@@ -86,12 +94,23 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 	 * Will not return until platform is woken up,
 	 * or if sleep failed.
 	 */
-    acpi_sleep_cpu(acpi_sleep_do_callback, &data);
+    acpi_sleep_cpu(acpi_hibernate, &data);
 
 	/* reset UART if kprintf is enabled */
 	if (FALSE == disableSerialOuput)
 		serial_init();
 
+    if (current_cpu_datap()->cpu_hibernate) {
+        * (int *) CM1 = 0;
+        * (int *) CM2 = 0;
+        * (int *) CM3 = 0;
+
+        current_cpu_datap()->cpu_hibernate = 0;
+
+        did_hibernate = TRUE;
+    } else {
+        did_hibernate = FALSE;
+    }
 
 	/* restore MTRR settings */
 	mtrr_update_cpu();
@@ -99,6 +118,10 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 	/* set up PAT following boot processor power up */
 	pat_init();
 
+    if (did_hibernate) {
+        hibernate_machine_init();
+    }
+        
 	/* re-enable and re-init local apic */
 	if (lapic_probe())
 		lapic_init();
@@ -106,4 +129,7 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 	/* let the realtime clock reset */
 	rtc_sleep_wakeup();
 
+    if (did_hibernate) {
+        enable_preemption();
+    }
 }

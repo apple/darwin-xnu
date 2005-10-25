@@ -974,7 +974,7 @@ nfs_buf_release(struct nfsbuf *bp, int freeup)
 			bp->nb_data = NULL;
 		}
 		if (bp->nb_flags & (NB_ERROR | NB_INVAL | NB_NOCACHE)) {
-			if (bp->nb_flags & (NB_READ | NB_INVAL))
+			if (bp->nb_flags & (NB_READ | NB_INVAL | NB_NOCACHE))
 				upl_flags = UPL_ABORT_DUMP_PAGES;
 			else
 				upl_flags = 0;

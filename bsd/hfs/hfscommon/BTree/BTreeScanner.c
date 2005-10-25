@@ -140,7 +140,9 @@ int BTScanNextRecord(	BTScanState *	scanState,
 
 static int FindNextLeafNode(	BTScanState *scanState, Boolean avoidIO )
 {
-	int		err;
+	int err;
+	BlockDescriptor block;
+	FileReference fref;
 	
 	err = noErr;		// Assume everything will be OK
 	
@@ -180,29 +182,23 @@ static int FindNextLeafNode(	BTScanState *scanState, Boolean avoidIO )
 			(u_int8_t *) scanState->currentNodePtr += scanState->btcb->nodeSize;
 		}
 		
-#if BYTE_ORDER == LITTLE_ENDIAN
-		{
-		BlockDescriptor block;
-		FileReference fref;
-
 		/* Fake a BlockDescriptor */
+		block.blockHeader = NULL;	/* No buffer cache buffer */
 		block.buffer = scanState->currentNodePtr;
+		block.blockNum = scanState->nodeNum;
 		block.blockSize = scanState->btcb->nodeSize;
 		block.blockReadFromDisk = 1;
 		block.isModified = 0;
 		
 		fref = scanState->btcb->fileRefNum;
 		
-		SWAP_BT_NODE(&block, ISHFSPLUS(VTOVCB(fref)), VTOC(fref)->c_fileid, 0);
-		}
-#endif
-
-		// Make sure this is a valid node
-		if ( CheckNode( scanState->btcb, scanState->currentNodePtr ) != noErr )
-		{
+		/* This node was read from disk, so it must be swapped/checked. */
+		err = hfs_swap_BTNode(&block, fref, kSwapBTNodeBigToHost);
+		if ( err != noErr ) {
+			printf("FindNextLeafNode: Error from hfs_swap_BTNode (node %u)\n", scanState->nodeNum);
 			continue;
 		}
-		
+
 		if ( scanState->currentNodePtr->kind == kBTLeafNode )
 			break;
 	}

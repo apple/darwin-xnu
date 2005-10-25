@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -63,6 +63,8 @@ unsigned int serialmode;				/* Serial mode keyboard and console control */
 extern int disableConsoleOutput;
 
 struct shadowBAT shadow_BAT;
+
+
 
 /*
  *	NOTE: mem_size is bogus on large memory machines.  We will pin it to 0x80000000 if there is more than 2 GB
@@ -329,6 +331,8 @@ void ppc_vm_init(uint64_t mem_limit, boot_args *args)
  */
 
 	hw_start_trans();					/* Start translating */
+	PE_init_platform(TRUE, args);		/* Initialize this right off the bat */
+
 
 #if 0
 	GratefulDebInit((bootBumbleC *)&(args->Video));	/* Initialize the GratefulDeb debugger */

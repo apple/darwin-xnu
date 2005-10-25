@@ -250,6 +250,7 @@ extern pmapTransTab *pmapTrans;			/* Space to pmap translate table */
 #define PHYS_MEM_WINDOW_VADDR	0x0000000100000000ULL
 #define IO_MEM_WINDOW_VADDR		0x0000000080000000ULL
 #define IO_MEM_WINDOW_SIZE		0x0000000080000000ULL
+#define pmapSmallBlock 65536
 
 #define pmap_kernel()			(kernel_pmap)
 #define	pmap_resident_count(pmap)	((pmap)->stats.resident_count)
@@ -302,8 +303,8 @@ extern void invalidate_icache(vm_offset_t va, unsigned length, boolean_t phys);
 extern void invalidate_icache64(addr64_t va, unsigned length, boolean_t phys);
 extern void pmap_sync_page_data_phys(ppnum_t pa);
 extern void pmap_sync_page_attributes_phys(ppnum_t pa);
-extern void pmap_map_block(pmap_t pmap, addr64_t va, ppnum_t pa, vm_size_t size, vm_prot_t prot, int attr, unsigned int flags);
-extern int pmap_map_block_rc(pmap_t pmap, addr64_t va, ppnum_t pa, vm_size_t size, vm_prot_t prot, int attr, unsigned int flags);
+extern void pmap_map_block(pmap_t pmap, addr64_t va, ppnum_t pa, uint32_t size, vm_prot_t prot, int attr, unsigned int flags);
+extern int pmap_map_block_rc(pmap_t pmap, addr64_t va, ppnum_t pa, uint32_t size, vm_prot_t prot, int attr, unsigned int flags);
 
 extern kern_return_t pmap_nest(pmap_t grand, pmap_t subord, addr64_t vstart, addr64_t nstart, uint64_t size);
 extern kern_return_t pmap_unnest(pmap_t grand, addr64_t vaddr);

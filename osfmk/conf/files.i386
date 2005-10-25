@@ -111,6 +111,8 @@ osfmk/kdp/ml/i386/kdp_machdep.c	optional	mach_kdp
 
 osfmk/kdp/ml/i386/kdp_vm.c	optional	mach_kdp
 
+osfmk/i386/hibernate_i386.c		standard
+osfmk/i386/hibernate_restore.s		standard
 
 # DUMMIES TO FORCE GENERATION OF .h FILES
 osfmk/OPTIONS/ln		optional ln

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -1080,7 +1080,7 @@ mlckslow1:
 			bl		lockDisa						; Go get a lock on the mutex's interlock lock
 			mr.		r4,r3							; Did we get it?
 			lwz		r3,FM_ARG0(r1)					; Restore the lock address
-			bne+	mlGotInt						; We got it just fine...
+			bne++	mlGotInt						; We got it just fine...
 			mr		r4,r11							; Saved lock addr
 			lis		r3,hi16(mutex_failed1)			; Get the failed mutex message
 			ori		r3,r3,lo16(mutex_failed1)		; Get the failed mutex message
@@ -1297,9 +1297,9 @@ L_mutex_try_slow:
 			bne-	mtFail							; Someone's got it already...
 
 			bl		lockDisa						; Go get a lock on the mutex's interlock lock
-			mr.		r4,r3							; Did we get it? */
+			mr.		r4,r3							; Did we get it?
 			lwz		r3,FM_ARG0(r1)					; Restore the lock address
-			bne+	mtGotInt						; We got it just fine...
+			bne++	mtGotInt						; We got it just fine...
 			mr		r4,r11							; Saved lock addr
 			lis		r3,hi16(mutex_failed2)			; Get the failed mutex message
 			ori		r3,r3,lo16(mutex_failed2)		; Get the failed mutex message
@@ -1490,7 +1490,7 @@ L_mutex_unlock_slow:
 			bl		lockDisa						; Go get a lock on the mutex's interlock lock
 			mr.		r4,r3							; Did we get it?
 			lwz		r3,FM_ARG0(r1)					; Restore the lock address
-			bne+	muGotInt						; We got it just fine...
+			bne++	muGotInt						; We got it just fine...
 			mr		r4,r11							; Saved lock addr
 			lis		r3,hi16(mutex_failed3)			; Get the failed mutex message
 			ori		r3,r3,lo16(mutex_failed3)		; Get the failed mutex message

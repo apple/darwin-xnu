@@ -2850,6 +2850,8 @@ key_newsav(m, mhp, sah, errp)
 	if (mhp->msg->sadb_msg_type != SADB_GETSPI) {
 		*errp = key_setsaval(newsav, m, mhp);
 		if (*errp) {
+			if (newsav->spihash.le_prev || newsav->spihash.le_next)
+				LIST_REMOVE(newsav, spihash);
 			KFREE(newsav);
 			return NULL;
 		}
@@ -3094,6 +3096,7 @@ key_setsaval(sav, m, mhp)
 
 		sa0 = (const struct sadb_sa *)mhp->ext[SADB_EXT_SA];
 		if (mhp->extlen[SADB_EXT_SA] < sizeof(*sa0)) {
+			ipseclog((LOG_DEBUG, "key_setsaval: invalid message size.\n"));
 			error = EINVAL;
 			goto fail;
 		}
@@ -3109,6 +3112,7 @@ key_setsaval(sav, m, mhp)
 		if ((sav->flags & SADB_X_EXT_NATT) != 0) {
 			if (mhp->extlen[SADB_EXT_SA] < sizeof(struct sadb_sa_2) ||
 				 ((struct sadb_sa_2*)(sa0))->sadb_sa_natt_port == 0) {
+				ipseclog((LOG_DEBUG, "key_setsaval: natt port not set.\n"));
 				error = EINVAL;
 				goto fail;
 			}
@@ -3136,6 +3140,7 @@ key_setsaval(sav, m, mhp)
 
 		error = 0;
 		if (len < sizeof(*key0)) {
+			ipseclog((LOG_DEBUG, "key_setsaval: invalid auth key ext len. len = %d\n", len));
 			error = EINVAL;
 			goto fail;
 		}
@@ -3174,6 +3179,7 @@ key_setsaval(sav, m, mhp)
 
 		error = 0;
 		if (len < sizeof(*key0)) {
+			ipseclog((LOG_DEBUG, "key_setsaval: invalid encryption key ext len. len = %d\n", len));
 			error = EINVAL;
 			goto fail;
 		}
@@ -3181,6 +3187,7 @@ key_setsaval(sav, m, mhp)
 		case SADB_SATYPE_ESP:
 			if (len == PFKEY_ALIGN8(sizeof(struct sadb_key)) &&
 			    sav->alg_enc != SADB_EALG_NULL) {
+			    ipseclog((LOG_DEBUG, "key_setsaval: invalid ESP algorithm.\n"));
 				error = EINVAL;
 				break;
 			}
@@ -3202,7 +3209,7 @@ key_setsaval(sav, m, mhp)
 			break;
 		}
 		if (error) {
-			ipseclog((LOG_DEBUG, "key_setsatval: invalid key_enc value.\n"));
+			ipseclog((LOG_DEBUG, "key_setsaval: invalid key_enc value.\n"));
 			goto fail;
 		}
 	}
@@ -3268,6 +3275,7 @@ key_setsaval(sav, m, mhp)
 	lft0 = (struct sadb_lifetime *)mhp->ext[SADB_EXT_LIFETIME_HARD];
 	if (lft0 != NULL) {
 		if (mhp->extlen[SADB_EXT_LIFETIME_HARD] < sizeof(*lft0)) {
+			ipseclog((LOG_DEBUG, "key_setsaval: invalid hard lifetime ext len.\n"));
 			error = EINVAL;
 			goto fail;
 		}
@@ -3284,6 +3292,7 @@ key_setsaval(sav, m, mhp)
 	lft0 = (struct sadb_lifetime *)mhp->ext[SADB_EXT_LIFETIME_SOFT];
 	if (lft0 != NULL) {
 		if (mhp->extlen[SADB_EXT_LIFETIME_SOFT] < sizeof(*lft0)) {
+			ipseclog((LOG_DEBUG, "key_setsaval: invalid soft lifetime ext len.\n"));
 			error = EINVAL;
 			goto fail;
 		}

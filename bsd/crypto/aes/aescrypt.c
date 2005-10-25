@@ -123,7 +123,8 @@ extern "C"
 aes_rval aes_encrypt_cbc(const unsigned char *in, const unsigned char *in_iv, unsigned int num_blk,
 					 unsigned char *out, const aes_encrypt_ctx cx[1])
 {   aes_32t         locals(b0, b1);
-    const aes_32t   *kp = cx->ks;
+    const aes_32t   *kp;
+    const aes_32t   *kptr = cx->ks;
 #if defined(ENC_ROUND_CACHE_TABLES)
 	dtables(t_fn);
 #endif
@@ -145,6 +146,7 @@ aes_rval aes_encrypt_cbc(const unsigned char *in, const unsigned char *in_iv, un
 
 	for (;num_blk; in += AES_BLOCK_SIZE, out += AES_BLOCK_SIZE, --num_blk)
 	{
+		kp = kptr;
 #if 0
 		// Read the plaintext into b1
 		state_in(b1, in);
@@ -289,7 +291,8 @@ aes_rval aes_encrypt_cbc(const unsigned char *in, const unsigned char *in_iv, un
 aes_rval aes_decrypt_cbc(const unsigned char *in, const unsigned char *in_iv, unsigned int num_blk,
 					 unsigned char *out, const aes_decrypt_ctx cx[1])
 {   aes_32t        locals(b0, b1);
-    const aes_32t *kp = cx->ks + cx->rn * N_COLS;
+    const aes_32t *kptr = cx->ks + cx->rn * N_COLS;
+	const aes_32t *kp;
 #if defined(DEC_ROUND_CACHE_TABLES)
 	dtables(t_in);
 #endif
@@ -317,6 +320,7 @@ aes_rval aes_decrypt_cbc(const unsigned char *in, const unsigned char *in_iv, un
 
 	for (;num_blk; out -= AES_BLOCK_SIZE, --num_blk)
 	{
+		kp = kptr;
 		// Do the xor part of state_in, where b1 is the previous block's ciphertext.
 		key_in(b0, b1, kp);
 

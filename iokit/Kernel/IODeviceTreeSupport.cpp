@@ -912,7 +912,6 @@ static SInt32 DefaultCompare( UInt32 cellCount, UInt32 left[], UInt32 right[] )
     return( left[ cellCount ] - right[ cellCount ] );
 }
 
-
 void IODTGetCellCounts( IORegistryEntry * regEntry,
 			    UInt32 * sizeCount, UInt32 * addressCount)
 {
@@ -941,10 +940,13 @@ bool IODTResolveAddressCell( IORegistryEntry * regEntry,
     UInt32		childSizeCells, childAddressCells;
     UInt32		childCells;
     UInt32		cell[ 5 ], offset = 0, length;
+    UInt32		endCell[ 5 ];
     UInt32		*range;
+    UInt32		*lookRange;
+    UInt32		*startRange;
     UInt32		*endRanges;
     bool		ok = true;
-    SInt32		diff;
+    SInt32		diff, endDiff;
 
     IODTPersistent	*persist;
     IODTCompareAddressCellFunc	compare;
@@ -959,60 +961,81 @@ bool IODTResolveAddressCell( IORegistryEntry * regEntry,
     else
         *len = IOPhysical32( 0, cellsIn[ childAddressCells ] );
 
-    do {
-        prop = OSDynamicCast( OSData, regEntry->getProperty( gIODTRangeKey ));
-        if( 0 == prop) {
-            /* end of the road */
-            *phys = IOPhysical32( 0,  cell[ childAddressCells - 1 ] + offset);
-            break;
-        }
+    do
+    {
+	prop = OSDynamicCast( OSData, regEntry->getProperty( gIODTRangeKey ));
+	if( 0 == prop) {
+	    /* end of the road */
+	    *phys = IOPhysical32( 0,  cell[ childAddressCells - 1 ] + offset);
+	    break;
+	}
 
-        parent = regEntry->getParentEntry( gIODTPlane );
-        IODTGetCellCounts( parent, &sizeCells, &addressCells );
+	parent = regEntry->getParentEntry( gIODTPlane );
+	IODTGetCellCounts( parent, &sizeCells, &addressCells );
 
-        if( (length = prop->getLength())) {
-            // search
-            range = (UInt32 *) prop->getBytesNoCopy();
-            endRanges = range + (length / 4);
+	if( (length = prop->getLength())) {
+	    // search
+	    startRange = (UInt32 *) prop->getBytesNoCopy();
+	    range = startRange;
+	    endRanges = range + (length / 4);
 
-            prop = (OSData *) regEntry->getProperty( gIODTPersistKey );
-            if( prop) {
-                persist = (IODTPersistent *) prop->getBytesNoCopy();
-                compare = persist->compareFunc;
-            } else
-                compare = DefaultCompare;
+	    prop = (OSData *) regEntry->getProperty( gIODTPersistKey );
+	    if( prop) {
+		persist = (IODTPersistent *) prop->getBytesNoCopy();
+		compare = persist->compareFunc;
+	    } else
+		compare = DefaultCompare;
 
-            for( ok = false;
-                 range < endRanges;
-                 range += (childCells + addressCells) ) {
+	    for( ok = false;
+		 range < endRanges;
+		 range += (childCells + addressCells) ) {
 
-                // is cell >= range start?
-                diff = (*compare)( childAddressCells, cell, range );
-                if( diff < 0)
-                    continue;
-                    
-                // is cell + size <= range end?
-                if( (diff + cell[ childCells - 1 ])
-                        > range[ childCells + addressCells - 1 ])
-                    continue;
+		// is cell start >= range start?
+		diff = (*compare)( childAddressCells, cell, range );
+		if( diff < 0)
+		    continue;
 
-                offset += diff;
-                ok = true;
-                break;
-            }
+		ok = (0 == cell[childCells - 1]);
+		if (!ok)
+		{
+		    // search for cell end
+		    bcopy(cell, endCell, childAddressCells * sizeof(UInt32));
+		    endCell[childAddressCells - 1] += cell[childCells - 1] - 1;
+		    lookRange = startRange;
+		    for( ;
+			 lookRange < endRanges;
+			 lookRange += (childCells + addressCells) )
+		     {
+			// is cell >= range start?
+			endDiff = (*compare)( childAddressCells, endCell, lookRange );
+			if( endDiff < 0)
+			    continue;
+			if ((endDiff - cell[childCells - 1] + 1 + lookRange[childAddressCells + addressCells - 1])
+			    == (diff + range[childAddressCells + addressCells - 1]))
+			{
+			    ok = true;
+			    break;
+			}
+		    }
+		    if (!ok)
+			continue;
+		}
+		offset += diff;
+		break;
+	    }
 
-            // Get the physical start of the range from our parent
-            bcopy( range + childAddressCells, cell, 4 * addressCells );
-            bzero( cell + addressCells, 4 * sizeCells );
+	    // Get the physical start of the range from our parent
+	    bcopy( range + childAddressCells, cell, 4 * addressCells );
+	    bzero( cell + addressCells, 4 * sizeCells );
 
-        } /* else zero length range => pass thru to parent */
+	} /* else zero length range => pass thru to parent */
 
 	regEntry		= parent;
 	childSizeCells		= sizeCells;
 	childAddressCells	= addressCells;
 	childCells		= childAddressCells + childSizeCells;
-
-    } while( ok && regEntry);
+    }
+    while( ok && regEntry);
 
     return( ok);
 }

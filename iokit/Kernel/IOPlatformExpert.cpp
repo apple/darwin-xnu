@@ -89,25 +89,17 @@ bool IOPlatformExpert::start( IOService * provider )
 {
     IORangeAllocator *	physicalRanges;
     OSData *		busFrequency;
+    uint32_t		debugFlags;
     
     if (!super::start(provider))
       return false;
-
+    
+    // Override the mapper present flag is requested by boot arguments.
+    if (PE_parse_boot_arg("dart", &debugFlags) && (debugFlags == 0))
+      removeProperty(kIOPlatformMapperPresentKey);
+    
     // Register the presence or lack thereof a system 
     // PCI address mapper with the IOMapper class
-
-#if 1
-    IORegistryEntry * regEntry = IORegistryEntry::fromPath("/u3/dart", gIODTPlane);
-    if (!regEntry)
-	regEntry = IORegistryEntry::fromPath("/dart", gIODTPlane);
-    if (regEntry) {
-	int debugFlags;
-	if (!PE_parse_boot_arg("dart", &debugFlags) || debugFlags)
-	    setProperty(kIOPlatformMapperPresentKey, kOSBooleanTrue);
-	regEntry->release();
-    }
-#endif
-
     IOMapper::setMapperRequired(0 != getProperty(kIOPlatformMapperPresentKey));
     
     gIOInterruptControllers = OSDictionary::withCapacity(1);

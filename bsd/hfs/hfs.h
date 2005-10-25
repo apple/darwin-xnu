@@ -247,6 +247,7 @@ typedef struct hfsmount {
 
 	lck_mtx_t      hfs_mutex;      /* protects access to hfsmount data */
 	void          *hfs_freezing_proc;  /* who froze the fs */
+	lck_rw_t       hfs_insync;     /* protects sync/freeze interaction */
 } hfsmount_t;
 
 typedef hfsmount_t  ExtendedVCB;

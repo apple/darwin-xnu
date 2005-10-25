@@ -113,6 +113,7 @@ enum {
 struct BlockDescriptor{
 	void		*buffer;
 	void		*blockHeader;
+	daddr64_t	 blockNum;	/* logical block number (used by hfs_swap_BTNode) */
 	ByteCount	 blockSize;
 	Boolean		 blockReadFromDisk;
 	Byte         isModified;             // XXXdbg - for journaling

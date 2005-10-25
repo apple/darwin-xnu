@@ -1055,21 +1055,21 @@ kevent(struct proc *p, struct kevent_args *uap, register_t *retval)
 
 	/* register all the change requests the user provided... */
 	noutputs = 0;
-	while (nchanges > 0) {
+	while (nchanges > 0 && error == 0) {
 		error = kevent_copyin(&changelist, &kev, p);
 		if (error)
 			break;
 				
 		kev.flags &= ~EV_SYSFLAGS;
 		error = kevent_register(kq, &kev, p);
-		if (error) {
-			if (nevents == 0)
-				break;
+		if (error && nevents > 0) {
 			kev.flags = EV_ERROR;
 			kev.data = error;
-			(void) kevent_copyout(&kev, &ueventlist, p);
-			nevents--;
-			noutputs++;
+			error = kevent_copyout(&kev, &ueventlist, p);
+			if (error == 0) {
+				nevents--;
+				noutputs++;
+			}
 		}
 		nchanges--;
 	}

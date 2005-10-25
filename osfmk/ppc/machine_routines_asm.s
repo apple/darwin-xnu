@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -989,10 +989,8 @@ LEXT(machine_idle_ret)
 
 ;			Force a line boundry here
 			.align	5
-			.globl	EXT(ml_ppc_sleep)
-LEXT(ml_ppc_sleep)
-
 			.globl	EXT(ml_ppc_do_sleep)
+
 LEXT(ml_ppc_do_sleep)
 
 #if 0
@@ -2027,8 +2025,6 @@ LEXT(ml_set_processor_speed_powertune)
 			mfsprg	r31,1									; Get the current activation
 			lwz		r31,ACT_PER_PROC(r31)					; Get the per_proc block
 
-			lwz		r30, pfPowerModes(r31)					; Get the supported power modes
-
 			rlwinm	r28, r3, 31-dnap, dnap, dnap			; Shift the 1 bit to the dnap+32 bit
 			rlwinm	r3, r3, 2, 29, 29						; Shift the 1 to a 4 and mask
 			addi	r3, r3, pfPowerTune0					; Add in the pfPowerTune0 offset
@@ -2137,7 +2133,11 @@ spsDPLL2:
 
 
 /*
-**      ml_set_processor_speed_dfs()
+**      ml_set_processor_speed_dfs(divideby)
+**			divideby == 0 then divide by 1 (full speed)
+**			divideby == 1 then divide by 2 (half speed)
+**			divideby == 2 then divide by 4 (quarter speed)
+**			divideby == 3 then divide by 4 (quarter speed) - preferred
 **
 */
 ;			Force a line boundry here
@@ -2145,19 +2145,13 @@ spsDPLL2:
 			.globl	EXT(ml_set_processor_speed_dfs)
 
 LEXT(ml_set_processor_speed_dfs)
-			mfsprg	r5,1									; Get the current activation
-			lwz		r5,ACT_PER_PROC(r5)						; Get the per_proc block
 
-			cmplwi	r3, 0									; full speed?
-			mfspr	r3, hid1								; Get the current HID1
-			rlwinm	r3, r3, 0, hid1dfs1+1, hid1dfs0-1		; assume full speed, clear dfs bits
-			beq		spsDFS
-			oris	r3, r3, hi16(hid1dfs1m)					; slow, set half speed dfs1 bit
-
-spsDFS:
-			stw		r3, pfHID1(r5)							; Save the new hid1 value
+			mfspr	r4,hid1									; Get the current HID1
+			mfsprg	r5,0									; Get the per_proc_info
+			rlwimi	r4,r3,31-hid1dfs1,hid1dfs0,hid1dfs1		; Stick the new divider bits in
+			stw		r4,pfHID1(r5)							; Save the new hid1 value
 			sync
-			mtspr	hid1, r3								; Set the new HID1
+			mtspr	hid1,r4									; Set the new HID1
 			sync
 			isync
 			blr
@@ -2272,3 +2266,49 @@ mhrcalc:	mftb	r8									; Get time now
 			sub		r3,r2,r9							; How many ticks?
 			mtmsrd	r12,1								; Flip EE on if needed
 			blr											; Leave...
+
+
+;
+;			int setPop(time)
+;	
+;			Calculates the number of ticks to the supplied event and
+;			sets the decrementer.  Never set the time for less that the
+;			minimum, which is 10, nor more than maxDec, which is usually 0x7FFFFFFF
+;			and never more than that but can be set by root.
+;
+;
+
+			.align	7
+			.globl	EXT(setPop)
+
+#define kMin	10
+
+LEXT(setPop)
+
+spOver:		mftbu	r8									; Get upper time
+			addic	r2,r4,-kMin							; Subtract minimum from target
+			mftb	r9									; Get lower
+			addme	r11,r3								; Do you have any bits I could borrow?
+			mftbu	r10									; Get upper again
+			subfe	r0,r0,r0							; Get -1 if we went negative 0 otherwise
+			subc	r7,r2,r9							; Subtract bottom and get carry
+			cmplw	r8,r10								; Did timebase upper tick?
+			subfe	r6,r8,r11							; Get the upper difference accounting for borrow
+			lwz		r12,maxDec(0)						; Get the maximum decrementer size 
+			addme	r0,r0								; Get -1 or -2 if anything negative, 0 otherwise
+			addic	r2,r6,-1							; Set carry if diff < 2**32
+			srawi	r0,r0,1								; Make all foxes
+			subi	r10,r12,kMin						; Adjust maximum for minimum adjust
+			andc	r7,r7,r0							; Pin time at 0 if under minimum
+			subfe	r2,r2,r2							; 0 if diff > 2**32, -1 otherwise		
+			sub		r7,r7,r10							; Negative if duration is less than (max - min)
+			or		r2,r2,r0							; If the duration is negative, it isn't too big
+			srawi	r0,r7,31							; -1 if duration is too small
+			and		r7,r7,r2							; Clear duration if high part too big
+			and		r7,r7,r0							; Clear duration if low part too big
+			bne--	spOver								; Timer ticked...
+			add		r3,r7,r12							; Add back the max for total				
+			mtdec	r3									; Set the decrementer
+			blr											; Leave...
+
+

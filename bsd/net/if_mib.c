@@ -117,6 +117,7 @@ make_ifmibdata(struct ifnet *ifp, int *name, struct sysctl_req *req)
 
 	case IFDATA_GENERAL:
 		
+		bzero(&ifmd, sizeof(ifmd));
 		snprintf(ifmd.ifmd_name, sizeof(ifmd.ifmd_name), "%s%d",
 			ifp->if_name, ifp->if_unit);
 

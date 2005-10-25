@@ -3081,8 +3081,8 @@ FastPmapEnter:
 				    (entry->object.vm_object->shadow_offset)) 
 					+ entry->offset + 
 					(laddr - entry->vme_start) 
-							- ldelta)>>12,
-				ldelta + hdelta, prot, 
+							- ldelta) >> 12,
+				((ldelta + hdelta) >> 12), prot, 
 				(VM_WIMG_MASK & (int)object->wimg_bits), 0);
 			} else { 
 				/* Set up a block mapped area */
@@ -3091,8 +3091,8 @@ FastPmapEnter:
 				   (((vm_map_offset_t)
 				    (entry->object.vm_object->shadow_offset)) 
 				       + entry->offset + 
-				       (laddr - entry->vme_start) - ldelta)>>12,
-				   ldelta + hdelta, prot, 
+				       (laddr - entry->vme_start) - ldelta) >> 12,
+				   ((ldelta + hdelta) >> 12), prot, 
 				   (VM_WIMG_MASK & (int)object->wimg_bits), 0);
 			}
 		}

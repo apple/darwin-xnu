@@ -42,7 +42,8 @@
 
 struct socket_filter;
 
-#define SFEF_DETACHING		0x1
+#define	SFEF_DETACHUSEZERO	0x1	// Detach when use reaches zero
+#define	SFEF_UNREGISTERING	0x2	// Remove due to unregister
 
 struct socket_filter_entry {
 	struct socket_filter_entry	*sfe_next_onsocket;
@@ -80,7 +81,6 @@ void	sflt_notify(struct socket *so, sflt_event_t event, void *param);
 int		sflt_data_in(struct socket *so, const struct sockaddr *from, mbuf_t *data,
 					 mbuf_t *control, sflt_data_flag_t flags, int *filtered);
 int		sflt_attach_private(struct socket *so, struct socket_filter *filter, sflt_handle handle, int locked);
-void	sflt_detach_private(struct socket_filter_entry *entry, int filter_detached);
 
 #endif /* BSD_KERNEL_PRIVATE */
 

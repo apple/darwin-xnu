@@ -175,6 +175,7 @@ osfmk/kern/wait_queue.c		standard
 osfmk/kern/xpr.c			optional xpr_debug
 osfmk/kern/zalloc.c			standard
 osfmk/kern/bsd_kern.c		optional mach_bsd
+osfmk/kern/hibernate.c		standard
 ./mach/clock_server.c			standard
 ./mach/clock_priv_server.c		standard
 ./mach/clock_reply_user.c		standard

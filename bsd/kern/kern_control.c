@@ -772,7 +772,7 @@ ctl_register(struct kern_ctl_reg *userkctl, kern_ctl_ref *kctlref)
 		userkctl->ctl_sendsize = CTL_SENDSIZE;
 	kctl->sendbufsize = userkctl->ctl_sendsize;
 
-	if (kctl->recvbufsize == 0)
+	if (userkctl->ctl_recvsize == 0)
 		userkctl->ctl_recvsize = CTL_RECVSIZE;
 	kctl->recvbufsize = userkctl->ctl_recvsize;
 

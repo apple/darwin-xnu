@@ -87,6 +87,11 @@ LDOBJS = $(OBJS)
 $(COMPONENT).o: $(LDOBJS)
 	@echo "creating $(COMPONENT).o"
 
+	$(SEG_HACK) __HIB IOHibernateRestoreKernel.o -o _IOHibernateRestoreKernel.o
+	mv _IOHibernateRestoreKernel.o IOHibernateRestoreKernel.o
+	$(SEG_HACK) __HIB WKdmDecompress.o -o _WKdmDecompress.o
+	mv _WKdmDecompress.o WKdmDecompress.o
+
 	@echo [ updating $(COMPONENT).o ${IOKIT_KERNEL_CONFIG} ]
 	$(LD)  $(LDFLAGS_COMPONENT) -o $(COMPONENT).o ${LDOBJS} 
 

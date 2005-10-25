@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -380,9 +380,9 @@ ml_processor_register(
 	else
 		proc_info->time_base_enable = (void(*)(cpu_id_t, boolean_t ))NULL;
 
-	if (proc_info->pf.pfPowerModes & pmPowerTune) {
-	  proc_info->pf.pfPowerTune0 = in_processor_info->power_mode_0;
-	  proc_info->pf.pfPowerTune1 = in_processor_info->power_mode_1;
+	if((proc_info->pf.pfPowerModes & pmType) == pmPowerTune) {
+		proc_info->pf.pfPowerTune0 = in_processor_info->power_mode_0;
+		proc_info->pf.pfPowerTune1 = in_processor_info->power_mode_1;
 	}
 
 	donap = in_processor_info->supports_nap;	/* Assume we use requested nap */
@@ -626,57 +626,64 @@ void
 ml_set_processor_speed(unsigned long speed)
 {
 	struct per_proc_info    *proc_info;
-	uint32_t                powerModes, cpu;
+	uint32_t                cpu;
 	kern_return_t           result;
  	boolean_t		current_state;
 	 unsigned int		i;
   
 	proc_info = PerProcTable[master_cpu].ppe_vaddr;
-	powerModes = proc_info->pf.pfPowerModes;
 
-	if (powerModes & pmDualPLL) {
+	switch (proc_info->pf.pfPowerModes & pmType) {	/* Figure specific type */
+		case pmDualPLL:
 
-		ml_set_processor_speed_dpll(speed);
+			ml_set_processor_speed_dpll(speed);
+			break;
+			
+		case pmDFS:
 
-	} else if (powerModes & pmDFS) {
-
-		for (cpu = 0; cpu < real_ncpus; cpu++) {
-			/*
-			 * cpu_signal() returns after .5ms if it fails to signal a running cpu
-			 * retry cpu_signal() for .1s to deal with long interrupt latency at boot
-			 */
-			for (i=200; i>0; i--) {
-				current_state = ml_set_interrupts_enabled(FALSE);
-				if (cpu != cpu_number()) {
-				        if (PerProcTable[cpu].ppe_vaddr->cpu_flags & SignalReady)
-						/*
-						 * Target cpu is off-line, skip
-						 */
+			for (cpu = 0; cpu < real_ncpus; cpu++) {
+				/*
+				 * cpu_signal() returns after .5ms if it fails to signal a running cpu
+				 * retry cpu_signal() for .1s to deal with long interrupt latency at boot
+				 */
+				for (i=200; i>0; i--) {
+					current_state = ml_set_interrupts_enabled(FALSE);
+					if (cpu != cpu_number()) {
+							if (PerProcTable[cpu].ppe_vaddr->cpu_flags & SignalReady)
+							/*
+							 * Target cpu is off-line, skip
+							 */
+							result = KERN_SUCCESS;
+						else {
+							simple_lock(&spsLock);
+							result = cpu_signal(cpu, SIGPcpureq, CPRQsps, speed);	
+							if (result == KERN_SUCCESS) 
+								thread_sleep_simple_lock(&spsLock, &spsLock, THREAD_UNINT);
+							simple_unlock(&spsLock);
+						}
+					} else {
+						ml_set_processor_speed_dfs(speed);
 						result = KERN_SUCCESS;
-					else {
-						simple_lock(&spsLock);
-						result = cpu_signal(cpu, SIGPcpureq, CPRQsps, speed);	
-						if (result == KERN_SUCCESS) 
-							thread_sleep_simple_lock(&spsLock, &spsLock, THREAD_UNINT);
-						simple_unlock(&spsLock);
 					}
-				} else {
-					ml_set_processor_speed_dfs(speed);
-					result = KERN_SUCCESS;
+					(void) ml_set_interrupts_enabled(current_state);
+					if (result == KERN_SUCCESS)
+						break;
 				}
-				(void) ml_set_interrupts_enabled(current_state);
-				if (result == KERN_SUCCESS)
-					break;
+				if (result != KERN_SUCCESS)
+					panic("ml_set_processor_speed(): Fail to set cpu%d speed\n", cpu);
 			}
-			if (result != KERN_SUCCESS)
-				panic("ml_set_processor_speed(): Fail to set cpu%d speed\n", cpu);
-		}
-
-	} else if (powerModes & pmPowerTune) {
-
-		ml_set_processor_speed_powertune(speed);
+			break;
+			
+		case pmPowerTune:
+	
+			ml_set_processor_speed_powertune(speed);
+			break;
+			
+		default:					
+			break;
 
 	}
+	return;
 }
 
 /*

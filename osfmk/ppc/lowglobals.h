@@ -60,7 +60,9 @@ typedef struct lowglo {
 	uint64_t		lgPMWvaddr;				/* 5020 physical memory window virtual address */
 	uint64_t		lgUMWvaddr;				/* 5028 user memory window virtual address */
 	unsigned int	lgVMMforcedFeats;		/* 5030 VMM boot-args forced feature flags */
-	unsigned int	lgRsv034[19];			/* 5034 reserved */
+	unsigned int	lgMaxDec;				/* 5034 Maximum decrementer we can set */
+	unsigned int	lgPmsCtlp;				/* 5038 Pointer to power management stepper control */
+	unsigned int	lgRsv03C[17];			/* 503C reserved */
 	traceWork		lgTrcWork;				/* 5080 Tracing control block - trcWork */
 	unsigned int	lgRsv0A0[24];			/* 50A0 reserved */
 	struct Saveanchor	lgSaveanchor;		/* 5100 Savearea anchor - saveanchor */

@@ -36,10 +36,11 @@ INSTALL_MI_LIST	= OSByteOrder.h OSDebug.h OSReturn.h OSTypes.h
 
 INSTALL_MI_DIR = libkern
 
+INSTALL_MI_LCL_GEN_LIST = OSCrossEndian.h
+
 EXPORT_MI_LIST	= ${DATAFILES}
 
-EXPORT_MI_GEN_LIST = \
-	 version.h
+EXPORT_MI_GEN_LIST = version.h
 
 EXPORT_MI_DIR = libkern
 

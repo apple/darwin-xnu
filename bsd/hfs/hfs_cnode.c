@@ -85,9 +85,11 @@ hfs_vnop_inactive(struct vnop_inactive_args *ap)
 	v_type = vnode_vtype(vp);
 	cp = VTOC(vp);
 
-	if ((hfsmp->hfs_flags & HFS_READ_ONLY) || vnode_issystem(vp)) {
+	if ((hfsmp->hfs_flags & HFS_READ_ONLY) || vnode_issystem(vp) ||
+	    (hfsmp->hfs_freezing_proc == p)) {
 		return (0);
 	}
+
 	/*
 	 * Ignore nodes related to stale file handles.
 	 */
@@ -142,11 +144,11 @@ hfs_vnop_inactive(struct vnop_inactive_args *ap)
 		    // them in the catalog entry and then double
 		    // free them later.
 		    //
-		    if (hfs_start_transaction(hfsmp) != 0) {
-			error = EINVAL;
-			goto out;
-		    }
-		    started_tr = 1;
+//		    if (hfs_start_transaction(hfsmp) != 0) {
+//			error = EINVAL;
+//			goto out;
+//		    }
+//		    started_tr = 1;
 		    
 			/*
 			 * Since we're already inside a transaction,

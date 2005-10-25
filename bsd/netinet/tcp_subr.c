@@ -1058,6 +1058,7 @@ tcp_pcblist SYSCTL_HANDLER_ARGS
 	gencnt = tcbinfo.ipi_gencnt;
 	n = tcbinfo.ipi_count;
 
+	bzero(&xig, sizeof(xig));
 	xig.xig_len = sizeof xig;
 	xig.xig_count = n;
 	xig.xig_gen = gencnt;
@@ -1098,6 +1099,8 @@ tcp_pcblist SYSCTL_HANDLER_ARGS
 		if (inp->inp_gencnt <= gencnt && inp->inp_state != INPCB_STATE_DEAD) {
 			struct xtcpcb xt;
 			caddr_t inp_ppcb;
+
+			bzero(&xt, sizeof(xt));
 			xt.xt_len = sizeof xt;
 			/* XXX should avoid extra copy */
 			inpcb_to_compat(inp, &xt.xt_inp);
@@ -1120,6 +1123,8 @@ tcp_pcblist SYSCTL_HANDLER_ARGS
 		 * while we were processing this request, and it
 		 * might be necessary to retry.
 		 */
+		bzero(&xig, sizeof(xig));
+		xig.xig_len = sizeof xig;
 		xig.xig_gen = tcbinfo.ipi_gencnt;
 		xig.xig_sogen = so_gencnt;
 		xig.xig_count = tcbinfo.ipi_count;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -456,10 +456,6 @@
 #define busFIR 0x0A00
 #define busFIRrst 0x0A10
 
-; PowerTune
-#define PowerTuneControlReg	0x0AA001
-#define PowerTuneStatusReg	0x408001
-
 ;	HID4
 #define hid4RMCI 23
 #define hid4FAlgn 24
@@ -661,6 +657,10 @@
 #define GUSMstgtdis 0x00000080
 #define GUSMstgttim 0x00000038
 #define GUSMstgttoff 0x00000004
+
+/* PowerTune */
+#define PowerTuneControlReg	0x0AA001
+#define PowerTuneStatusReg	0x408001
 
 /* Tags are placed before Immediately Following Code (IFC) for the debugger
  * to be able to deduce where to find various registers when backtracing

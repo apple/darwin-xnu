@@ -850,6 +850,7 @@ skip_ipsec:
 		args.m = m;
 		args.next_hop = dst;
 		args.oif = ifp;
+		lck_mtx_unlock(ip_mutex);
 		off = ip_fw_chk_ptr(&args);
 		m = args.m;
 		dst = args.next_hop;
@@ -873,12 +874,13 @@ skip_ipsec:
 			if (m)
 				m_freem(m);
 			error = EACCES ;
-			lck_mtx_unlock(ip_mutex);
 			goto done ;
 		}
 		ip = mtod(m, struct ip *);
-		if (off == 0 && dst == old) /* common case */
+		if (off == 0 && dst == old) {/* common case */
+			lck_mtx_lock(ip_mutex);
 			goto pass ;
+		}
 #if DUMMYNET
                 if (DUMMYNET_LOADED && (off & IP_FW_PORT_DYNT_FLAG) != 0) {
                     /*
@@ -894,12 +896,12 @@ skip_ipsec:
 		    args.dst = dst;
 		    args.flags = flags;
 
-		    lck_mtx_unlock(ip_mutex);
 		    error = ip_dn_io_ptr(m, off & 0xffff, DN_TO_IP_OUT,
 				&args);
 		    goto done;
 		}
 #endif /* DUMMYNET */
+		lck_mtx_lock(ip_mutex);
 #if IPDIVERT
 		if (off != 0 && (off & IP_FW_PORT_DYNT_FLAG) == 0) {
 			struct mbuf *clone = NULL;

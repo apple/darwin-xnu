@@ -970,10 +970,12 @@ getattrlist(struct proc *p, struct getattrlist_args *uap, __unused register_t *r
 	
 	/*
 	 * Allocate a target buffer for attribute results.
-	 * Note that since we won't ever copy out more than the caller requested,
-	 * we never need to allocate more than they offer.
+	 *
+	 * Note that we won't ever copy out more than the caller requested, even though
+	 * we might have to allocate more than they offer do that the diagnostic checks
+	 * don't result in a panic if the caller's buffer is too small..
 	 */
-	ab.allocated = imin(uap->bufferSize, fixedsize + varsize);
+	ab.allocated = fixedsize + varsize;
 	if (ab.allocated > ATTR_MAX_BUFFER) {
 		error = ENOMEM;
 		VFS_DEBUG(ctx, vp, "ATTRLIST - ERROR: buffer size too large (%d limit %d)", ab.allocated, ATTR_MAX_BUFFER);
@@ -991,7 +993,7 @@ getattrlist(struct proc *p, struct getattrlist_args *uap, __unused register_t *r
 	 */
 	ab.fixedcursor = ab.base + sizeof(uint32_t);
 	ab.varcursor = ab.base + fixedsize;
-	ab.needed = fixedsize + varsize;
+	ab.needed = ab.allocated;
 
 	/* common attributes **************************************************/
 	if (al.commonattr & ATTR_CMN_NAME)
@@ -1248,7 +1250,8 @@ getattrlist(struct proc *p, struct getattrlist_args *uap, __unused register_t *r
 	 */
 	*(uint32_t *)ab.base = (uap->options & FSOPT_REPORT_FULLSIZE) ? ab.needed : imin(ab.allocated, ab.needed);
 	
-	error = copyout(ab.base, uap->attributeBuffer, ab.allocated);
+	/* Only actually copyout as much out as the user buffer can hold */
+	error = copyout(ab.base, uap->attributeBuffer, imin(uap->bufferSize, ab.allocated));
 	
 out:
 	if (va.va_name)

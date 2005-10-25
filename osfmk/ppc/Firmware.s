@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -2347,7 +2347,6 @@ stsslbm:	slbmfee	r6,r5
 			cmplwi	r5,64
 			addi	r4,r4,16
 			blt		stsslbm
-
 			
 			mtmsr	r0
 			isync

@@ -1454,6 +1454,12 @@ ifconf(u_long cmd, user_addr_t ifrp, int * ret_space)
 	int error = 0;
 	size_t space;
 	
+	/*
+	 * Zero the ifr buffer to make sure we don't
+	 * disclose the contents of the stack.
+	 */
+	bzero(&ifr, sizeof(struct ifreq));
+
 	space = *ret_space;
 	ifnet_head_lock_shared();
 	for (ifp = ifnet_head.tqh_first; space > sizeof(ifr) && ifp; ifp = ifp->if_link.tqe_next) {
@@ -1932,10 +1938,10 @@ if_rtdel(
  */
 void if_rtproto_del(struct ifnet *ifp, int protocol)
 {
-	
-        struct radix_node_head  *rnh;
+	struct radix_node_head  *rnh;
 
-	if ((protocol <= AF_MAX) && ((rnh = rt_tables[protocol]) != NULL) && (ifp != NULL)) {
+	if ((protocol <= AF_MAX) && (protocol >= 0) &&
+		((rnh = rt_tables[protocol]) != NULL) && (ifp != NULL)) {
 		lck_mtx_lock(rt_mtx);
 		(void) rnh->rnh_walktree(rnh, if_rtdel, ifp);
 		lck_mtx_unlock(rt_mtx);

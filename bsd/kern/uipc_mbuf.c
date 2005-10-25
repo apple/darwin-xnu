@@ -812,8 +812,7 @@ m_move_pkthdr(struct mbuf *to, struct mbuf *from)
  * "from" must have M_PKTHDR set, and "to" must be empty.
  * In particular, this does a deep copy of the packet tags.
  */
-#ifndef __APPLE__
-int
+static int
 m_dup_pkthdr(struct mbuf *to, struct mbuf *from, int how)
 {
         to->m_flags = (from->m_flags & M_COPYFLAGS) | (to->m_flags & M_EXT);
@@ -823,7 +822,6 @@ m_dup_pkthdr(struct mbuf *to, struct mbuf *from, int how)
         SLIST_INIT(&to->m_pkthdr.tags);
         return (m_tag_copy_chain(to, from, how));
 }
-#endif
 
 /*
  * return a list of mbuf hdrs that point to clusters...
@@ -2146,17 +2144,8 @@ m_dup(struct mbuf *m, int how)
 			{	if ((n = m_gethdr(how, m->m_type)) == NULL)
 					return(NULL);
 				n->m_len = m->m_len;
-				n->m_flags |= (m->m_flags & M_COPYFLAGS);
-				n->m_pkthdr.len = m->m_pkthdr.len;
-				n->m_pkthdr.rcvif = m->m_pkthdr.rcvif;
-				n->m_pkthdr.header = NULL;
-				n->m_pkthdr.csum_flags = 0;
-				n->m_pkthdr.csum_data = 0;
-				n->m_pkthdr.aux = NULL;
-				n->m_pkthdr.vlan_tag = 0;
-				n->m_pkthdr.socket_id = 0;
-				SLIST_INIT(&n->m_pkthdr.tags);
-                                bcopy(m->m_data, n->m_data, m->m_pkthdr.len);
+				m_dup_pkthdr(n, m, how);
+				bcopy(m->m_data, n->m_data, m->m_len);
 				return(n);
 			}
 		} else if (m->m_len <= MLEN)
@@ -2187,8 +2176,7 @@ m_dup(struct mbuf *m, int how)
 		*np = n;
 		if (copyhdr)
 		{	/* Don't use M_COPY_PKTHDR: preserve m_data */
-			n->m_pkthdr = m->m_pkthdr;
-			n->m_flags |= (m->m_flags & M_COPYFLAGS);
+			m_dup_pkthdr(n, m, how);
 			copyhdr = 0;
 			if ((n->m_flags & M_EXT) == 0)
 				n->m_data = n->m_pktdat;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -95,6 +95,10 @@
 #include <vm/vm_map.h>
 
 #include <sys/kdebug.h>
+
+#ifdef __ppc__
+#include <ppc/pms.h>
+#endif
 
 #define		DEFAULT_PREEMPTION_RATE		100		/* (1/s) */
 int			default_preemption_rate = DEFAULT_PREEMPTION_RATE;
@@ -2523,7 +2527,13 @@ idle_thread(void)
 	lcount = &processor->runq.count;
 	gcount = &processor->processor_set->runq.count;
 
-	(void)splsched();
+
+	(void)splsched();			/* Turn interruptions off */
+
+#ifdef __ppc__
+	pmsDown();					/* Step power down.  Note: interruptions must be disabled for this call */
+#endif
+
 	while (	(*threadp == THREAD_NULL)				&&
 				(*gcount == 0) && (*lcount == 0)	) {
 
@@ -2545,6 +2555,10 @@ idle_thread(void)
 	 */
 	pset = processor->processor_set;
 	simple_lock(&pset->sched_lock);
+
+#ifdef __ppc__
+	pmsStep(0);					/* Step up out of idle power, may start timer for next step */
+#endif
 
 	state = processor->state;
 	if (state == PROCESSOR_DISPATCHING) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -99,7 +99,7 @@ struct scc_tty scc_tty[NSCC_LINE];
 extern unsigned int disableSerialOuput;
 
 int	serial_initted = 0;
-unsigned int scc_parm_done = 0;				/* (TEST/DEBUG) */
+unsigned int scc_parm_done = 0;
 
 extern unsigned int serialmode;
 
@@ -182,7 +182,7 @@ boolean_t scc_funnel_initted = FALSE;
  * Adapt/Probe/Attach functions
  */
 boolean_t	scc_uses_modem_control = FALSE;/* patch this with adb */
-decl_simple_lock_data(,scc_stomp)			/* (TEST/DEBUG) */
+decl_simple_lock_data(,scc_stomp)
 
 /* This is called VERY early on in the init and therefore has to have
  * hardcoded addresses of the serial hardware control registers. The
@@ -210,7 +210,7 @@ initialize_serial( caddr_t scc_phys_base, int32_t serial_baud )
 		return;
 	}
 
-	simple_lock_init(&scc_stomp, FALSE);				/* (TEST/DEBUG) */
+	simple_lock_init(&scc_stomp, FALSE);
 	
 	if (serial_baud == -1) serial_baud = DEFAULT_SPEED;
 	
@@ -241,7 +241,7 @@ initialize_serial( caddr_t scc_phys_base, int32_t serial_baud )
 
 			scc_read_reg_zero(regs, 0, bits);/* Clear the status */
 		}
-                scc_parm_done = 1;			/* (TEST/DEBUG) */
+		scc_parm_done = 1;
 	}
 
 	serial_initted = TRUE;
@@ -323,12 +323,14 @@ scc_getc(int unit, int line, boolean_t wait, boolean_t raw)
 	register scc_regmap_t	regs;
 	unsigned char   c, value;
 	int             rcvalue, from_line;
+	uint32_t 	fcrmunge;
 	spl_t		s = splhigh();
 	DECL_FUNNEL_VARS
 
 	FUNNEL_ENTER(&SCC_FUNNEL);
 
-	simple_lock(&scc_stomp);					/* (TEST/DEBUG) */
+
+	simple_lock(&scc_stomp);
 	regs = scc_softc[0].regs;
 
 	/*
@@ -344,7 +346,7 @@ again:
 			break;
 
 		if (!wait) {
-			simple_unlock(&scc_stomp);			/* (TEST/DEBUG) */
+			simple_unlock(&scc_stomp);
 			splx(s);
 			FUNNEL_EXIT(&SCC_FUNNEL);
 			return -1;
@@ -362,14 +364,14 @@ again:
 	if (console_is_serial() &&
 	    c == ('_' & 0x1f)) {
 		/* Drop into the debugger */
-		simple_unlock(&scc_stomp);				/* (TEST/DEBUG) */
+		simple_unlock(&scc_stomp);
 		Debugger("Serial Line Request");
-		simple_lock(&scc_stomp);				/* (TEST/DEBUG) */
+		simple_lock(&scc_stomp);
 		scc_write_reg(regs, line, SCC_RR0, SCC_RESET_HIGHEST_IUS);
 		if (wait) {
 			goto again;
 		}
-		simple_unlock(&scc_stomp);				/* (TEST/DEBUG) */
+		simple_unlock(&scc_stomp);
 		splx(s);
 		FUNNEL_EXIT(&SCC_FUNNEL);
 		return -1;
@@ -390,7 +392,7 @@ again:
 
 	scc_write_reg(regs, line, SCC_RR0, SCC_RESET_HIGHEST_IUS);
 
-	simple_unlock(&scc_stomp);					/* (TEST/DEBUG) */
+	simple_unlock(&scc_stomp);
 	splx(s);
 
 	FUNNEL_EXIT(&SCC_FUNNEL);
@@ -408,14 +410,16 @@ scc_putc(int unit, int line, int c)
 	scc_regmap_t	regs;
 	spl_t            s;
 	unsigned char	 value;
+	uint32_t fcrmunge;
 	DECL_FUNNEL_VARS
+
 
 	if (disableSerialOuput)
 		return 0;
 
 	s = splhigh();
 	FUNNEL_ENTER(&SCC_FUNNEL);
-	simple_lock(&scc_stomp);				/* (TEST/DEBUG) */
+	simple_lock(&scc_stomp);		
 
 	regs = scc_softc[0].regs;
 
@@ -435,7 +439,7 @@ scc_putc(int unit, int line, int c)
 			break;
 	} while (1);
 	scc_write_reg(regs, line, SCC_RR0, SCC_RESET_HIGHEST_IUS);
-	simple_unlock(&scc_stomp);				/* (TEST/DEBUG) */
+	simple_unlock(&scc_stomp);		
 
 	splx(s);
 
@@ -485,7 +489,7 @@ scc_param(struct scc_tty *tp)
 	assert(FUNNEL_IN_USE(&SCC_FUNNEL));
 	
 	s = splhigh();
-	simple_lock(&scc_stomp);				/* (TEST/DEBUG) */
+	simple_lock(&scc_stomp);
 
 	chan = scc_chan(tp->t_dev);
 	scc = &scc_softc[0];
@@ -497,29 +501,29 @@ scc_param(struct scc_tty *tp)
 	if ((sr->flags & (TF_ODDP|TF_EVENP)) == (tp->t_flags & (TF_ODDP|TF_EVENP))
 	    && sr->speed == tp->t_ispeed) {
 		assert(FUNNEL_IN_USE(&SCC_FUNNEL));
-		simple_unlock(&scc_stomp);					/* (TEST/DEBUG) */
-		splx(s);											/* (TEST/DEBUG) */
-		return 0;											/* (TEST/DEBUG) */
+		simple_unlock(&scc_stomp);
+		splx(s);
+		return 0;
 	}
 
 	if(scc_parm_done) 	{								
 		
-		scc_write_reg(regs,  chan,  3, SCC_WR3_RX_8_BITS|SCC_WR3_RX_ENABLE);	/* (TEST/DEBUG) */
-		sr->wr1 = SCC_WR1_RXI_FIRST_CHAR | SCC_WR1_EXT_IE;	/* (TEST/DEBUG) */
-		scc_write_reg(regs,  chan,  1, sr->wr1);			/* (TEST/DEBUG) */
-       	scc_write_reg(regs,  chan, 15, SCC_WR15_ENABLE_ESCC);	/* (TEST/DEBUG) */
-		scc_write_reg(regs,  chan,  7, SCC_WR7P_RX_FIFO);	/* (TEST/DEBUG) */
-		scc_write_reg(regs,  chan,  0, SCC_IE_NEXT_CHAR);	/* (TEST/DEBUG) */
-		scc_write_reg(regs,  chan,  0, SCC_RESET_EXT_IP);	/* (TEST/DEBUG) */
-		scc_write_reg(regs,  chan,  0, SCC_RESET_EXT_IP);	/* (TEST/DEBUG) */
-		scc_write_reg(regs,  chan,  9, SCC_WR9_MASTER_IE|SCC_WR9_NV);	/* (TEST/DEBUG) */
-		scc_read_reg_zero(regs, 0, bits);					/* (TEST/DEBUG) */
-		sr->wr1 = SCC_WR1_RXI_FIRST_CHAR | SCC_WR1_EXT_IE;	/* (TEST/DEBUG) */
-		scc_write_reg(regs,  chan,  1, sr->wr1);			/* (TEST/DEBUG) */
-		scc_write_reg(regs,  chan,  0, SCC_IE_NEXT_CHAR);	/* (TEST/DEBUG) */
-		simple_unlock(&scc_stomp);							/* (TEST/DEBUG) */
-		splx(s);											/* (TEST/DEBUG) */
-		return 0;											/* (TEST/DEBUG) */
+		scc_write_reg(regs,  chan,  3, SCC_WR3_RX_8_BITS|SCC_WR3_RX_ENABLE);
+		sr->wr1 = SCC_WR1_RXI_FIRST_CHAR | SCC_WR1_EXT_IE;
+		scc_write_reg(regs,  chan,  1, sr->wr1);
+       	scc_write_reg(regs,  chan, 15, SCC_WR15_ENABLE_ESCC);
+		scc_write_reg(regs,  chan,  7, SCC_WR7P_RX_FIFO);
+		scc_write_reg(regs,  chan,  0, SCC_IE_NEXT_CHAR);
+		scc_write_reg(regs,  chan,  0, SCC_RESET_EXT_IP);
+		scc_write_reg(regs,  chan,  0, SCC_RESET_EXT_IP);
+		scc_write_reg(regs,  chan,  9, SCC_WR9_MASTER_IE|SCC_WR9_NV);
+		scc_read_reg_zero(regs, 0, bits);
+		sr->wr1 = SCC_WR1_RXI_FIRST_CHAR | SCC_WR1_EXT_IE;
+		scc_write_reg(regs,  chan,  1, sr->wr1);
+		scc_write_reg(regs,  chan,  0, SCC_IE_NEXT_CHAR);
+		simple_unlock(&scc_stomp);
+		splx(s);
+		return 0;
 	}
 	
 	sr->flags = tp->t_flags;
@@ -529,7 +533,7 @@ scc_param(struct scc_tty *tp)
 	if (tp->t_ispeed == 0) {
 		sr->wr5 &= ~SCC_WR5_DTR;
 		scc_write_reg(regs,  chan, 5, sr->wr5);
-		simple_unlock(&scc_stomp);							/* (TEST/DEBUG) */
+		simple_unlock(&scc_stomp);
 		splx(s);
 
 		assert(FUNNEL_IN_USE(&SCC_FUNNEL));
@@ -635,7 +639,7 @@ scc_param(struct scc_tty *tp)
 	sr->wr5 |= SCC_WR5_TX_ENABLE;
 	scc_write_reg(regs,  chan,  5, sr->wr5);
 
-	simple_unlock(&scc_stomp);			/* (TEST/DEBUG) */
+	simple_unlock(&scc_stomp);
 	splx(s);
 
 	assert(FUNNEL_IN_USE(&SCC_FUNNEL));
@@ -671,12 +675,15 @@ serial_keyboard_start(void)
 	panic("serial_keyboard_start: we can't get back here\n");
 }
 
+static int ptestxxx = 0;
+
 void
 serial_keyboard_poll(void)
 {
 	int chr;
 	uint64_t next;
 	extern void cons_cinput(char ch);	/* The BSD routine that gets characters */
+
 
 	while(1) {				/* Do this for a while */
 		chr = scc_getc(0, 1, 0, 1);	/* Get a character if there is one */

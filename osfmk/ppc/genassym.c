@@ -68,6 +68,8 @@
 #include <ppc/boot.h>
 #include <ppc/lowglobals.h>
 
+/* Undefine standard offsetof because it is different than the one here */
+#undef offsetof
 #define offsetof(TYPE, MEMBER) ((size_t) &((TYPE)0)->MEMBER)
 
 #define DECLARE(SYM,VAL) \
@@ -129,6 +131,7 @@ int main(int argc, char *argv[])
 	DECLARE("PP_INTSTACK_TOP_SS",	offsetof(struct per_proc_info *, intstack_top_ss));
 	DECLARE("PP_DEBSTACKPTR",		offsetof(struct per_proc_info *, debstackptr));
 	DECLARE("PP_DEBSTACK_TOP_SS",	offsetof(struct per_proc_info *, debstack_top_ss));
+	DECLARE("PP_HIBERNATE",	offsetof(struct per_proc_info *, hibernate));
 	DECLARE("FPUowner",				offsetof(struct per_proc_info *, FPU_owner));
 	DECLARE("VMXowner",				offsetof(struct per_proc_info *, VMX_owner));
 	DECLARE("holdQFret",			offsetof(struct per_proc_info *, holdQFret));
@@ -225,14 +228,12 @@ int main(int argc, char *argv[])
 	DECLARE("pfPowerModes",			offsetof(struct per_proc_info *, pf.pfPowerModes));
 	DECLARE("pfPowerTune0",			offsetof(struct per_proc_info *, pf.pfPowerTune0));
 	DECLARE("pfPowerTune1",			offsetof(struct per_proc_info *, pf.pfPowerTune1));
+	DECLARE("pmType",				pmType);
 	DECLARE("pmDPLLVmin",			pmDPLLVmin);
 	DECLARE("pmDPLLVminb",			pmDPLLVminb);
 	DECLARE("pmPowerTune",			pmPowerTune);
-	DECLARE("pmPowerTuneb",			pmPowerTuneb);
 	DECLARE("pmDFS",				pmDFS);
-	DECLARE("pmDFSb",				pmDFSb);
 	DECLARE("pmDualPLL",			pmDualPLL);
-	DECLARE("pmDualPLLb",			pmDualPLLb);
 	DECLARE("pfPTEG", 				offsetof(struct per_proc_info *, pf.pfPTEG));
 	DECLARE("pfMaxVAddr", 			offsetof(struct per_proc_info *, pf.pfMaxVAddr));
 	DECLARE("pfMaxPAddr", 			offsetof(struct per_proc_info *, pf.pfMaxPAddr));
@@ -1367,6 +1368,7 @@ int main(int argc, char *argv[])
 
 	DECLARE("lgVerCode", 			offsetof(struct lowglo *, lgVerCode));
 	DECLARE("lgPPStart", 			offsetof(struct lowglo *, lgPPStart));
+	DECLARE("maxDec", 				offsetof(struct lowglo *, lgMaxDec));
 	DECLARE("mckFlags", 			offsetof(struct lowglo *, lgMckFlags));
 	DECLARE("lgPMWvaddr",			offsetof(struct lowglo *, lgPMWvaddr));
 	DECLARE("lgUMWvaddr",			offsetof(struct lowglo *, lgUMWvaddr));

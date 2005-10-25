@@ -222,7 +222,7 @@ coredump(struct proc *p)
 	context.vc_proc = p;
 	context.vc_ucred = cred;
 
-	if ((error = vnode_open(name, (O_CREAT | FWRITE | O_NOFOLLOW), S_IRUSR, 0, &vp, &context)))
+	if ((error = vnode_open(name, (O_CREAT | FWRITE | O_NOFOLLOW), S_IRUSR, VNODE_LOOKUP_NOFOLLOW, &vp, &context)))
 	        return (error);
 
 	VATTR_INIT(&va);

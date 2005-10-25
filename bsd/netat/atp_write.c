@@ -65,7 +65,7 @@ static int loop_cnt; /* for debugging loops */
   } \
 }
 
-static void atp_pack_bdsp(struct atp_trans *, struct atpBDS *);
+static int atp_pack_bdsp(struct atp_trans *, struct atpBDS *);
 static int atp_unpack_bdsp(struct atp_state *, gbuf_t *, struct atp_rcb *, 
 			   int, int);
 void atp_trp_clock(), asp_clock(), asp_clock_locked(), atp_trp_clock_locked();;
@@ -604,7 +604,7 @@ nothing_to_send:
 } /* atp_send_replies */
 
 
-static void
+static int
 atp_pack_bdsp(trp, bdsp)
      register struct atp_trans *trp;
      register struct atpBDS *bdsp;
@@ -612,12 +612,13 @@ atp_pack_bdsp(trp, bdsp)
 	register gbuf_t *m = NULL;
 	register int i, datsize = 0;
 	struct atpBDS *bdsbase = bdsp;
+	int error = 0;
 
 	dPrintf(D_M_ATP, D_L_INFO, ("atp_pack_bdsp: socket=%d\n",
 		trp->tr_queue->atp_socket_no));
 
 	for (i = 0; i < ATP_TRESP_MAX; i++, bdsp++) {
-	  	short bufsize = UAS_VALUE(bdsp->bdsBuffSz);
+	  	unsigned short bufsize = UAS_VALUE(bdsp->bdsBuffSz);
 		long bufaddr = UAL_VALUE(bdsp->bdsBuffAddr);
 
 	        if ((m = trp->tr_rcv[i]) == NULL)
@@ -639,13 +640,15 @@ atp_pack_bdsp(trp, bdsp)
 			register char *buf = (char *)bufaddr;
 
 			while (m) {
-			  	short len = (short)(gbuf_len(m));
+			  	unsigned short len = (unsigned short)(gbuf_len(m));
 				if (len) {
 				  	if (len > bufsize)
 						len = bufsize;
-					copyout((caddr_t)gbuf_rptr(m), 
+					if ((error = copyout((caddr_t)gbuf_rptr(m), 
 						CAST_USER_ADDR_T(&buf[tmp]),
-						len);
+						len)) != 0) {
+						return error;
+					}
 					bufsize -= len;
 					tmp += len;
 				}
@@ -664,6 +667,8 @@ atp_pack_bdsp(trp, bdsp)
 
 	dPrintf(D_M_ATP, D_L_INFO, ("             : size=%d\n",
 		datsize));
+	
+	return 0;
 } /* atp_pack_bdsp */
 
 
@@ -1635,12 +1640,20 @@ _ATPsndreq(fd, buf, len, nowait, err, proc)
 	/*
 	 * copy out the recv data
 	 */
-	atp_pack_bdsp(trp, (struct atpBDS *)bds);
+	if ((*err = atp_pack_bdsp(trp, (struct atpBDS *)bds)) != 0) {
+		atp_free(trp);
+		file_drop(fd);
+		return -1;
+	}
 
 	/*
 	 * copyout the result info
 	 */
-	copyout((caddr_t)bds, CAST_USER_ADDR_T(buf), atpBDSsize);
+	if ((*err = copyout((caddr_t)bds, CAST_USER_ADDR_T(buf), atpBDSsize)) != 0) {
+		atp_free(trp);
+		file_drop(fd);
+		return -1;
+	}
 
 	atp_free(trp);
 	file_drop(fd);
@@ -1885,13 +1898,21 @@ _ATPgetrsp(fd, bdsp, err, proc)
 	    	ATENABLE(s, atp->atp_lock);
 			if ((*err = copyin(CAST_USER_ADDR_T(bdsp),
 					(caddr_t)bds, sizeof(bds))) != 0) {
+				atp_free(trp);
 				file_drop(fd);
 				return -1;
 			}
-			atp_pack_bdsp(trp, (struct atpBDS *)bds);
+			if ((*err = atp_pack_bdsp(trp, (struct atpBDS *)bds)) != 0) {
+				atp_free(trp);
+				file_drop(fd);
+				return -1;
+			}
 			tid = (int)trp->tr_tid;
 			atp_free(trp);
-			copyout((caddr_t)bds, CAST_USER_ADDR_T(bdsp), sizeof(bds));
+			if ((*err = copyout((caddr_t)bds, CAST_USER_ADDR_T(bdsp), sizeof(bds))) != 0) {
+				file_drop(fd);
+				return -1;
+			}
 			file_drop(fd);
 			return tid;
 

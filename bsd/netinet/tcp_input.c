@@ -3420,6 +3420,7 @@ tcpdropdropablreq(struct socket *head)
 	static unsigned int cur_cnt, old_cnt;
 	struct timeval tv;
 	struct inpcb *inp = NULL;
+	struct tcpcb *tp;
 	
 	microtime(&tv);
 	if ((i = (tv.tv_sec - old_runtime.tv_sec)) != 0) {
@@ -3459,16 +3460,29 @@ tcpdropdropablreq(struct socket *head)
 		tcp_unlock(so, 1, 0);
 		return 0;
 	}
-	sototcpcb(so)->t_flags |= TF_LQ_OVERFLOW;
 	head->so_incqlen--;
 	head->so_qlen--;
-	so->so_head = NULL;
 	TAILQ_REMOVE(&head->so_incomp, so, so_list);
+	tcp_unlock(head, 0, 0);
+	
+	so->so_head = NULL;
 	so->so_usecount--;	/* No more held by so_head */
 
-	tcp_drop(sototcpcb(so), ETIMEDOUT);
-
+	/* 
+	 * We do not want to lose track of the PCB right away in case we receive 
+	 * more segments from the peer
+	 */
+	tp = sototcpcb(so);
+	tp->t_flags |= TF_LQ_OVERFLOW;
+	tp->t_state = TCPS_CLOSED;
+	(void) tcp_output(tp);
+	tcpstat.tcps_drops++;
+	soisdisconnected(so);
+	tcp_canceltimers(tp);
+	add_to_time_wait(tp);
+	
 	tcp_unlock(so, 1, 0);
+	tcp_lock(head, 0, 0);
 	
 	return 1;
 	

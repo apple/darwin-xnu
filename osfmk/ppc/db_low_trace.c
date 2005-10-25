@@ -440,7 +440,7 @@ void db_check_pmaps(db_expr_t addr, int have_addr, db_expr_t count, char * modif
 /*
  *		Displays iokit junk
  *
-  *		dp
+  *		di
  */
 
 void db_piokjunk(void);
