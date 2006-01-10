@@ -3,19 +3,20 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -727,34 +728,35 @@ soclose_locked(so)
 			 * but we want the head, not the socket locked
 			 * in the case of per-socket lock...
 			 */
-			if (so->so_proto->pr_getlock != NULL) 
-				socket_lock(sp, 1);
-			if (so->so_proto->pr_getlock != NULL) 
+			if (so->so_proto->pr_getlock != NULL) {
 				socket_unlock(so, 0);
+				socket_lock(sp, 1);
+			}
 			(void) soabort(sp);
-			if (so->so_proto->pr_getlock != NULL) 
-				socket_lock(so, 0);
-			if (so->so_proto->pr_getlock != NULL) 
+			if (so->so_proto->pr_getlock != NULL) {
 				socket_unlock(sp, 1);
+				socket_lock(so, 0);
+			}
 		}
 
 		while ((sp = TAILQ_FIRST(&so->so_comp)) != NULL) {
-			if (so->so_proto->pr_getlock != NULL) 
-				socket_lock(sp, 1);
-
 			/* Dequeue from so_comp since sofree() won't do it */
 			TAILQ_REMOVE(&so->so_comp, sp, so_list);			
 			so->so_qlen--;
+
+			if (so->so_proto->pr_getlock != NULL) {
+				socket_unlock(so, 0);
+				socket_lock(sp, 1);
+			}
+
 			sp->so_state &= ~SS_COMP;
 			sp->so_head = NULL;
 
-			if (so->so_proto->pr_getlock != NULL) 
-				socket_unlock(so, 0);
 			(void) soabort(sp);
-			if (so->so_proto->pr_getlock != NULL) 
-				socket_lock(so, 0);
-			if (so->so_proto->pr_getlock != NULL) 
+			if (so->so_proto->pr_getlock != NULL) {
 				socket_unlock(sp, 1);
+				socket_lock(so, 0);
+			}
 		}
 	}
 	if (so->so_pcb == 0) {
@@ -1358,6 +1360,7 @@ sosend(so, addr, uio, top, control, flags)
 						if (filtered == 0) {
 							filtered = 1;
 							so->so_send_filt_thread = current_thread();
+							sflt_use(so);
 							socket_unlock(so, 0);
 							so_flags = (sendflags & MSG_OOB) ? sock_data_filt_flag_oob : 0;
 						}
@@ -1372,6 +1375,7 @@ sosend(so, addr, uio, top, control, flags)
 					 * The socket is unlocked as is the socket buffer.
 					 */
 					socket_lock(so, 0);
+					sflt_unuse(so);
 					so->so_send_filt_thread = 0;
 					if (error) {
 						if (error == EJUSTRETURN) {

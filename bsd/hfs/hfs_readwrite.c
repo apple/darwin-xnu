@@ -3,19 +3,20 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -1812,6 +1813,7 @@ do_hfs_truncate(struct vnode *vp, off_t length, int flags, int skipsetsize, vfs_
 	off_t bytesToAdd;
 	off_t actualBytesAdded;
 	off_t filebytes;
+	u_int64_t old_filesize;
 	u_long fileblocks;
 	int blksize;
 	struct hfsmount *hfsmp;
@@ -1820,6 +1822,7 @@ do_hfs_truncate(struct vnode *vp, off_t length, int flags, int skipsetsize, vfs_
 	blksize = VTOVCB(vp)->blockSize;
 	fileblocks = fp->ff_blocks;
 	filebytes = (off_t)fileblocks * (off_t)blksize;
+	old_filesize = fp->ff_size;
 
 	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 7)) | DBG_FUNC_START,
 		 (int)length, (int)fp->ff_size, (int)filebytes, 0, 0);
@@ -2070,6 +2073,9 @@ do_hfs_truncate(struct vnode *vp, off_t length, int flags, int skipsetsize, vfs_
 				hfs_systemfile_unlock(hfsmp, lockflags);
 			}
 			if (hfsmp->jnl) {
+				if (retval == 0) {
+					fp->ff_size = length;
+				}
 				(void) hfs_update(vp, TRUE);
 				(void) hfs_volupdate(hfsmp, VOL_UPDATE, 0);
 			}
@@ -2085,7 +2091,7 @@ do_hfs_truncate(struct vnode *vp, off_t length, int flags, int skipsetsize, vfs_
 #endif /* QUOTA */
 		}
 		/* Only set update flag if the logical length changes */
-		if ((off_t)fp->ff_size != length)
+		if (old_filesize != length)
 			cp->c_touch_modtime = TRUE;
 		fp->ff_size = length;
 	}
@@ -2488,6 +2494,12 @@ hfs_vnop_pageout(struct vnop_pageout_args *ap)
 		      cp->c_desc.cd_nameptr ? cp->c_desc.cd_nameptr : "");
 	}
 	if ( (retval = hfs_lock(cp, HFS_EXCLUSIVE_LOCK))) {
+		if (!(ap->a_flags & UPL_NOCOMMIT)) {
+		        ubc_upl_abort_range(ap->a_pl,
+					    ap->a_pl_offset,
+					    ap->a_size,
+					    UPL_ABORT_FREE_ON_EMPTY);
+		}
 		return (retval);
 	}
 	fp = VTOF(vp);
