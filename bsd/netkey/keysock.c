@@ -373,13 +373,12 @@ key_attach(struct socket *so, int proto, struct proc *p)
 		return error;
 	}
 
-	socket_lock(so, 1);
+	/* so is already locked when calling key_attach */
 	if (kp->kp_raw.rcb_proto.sp_protocol == PF_KEY) /* XXX: AF_KEY */
 		key_cb.key_count++;
 	key_cb.any_count++;
 	soisconnected(so);
 	so->so_options |= SO_USELOOPBACK;
-	socket_unlock(so, 1);
 
 	return 0;
 }

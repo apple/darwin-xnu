@@ -359,7 +359,7 @@
 254	NONE	NONE	ALL	{ int semctl(int semid, int semnum, int cmd, semun_t arg); } 
 255	NONE	NONE	ALL	{ int semget(key_t key, int	nsems, int semflg); } 
 256	NONE	NONE	ALL	{ int semop(int semid, struct sembuf *sops, int nsops); } 
-257	NONE	NONE	ALL	{ int semconfig(semconfig_ctl_t	flag); } 
+257	NONE	NONE	ALL	{ int nosys(void); } 
 258	NONE	NONE	ALL	{ int msgctl(int msqid, int cmd, struct	msqid_ds *buf); } 
 259	NONE	NONE	ALL	{ int msgget(key_t key, int msgflg); } 
 260	PRE 	NONE	ALL	{ int msgsnd(int msqid, void *msgp, size_t msgsz, int msgflg); } 

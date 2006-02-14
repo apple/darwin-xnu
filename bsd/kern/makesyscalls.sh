@@ -519,7 +519,7 @@ s/\$//g
 							 argtype[i] == "id_t" || argtype[i] == "idtype_t" ||
 							 argtype[i] == "socklen_t" || argtype[i] == "uint32_t" || argtype[i] == "int32_t" ||
 							 argtype[i] == "sigset_t" || argtype[i] == "gid_t" ||
-							 argtype[i] == "semconfig_ctl_t" || argtype[i] == "mode_t" || argtype[i] == "key_t" || argtype[i] == "time_t") {
+							 argtype[i] == "mode_t" || argtype[i] == "key_t" || argtype[i] == "time_t") {
 						munge32 = munge32 "w"
 						munge64 = munge64 "d"
 					}

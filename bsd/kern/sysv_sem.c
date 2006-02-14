@@ -3,20 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -98,7 +97,7 @@ static void semundo_clear(int semid, int semnum);
 /* XXX casting to (sy_call_t *) is bogus, as usual. */
 static sy_call_t *semcalls[] = {
 	(sy_call_t *)semctl, (sy_call_t *)semget,
-	(sy_call_t *)semop, (sy_call_t *)semconfig
+	(sy_call_t *)semop
 };
 
 static int		semtot = 0;		/* # of used semaphores */
@@ -196,46 +195,6 @@ semsys(struct proc *p, struct semsys_args *uap, register_t *retval)
 	if (uap->which >= sizeof(semcalls)/sizeof(semcalls[0]))
 		return (EINVAL);
 	return ((*semcalls[uap->which])(p, &uap->a2, retval));
-}
-
-/*
- * Lock or unlock the entire semaphore facility.
- *
- * This will probably eventually evolve into a general purpose semaphore
- * facility status enquiry mechanism (I don't like the "read /dev/kmem"
- * approach currently taken by ipcs and the amount of info that we want
- * to be able to extract for ipcs is probably beyond what the capability
- * of the getkerninfo facility.
- *
- * At the time that the current version of semconfig was written, ipcs is
- * the only user of the semconfig facility.  It uses it to ensure that the
- * semaphore facility data structures remain static while it fishes around
- * in /dev/kmem.
- */
-
-int
-semconfig(__unused struct proc *p, struct semconfig_args *uap, register_t *retval)
-{
-	int eval = 0;
-
-	switch (uap->flag) {
-	case SEM_CONFIG_FREEZE:
-		SYSV_SEM_SUBSYS_LOCK();
-		break;
-
-	case SEM_CONFIG_THAW:
-		SYSV_SEM_SUBSYS_UNLOCK();
-		break;
-
-	default:
-		printf("semconfig: unknown flag parameter value (%d) - ignored\n",
-		    uap->flag);
-		eval = EINVAL;
-		break;
-	}
-
-	*retval = 0;
-	return(eval);
 }
 
 /*

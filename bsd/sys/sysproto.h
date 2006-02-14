@@ -1,24 +1,23 @@
 /*
  * Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
  * 
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@ 
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
+ * The contents of this file constitute Original Code as defined in and 
+ * are subject to the Apple Public Source License Version 1.1 (the 
+ * "License").  You may not use this file except in compliance with the 
+ * License.  Please obtain a copy of the License at 
+ * http://www.apple.com/publicsource and read it before using this file. 
  * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * This Original Code and all software distributed under the License are 
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the 
+ * License for the specific language governing rights and limitations 
+ * under the License. 
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@ 
  * 
  * 
  * System call switch table.
@@ -980,9 +979,6 @@ struct semop_args {
 	char sops_l_[PADL_(user_addr_t)]; user_addr_t sops; char sops_r_[PADR_(user_addr_t)];
 	char nsops_l_[PADL_(int)]; int nsops; char nsops_r_[PADR_(int)];
 };
-struct semconfig_args {
-	char flag_l_[PADL_(semconfig_ctl_t)]; semconfig_ctl_t flag; char flag_r_[PADR_(semconfig_ctl_t)];
-};
 struct msgctl_args {
 	char msqid_l_[PADL_(int)]; int msqid; char msqid_r_[PADR_(int)];
 	char cmd_l_[PADL_(int)]; int cmd; char cmd_r_[PADR_(int)];
@@ -1524,7 +1520,6 @@ int shmsys(struct proc *, struct shmsys_args *, int *);
 int semctl(struct proc *, struct semctl_args *, int *);
 int semget(struct proc *, struct semget_args *, int *);
 int semop(struct proc *, struct semop_args *, int *);
-int semconfig(struct proc *, struct semconfig_args *, int *);
 int msgctl(struct proc *, struct msgctl_args *, int *);
 int msgget(struct proc *, struct msgget_args *, int *);
 int msgsnd(struct proc *, struct msgsnd_args *, int *);
