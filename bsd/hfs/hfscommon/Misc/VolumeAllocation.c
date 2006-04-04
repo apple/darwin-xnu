@@ -1353,13 +1353,20 @@ static OSErr BlockFindContiguous(
 	UInt32  blockRef;
 	UInt32  wordsPerBlock;
 
-	if (!useMetaZone) {
-		struct hfsmount *hfsmp = VCBTOHFS(vcb);
-
-		
-		if ((hfsmp->hfs_flags & HFS_METADATA_ZONE) &&
-		    (startingBlock <= hfsmp->hfs_metazone_end))
-			startingBlock = hfsmp->hfs_metazone_end + 1;
+	/*
+	 * When we're skipping the metadata zone and the start/end
+	 * range overlaps with the metadata zone then adjust the 
+	 * start to be outside of the metadata zone.  If the range
+	 * is entirely inside the metadata zone then we can deny the
+	 * request (dskFulErr).
+	 */
+	if (!useMetaZone && (vcb->hfs_flags & HFS_METADATA_ZONE)) {
+		if (startingBlock <= vcb->hfs_metazone_end) {
+			if (endingBlock > (vcb->hfs_metazone_end + 2))
+				startingBlock = vcb->hfs_metazone_end + 1;
+			else
+				goto DiskFull;
+		}
 	}
 
 	if ((endingBlock - startingBlock) < minBlocks)

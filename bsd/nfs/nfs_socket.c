@@ -1891,6 +1891,12 @@ nfs_timer(__unused void *arg)
 	    if (slp->ns_wgtime && (slp->ns_wgtime <= cur_usec))
 		nfsrv_wakenfsd(slp);
 	}
+	while ((slp = TAILQ_FIRST(&nfssvc_deadsockhead))) {
+		if ((slp->ns_timestamp + 5) > now.tv_sec)
+			break;
+		TAILQ_REMOVE(&nfssvc_deadsockhead, slp, ns_chain);
+		nfsrv_slpfree(slp);
+	}
 	lck_mtx_unlock(nfsd_mutex);
 #endif /* NFS_NOSERVER */
 

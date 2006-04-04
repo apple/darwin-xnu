@@ -480,6 +480,7 @@ ptcopen(dev_t dev, __unused int flag, __unused int devtype, __unused proc_t p)
 		goto out;
 	}
 	tp->t_oproc = ptsstart;
+	CLR(tp->t_state, TS_ZOMBIE);
 #ifdef sun4c
 	tp->t_stop = ptsstop;
 #endif

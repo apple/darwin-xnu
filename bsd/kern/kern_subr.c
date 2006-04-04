@@ -1055,7 +1055,7 @@ __private_extern__ void uio_calculateresid( uio_t a_uio )
 		return;
 	}
 
-	a_uio->uio_iovcnt = 0;
+	a_uio->uio_iovcnt = a_uio->uio_max_iovs;
 	if (UIO_IS_64_BIT_SPACE(a_uio)) {
 #if 1 // LP64todo - remove this temp workaround once we go live with uio KPI
 		a_uio->uio_resid = 0;
@@ -1064,7 +1064,6 @@ __private_extern__ void uio_calculateresid( uio_t a_uio )
 #endif
 		for ( i = 0; i < a_uio->uio_max_iovs; i++ ) {
 			if (a_uio->uio_iovs.uiovp[i].iov_len != 0 && a_uio->uio_iovs.uiovp[i].iov_base != 0) {
-				a_uio->uio_iovcnt++;
 #if 1 // LP64todo - remove this temp workaround once we go live with uio KPI
 				a_uio->uio_resid += a_uio->uio_iovs.uiovp[i].iov_len;
 #else
@@ -1072,16 +1071,32 @@ __private_extern__ void uio_calculateresid( uio_t a_uio )
 #endif
 			}
 		}
+
+		/* position to first non zero length iovec (4235922) */
+		while (a_uio->uio_iovcnt > 0 && a_uio->uio_iovs.uiovp->iov_len == 0) {
+			a_uio->uio_iovcnt--;
+			if (a_uio->uio_iovcnt > 0) {
+				a_uio->uio_iovs.uiovp++;
+			}
+		}
 	}
 	else {
 		a_uio->uio_resid = 0;
 		for ( i = 0; i < a_uio->uio_max_iovs; i++ ) {
 			if (a_uio->uio_iovs.kiovp[i].iov_len != 0 && a_uio->uio_iovs.kiovp[i].iov_base != 0) {
-				a_uio->uio_iovcnt++;
 				a_uio->uio_resid += a_uio->uio_iovs.kiovp[i].iov_len;
 			}
 		}
+
+		/* position to first non zero length iovec (4235922) */
+		while (a_uio->uio_iovcnt > 0 && a_uio->uio_iovs.kiovp->iov_len == 0) {
+			a_uio->uio_iovcnt--;
+			if (a_uio->uio_iovcnt > 0) {
+				a_uio->uio_iovs.kiovp++;
+			}
+		}
 	}
+
 	return;
 }
 

@@ -1331,8 +1331,9 @@ lookup:
 
 	if (fileflags & O_CREAT) {
 		nd.ni_cnd.cn_nameiop = CREATE;
-		nd.ni_cnd.cn_flags |= LOCKPARENT;
-
+		if (dvp != vp) {
+			nd.ni_cnd.cn_flags |= LOCKPARENT;
+		}
 		if ( (error = namei(&nd))) {
 		        nd.ni_dvp = NULLVP;
 			error = ENOATTR;
@@ -1378,8 +1379,9 @@ lookup:
 			        xvp = nd.ni_vp;
 		}
 		nameidone(&nd);
-		vnode_put(dvp);  /* drop iocount from LOCKPARENT request above */
-		
+		if (dvp != vp) {
+			vnode_put(dvp);  /* drop iocount from LOCKPARENT request above */
+		}
 		if (error)
 		        goto out;
 	} else {

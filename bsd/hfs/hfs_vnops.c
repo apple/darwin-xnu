@@ -289,7 +289,7 @@ hfs_vnop_getattr(struct vnop_getattr_args *ap)
 			if (vnode_isvroot(vp)) {
 				if (hfsmp->hfs_privdir_desc.cd_cnid != 0)
 					--entries;     /* hide private dir */
-				if (hfsmp->jnl)
+				if (hfsmp->jnl || ((HFSTOVCB(hfsmp)->vcbAtrb & kHFSVolumeJournaledMask) && (hfsmp->hfs_flags & HFS_READ_ONLY)))
 					entries -= 2;  /* hide the journal files */
 			}
 			VATTR_RETURN(vap, va_nlink, (uint64_t)entries);
@@ -1890,6 +1890,10 @@ out:
 __private_extern__ void
 replace_desc(struct cnode *cp, struct cat_desc *cdp)
 {
+    if (&cp->c_desc == cdp) {
+        return;
+    }
+         
 	/* First release allocated name buffer */
 	if (cp->c_desc.cd_flags & CD_HASBUF && cp->c_desc.cd_nameptr != 0) {
 		char *name = cp->c_desc.cd_nameptr;
@@ -3166,6 +3170,22 @@ hfs_vgetrsrc(struct hfsmount *hfsmp, struct vnode *vp, struct vnode **rvpp, __un
 		struct cat_fork rsrcfork;
 		struct componentname cn;
 		int lockflags;
+
+		/*
+		 * Make sure cnode lock is exclusive, if not upgrade it.
+		 *
+		 * We assume that we were called from a read-only VNOP (getattr)
+		 * and that its safe to have the cnode lock dropped and reacquired.
+		 */
+		if (cp->c_lockowner != current_thread()) {
+			/*
+			 * If the upgrade fails we loose the lock and
+			 * have to take the exclusive lock on our own.
+			 */
+			if (lck_rw_lock_shared_to_exclusive(&cp->c_rwlock) != 0)
+				lck_rw_lock_exclusive(&cp->c_rwlock);
+			cp->c_lockowner = current_thread();
+		}
 
 		lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_SHARED_LOCK);
 

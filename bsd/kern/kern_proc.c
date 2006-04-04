@@ -594,17 +594,14 @@ pgdelete(pgrp)
 	register struct pgrp *pgrp;
 {
 	struct tty * ttyp;
-	int removettypgrp = 0;
 
 	ttyp = pgrp->pg_session->s_ttyp;
-	if (pgrp->pg_session->s_ttyp != NULL && 
-	    pgrp->pg_session->s_ttyp->t_pgrp == pgrp) {
+	if (ttyp != NULL && pgrp->pg_session->s_ttyp->t_pgrp == pgrp) {
 		pgrp->pg_session->s_ttyp->t_pgrp = NULL;
-		removettypgrp = 1;
 	}
 	LIST_REMOVE(pgrp, pg_hash);
 	if (--pgrp->pg_session->s_count == 0) {
-		if (removettypgrp && (ttyp == &cons) && (ttyp->t_session == pgrp->pg_session))
+		if (ttyp != NULL && (ttyp->t_session == pgrp->pg_session))
 			ttyp->t_session = 0;
 		FREE_ZONE(pgrp->pg_session, sizeof(struct session), M_SESSION);
 	}

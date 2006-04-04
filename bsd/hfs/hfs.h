@@ -302,6 +302,7 @@ typedef struct filefork FCB;
 #define MAKE_INODE_NAME(name,linkno) \
 	    (void) sprintf((name), "%s%d", HFS_INODE_PREFIX, (linkno))
 
+#define HFS_INODE_PREFIX_LEN	5
 
 
 #define HFS_AVERAGE_NAME_SIZE	22

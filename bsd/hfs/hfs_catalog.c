@@ -596,7 +596,7 @@ cat_lookupbykey(struct hfsmount *hfsmp, CatalogKey *keyp, u_long hint, int wantr
 	hint = iterator->hint.nodeNum;
 
 	/* Hide the journal files (if any) */
-	if (hfsmp->jnl &&
+	if ((hfsmp->jnl || ((HFSTOVCB(hfsmp)->vcbAtrb & kHFSVolumeJournaledMask) && (hfsmp->hfs_flags & HFS_READ_ONLY))) &&
 		((cnid == hfsmp->hfs_jnlfileid) ||
 		 (cnid == hfsmp->hfs_jnlinfoblkid))) {
 
@@ -1022,11 +1022,14 @@ cat_rename (
 
 		/* Find cnode data at new location */
 		result = BTSearchRecord(fcb, to_iterator, &btdata, &datasize, NULL);
+		if (result)
+			goto exit;
 		
 		if ((fromtype != recp->recordType) ||
-		    (from_cdp->cd_cnid != getcnid(recp)))
+		    (from_cdp->cd_cnid != getcnid(recp))) {
+			result = EEXIST;
 			goto exit; /* EEXIST */
-		
+		}
 		/* The old name is a case variant and must be removed */
 		result = BTDeleteRecord(fcb, from_iterator);
 		if (result)
@@ -1563,7 +1566,7 @@ cat_readattr(const CatalogKey *key, const CatalogRecord *rec,
 		    (rec->hfsPlusFolder.folderID == hfsmp->hfs_privdir_desc.cd_cnid)) {
 			return (1);	/* continue */
 		}
-		if (hfsmp->jnl &&
+		if ((hfsmp->jnl || ((HFSTOVCB(hfsmp)->vcbAtrb & kHFSVolumeJournaledMask) && (hfsmp->hfs_flags & HFS_READ_ONLY))) &&
 		    (rec->recordType == kHFSPlusFileRecord) &&
 		    ((rec->hfsPlusFile.fileID == hfsmp->hfs_jnlfileid) ||
 		     (rec->hfsPlusFile.fileID == hfsmp->hfs_jnlinfoblkid))) {
@@ -1879,7 +1882,7 @@ cat_packdirentry(const CatalogKey *ckp, const CatalogRecord *crp,
 				cnid = crp->hfsPlusFile.fileID;
 				/* Hide the journal files */
 				if ((curID == kHFSRootFolderID) &&
-					(hfsmp->jnl) &&
+					((hfsmp->jnl || ((HFSTOVCB(hfsmp)->vcbAtrb & kHFSVolumeJournaledMask) && (hfsmp->hfs_flags & HFS_READ_ONLY)))) &&
 					((cnid == hfsmp->hfs_jnlfileid) ||
 					 (cnid == hfsmp->hfs_jnlinfoblkid))) {
 					hide = 1;

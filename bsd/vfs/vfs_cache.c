@@ -655,11 +655,33 @@ cache_lookup_path(struct nameidata *ndp, struct componentname *cnp, vnode_t dp, 
 		if ( (cnp->cn_flags & (ISLASTCN | ISDOTDOT)) ) {
 		        if (cnp->cn_nameiop != LOOKUP)
 			        break;
-		        if (cnp->cn_flags & (LOCKPARENT | NOCACHE | ISDOTDOT))
+		        if (cnp->cn_flags & (LOCKPARENT | NOCACHE))
 			        break;
+			if (cnp->cn_flags & ISDOTDOT) {
+				/*
+				 * Quit here only if we can't use
+				 * the parent directory pointer or
+				 * don't have one.  Otherwise, we'll
+				 * use it below.
+				 */
+				if ((dp->v_flag & VROOT) ||
+				    dp->v_parent == NULLVP)
+					break;
+			}
 		}
-		if ( (vp = cache_lookup_locked(dp, cnp)) == NULLVP)
-		        break;
+
+		/*
+		 * "." and ".." aren't supposed to be cached, so check
+		 * for them before checking the cache.
+		 */
+		if (cnp->cn_namelen == 1 && cnp->cn_nameptr[0] == '.')
+			vp = dp;
+		else if (cnp->cn_flags & ISDOTDOT)
+			vp = dp->v_parent;
+		else {
+			if ( (vp = cache_lookup_locked(dp, cnp)) == NULLVP)
+				break;
+		}
 
 		if ( (cnp->cn_flags & ISLASTCN) )
 		        break;

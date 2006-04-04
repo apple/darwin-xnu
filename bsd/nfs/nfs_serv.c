@@ -213,10 +213,7 @@ nfsrv3_access(nfsd, slp, procp, mrq)
 			    KAUTH_VNODE_DELETE_CHILD;
 		} else {
 			testaction =
-			    KAUTH_VNODE_WRITE_DATA |
-			    KAUTH_VNODE_WRITE_ATTRIBUTES |
-			    KAUTH_VNODE_WRITE_EXTATTRIBUTES |
-			    KAUTH_VNODE_WRITE_SECURITY;
+                           KAUTH_VNODE_WRITE_DATA;
 		}
 		if (nfsrv_authorize(vp, NULL, testaction, &context, nxo, 0))
 			nfsmode &= ~NFSV3ACCESS_MODIFY;
@@ -780,7 +777,7 @@ nfsrv_read(nfsd, slp, procp, mrq)
 	int i;
 	caddr_t bpos;
 	int error = 0, count, len, left, siz, tlen, getret;
-	int v3 = (nfsd->nd_flag & ND_NFSV3), reqlen;
+	int v3 = (nfsd->nd_flag & ND_NFSV3), reqlen, maxlen;
 	char *cp2;
 	mbuf_t mb, mb2, mreq;
 	mbuf_t m2;
@@ -803,7 +800,12 @@ nfsrv_read(nfsd, slp, procp, mrq)
 		nfsm_dissect(tl, u_long *, NFSX_UNSIGNED);
 		off = (off_t)fxdr_unsigned(u_long, *tl);
 	}
-	nfsm_srvstrsiz(reqlen, NFS_SRVMAXDATA(nfsd));
+	nfsm_dissect(tl, u_long *, NFSX_UNSIGNED);
+	reqlen = fxdr_unsigned(u_long, *tl);
+	maxlen = NFS_SRVMAXDATA(nfsd);
+	if (reqlen > maxlen)
+		reqlen = maxlen;
+
 	if ((error = nfsrv_fhtovp(&nfh, nam, TRUE, &vp, &nx, &nxo))) {
 		nfsm_reply(2 * NFSX_UNSIGNED);
 		nfsm_srvpostop_attr(1, NULL);
@@ -1851,6 +1853,7 @@ nfsrv_create(nfsd, slp, procp, mrq)
 			if (!error) {
 			        if (nd.ni_cnd.cn_flags & ISSYMLINK)
 				        error = EINVAL;
+				vp = nd.ni_vp;
 			}
 			if (error)
 				nfsm_reply(0);

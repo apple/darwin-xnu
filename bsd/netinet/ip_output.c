@@ -1383,8 +1383,8 @@ in_delayed_cksum_offset(struct mbuf *m, int ip_offset)
 	}
 	
 	if (ip_offset + sizeof(struct ip) > m->m_len) {
-		printf("delayed m_pullup, m->len: %d  off: %d  p: %d\n",
-			m->m_len, ip_offset, ip->ip_p);
+		printf("delayed m_pullup, m->len: %d  off: %d\n",
+			m->m_len, ip_offset);
 		/*
 		 * XXX
 		 * this shouldn't happen

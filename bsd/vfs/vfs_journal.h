@@ -203,6 +203,19 @@ journal  *journal_open(struct vnode *jvp,
 					   void         *arg);
 
 /*
+ * Test whether the journal is clean or not.  This is intended
+ * to be used when you're mounting read-only.  If the journal
+ * is not clean for some reason then you should not mount the
+ * volume as your data structures may be in an unknown state.
+ */
+int journal_is_clean(struct vnode *jvp,
+		     off_t         offset,
+		     off_t         journal_size,
+		     struct vnode *fsvp,
+                     size_t        min_fs_block_size);
+
+
+/*
  * Call journal_close() just before your file system is unmounted.
  * It flushes any outstanding transactions and makes sure the
  * journal is in a consistent state.

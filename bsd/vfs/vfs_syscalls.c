@@ -190,6 +190,7 @@ mount(struct proc *p, register struct mount_args *uap, __unused register_t *retv
 	int mntalloc = 0;
 	mode_t accessmode;
 	boolean_t is_64bit;
+	boolean_t is_rwlock_locked = FALSE;
 
 	AUDIT_ARG(fflags, uap->flags);
 
@@ -227,13 +228,13 @@ mount(struct proc *p, register struct mount_args *uap, __unused register_t *retv
 		}
 		mount_unlock(mp);
 		lck_rw_lock_exclusive(&mp->mnt_rwlock);
+		is_rwlock_locked = TRUE;
 		/*
 		 * We only allow the filesystem to be reloaded if it
 		 * is currently mounted read-only.
 		 */
 		if ((uap->flags & MNT_RELOAD) &&
 		    ((mp->mnt_flag & MNT_RDONLY) == 0)) {
-			lck_rw_done(&mp->mnt_rwlock);
 			error = ENOTSUP;
 			goto out1;
 		}
@@ -243,7 +244,6 @@ mount(struct proc *p, register struct mount_args *uap, __unused register_t *retv
 		 */
 		if (mp->mnt_vfsstat.f_owner != kauth_cred_getuid(context.vc_ucred) &&
 		    (error = suser(context.vc_ucred, &p->p_acflag))) {
-			lck_rw_done(&mp->mnt_rwlock);
 			goto out1;
 		}
 		/*
@@ -333,6 +333,7 @@ mount(struct proc *p, register struct mount_args *uap, __unused register_t *retv
 	TAILQ_INIT(&mp->mnt_newvnodes);
 	mount_lock_init(mp);
 	lck_rw_lock_exclusive(&mp->mnt_rwlock);
+	is_rwlock_locked = TRUE;
 	mp->mnt_op = vfsp->vfc_vfsops;
 	mp->mnt_vtable = vfsp;
 	mount_list_lock();
@@ -471,6 +472,7 @@ update:
 			mp->mnt_flag = flag;
 		vfs_event_signal(NULL, VQ_UPDATE, (intptr_t)NULL);
 		lck_rw_done(&mp->mnt_rwlock);
+		is_rwlock_locked = FALSE;
 		if (!error)
 			enablequotas(mp,&context);
 		goto out2;
@@ -490,6 +492,7 @@ update:
 		vfs_event_signal(NULL, VQ_MOUNT, (intptr_t)NULL);
 		checkdirs(vp, &context);
 		lck_rw_done(&mp->mnt_rwlock);
+		is_rwlock_locked = FALSE;
 		mount_list_add(mp);
 		/* 
 		 * there is no cleanup code here so I have made it void 
@@ -523,6 +526,7 @@ update:
 			vnode_rele(device_vnode);
 		}
 		lck_rw_done(&mp->mnt_rwlock);
+		is_rwlock_locked = FALSE;
 		mount_lock_destroy(mp);
 		FREE_ZONE((caddr_t)mp, sizeof (struct mount), M_MOUNT);
 	}
@@ -544,6 +548,10 @@ out2:
 	if (devpath && devvp)
 	        vnode_put(devvp);
 out1:
+	/* Release mnt_rwlock only when it was taken */
+	if (is_rwlock_locked == TRUE) {
+		lck_rw_done(&mp->mnt_rwlock);
+	}
 	if (mntalloc)
 		FREE_ZONE((caddr_t)mp, sizeof (struct mount), M_MOUNT);
 	vnode_put(vp);

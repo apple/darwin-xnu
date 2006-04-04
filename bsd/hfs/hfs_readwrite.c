@@ -1158,6 +1158,7 @@ hfs_vnop_ioctl( struct vnop_ioctl_args /* {
 			goto err_exit_bulk_access;
 		}
 		myucred.cr_rgid = myucred.cr_svgid = myucred.cr_groups[0];
+		myucred.cr_gmuid = myucred.cr_uid;
 		
 		my_context.vc_proc = p;
 		my_context.vc_ucred = &myucred;

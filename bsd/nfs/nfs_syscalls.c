@@ -912,12 +912,12 @@ nfssvc_nfsd(nsd, argp, p)
 				continue;
 			lck_rw_lock_exclusive(&slp->ns_rwlock);
 			if (slp->ns_flag & SLP_VALID) {
-				if (slp->ns_flag & SLP_DISCONN) {
-					nfsrv_zapsock(slp);
-				} else if (slp->ns_flag & SLP_NEEDQ) {
+				if ((slp->ns_flag & (SLP_NEEDQ|SLP_DISCONN)) == SLP_NEEDQ) {
 					slp->ns_flag &= ~SLP_NEEDQ;
 					nfsrv_rcv_locked(slp->ns_so, slp, MBUF_WAITOK);
 				}
+				if (slp->ns_flag & SLP_DISCONN)
+					nfsrv_zapsock(slp);
 				error = nfsrv_dorec(slp, nfsd, &nd);
 				microuptime(&now);
 				cur_usec = (u_quad_t)now.tv_sec * 1000000 +
@@ -1389,10 +1389,15 @@ nfsrv_zapsock(struct nfssvc_sock *slp)
 	if (so == NULL)
 		return;
 
+	/*
+	 * Attempt to deter future upcalls, but leave the
+	 * upcall info in place to avoid a race with the
+	 * networking code.
+	 */
 	socket_lock(so, 1);
-	so->so_upcall = NULL;
 	so->so_rcv.sb_flags &= ~SB_UPCALL;
 	socket_unlock(so, 1);
+
 	sock_shutdown(so, SHUT_RDWR);
 }
 
@@ -1622,7 +1627,7 @@ nfsmout:
 /*
  * cleanup and release a server socket structure.
  */
-static void
+void
 nfsrv_slpfree(struct nfssvc_sock *slp)
 {
 	struct nfsuid *nuidp, *nnuidp;
@@ -1673,6 +1678,8 @@ nfsrv_slpfree(struct nfssvc_sock *slp)
 void
 nfsrv_slpderef(struct nfssvc_sock *slp)
 {
+	struct timeval now;
+
 	lck_mtx_lock(nfsd_mutex);
 	lck_rw_lock_exclusive(&slp->ns_rwlock);
 	slp->ns_sref--;
@@ -1682,10 +1689,13 @@ nfsrv_slpderef(struct nfssvc_sock *slp)
 		return;
 	}
 
+	/* queue the socket up for deletion */
+	microuptime(&now);
+	slp->ns_timestamp = now.tv_sec;
 	TAILQ_REMOVE(&nfssvc_sockhead, slp, ns_chain);
+	TAILQ_INSERT_TAIL(&nfssvc_deadsockhead, slp, ns_chain);
+	lck_rw_done(&slp->ns_rwlock);
 	lck_mtx_unlock(nfsd_mutex);
-
-	nfsrv_slpfree(slp);
 }
 
 
@@ -1699,8 +1709,10 @@ nfsrv_init(terminating)
 	int terminating;
 {
 	struct nfssvc_sock *slp, *nslp;
+	struct timeval now;
 
 	if (terminating) {
+		microuptime(&now);
 		for (slp = TAILQ_FIRST(&nfssvc_sockhead); slp != 0; slp = nslp) {
 			nslp = TAILQ_NEXT(slp, ns_chain);
 			if (slp->ns_flag & SLP_VALID) {
@@ -1708,10 +1720,10 @@ nfsrv_init(terminating)
 				nfsrv_zapsock(slp);
 				lck_rw_done(&slp->ns_rwlock);
 			}
+			/* queue the socket up for deletion */
+			slp->ns_timestamp = now.tv_sec;
 			TAILQ_REMOVE(&nfssvc_sockhead, slp, ns_chain);
-			/* grab the lock one final time in case anyone's using it */
-			lck_rw_lock_exclusive(&slp->ns_rwlock);
-			nfsrv_slpfree(slp);
+			TAILQ_INSERT_TAIL(&nfssvc_deadsockhead, slp, ns_chain);
 		}
 		nfsrv_cleancache();	/* And clear out server cache */
 /* XXX Revisit when enabling WebNFS */
@@ -1723,6 +1735,7 @@ nfsrv_init(terminating)
 #endif
 
 	TAILQ_INIT(&nfssvc_sockhead);
+	TAILQ_INIT(&nfssvc_deadsockhead);
 
 	TAILQ_INIT(&nfsd_head);
 	nfsd_head_flag &= ~NFSD_CHECKSLP;

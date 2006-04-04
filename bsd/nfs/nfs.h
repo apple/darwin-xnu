@@ -747,6 +747,7 @@ struct nfssvc_sock {
 	int		ns_reclen;
 	int		ns_numuids;
 	u_long		ns_sref;
+	time_t		ns_timestamp;		/* socket timestamp */
 	lck_mtx_t	ns_wgmutex;		/* mutex for write gather fields */
 	u_quad_t	ns_wgtime;		/* next Write deadline (usec) */
 	LIST_HEAD(, nfsrv_descript) ns_tq;	/* Write gather lists */
@@ -764,7 +765,7 @@ struct nfssvc_sock {
 #define	SLP_LASTFRAG	0x20 /* on last fragment of RPC record */
 #define SLP_ALLFLAGS	0xff
 
-extern TAILQ_HEAD(nfssvc_sockhead, nfssvc_sock) nfssvc_sockhead;
+extern TAILQ_HEAD(nfssvc_sockhead, nfssvc_sock) nfssvc_sockhead, nfssvc_deadsockhead;
 
 /* locks for nfssvc_sock's */
 extern lck_grp_attr_t *nfs_slp_group_attr;
@@ -1021,6 +1022,7 @@ int	nfsrv_setattr(struct nfsrv_descript *nfsd,
 			   struct nfssvc_sock *slp,
 			   proc_t procp, mbuf_t *mrq);
 void	nfsrv_slpderef(struct nfssvc_sock *slp);
+void	nfsrv_slpfree(struct nfssvc_sock *slp);
 int	nfsrv_statfs(struct nfsrv_descript *nfsd, 
 			  struct nfssvc_sock *slp,
 			  proc_t procp, mbuf_t *mrq);

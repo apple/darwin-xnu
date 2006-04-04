@@ -690,7 +690,7 @@ hfs_vnop_readdirattr(ap)
 	}
 
 	dir_entries = dcp->c_entries;
-	if (dcp->c_attr.ca_fileid == kHFSRootFolderID && hfsmp->jnl) {
+	if (dcp->c_attr.ca_fileid == kHFSRootFolderID && (hfsmp->jnl || ((HFSTOVCB(hfsmp)->vcbAtrb & kHFSVolumeJournaledMask) && (hfsmp->hfs_flags & HFS_READ_ONLY)))) {
 		dir_entries -= 3;
 	}
 
@@ -887,7 +887,12 @@ hfs_vnop_readdirattr(ap)
 
 	/* Make sure dcp is locked exclusive before changing c_dirhinttag. */
 	if (shared_cnode_lock) {
-		lck_rw_lock_shared_to_exclusive(&dcp->c_rwlock);
+		/*
+		 * If the upgrade fails we loose the lock and
+		 * have to take the exclusive lock on our own.
+		 */
+		if (lck_rw_lock_shared_to_exclusive(&dcp->c_rwlock) != 0)
+			lck_rw_lock_exclusive(&dcp->c_rwlock);
 		dcp->c_lockowner = current_thread();
 		shared_cnode_lock = 0;
 	}
@@ -901,7 +906,12 @@ exit:
 	/* Drop directory hint on error or if there are no more entries */
 	if (dirhint && (error || index >= dir_entries)) {
 		if (shared_cnode_lock) {
-			lck_rw_lock_shared_to_exclusive(&dcp->c_rwlock);
+			/*
+			 * If the upgrade fails we loose the lock and
+			 * have to take the exclusive lock on our own.
+			 */
+			if (lck_rw_lock_shared_to_exclusive(&dcp->c_rwlock) != 0)
+				lck_rw_lock_exclusive(&dcp->c_rwlock);
 			dcp->c_lockowner = current_thread();
 		}
 		hfs_reldirhint(dcp, dirhint);
@@ -1614,7 +1624,7 @@ packdirattr(
 		if (descp->cd_parentcnid == kHFSRootParentID) {
 			if (hfsmp->hfs_privdir_desc.cd_cnid != 0)
 				--entries;	    /* hide private dir */
-			if (hfsmp->jnl)
+			if (hfsmp->jnl || ((HFSTOVCB(hfsmp)->vcbAtrb & kHFSVolumeJournaledMask) && (hfsmp->hfs_flags & HFS_READ_ONLY)))
 				entries -= 2;	/* hide the journal files */
 		}
 

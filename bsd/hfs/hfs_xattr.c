@@ -145,7 +145,12 @@ hfs_vnop_getxattr(struct vnop_getxattr_args *ap)
 			if ( !RESOURCE_FORK_EXISTS(vp)) {
 				return (ENOATTR);
 			}
-			if ((result = hfs_vgetrsrc(hfsmp, vp, &rvp, vfs_context_proc(ap->a_context)))) {
+			if ((result = hfs_lock(VTOC(vp), HFS_EXCLUSIVE_LOCK))) {
+				return (result);
+			}
+			result = hfs_vgetrsrc(hfsmp, vp, &rvp, vfs_context_proc(ap->a_context));
+			hfs_unlock(VTOC(vp));
+			if (result) {
 				return (result);
 			}
 			if (uio == NULL) {
@@ -292,7 +297,12 @@ hfs_vnop_setxattr(struct vnop_setxattr_args *ap)
 				return (ENOATTR);
 			}
 		}
-		if ((result = hfs_vgetrsrc(hfsmp, vp, &rvp, vfs_context_proc(ap->a_context)))) {
+		if ((result = hfs_lock(VTOC(vp), HFS_EXCLUSIVE_LOCK))) {
+			return (result);
+		}
+		result = hfs_vgetrsrc(hfsmp, vp, &rvp, vfs_context_proc(ap->a_context));
+		hfs_unlock(VTOC(vp));
+		if (result) {
 			return (result);
 		}
 		result = VNOP_WRITE(rvp, uio, 0, ap->a_context);
@@ -468,7 +478,12 @@ hfs_vnop_removexattr(struct vnop_removexattr_args *ap)
 		if ( !RESOURCE_FORK_EXISTS(vp) ) {
 			return (ENOATTR);
 		}
-		if ((result = hfs_vgetrsrc(hfsmp, vp, &rvp, p))) {
+		if ((result = hfs_lock(VTOC(vp), HFS_EXCLUSIVE_LOCK))) {
+			return (result);
+		}
+		result = hfs_vgetrsrc(hfsmp, vp, &rvp, p);
+		hfs_unlock(VTOC(vp));
+		if (result) {
 			return (result);
 		}
 		hfs_lock_truncate(VTOC(rvp), TRUE);

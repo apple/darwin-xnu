@@ -156,7 +156,7 @@ lck_grp_t *nfs_slp_rwlock_group;
 lck_grp_t *nfs_slp_mutex_group;
 
 struct nfs_reqq nfs_reqq;
-struct nfssvc_sockhead nfssvc_sockhead;
+struct nfssvc_sockhead nfssvc_sockhead, nfssvc_deadsockhead;
 struct nfsd_head nfsd_head;
 int nfsd_head_flag;
 
@@ -1456,7 +1456,7 @@ nfs_loadattrcache(
 			      (nvap->nva_type == VREG) |
 			      (np->n_flag & NMODIFIED ? 6 : 4));
 			if (nvap->nva_type == VREG) {
-				int orig_size = np->n_size;
+				u_quad_t orig_size = np->n_size;
 				if (np->n_flag & NMODIFIED) {
 					if (nvap->nva_size < np->n_size)
 						nvap->nva_size = np->n_size;
