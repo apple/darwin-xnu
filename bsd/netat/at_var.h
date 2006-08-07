@@ -310,8 +310,8 @@ struct kev_atalk_data {
 
 void atalk_post_msg(struct ifnet *ifp, u_long event_code, struct at_addr *address, at_nvestr_t *zone);
 void aarp_sched_probe(void *);
-void atalk_lock();
-void atalk_unlock();
+void atalk_lock(void);
+void atalk_unlock(void);
 
 #endif /* KERNEL_PRIVATE */
 #endif /* __APPLE_API_OBSOLETE */

@@ -196,8 +196,11 @@ sendsig(struct proc *p, user_addr_t catcher, int sig, int mask, __unused u_long 
 	int stack_size = 0;
 	void * tstate;
 	int flavor;
-        int ctx32 = 1;
-
+	int ctx32 = 1;
+	int uthsigaltstack = 0;
+	int altstack = 0;
+	
+	
 	th_act = current_thread();
 	ut = get_bsdthread_info(th_act);
 
@@ -300,15 +303,31 @@ sendsig(struct proc *p, user_addr_t catcher, int sig, int mask, __unused u_long 
 	}  
 
 	trampact = ps->ps_trampact[sig];
-	oonstack = ps->ps_sigstk.ss_flags & SA_ONSTACK;
+	uthsigaltstack = p->p_lflag & P_LTHSIGSTACK;
+	
+	if (uthsigaltstack != 0 )  {
+		oonstack = ut->uu_sigstk.ss_flags & SA_ONSTACK;
+		altstack = ut->uu_flag & UT_ALTSTACK;
+	} else {
+		oonstack = ps->ps_sigstk.ss_flags & SA_ONSTACK;
+		altstack = ps->ps_flags & SAS_ALTSTACK;
+	}
+	
 
 	/* figure out where our new stack lives */
-	if ((ps->ps_flags & SAS_ALTSTACK) && !oonstack &&
+	if (altstack && !oonstack &&
 		(ps->ps_sigonstack & sigmask(sig))) {
-		sp = ps->ps_sigstk.ss_sp;
-		sp += ps->ps_sigstk.ss_size;
-		stack_size = ps->ps_sigstk.ss_size;
-		ps->ps_sigstk.ss_flags |= SA_ONSTACK;
+		if (uthsigaltstack != 0) {
+			sp = ut->uu_sigstk.ss_sp;
+			sp += ut->uu_sigstk.ss_size;
+			stack_size = ut->uu_sigstk.ss_size;
+			ut->uu_sigstk.ss_flags |= SA_ONSTACK;
+		} else {
+			sp = ps->ps_sigstk.ss_sp;
+			sp += ps->ps_sigstk.ss_size;
+			stack_size = ps->ps_sigstk.ss_size;
+			ps->ps_sigstk.ss_flags |= SA_ONSTACK;
+		}
 	}
 	else {
 		if (ctx32 == 0)
@@ -632,8 +651,9 @@ sigreturn(struct proc *p, struct sigreturn_args *uap, __unused int *retval)
 	struct uthread * ut;
 	int vec_used = 0;
 	void *tsptr, *fptr, *vptr;
-        int infostyle = uap->infostyle;
-
+	int infostyle = uap->infostyle;
+	int uthsigaltstack = 0;
+	
 	th_act = current_thread();
 
 	ut = (struct uthread *)get_bsdthread_info(th_act);
@@ -675,11 +695,21 @@ sigreturn(struct proc *p, struct sigreturn_args *uap, __unused int *retval)
 	error = copyin(uctx.uc_mcontext64, mactx, uctx.uc_mcsize);
 	if (error)
 		return(error);
-	
-	if ((uctx.uc_onstack & 01))
+
+	uthsigaltstack = p->p_lflag & P_LTHSIGSTACK;
+
+
+	if (uctx.uc_onstack & 01) {
+		if (uthsigaltstack != 0)
+			ut->uu_sigstk.ss_flags |= SA_ONSTACK;
+		else
 			p->p_sigacts->ps_sigstk.ss_flags |= SA_ONSTACK;
-	else
-		p->p_sigacts->ps_sigstk.ss_flags &= ~SA_ONSTACK;
+	} else {
+		if (uthsigaltstack != 0)
+			ut->uu_sigstk.ss_flags &= ~SA_ONSTACK;
+		else
+			p->p_sigacts->ps_sigstk.ss_flags &= ~SA_ONSTACK;
+	}
 
 	ut->uu_sigmask = uctx.uc_sigmask & ~sigcantmask;
 	if (ut->uu_siglist & ~ut->uu_sigmask)

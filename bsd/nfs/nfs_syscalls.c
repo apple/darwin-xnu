@@ -220,9 +220,9 @@ getfh(proc_t p, struct getfh_args *uap, __unused int *retval)
 	}
 
 	bzero(&nfh, sizeof(nfh));
-	nfh.nfh_xh.nxh_version = NFS_FH_VERSION;
-	nfh.nfh_xh.nxh_fsid = nxfs->nxfs_id;
-	nfh.nfh_xh.nxh_expid = nx->nx_id;
+	nfh.nfh_xh.nxh_version = htonl(NFS_FH_VERSION);
+	nfh.nfh_xh.nxh_fsid = htonl(nxfs->nxfs_id);
+	nfh.nfh_xh.nxh_expid = htonl(nx->nx_id);
 	nfh.nfh_xh.nxh_flags = 0;
 	nfh.nfh_xh.nxh_reserved = 0;
 	nfh.nfh_len = NFS_MAX_FID_SIZE;

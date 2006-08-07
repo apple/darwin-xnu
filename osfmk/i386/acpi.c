@@ -25,7 +25,9 @@
 #include <i386/pmap.h>
 #include <i386/mtrr.h>
 #include <i386/acpi.h>
+#include <i386/fpu.h>
 #include <i386/mp.h>
+#include <i386/mp_desc.h>
 
 #include <kern/cpu_data.h>
 
@@ -41,11 +43,13 @@ extern unsigned int disableSerialOuput;
 
 extern void        set_kbd_leds(int leds);
 
+extern void 	fpinit(void);
+
 vm_offset_t
 acpi_install_wake_handler(void)
 {
 	/* copy wake code to ACPI_WAKE_ADDR in low memory */
-	bcopy_phys((addr64_t) kvtophys((vm_offset_t)acpi_wake_start),
+	bcopy_phys(kvtophys((vm_offset_t)acpi_wake_start),
 		   (addr64_t) ACPI_WAKE_ADDR,
 		   acpi_wake_end - acpi_wake_start);
 
@@ -64,12 +68,28 @@ typedef struct acpi_hibernate_callback_data {
 static void
 acpi_hibernate(void *refcon)
 {
-    boolean_t hib;
+    boolean_t dohalt;
 
     acpi_hibernate_callback_data *data = (acpi_hibernate_callback_data *)refcon;
 
     if (current_cpu_datap()->cpu_hibernate) {
-        hib = hibernate_write_image();
+
+        dohalt = hibernate_write_image();
+	if (dohalt)
+	{
+	    // off
+	    HIBLOG("power off\n");
+	    if (PE_halt_restart) 
+		(*PE_halt_restart)(kPEHaltCPU);
+	}
+	else
+	{
+	    // sleep
+	    HIBLOG("sleep\n");
+
+	    // should we come back via regular wake, set the state in memory.
+	    cpu_datap(0)->cpu_hibernate = 0;
+	}
     }
 
     (data->func)(data->refcon);
@@ -83,51 +103,82 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
     acpi_hibernate_callback_data data;
     boolean_t did_hibernate;
 
-	/* shutdown local APIC before passing control to BIOS */
-	lapic_shutdown();
+    kprintf("acpi_sleep_kernel hib=%d\n", current_cpu_datap()->cpu_hibernate);
+
+    /* shutdown local APIC before passing control to BIOS */
+    lapic_shutdown();
 
     data.func = func;
     data.refcon = refcon;
 
-	/*
-	 * Save master CPU state and sleep platform.
-	 * Will not return until platform is woken up,
-	 * or if sleep failed.
-	 */
-    acpi_sleep_cpu(acpi_hibernate, &data);
+    /* Save HPET state */
+    hpet_save();
 
-	/* reset UART if kprintf is enabled */
-	if (FALSE == disableSerialOuput)
-		serial_init();
-
-    if (current_cpu_datap()->cpu_hibernate) {
-        * (int *) CM1 = 0;
-        * (int *) CM2 = 0;
-        * (int *) CM3 = 0;
-
-        current_cpu_datap()->cpu_hibernate = 0;
-
-        did_hibernate = TRUE;
-    } else {
-        did_hibernate = FALSE;
+    /*
+     * If we're in 64-bit mode, drop back into legacy mode during sleep.
+     */
+    if (cpu_mode_is64bit()) {
+	cpu_IA32e_disable(current_cpu_datap());
+	kprintf("acpi_sleep_kernel legacy mode re-entered\n");
     }
 
-	/* restore MTRR settings */
-	mtrr_update_cpu();
+    /*
+     * Save master CPU state and sleep platform.
+     * Will not return until platform is woken up,
+     * or if sleep failed.
+     */
+    acpi_sleep_cpu(acpi_hibernate, &data);
 
-	/* set up PAT following boot processor power up */
-	pat_init();
+    /* reset UART if kprintf is enabled */
+    if (FALSE == disableSerialOuput)
+	    serial_init();
+
+    kprintf("ret from acpi_sleep_cpu hib=%d\n", current_cpu_datap()->cpu_hibernate);
+
+    if (current_cpu_datap()->cpu_hibernate) {
+	int i;
+	for (i=0; i<PMAP_NWINDOWS; i++) {
+	    *current_cpu_datap()->cpu_pmap->mapwindow[i].prv_CMAP = 0;
+	}
+	current_cpu_datap()->cpu_hibernate = 0;
+	did_hibernate = TRUE;
+
+    } else {
+	did_hibernate = FALSE;
+    }
+
+    /* Re-enable 64-bit mode if necessary. */
+    if (cpu_mode_is64bit()) {
+	cpu_IA32e_enable(current_cpu_datap());
+	cpu_desc_load64(current_cpu_datap());
+	kprintf("acpi_sleep_kernel 64-bit mode re-enabled\n");
+	fast_syscall_init64();
+    } else {
+	fast_syscall_init();
+    }
+
+    /* restore MTRR settings */
+    mtrr_update_cpu();
+
+    /* set up PAT following boot processor power up */
+    pat_init();
 
     if (did_hibernate) {
         hibernate_machine_init();
     }
         
-	/* re-enable and re-init local apic */
-	if (lapic_probe())
-		lapic_init();
+    /* re-enable and re-init local apic */
+    if (lapic_probe())
+	lapic_init();
 
-	/* let the realtime clock reset */
-	rtc_sleep_wakeup();
+    /* Restore HPET state */
+    hpet_restore();
+
+    /* let the realtime clock reset */
+    rtc_sleep_wakeup();
+
+    fpinit();
+    clear_fpu();
 
     if (did_hibernate) {
         enable_preemption();

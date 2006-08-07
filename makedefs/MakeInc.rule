@@ -604,7 +604,7 @@ do_build_mach_kernel: $(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/kgmacros
 	@install $(DATA_INSTALL_FLAGS) $(SRCROOT)/config/version.c $(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/version.c;
 	@$(SRCROOT)/config/newvers.pl $(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/version.c;
 	${KCC} -c ${filter-out ${${join $@,_CFLAGS_RM}}, ${CFLAGS}} ${${join $@,_CFLAGS_ADD}} ${INCFLAGS} ${${join $@,_INCFLAGS}} $(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/version.c -o $(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/version.o
-	$(LD) $(LDFLAGS_KERNEL) $(addprefix $(TARGET)/,$(foreach component,$(COMPONENT_LIST), $(addprefix $(component)/$(firstword $($(addsuffix _KERNEL_CONFIG, $(shell echo -n $(component) | tr a-z A-Z))) $(KERNEL_CONFIG))/, $(addsuffix .o, $(component))))) $(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/version.o -o $(TARGET)/mach_kernel.sys $(LD_KERNEL_LIBS);	\
+	$(LD) $(LDFLAGS_KERNEL) $(addprefix $(TARGET)/,$(foreach component,$(COMPONENT_LIST), $(addprefix $(component)/$(firstword $($(addsuffix _KERNEL_CONFIG, $(shell printf "%s" "$(component)" | tr a-z A-Z))) $(KERNEL_CONFIG))/, $(addsuffix .o, $(component))))) $(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/version.o -o $(TARGET)/mach_kernel.sys $(LD_KERNEL_LIBS);	\
 	$(STRIP) $(STRIP_FLAGS) $(TARGET)/mach_kernel.sys -o $(TARGET)/mach_kernel;
 
 $(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/kgmacros: $(SRCROOT)/kgmacros

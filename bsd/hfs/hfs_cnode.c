@@ -995,7 +995,8 @@ void
 hfs_unlock(struct cnode *cp)
 {
         vnode_t rvp = NULLVP;
-        vnode_t dvp = NULLVP;
+        vnode_t vp = NULLVP;
+	u_int32_t c_flag;
 
 	/* System files need to keep track of owner */
 	if ((cp->c_fileid < kHFSFirstUserCatalogNodeID) &&
@@ -1012,21 +1013,31 @@ hfs_unlock(struct cnode *cp)
 			}
 		}
 	}
-	if (cp->c_flag & C_NEED_DVNODE_PUT)
-	        dvp = cp->c_vp;
+	c_flag = cp->c_flag;
+	cp->c_flag &= ~(C_NEED_DVNODE_PUT | C_NEED_RVNODE_PUT | C_NEED_DATA_SETSIZE | C_NEED_RSRC_SETSIZE);
+	if (c_flag & (C_NEED_DVNODE_PUT | C_NEED_DATA_SETSIZE)) {
+		vp = cp->c_vp;
+	}
+	if (c_flag & (C_NEED_RVNODE_PUT | C_NEED_RSRC_SETSIZE)) {
+                rvp = cp->c_rsrc_vp;
+	}
 
-	if (cp->c_flag & C_NEED_RVNODE_PUT)
-	        rvp = cp->c_rsrc_vp;
-
-	cp->c_flag &= ~(C_NEED_DVNODE_PUT | C_NEED_RVNODE_PUT);
-
-	cp-> c_lockowner = NULL;
+	cp->c_lockowner = NULL;
 	lck_rw_done(&cp->c_rwlock);
 
-	if (dvp)
-	        vnode_put(dvp);
-	if (rvp)
-	        vnode_put(rvp);
+	/* Perform any vnode post processing after cnode lock is dropped. */
+	if (vp) {
+		if (c_flag & C_NEED_DATA_SETSIZE)
+			ubc_setsize(vp, 0);
+		if (c_flag & C_NEED_DVNODE_PUT)
+			vnode_put(vp);
+	}
+	if (rvp) {
+		if (c_flag & C_NEED_RSRC_SETSIZE)
+			ubc_setsize(rvp, 0);
+		if (c_flag & C_NEED_RVNODE_PUT)
+			vnode_put(rvp);
+	}
 }
 
 /*

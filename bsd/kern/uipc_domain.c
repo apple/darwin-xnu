@@ -259,7 +259,6 @@ domaininit()
 	 * allocate lock group attribute and group for domain mutexes
 	 */
 	domain_proto_mtx_grp_attr = lck_grp_attr_alloc_init();
-	lck_grp_attr_setdefault(domain_proto_mtx_grp_attr);
 
 	domain_proto_mtx_grp = lck_grp_alloc_init("domain", domain_proto_mtx_grp_attr);
 		
@@ -267,7 +266,6 @@ domaininit()
 	 * allocate the lock attribute for per domain mutexes
 	 */
 	domain_proto_mtx_attr = lck_attr_alloc_init();
-	lck_attr_setdefault(domain_proto_mtx_attr);
 
 	if ((domain_proto_mtx = lck_mtx_alloc_init(domain_proto_mtx_grp, domain_proto_mtx_attr)) == NULL) {
 		printf("domaininit: can't init domain mtx for domain list\n");

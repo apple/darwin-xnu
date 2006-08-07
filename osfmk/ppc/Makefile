@@ -16,11 +16,11 @@ EXPORT_ONLY_FILES = 		\
 	io_map_entries.h	\
 	lock.h			\
 	locks.h			\
+	pms.h			\
 	proc_reg.h		\
 	machine_routines.h	\
 	mappings.h		\
 	savearea.h		\
-	pms.h			\
 	simple_lock.h
 
 INSTALL_MD_DIR = ppc

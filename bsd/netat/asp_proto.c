@@ -115,7 +115,6 @@ static unsigned char scb_tmo_cnt;
 asp_scb_t *scb_used_list;
 static asp_scb_t *scb_tmo_list;
 asp_scb_t *scb_free_list;
-atlock_t aspall_lock, asptmo_lock;
 
 int
 asp_readable(gref)
@@ -141,7 +140,6 @@ asp_init()
 int asp_open(gref)
 	gref_t *gref;
 {
-	int s;
 	asp_scb_t *scb;
 
 	/*
@@ -166,11 +164,9 @@ int asp_open(gref)
 	scb->gref = gref;
 	scb->session_timer = DEF_SESS_TMO;
 	scb->cmd_retry = asp_def_retry;
-	ATDISABLE(s, aspall_lock);
 	if ((scb->next_scb = scb_used_list) != 0)
 		scb->next_scb->prev_scb = scb;
 	scb_used_list = scb;
-	ATENABLE(s, aspall_lock);
 
 	/*
 	 * return success
@@ -186,7 +182,6 @@ int
 asp_close(gref)
 	gref_t *gref;
 {
-	int s;
 	unsigned char sock_num;
 	asp_scb_t *scb, *new_scb;
 	gbuf_t *m;
@@ -200,17 +195,14 @@ asp_close(gref)
 		 * send the CloseSess response to peer
 		 */
 		if (gbuf_type(scb->sess_ioc) != MSG_PROTO) {
-			ATDISABLE(s, scb->lock);
 			m = scb->sess_ioc;
 			scb->sess_ioc = gbuf_next(m);
-			ATENABLE(s, scb->lock);
 			atp_send_rsp(scb->gref, m, TRUE);
 		}
 	}
 
 	if (scb->atp_state) {
 		sock_num = scb->loc_addr.socket;
-		ATDISABLE(s, aspall_lock);
 		if ((scb->dflag != 1) && scb->stat_msg) {
 			untimeout(atp_retry_req, scb->stat_msg);
 			gbuf_freem(scb->stat_msg);
@@ -219,7 +211,6 @@ asp_close(gref)
 		if (asp_scbQ[sock_num]->next_scb == 0) {
 			asp_scbQ[sock_num] = 0;
 			asp_inpC[sock_num] = 0;
-			ATENABLE(s, aspall_lock);
 			dPrintf(D_M_ASP, D_L_INFO,
 			("         : atp_close(), loc=%d\n", scb->loc_addr.socket));
 			atp_close(gref, 0);
@@ -237,7 +228,6 @@ asp_close(gref)
 					scb->next_scb->prev_scb = scb->prev_scb;
 			}
 			scb->next_scb = 0;
-			ATENABLE(s, aspall_lock);
 		}
 	} else
 		asp_dequeue_scb(scb);
@@ -245,7 +235,6 @@ asp_close(gref)
 	/*
 	 * free all allocated blocks if any
 	 */
-	ATDISABLE(s, scb->lock);
 	if (scb->stat_msg) {
 		gbuf_freem(scb->stat_msg);
 		scb->stat_msg = 0;
@@ -260,7 +249,6 @@ asp_close(gref)
 	}
 
 	scb->rem_addr.node = 0;
-	ATENABLE(s, scb->lock);
 
 	/*
 	 * stop all timers
@@ -381,7 +369,7 @@ int asp_wput(gref, m)
 	gref_t *gref;
 	gbuf_t *m;
 {
-	int s, err;
+	int err;
 	unsigned char sockSav, sock_num;
 	gbuf_t *mioc, *mdata;
 	ioc_t *iocbp;
@@ -546,7 +534,6 @@ int asp_wput(gref, m)
 		if ((sock_num = (at_socket)atp_bind(gref, 0, &sockSav)) == 0) {
 			atp_close(gref, 0);
 			asp_dequeue_scb(scb);
-			ATDISABLE(s, aspall_lock);
 			sock_num = sockSav;
 			scb->loc_addr.socket = sock_num;
 			for (curr_scb = asp_scbQ[sock_num];
@@ -554,14 +541,11 @@ int asp_wput(gref, m)
 			scb->prev_scb = curr_scb;
 			curr_scb->next_scb = scb;
 			scb->atp_state = curr_scb->atp_state;
-			ATENABLE(s, aspall_lock);
 		} else {
 			asp_dequeue_scb(scb);
-			ATDISABLE(s, aspall_lock);
 			scb->loc_addr.socket = sock_num;
 			asp_scbQ[sock_num] = scb;
 			scb->atp_state->dflag = scb->dflag;
-			ATENABLE(s, aspall_lock);
 		}
 		gref->info = (void *)scb;
 		asp_inpC[sock_num]++;
@@ -602,7 +586,7 @@ int asp_wput(gref, m)
 		scb->session_timer = open_cmd->SessionTimer;
 		aw.func = ASPFUNC_OpenSess;
 		aw.param1 = scb->loc_addr.socket;
-		aw.param2 = ASP_Version;
+		aw.param2 = htons(ASP_Version);
 		scb->ioc_wait = (unsigned char)(iocbp->ioc_cmd & 0xff);
 		iocbp->ioc_cmd = AT_ATP_ISSUE_REQUEST_DEF;
 		asp_send_req(gref, mioc, &open_cmd->SLSEntityIdentifier,
@@ -848,7 +832,6 @@ asp_accept(scb, sess_scb, m)
 	asp_scb_t *sess_scb;
 	gbuf_t *m;
 {
-	int s;
 	gbuf_t *mdata;
 	at_ddp_t *ddp;
 	at_atp_t *atp;
@@ -880,9 +863,7 @@ asp_accept(scb, sess_scb, m)
 	awp->param1 = sess_scb->sess_id;
 	awp->param2 = 0;
 	gbuf_freeb(m);
-	ATDISABLE(s, scb->lock);
 	scb->sess_ioc = gbuf_next(mdata);
-	ATENABLE(s, scb->lock);
 	gbuf_next(mdata) = 0;
 	asp_timout(asp_hangup, sess_scb, sess_scb->session_timer);
 	atp_send_rsp(scb->gref, mdata, TRUE);
@@ -911,11 +892,9 @@ void asp_clock_locked(arg)
 void asp_clock(arg)
 	void *arg;
 {
-	int s;
 	asp_scb_t *scb;
 	void (*tmo_func)();
 
-	ATDISABLE(s, asptmo_lock);
 	if (scb_tmo_list)
 		scb_tmo_list->tmo_delta--;
 	while (((scb = scb_tmo_list) != 0) && (scb_tmo_list->tmo_delta == 0)) {
@@ -923,12 +902,9 @@ void asp_clock(arg)
 			scb_tmo_list->prev_tmo = 0;
 		if ((tmo_func = scb->tmo_func) != 0) {
 			scb->tmo_func = 0;
-			ATENABLE(s, asptmo_lock);
 			(*tmo_func)(scb);
-			ATDISABLE(s, asptmo_lock);
 		}
 	}
-	ATENABLE(s, asptmo_lock);
 
 	if (++scb_tmo_cnt == 0) scb_tmo_cnt++;
 	timeout(asp_clock_locked, (void *)arg, (1<<SESS_TMO_RES)*TICKS_PER_SEC);
@@ -943,7 +919,6 @@ asp_ack_reply(gref, mioc)
 	register gref_t *gref;
 	register gbuf_t *mioc;
 {
-	int s;
 	int len, msize, nbds;
 	register gbuf_t *mdata, *m, *mx;
 	struct atpBDS *atpBDS;
@@ -1083,7 +1058,7 @@ asp_ack_reply(gref, mioc)
 				 */
 				awp->func = 0;
 				awp->param1 = 0;
-				awp->param2 = (unsigned short)ASPERR_BadVersNum;
+				awp->param2 = htons((unsigned short)ASPERR_BadVersNum);
 				dPrintf(D_M_ASP, D_L_INFO,
 					("             : version=%d\n",
 					ASPERR_BadVersNum));
@@ -1100,7 +1075,6 @@ asp_ack_reply(gref, mioc)
 			/*
 			 * queue the connection request
 			 */
-			ATDISABLE(s, scb->lock);
 			gbuf_next(mdata) = 0;
 			if ((m = scb->sess_ioc) == 0) {
 				scb->sess_ioc = mdata;
@@ -1113,7 +1087,6 @@ asp_ack_reply(gref, mioc)
 					m = gbuf_next(m);
 				gbuf_next(m) = mdata;
 			}
-			ATENABLE(s, scb->lock);
 			dPrintf(D_M_ASP, D_L_INFO,
 				("             : QUEUE connect request\n"));
 
@@ -1122,7 +1095,7 @@ asp_ack_reply(gref, mioc)
 		case ASPFUNC_Command:
 		case ASPFUNC_Write:
 			if ( (scb->sess_id != awp->param1)
-			     || (scb->rcv_seq_num != awp->param2)
+			     || (scb->rcv_seq_num != ntohs(awp->param2))
 			     || BAD_REMADDR(rem_addr) ) {
 				char era[8], ra[8];
 				sprintf(era,"%d.%d", scb->rem_addr.node,scb->rem_addr.socket);
@@ -1144,12 +1117,11 @@ asp_ack_reply(gref, mioc)
 			command_ind = (asp_command_ind_t *)gbuf_rptr(mioc);
 			command_ind->Primitive = (int)awp->func;
 			command_ind->ReqRefNum =
-				*(unsigned short *)atp->tid;
+				ntohs(*(unsigned short *)atp->tid);
 			command_ind->ReqType = awp->func;
 
 			mdata = gbuf_strip(mdata);
 			gbuf_cont(mioc) = mdata;
-			ATDISABLE(s, scb->lock);
 			if (scb->req_flag) {
 				if ((mx = scb->req_msgq) != 0) {
 					while (gbuf_next(mx))
@@ -1157,10 +1129,8 @@ asp_ack_reply(gref, mioc)
 					gbuf_next(mx) = mioc;
 				} else
 					scb->req_msgq = mioc;
-				ATENABLE(s, scb->lock);
 			} else {
 				scb->req_flag = 1;
-				ATENABLE(s, scb->lock);
 				asp_putnext(scb->gref, mioc);
 			}
 			goto l_done;
@@ -1177,7 +1147,7 @@ asp_ack_reply(gref, mioc)
 			command_ind = (asp_command_ind_t *)gbuf_rptr(mioc);
 			command_ind->Primitive = (int)awp->func;
 			command_ind->ReqRefNum =
-				*(unsigned short *)atp->tid;
+				ntohs(*(unsigned short *)atp->tid);
 			command_ind->ReqType = awp->func;
 
 			mdata = gbuf_strip(mdata);
@@ -1246,12 +1216,10 @@ asp_ack_reply(gref, mioc)
 				scb->rem_addr.socket));
 
 			gbuf_next(mdata) = 0;
-			ATDISABLE(s, scb->lock);
 			if (scb->sess_ioc)
 				gbuf_freel(scb->sess_ioc);
 			scb->sess_ioc = mdata;
 			scb->state = ASPSTATE_Close;
-			ATENABLE(s, scb->lock);
 
 			/*
 			 * notify upstream of the CloseSess from peer
@@ -1270,7 +1238,7 @@ asp_ack_reply(gref, mioc)
 			command_ind = (asp_command_ind_t *)gbuf_rptr(mioc);
 			command_ind->Primitive = (int)awp->func;
 			command_ind->ReqRefNum =
-				*(unsigned short *)atp->tid;
+				ntohs(*(unsigned short *)atp->tid);
 			command_ind->ReqType = awp->func;
 			scb->attn_tid = *(unsigned short *)atp->tid;
 			scb->attn_flag = 1;
@@ -1316,12 +1284,10 @@ asp_ack_reply(gref, mioc)
 		case ASPSTATE_Idle:
 			scb->rem_addr.node = 0;
 			gbuf_freem(mioc);
-			ATDISABLE(s, scb->lock);
 			if (scb->get_wait)
 				wakeup(&scb->event);
 			else
 				atalk_notify_sel(gref);
-			ATENABLE(s, scb->lock);
 			return;
 
 		case ASPSTATE_WaitingForGetStatusRsp:
@@ -1390,7 +1356,7 @@ asp_ack_reply(gref, mioc)
 			atpBDS = (struct atpBDS *)gbuf_rptr(mx);
 			cmdreply_ind = (asp_cmdreply_ind_t *)gbuf_rptr(mioc);
 			cmdreply_ind->Primitive = ASPFUNC_CmdReply;
-			cmdreply_ind->CmdResult = *(int *)atpBDS->bdsUserData;
+			cmdreply_ind->CmdResult = ntohl(*(int *)atpBDS->bdsUserData);
 			gbuf_wset(mioc,sizeof(asp_cmdreply_ind_t));
 			gbuf_freeb(mx);
 			asp_putnext(scb->gref, mioc);
@@ -1586,9 +1552,7 @@ StaticProc void
 asp_dequeue_scb(scb)
 	asp_scb_t *scb;
 {
-	int s;
 
-	ATDISABLE(s, aspall_lock);
 	if (scb == scb_used_list) {
 		if ((scb_used_list = scb->next_scb) != 0)
 			scb->next_scb->prev_scb = 0;
@@ -1596,7 +1560,6 @@ asp_dequeue_scb(scb)
 		if ((scb->prev_scb->next_scb = scb->next_scb) != 0)
 			scb->next_scb->prev_scb = scb->prev_scb;
 	}
-	ATENABLE(s, aspall_lock);
 
 	scb->next_scb = 0;
 	scb->prev_scb = 0;
@@ -1610,11 +1573,9 @@ asp_find_scb(sock_num, rem_addr)
 	unsigned char sock_num;
 	at_inet_t *rem_addr;
 {
-	int s;
 	asp_scb_t *scb;
 	asp_scb_t *alt_scb = 0;
 
-	ATDISABLE(s, aspall_lock);
 	for (scb = asp_scbQ[sock_num]; scb; scb = scb->next_scb) {
 		if ((scb->rem_addr.net == rem_addr->net)
 			&& (scb->rem_addr.node == rem_addr->node)) {
@@ -1634,7 +1595,6 @@ asp_find_scb(sock_num, rem_addr)
 			rem_addr->node,
 			rem_addr->socket));
 	}
-	ATENABLE(s, aspall_lock);
 
 	return scb;
 }
@@ -1648,7 +1608,6 @@ asp_timout(func, scb, seconds)
 	register asp_scb_t *scb;
 	int seconds;
 {
-	int s;
 	unsigned char sum;
 	register asp_scb_t *curr_scb, *prev_scb;
 
@@ -1659,11 +1618,9 @@ asp_timout(func, scb, seconds)
 	scb->tmo_delta = (seconds>>SESS_TMO_RES);
 	scb->tmo_cnt = scb_tmo_cnt;
 
-	ATDISABLE(s, asptmo_lock);
 	if (scb_tmo_list == 0) {
 		scb->next_tmo = scb->prev_tmo = 0;
 		scb_tmo_list = scb;
-		ATENABLE(s, asptmo_lock);
 		return;
 	}
 
@@ -1697,7 +1654,6 @@ asp_timout(func, scb, seconds)
 		scb_tmo_list->prev_tmo = scb;
 		scb_tmo_list = scb;
 	}
-	ATENABLE(s, asptmo_lock);
 }
 
 /*
@@ -1708,12 +1664,10 @@ asp_untimout(func, scb)
 	void (*func)();
 	register asp_scb_t *scb;
 {
-	int s;
 
 	if ((scb->tmo_cnt == scb_tmo_cnt) || (scb->tmo_func == 0))
 		return;
 
-	ATDISABLE(s, asptmo_lock);
 	if (scb_tmo_list == scb) {
 		if ((scb_tmo_list = scb->next_tmo) != 0) {
 			scb_tmo_list->prev_tmo = 0;
@@ -1727,7 +1681,6 @@ asp_untimout(func, scb)
 		scb->prev_tmo = 0;
 	}
 	scb->tmo_func = 0;
-	ATENABLE(s, asptmo_lock);
 }
 
 /*
@@ -1742,7 +1695,6 @@ asp_hangup(scb)
 	/*
 	 * set the state to Close
 	 */
-	ATDISABLE(s, scb->lock);
 	scb->state = ASPSTATE_Close;
 	if (scb->tickle_tid) {
 		atp_cancel_req(scb->gref, (unsigned int)scb->tickle_tid);
@@ -1753,15 +1705,11 @@ asp_hangup(scb)
 	 * notify upstream of the hangup
 	 */
 	if (scb->rem_addr.node) {
-		if (scb->get_wait) {
+		if (scb->get_wait)
 			wakeup(&scb->event);
-			ATENABLE(s, scb->lock);
-		} else {
-			ATENABLE(s, scb->lock);
+		else
 			atalk_notify_sel(scb->gref);
-		}
-	} else
-		ATENABLE(s, scb->lock);
+	}
 }
 
 StaticProc void
@@ -1804,17 +1752,13 @@ asp_iocnak(gref, mioc, err)
 StaticProc asp_scb_t *
 asp_scb_alloc()
 {
-	int s, i;
+	int i;
 	gbuf_t *m;
 	asp_scb_t *scb, *scb_array;
 
-	ATDISABLE(s, aspall_lock);
 	if (scb_free_list == 0) {
 		if ((m = gbuf_alloc(SCBS_PER_BLK*sizeof(asp_scb_t), PRI_MED)) == 0)
-		{
-			ATENABLE(s, aspall_lock);
 			return (asp_scb_t *)0;
-		}
 		bzero((char *)gbuf_rptr(m), SCBS_PER_BLK*sizeof(asp_scb_t));
 		gbuf_cont(m) = scb_resource_m;
 		scb_resource_m = m;
@@ -1827,9 +1771,6 @@ asp_scb_alloc()
 
 	scb = scb_free_list;
 	scb_free_list = scb->next_scb;
-	ATENABLE(s, aspall_lock);
-	ATLOCKINIT(scb->lock);
-	ATLOCKINIT(scb->delay_lock);
 	ATEVENTINIT(scb->event);
 	ATEVENTINIT(scb->delay_event);
 
@@ -1843,13 +1784,10 @@ StaticProc void
 asp_scb_free(scb)
 	asp_scb_t *scb;
 {
-	int s;
 
 	bzero((char *)scb, sizeof(asp_scb_t));
-	ATDISABLE(s, aspall_lock);
 	scb->next_scb = scb_free_list;
 	scb_free_list = scb;
-	ATENABLE(s, aspall_lock);
 }
 
 /*
@@ -1860,7 +1798,6 @@ asp_putnext(gref, mproto)
 	gref_t *gref;
 	gbuf_t *mproto;
 {
-	int s;
 	gbuf_t *m;
 	asp_scb_t *scb;
 
@@ -1869,7 +1806,6 @@ asp_putnext(gref, mproto)
 	/*
 	 * queue the message.
 	 */
-	ATDISABLE(s, scb->lock);
 	gbuf_next(mproto) = 0;
 	if ((m = scb->sess_ioc) == 0)
 		scb->sess_ioc = mproto;
@@ -1882,14 +1818,11 @@ asp_putnext(gref, mproto)
 	if (scb->rcv_cnt >= MAX_RCV_CNT)
 		scb->snd_stop = 1;
 
-	if (scb->get_wait) {
+	if (scb->get_wait)
 		wakeup(&scb->event);
-		ATENABLE(s, scb->lock);
-	} else if (mproto == scb->sess_ioc) {
-		ATENABLE(s, scb->lock);
+	else if (mproto == scb->sess_ioc)
 		atalk_notify_sel(gref);
-	} else
-		ATENABLE(s, scb->lock);
+
 } /* asp_putnext */
 
 /*
@@ -1913,7 +1846,7 @@ asp_putnext(gref, mproto)
 
 int ASPputmsg(gref_t *gref, strbuf_t *ctlptr, strbuf_t *datptr, gbuf_t *mreq, int flags, int *errp)
 {
-    int s, i, err, len, offset, remain, size, copy_len;
+    int i, err, len, offset, remain, size, copy_len;
     gbuf_t *mioc, *mdata, *mx, *m0;
     ioc_t *iocbp;
     strbuf_t ctlbuf;
@@ -2097,7 +2030,7 @@ int ASPputmsg(gref_t *gref, strbuf_t *ctlptr, strbuf_t *datptr, gbuf_t *mreq, in
         awp = (asp_word_t *)atp->user_bytes;
         awp->func = (unsigned char)Primitive;
         awp->param1 = scb->sess_id;
-        awp->param2 = scb->snd_seq_num;
+        awp->param2 = htons(scb->snd_seq_num);
         iocbp->ioc_private = (void *)scb;
         iocbp->ioc_count = gbuf_len(mdata);
         iocbp->ioc_rval = 0;
@@ -2106,7 +2039,6 @@ int ASPputmsg(gref_t *gref, strbuf_t *ctlptr, strbuf_t *datptr, gbuf_t *mreq, in
         /*
          * send the command/write/write_continue/attention request
          */
-        ATDISABLE(s, scb->lock);
         switch (awp->func) {
         case ASPFUNC_Command:
             scb->state = ASPSTATE_WaitingForCommandRsp;
@@ -2116,7 +2048,7 @@ int ASPputmsg(gref_t *gref, strbuf_t *ctlptr, strbuf_t *datptr, gbuf_t *mreq, in
             break;
         case ASPFUNC_WriteContinue:
             scb->state = ASPSTATE_WaitingForWriteContinueRsp;
-            awp->param2 = scb->wrt_seq_num;
+            awp->param2 = htons(scb->wrt_seq_num);
             break;
         case ASPFUNC_Attention:
             scb->state = ASPSTATE_WaitingForCommandRsp;
@@ -2124,10 +2056,9 @@ int ASPputmsg(gref_t *gref, strbuf_t *ctlptr, strbuf_t *datptr, gbuf_t *mreq, in
             atp->xo_relt = 0;
             atp->bitmap = 0x01;
             gbuf_wdec(mdata,2);
-            awp->param2 = *(unsigned short *)gbuf_wptr(mdata);
+            awp->param2 = htons(*(unsigned short *)gbuf_wptr(mdata));
             break;
         }
-        ATENABLE(s, scb->lock);
         dPrintf(D_M_ASP,D_L_INFO,
             ("ASPputmsg: %s, loc=%d, rem=%x.%x.%d\n",
              (awp->func == ASPFUNC_Command ? "CommandReq" :
@@ -2140,17 +2071,14 @@ int ASPputmsg(gref_t *gref, strbuf_t *ctlptr, strbuf_t *datptr, gbuf_t *mreq, in
 
     case ASPFUNC_CmdReply:
 
-        ATDISABLE(s, scb->lock);
         if (scb->req_msgq) {
             mx = scb->req_msgq;
             scb->req_msgq = gbuf_next(mx);
             gbuf_next(mx) = 0;
-            ATENABLE(s, scb->lock);
             asp_putnext(scb->gref, mx);
-        } else {
+        } else
             scb->req_flag = 0;
-            ATENABLE(s, scb->lock);
-        }
+
         result = primitives->CmdReplyReq.CmdResult;
         tid = primitives->CmdReplyReq.ReqRefNum;
 
@@ -2168,7 +2096,7 @@ int ASPputmsg(gref_t *gref, strbuf_t *ctlptr, strbuf_t *datptr, gbuf_t *mreq, in
         ddp->dst_socket = scb->reply_socket;
         ddp->type = DDP_ATP;
         UAS_ASSIGN(ddp->checksum, 0);
-        UAS_ASSIGN(atp->tid, tid);
+        UAS_ASSIGN(atp->tid, htons(tid));
         if (scb->attn_flag && (tid == scb->attn_tid)) {
            scb->attn_flag = 0;
             atp->xo = 0;
@@ -2215,7 +2143,7 @@ l_err:
 /* bms:  make this callable from kernel.  reply date is passed back as a mbuf chain in *mreply  */
 int ASPgetmsg(gref_t *gref, strbuf_t *ctlptr, strbuf_t *datptr, gbuf_t **mreply, int *flags, int *errp)
 {
-    int err, s, len, sum, rval;
+    int err, len, sum, rval;
     gbuf_t *mproto, *mdata;
     strbuf_t ctlbuf;
     strbuf_t datbuf;
@@ -2231,11 +2159,8 @@ int ASPgetmsg(gref_t *gref, strbuf_t *ctlptr, strbuf_t *datptr, gbuf_t **mreply,
 		return -1;
 	}
 
-    ATDISABLE(s, scb->lock);
-    if (scb->state == ASPSTATE_Close) {
-        ATENABLE(s, scb->lock);
+    if (scb->state == ASPSTATE_Close)
         return 0;
-    }
 
     /*
      * get receive data
@@ -2246,25 +2171,20 @@ int ASPgetmsg(gref_t *gref, strbuf_t *ctlptr, strbuf_t *datptr, gbuf_t **mreply,
         err = msleep(&scb->event, atalk_mutex, PSOCK | PCATCH, "aspgetmsg", 0);
         if (err != 0) {
             scb->get_wait = 0;
-            ATENABLE(s, scb->lock);
             *errp = err;
             return -1;
         }
         if (scb->state == ASPSTATE_Close) {
             scb->get_wait = 0;
-            ATENABLE(s, scb->lock);
             return 0;
         }
     }
     get_wait = scb->get_wait;
     scb->get_wait = 0;
-    if ((ctlptr == 0) && (datptr == 0)) {
-        ATENABLE(s, scb->lock);
+    if ((ctlptr == 0) && (datptr == 0))
         return 0;
-    }
     scb->sess_ioc = gbuf_next(mproto);
     mdata = gbuf_cont(mproto);
-    ATENABLE(s, scb->lock);
 
     /* last remaining use of MSG_ERROR */
     if (gbuf_type(mproto) == MSG_ERROR) {
@@ -2289,10 +2209,8 @@ int ASPgetmsg(gref_t *gref, strbuf_t *ctlptr, strbuf_t *datptr, gbuf_t **mreply,
             goto l_err;
     }
     if ((datbuf.maxlen < 0) || (datbuf.maxlen < gbuf_msgsize(mdata))) {
-        ATDISABLE(s, scb->lock);
         gbuf_next(mproto) = scb->sess_ioc;
         scb->sess_ioc = mproto;
-        ATENABLE(s, scb->lock);
         return MOREDATA;
     }
 
@@ -2302,13 +2220,9 @@ int ASPgetmsg(gref_t *gref, strbuf_t *ctlptr, strbuf_t *datptr, gbuf_t **mreply,
          * we're not supposed to dequeue messages in the Streams 
          * head's read queue this way; but there is no better way.
          */
-        ATDISABLE(s, scb->lock);
-        if (scb->sess_ioc == 0) {
-            ATENABLE(s, scb->lock);
-        } else {
-            ATENABLE(s, scb->lock);
+        if (scb->sess_ioc != 0)
             atalk_notify_sel(gref); 
-        }
+        
     }
 
     /*
@@ -2373,21 +2287,17 @@ int ASPgetmsg(gref_t *gref, strbuf_t *ctlptr, strbuf_t *datptr, gbuf_t **mreply,
         gbuf_freem(mproto);
     }
 
-    ATDISABLE(s, scb->lock);
     if (scb->sess_ioc)
         scb->rcv_cnt--;
     else {
         scb->rcv_cnt = 0;
         scb->snd_stop = 0;
     }
-    ATENABLE(s, scb->lock);
     return rval;
 
 l_err:
-    ATDISABLE(s, scb->lock);
     gbuf_next(mproto) = scb->sess_ioc;
     scb->sess_ioc = mproto;
-    ATENABLE(s, scb->lock);
     *errp = err;
     return -1;
 }

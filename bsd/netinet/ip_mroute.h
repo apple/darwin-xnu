@@ -290,4 +290,4 @@ extern int	(*mrt_ioctl)(int, caddr_t, struct proc *);
 #endif
 
 #endif KERNEL_PRIVATE
-#endif _NETINET_IP_MROUTE_H_
+#endif /* _NETINET_IP_MROUTE_H_ */

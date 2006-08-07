@@ -351,6 +351,20 @@ default_pager_add(
 
 #endif
 
+const struct memory_object_pager_ops default_pager_ops = {
+	dp_memory_object_reference,
+	dp_memory_object_deallocate,
+	dp_memory_object_init,
+	dp_memory_object_terminate,
+	dp_memory_object_data_request,
+	dp_memory_object_data_return,
+	dp_memory_object_data_initialize,
+	dp_memory_object_data_unlock,
+	dp_memory_object_synchronize,
+	dp_memory_object_unmap,
+	"default pager"
+};
+
 kern_return_t
 dp_memory_object_init(
 	memory_object_t		mem_obj,
@@ -709,7 +723,7 @@ dp_memory_object_data_return(
 		/* a synchronous interface */
 		/* return KERN_LOCK_OWNED; */
 		upl_t		upl;
-		int		page_list_count = 0;
+		unsigned int	page_list_count = 0;
 		memory_object_super_upl_request(vs->vs_control,
 					(memory_object_offset_t)offset,
 					size, size,
@@ -724,8 +738,8 @@ dp_memory_object_data_return(
 	if ((vs->vs_seqno != vs->vs_next_seqno++)
 			|| (vs->vs_readers)
 			|| (vs->vs_xfer_pending)) {
-		upl_t	upl;
-		int	page_list_count = 0;
+		upl_t		upl;
+		unsigned int	page_list_count = 0;
 
 		vs->vs_next_seqno--;
                 VS_UNLOCK(vs);
@@ -809,7 +823,7 @@ default_pager_memory_object_create(
 	 * and this default_pager structure
 	 */
 
-	vs->vs_mem_obj = ISVS;
+	vs->vs_pager_ops = &default_pager_ops;
 	vs->vs_mem_obj_ikot = IKOT_MEMORY_OBJECT;
 
 	/*
@@ -844,7 +858,7 @@ default_pager_object_create(
 	 * Set up associations between the default pager
 	 * and this vstruct structure
 	 */
-	vs->vs_mem_obj = ISVS;
+	vs->vs_pager_ops = &default_pager_ops;
 	vstruct_list_insert(vs);
 	*mem_objp = vs_to_mem_obj(vs);
 	return KERN_SUCCESS;

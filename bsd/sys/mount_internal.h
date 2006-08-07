@@ -226,14 +226,10 @@ struct vfsmount_args {
  * LP64 version of statfs structure.
  * NOTE - must be kept in sync with struct statfs in mount.h
  */
-#if __DARWIN_ALIGN_NATURAL
-#pragma options align=natural
-#endif
-
 struct user_statfs {
 	short		f_otype;		/* TEMPORARY SHADOW COPY OF f_type */
 	short		f_oflags;		/* TEMPORARY SHADOW COPY OF f_flags */
-	user_long_t	f_bsize;		/* fundamental file system block size */
+	user_long_t	f_bsize __attribute((aligned(8)));		/* fundamental file system block size */
 	user_long_t	f_iosize;		/* optimal transfer block size */
 	user_long_t	f_blocks;		/* total data blocks in file system */
 	user_long_t	f_bfree;		/* free blocks in fs */
@@ -254,13 +250,9 @@ struct user_statfs {
 	user_long_t	f_reserved4[0];	/* For future use */
 #else
 	char		f_reserved3;	/* For alignment */
-	user_long_t	f_reserved4[4];	/* For future use */
+	user_long_t	f_reserved4[4] __attribute((aligned(8)));	/* For future use */
 #endif
 };
-
-#if __DARWIN_ALIGN_NATURAL
-#pragma options align=reset
-#endif
 
 __BEGIN_DECLS
 

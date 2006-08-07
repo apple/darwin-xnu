@@ -53,10 +53,6 @@ struct IPCS_command {
 #ifdef KERNEL_PRIVATE
 #include <machine/types.h>
 
-#if __DARWIN_ALIGN_NATURAL
-#pragma options align=natural
-#endif
-
 struct user_IPCS_command {
 	int		ipcs_magic;	/* Magic number for struct layout */
 	int		ipcs_op;	/* Operation to perform */
@@ -64,10 +60,6 @@ struct user_IPCS_command {
 	int		ipcs_datalen;	/* Length of ipcs_data area */
 	user_addr_t	ipcs_data;	/* OP specific data */
 };
-
-#if __DARWIN_ALIGN_NATURAL
-#pragma options align=reset
-#endif
 
 #endif /* KERNEL_PRIVATE */
 

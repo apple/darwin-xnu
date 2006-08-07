@@ -81,9 +81,7 @@ typedef	integer_t	task_info_data_t[TASK_INFO_MAX];
  *	Currently defined information structures.
  */
 
-#if __DARWIN_ALIGN_POWER
-#pragma options align=power
-#endif
+#pragma pack(4)
 
 #define TASK_BASIC_INFO_32      4       /* basic information */
 
@@ -200,9 +198,7 @@ typedef struct task_absolutetime_info	*task_absolutetime_info_t;
 #define TASK_AUDIT_TOKEN_COUNT	\
 		(sizeof(audit_token_t) / sizeof(natural_t))
 
-#if __DARWIN_ALIGN_POWER
-#pragma options align=reset
-#endif
+#pragma pack()
 
 
 /*

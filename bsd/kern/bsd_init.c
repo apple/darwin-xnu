@@ -117,6 +117,8 @@
 
 #include <net/init.h>
 
+#include <machine/exec.h>
+
 extern int app_profile;		/* on/off switch for pre-heat cache */
 
 char    copyright[] =
@@ -156,9 +158,13 @@ char	hostname[MAXHOSTNAMELEN];
 int		hostnamelen;
 char	domainname[MAXDOMNAMELEN];
 int		domainnamelen;
-char	classichandler[32] = {0};  
-uint32_t	classichandler_fsid = -1L;
-long	classichandler_fileid = -1L;
+#if __i386__
+struct exec_archhandler exec_archhandler_ppc = {
+	.path = "/usr/libexec/oah/translate",
+};
+#else /* __i386__ */
+struct exec_archhandler exec_archhandler_ppc;
+#endif /* __i386__ */
 
 char rootdevice[16]; 	/* hfs device names have at least 9 chars */
 
@@ -176,6 +182,7 @@ vm_map_t	mb_map;
 semaphore_t execve_semaphore;
 
 int	cmask = CMASK;
+extern int customnbuf;
 
 int parse_bsd_args(void);
 extern int bsd_hardclockinit;
@@ -193,6 +200,12 @@ extern void sysv_sem_lock_init(void);
 extern void sysv_msg_lock_init(void);
 extern void pshm_lock_init();
 extern void psem_lock_init();
+extern int maxprocperuid;
+
+/* kmem access not enabled by default; can be changed with boot-args */
+int setup_kmem = 0;
+
+extern void stackshot_lock_init();
 
 /*
  * Initialization code.
@@ -261,6 +274,7 @@ bsd_init()
 	extern kauth_cred_t rootcred;
 	register int i;
 	int s;
+	int error;
 	thread_t	th;
 	struct vfs_context context;
 	void		lightning_bolt(void );
@@ -302,17 +316,13 @@ bsd_init()
 	/* give kernproc a name */
 	process_name("kernel_task", p);
 
-
 	/* allocate proc lock group attribute and group */
 	proc_lck_grp_attr= lck_grp_attr_alloc_init();
-	lck_grp_attr_setstat(proc_lck_grp_attr);
-
+	
 	proc_lck_grp = lck_grp_alloc_init("proc",  proc_lck_grp_attr);
-
 
 	/* Allocate proc lock attribute */
 	proc_lck_attr = lck_attr_alloc_init();
-	//lck_attr_setdebug(proc_lck_attr);
 
 	lck_mtx_init(&p->p_mlock, proc_lck_grp, proc_lck_attr);
 	lck_mtx_init(&p->p_fdmlock, proc_lck_grp, proc_lck_attr);
@@ -384,7 +394,7 @@ bsd_init()
 		limit0.pl_rlimit[i].rlim_cur = 
 			limit0.pl_rlimit[i].rlim_max = RLIM_INFINITY;
 	limit0.pl_rlimit[RLIMIT_NOFILE].rlim_cur = NOFILE;
-	limit0.pl_rlimit[RLIMIT_NPROC].rlim_cur = MAXUPRC;
+	limit0.pl_rlimit[RLIMIT_NPROC].rlim_cur = maxprocperuid;
 	limit0.pl_rlimit[RLIMIT_NPROC].rlim_max = maxproc;
 	limit0.pl_rlimit[RLIMIT_STACK] = vm_initial_limit_stack;
 	limit0.pl_rlimit[RLIMIT_DATA] = vm_initial_limit_data;
@@ -473,6 +483,8 @@ bsd_init()
 	psem_cache_init();
 	time_zone_slock_init();
 
+	/* Stack snapshot facility lock */
+	stackshot_lock_init();
 	/*
 	 * Initialize protocols.  Block reception of incoming packets
 	 * until everything is ready.
@@ -584,6 +596,13 @@ bsd_init()
 
 	bsd_utaskbootstrap();
 
+#if __i386__
+	// this should be done after the root filesystem is mounted
+	error = set_archhandler(p, CPU_TYPE_POWERPC);
+	if (error)
+		exec_archhandler_ppc.path[0] = 0;
+#endif	
+	
 	/* invoke post-root-mount hook */
 	if (mountroot_post_hook != NULL)
 		mountroot_post_hook();
@@ -624,7 +643,6 @@ bsdinit_task(void)
 
 
 	ut = (uthread_t)get_bsdthread_info(th_act);
-	ut->uu_ar0 = (void *)get_user_regs(th_act);
 
 	bsd_hardclockinit = 1;	/* Start bsd hardclock */
 	bsd_init_task = get_threadtask(th_act);
@@ -794,7 +812,9 @@ parse_bsd_args()
 
 	PE_parse_boot_arg("srv", &srv);
 	PE_parse_boot_arg("ncl", &ncl);
-	PE_parse_boot_arg("nbuf", &nbuf);
+	if (PE_parse_boot_arg("nbuf", &max_nbuf_headers)) 
+		customnbuf = 1;
+	PE_parse_boot_arg("kmem", &setup_kmem);
 
 	return 0;
 }

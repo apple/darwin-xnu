@@ -172,10 +172,6 @@ struct dqblk {
  * WARNING - keep in sync with struct dqblk
  */
 
-#if __DARWIN_ALIGN_NATURAL
-#pragma options align=natural
-#endif
-
 struct user_dqblk {
 	u_int64_t dqb_bhardlimit;	/* absolute limit on disk bytes alloc */
 	u_int64_t dqb_bsoftlimit;	/* preferred limit on disk bytes */
@@ -183,15 +179,11 @@ struct user_dqblk {
 	u_int32_t dqb_ihardlimit;	/* maximum # allocated inodes + 1 */
 	u_int32_t dqb_isoftlimit;	/* preferred inode limit */
 	u_int32_t dqb_curinodes;	/* current # allocated inodes */
-	user_time_t	  dqb_btime;		/* time limit for excessive disk use */
+	user_time_t	  dqb_btime __attribute((aligned(8)));		/* time limit for excessive disk use */
 	user_time_t	  dqb_itime;		/* time limit for excessive files */
 	u_int32_t dqb_id;		/* identifier (0 for empty entries) */
 	u_int32_t dqb_spare[4];		/* pad struct to power of 2 */
 };
-
-#if __DARWIN_ALIGN_NATURAL
-#pragma options align=reset
-#endif
 #endif  /* KERNEL_PRIVATE */
 
 #define INITQMAGICS { \
@@ -291,8 +283,8 @@ struct quotafile {
 struct dquot {
 	LIST_ENTRY(dquot) dq_hash;	/* hash list */
 	TAILQ_ENTRY(dquot) dq_freelist;	/* free list */
+	uint32_t  dq_cnt;		/* count of active references */
 	u_int16_t dq_flags;		/* flags, see below */
-	u_int16_t dq_cnt;		/* count of active references */
         u_int16_t dq_lflags;		/* protected by the quota list lock */
 	u_int16_t dq_type;		/* quota type of this dquot */
 	u_int32_t dq_id;		/* identifier this applies to */

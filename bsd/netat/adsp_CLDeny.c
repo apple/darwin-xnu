@@ -82,8 +82,8 @@ int adspCLDeny(struct adspcmd *pb, CCBPtr sp)
     adspp->descriptor = ADSP_CONTROL_BIT | ADSP_CTL_ODENY;
     adspop = (ADSP_OPEN_DATAPtr)gbuf_wptr(mp);
     gbuf_winc(mp,ADSP_OPEN_FRAME_LEN);
-    UAS_ASSIGN(adspop->dstCID, pb->u.openParams.remoteCID);
-    UAS_ASSIGN(adspop->version, 0x100);
+    UAS_ASSIGN_HTON(adspop->dstCID, pb->u.openParams.remoteCID);
+    UAS_ASSIGN_HTON(adspop->version, 0x100);
     adsp_sendddp(sp, mp, 
 		 DDPL_FRAME_LEN + ADSP_FRAME_LEN + ADSP_OPEN_FRAME_LEN, 
 		 &pb->u.openParams.remoteAddress, DDP_ADSP);

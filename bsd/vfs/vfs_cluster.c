@@ -156,18 +156,16 @@ struct timeval priority_IO_timestamp_for_root;
 
 void
 cluster_init(void) {
-        /*
+    /*
 	 * allocate lock group attribute and group
 	 */
-        cl_mtx_grp_attr = lck_grp_attr_alloc_init();
-	//lck_grp_attr_setstat(cl_mtx_grp_attr);
+    cl_mtx_grp_attr = lck_grp_attr_alloc_init();
 	cl_mtx_grp = lck_grp_alloc_init("cluster I/O", cl_mtx_grp_attr);
 		
 	/*
 	 * allocate the lock attribute
 	 */
 	cl_mtx_attr = lck_attr_alloc_init();
-	//lck_attr_setdebug(clf_mtx_attr);
 
 	/*
 	 * allocate and initialize mutex's used to protect updates and waits

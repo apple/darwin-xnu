@@ -248,6 +248,10 @@ typedef struct hfsmount {
 	lck_mtx_t      hfs_mutex;      /* protects access to hfsmount data */
 	void          *hfs_freezing_proc;  /* who froze the fs */
 	lck_rw_t       hfs_insync;     /* protects sync/freeze interaction */
+
+	/* Resize variables: */
+	u_int32_t		hfs_resize_filesmoved;
+	u_int32_t		hfs_resize_totalfiles;
 } hfsmount_t;
 
 typedef hfsmount_t  ExtendedVCB;
@@ -275,6 +279,7 @@ typedef hfsmount_t  ExtendedVCB;
 #define HFS_FRAGMENTED_FREESPACE  0x100
 #define HFS_NEED_JNL_RESET        0x200
 #define HFS_HAS_SPARSE_DEVICE     0x400
+#define HFS_RESIZE_IN_PROGRESS    0x800
 
 
 #define HFS_MOUNT_LOCK(hfsmp, metadata)                      \
@@ -491,6 +496,7 @@ extern void hfs_checkextendedsecurity(struct hfsmount *hfsmp);
 
 extern int  hfs_extendfs(struct hfsmount *, u_int64_t, vfs_context_t);
 extern int  hfs_truncatefs(struct hfsmount *, u_int64_t, vfs_context_t);
+extern int  hfs_resize_progress(struct hfsmount *, u_int32_t *);
 
 extern int  hfs_isallocated(struct hfsmount *, u_long, u_long);
 

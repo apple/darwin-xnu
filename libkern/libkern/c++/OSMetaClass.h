@@ -34,7 +34,7 @@ class OSSymbol;
 class OSDictionary;
 class OSSerialize;
 
-#if __GNUC__ < 3
+#if !defined(__ppc__) || __GNUC__ < 3
 #define APPLE_KEXT_COMPATIBILITY
 #else
 #define APPLE_KEXT_COMPATIBILITY __attribute__ ((apple_kext_compatibility))
@@ -359,7 +359,7 @@ protected:
 
     // Needs to be overriden as NULL as all OSMetaClass objects are allocated
     // statically at compile time, don't accidently try to free them.
-    void operator delete(void *mem, size_t size) { };
+    void operator delete(void *, size_t) { };
 
 public:
     static const OSMetaClass * const metaClass;

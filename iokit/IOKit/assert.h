@@ -22,6 +22,7 @@
 
 #ifndef	_IO_ASSERT_H_
 #define	_IO_ASSERT_H_
+#include <sys/cdefs.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -37,6 +38,12 @@ extern "C" {
 
 #ifdef __cplusplus
 }
+#endif
+
+
+#if( !defined( OSCompileAssert ) )
+#	define OSCompileAssert( TEST )     \
+	extern int OSCompileAssertFailed[ ( TEST ) ? 1 : -1 ] __unused;
 #endif
 
 #endif	/* _IO_ASSERT_H_ */

@@ -178,7 +178,9 @@ extern void		pmap_virtual_space(
 /*
  *	Routines to manage the physical map data structure.
  */
-extern pmap_t		pmap_create(vm_map_size_t size);	/* Create a pmap_t. */
+extern pmap_t		pmap_create(	/* Create a pmap_t. */
+				vm_map_size_t	size,
+				boolean_t	is_64bit);
 extern pmap_t		(pmap_kernel)(void);	/* Return the kernel's pmap */
 extern void		pmap_reference(pmap_t pmap);	/* Gain a reference. */
 extern void		pmap_destroy(pmap_t pmap); /* Release a reference. */
@@ -247,6 +249,9 @@ extern kern_return_t	(pmap_attribute_cache_sync)(  /* Flush appropriate
 				vm_size_t	size, 
 				vm_machine_attribute_t attribute, 
 				vm_machine_attribute_val_t* value);
+
+extern unsigned int	(pmap_cache_attributes)(
+				ppnum_t		pn);
 
 /*
  * debug/assertions. pmap_verify_free returns true iff

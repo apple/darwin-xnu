@@ -70,7 +70,7 @@
 #if 1
 int
 emulate_io(
-	__unused struct i386_saved_state	*regs,
+	__unused x86_saved_state32_t		*regs,
 	__unused int				opcode,
 	__unused int				io_port)
 {

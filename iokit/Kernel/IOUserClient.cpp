@@ -24,7 +24,6 @@
 #include <IOKit/IOKitServer.h>
 #include <IOKit/IOUserClient.h>
 #include <IOKit/IOService.h>
-#include <IOKit/IOService.h>
 #include <IOKit/IORegistryEntry.h>
 #include <IOKit/IOCatalogue.h>
 #include <IOKit/IOMemoryDescriptor.h>
@@ -801,6 +800,22 @@ IOReturn IOUserClient::clientHasPrivilege( void * securityToken,
 	kr = kIOReturnUnsupported;
 
     return (kr);
+}
+
+bool IOUserClient::init()
+{
+    if( getPropertyTable())
+        return true;
+    else
+        return super::init();
+}
+
+bool IOUserClient::init(OSDictionary * dictionary)
+{
+    if( getPropertyTable())
+        return true;
+    else
+        return super::init(dictionary);
 }
 
 bool IOUserClient::initWithTask(task_t owningTask,
@@ -1726,6 +1741,7 @@ kern_return_t is_io_registry_entry_get_property_bytes(
     return( ret );
 }
 
+
 /* Routine io_registry_entry_get_property */
 kern_return_t is_io_registry_entry_get_property(
 	io_object_t registry_entry,
@@ -1959,7 +1975,7 @@ kern_return_t is_io_service_open(
     CHECK( IOService, _service, service );
 
     err = service->newUserClient( owningTask, (void *) owningTask,
-		connect_type, &client );
+		connect_type, 0, &client );
 
     if( err == kIOReturnSuccess) {
 	assert( OSDynamicCast(IOUserClient, client) );
@@ -1967,6 +1983,101 @@ kern_return_t is_io_service_open(
     }
 
     return( err);
+}
+
+/* Routine io_service_open_ndr */
+kern_return_t is_io_service_open_extended(
+	io_object_t _service,
+	task_t owningTask,
+	int connect_type,
+	NDR_record_t ndr,
+	io_buf_ptr_t properties,
+	mach_msg_type_number_t propertiesCnt,
+        natural_t * result,
+	io_object_t *connection )
+{
+    IOUserClient * client = 0;
+    kern_return_t  err = KERN_SUCCESS;
+    IOReturn	   res = kIOReturnSuccess;
+    OSDictionary * propertiesDict = 0;
+    bool	   crossEndian;
+    bool	   disallowAccess;
+
+    CHECK( IOService, _service, service );
+
+    do
+    {
+	if (properties)
+	{
+	    OSObject *	    obj;
+	    vm_offset_t     data;
+	    vm_map_offset_t map_data;
+
+	    err = vm_map_copyout( kernel_map, &map_data, (vm_map_copy_t) properties );
+	    res = err;
+	    data = CAST_DOWN(vm_offset_t, map_data);
+	    if (KERN_SUCCESS == err)
+	    {
+		// must return success after vm_map_copyout() succeeds
+		obj = OSUnserializeXML( (const char *) data );
+		vm_deallocate( kernel_map, data, propertiesCnt );
+		propertiesDict = OSDynamicCast(OSDictionary, obj);
+		if (!propertiesDict)
+		{
+		    res = kIOReturnBadArgument;
+		    if (obj)
+			obj->release();
+		}
+	    }
+	    if (kIOReturnSuccess != res)
+		break;
+	}
+
+	crossEndian = (ndr.int_rep != NDR_record.int_rep);
+	if (crossEndian)
+	{
+	    if (!propertiesDict)
+		propertiesDict = OSDictionary::withCapacity(4);
+	    OSData * data = OSData::withBytes(&ndr, sizeof(ndr));
+	    if (data)
+	    {
+		if (propertiesDict)
+		    propertiesDict->setObject(kIOUserClientCrossEndianKey, data);
+		data->release();
+	    }
+	}
+
+	res = service->newUserClient( owningTask, (void *) owningTask,
+		    connect_type, propertiesDict, &client );
+
+	if (propertiesDict)
+	    propertiesDict->release();
+
+	if (res == kIOReturnSuccess)
+	{
+	    assert( OSDynamicCast(IOUserClient, client) );
+
+	    disallowAccess = (crossEndian
+		&& (kOSBooleanTrue != service->getProperty(kIOUserClientCrossEndianCompatibleKey))
+		&& (kOSBooleanTrue != client->getProperty(kIOUserClientCrossEndianCompatibleKey)));
+
+	    if (disallowAccess)
+	    {
+		client->clientClose();
+		client->release();
+		client = 0;
+		res = kIOReturnUnsupported;
+		break;
+	    }
+	    client->sharedInstance = (0 != client->getProperty(kIOUserClientSharedInstanceKey));
+	}
+    }
+    while (false);
+
+    *connection = client;
+    *result = res;
+
+    return (err);
 }
 
 /* Routine io_service_close */
@@ -2035,7 +2146,8 @@ kern_return_t is_io_connect_map_memory(
         if( mapSize)
             *mapSize = map->getLength();
 
-        if( task != current_task()) {
+        if( client->sharedInstance
+	    || (task != current_task())) {
             // push a name out to the task owning the map,
             // so we can clean up maps
 #if IOASSERT

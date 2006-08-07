@@ -32,6 +32,7 @@
  * Kernel process to implement the AURP daemon:
  *  manage tunnels to remote AURP servers across IP networks
  */
+#ifdef AURP_SUPPORT
 
 #include <sys/errno.h>
 #include <sys/types.h>
@@ -103,7 +104,6 @@ aurpd_start()
 	 */
 	bzero((char *)&aurp_global.tunnel, sizeof(aurp_global.tunnel));
 	/*lock_alloc(&aurp_global.glock, LOCK_ALLOC_PIN, AURP_EVNT_LOCK, -1);*/
-	ATLOCKINIT(aurp_global.glock);
 	ATEVENTINIT(aurp_global.event_anchor);
 
 	/* open udp socket */
@@ -203,7 +203,6 @@ AURPgetmsg(err)
 		 *	     when a packet arrives
 		 */
 
-		ATDISABLE(s, aurp_global.glock);
 		events = aurp_global.event;
 		if (((*err == 0) || (*err == EWOULDBLOCK)) && events == 0)
 		  {
@@ -212,7 +211,6 @@ AURPgetmsg(err)
 		    events = aurp_global.event;
 		    aurp_global.event = 0;
 		  }	
-		ATENABLE(s, aurp_global.glock);	 
 
 		/*
 		 * Shut down if we have the AE_SHUTDOWN event or if we got
@@ -282,9 +280,7 @@ AURPgetmsg(err)
 				 * which will wake us from the sleep at
 				 * the top of the outer loop.
 				 */
-				ATDISABLE(s, aurp_global.glock);
 				aurp_global.event &= ~AE_UDPIP;
-				ATENABLE(s, aurp_global.glock);
 				dPrintf(D_M_AURP, D_L_WARNING, ("AURPgetmsg: spurious soreceive, err==%d, p_mbuf==0x%x\n", *err, (unsigned int) p_mbuf));
 			  break;
 		}
@@ -304,9 +300,7 @@ void aurp_wakeup(__unused struct socket *so, register caddr_t p, __unused int st
 	register int bit;
 
 	bit = (int) p;
-	ATDISABLE(s, aurp_global.glock);
 	aurp_global.event |= bit;
-	ATENABLE(s, aurp_global.glock);
 
 	dPrintf(D_M_AURP, D_L_STATE_CHG,
 		("aurp_wakeup: bit 0x%x, aurp_global.event now 0x%x\n",
@@ -422,14 +416,10 @@ atalk_to_ip(register gbuf_t *m)
 	domain = (aurp_domain_t *)gbuf_rptr(m);
 	*(long *) &rem_addr.sin_addr = domain->dst_address;
 
-	ATDISABLE(s, aurp_global.glock);
 	aurp_global.running++;
-	ATENABLE(s, aurp_global.glock);
 	if (aurp_global.shutdown) {
 		gbuf_freem(m);
-			ATDISABLE(s, aurp_global.glock);
 		aurp_global.running--;
-		ATENABLE(s, aurp_global.glock);
 		dPrintf(D_M_AURP, D_L_SHUTDN_INFO,
 			("atalk_to_ip: detected aurp_global.shutdown state\n"));
 		return;
@@ -442,9 +432,8 @@ atalk_to_ip(register gbuf_t *m)
 		  error));
 	}
 
-	ATDISABLE(s, aurp_global.glock);
 	aurp_global.running--;
-	ATENABLE(s, aurp_global.glock);
 	return;
 }
 
+#endif  /* AURP_SUPPORT */

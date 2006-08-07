@@ -182,7 +182,8 @@ extern const struct in6_addr in6mask32;
 extern const struct in6_addr in6mask64;
 extern const struct in6_addr in6mask96;
 extern const struct in6_addr in6mask128;
-#endif KERNEL_PRIVATE
+#endif /* KERNEL_PRIVATE */
+
 
 /*
  * Macros started with IPV6_ADDR is KAME local
@@ -413,7 +414,7 @@ struct route_in6 {
 #define IPV6_RECVRETOPTS	6  /* bool; receive IP6 opts for response */
 #define IPV6_RECVDSTADDR	7  /* bool; receive IP6 dst addr w/dgram */
 #define IPV6_RETOPTS		8  /* ip6_opts; set/get IP6 options */
-#endif 0
+#endif /* 0 */
 #define IPV6_SOCKOPT_RESERVED1	3  /* reserved for future use */
 #endif /* _POSIX_C_SOURCE */
 #define IPV6_UNICAST_HOPS	4  /* int; IP6 hops */
@@ -441,12 +442,12 @@ struct route_in6 {
 #ifndef _POSIX_C_SOURCE
 #ifndef KERNEL
 #define IPV6_BINDV6ONLY		IPV6_V6ONLY
-#endif KERNEL
+#endif /* KERNEL */
 
 
 #if 1 /*IPSEC*/
 #define IPV6_IPSEC_POLICY	28 /* struct; get/set security policy */
-#endif 1
+#endif /* 1 */
 #define IPV6_FAITH		29 /* bool; accept FAITH'ed connections */
 
 #if 1 /*IPV6FIREWALL*/
@@ -455,7 +456,7 @@ struct route_in6 {
 #define IPV6_FW_FLUSH		32 /* flush firewall rule chain */
 #define IPV6_FW_ZERO		33 /* clear single/all firewall counter(s) */
 #define IPV6_FW_GET		34 /* get entire firewall rule chain */
-#endif 1
+#endif /* 1 */
 
 /* to define items, should talk with KAME guys first, for *BSD compatibility */
 
@@ -626,7 +627,7 @@ void	in6_sin_2_v4mapsin6_in_sock(struct sockaddr **nam);
 #define	satosin6(sa)	((struct sockaddr_in6 *)(sa))
 #define	sin6tosa(sin6)	((struct sockaddr *)(sin6))
 #define	ifatoia6(ifa)	((struct in6_ifaddr *)(ifa))
-#endif KERNEL_PRIVATE
+#endif /* KERNEL_PRIVATE */
 
 #ifndef KERNEL
 __BEGIN_DECLS
@@ -670,6 +671,6 @@ extern int inet6_rth_reverse(const void *, void *);
 extern int inet6_rth_segments(const void *);
 extern struct in6_addr *inet6_rth_getaddr(const void *, int);
 __END_DECLS
-#endif !KERNEL
+#endif /* !KERNEL */
 #endif /* _POSIX_C_SOURCE */
 #endif /* !_NETINET6_IN6_H_ */

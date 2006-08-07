@@ -308,6 +308,8 @@ start_def_pager( __unused char *bs_device )
 	if (!default_pager_backing_store_monitor_callout)
 		panic("can't start backing store monitor thread");
 	thread_call_enter(default_pager_backing_store_monitor_callout);
+	
+	return (0);
 }
 
 /*

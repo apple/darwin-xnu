@@ -365,7 +365,7 @@ extern mappingctl_t	mapCtl;				/* Mapping allocation control */
 
 extern unsigned char ppc_prot[];		/* Mach -> PPC protection translation table */
 
-#define getProtPPC(__key) (ppc_prot[(__key) & 0xF])
+vm_prot_t getProtPPC(int, boolean_t);
 										/* Safe Mach -> PPC protection key conversion */
 
 extern addr64_t 	mapping_remove(pmap_t pmap, addr64_t va);	/* Remove a single mapping for this VADDR */

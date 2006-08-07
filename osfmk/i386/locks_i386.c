@@ -78,9 +78,7 @@
 #include <ddb/db_print.h>
 #endif	/* MACH_KDB */
 
-#ifdef __ppc__
-#include <ppc/Firmware.h>
-#endif
+#include <i386/machine_cpu.h>
 
 #include <sys/kdebug.h>
 
@@ -91,6 +89,7 @@
 #define	LCK_RW_LCK_SH_TO_EX1_CODE	0x104
 #define	LCK_RW_LCK_EX_TO_SH_CODE	0x105
 
+#define	LCK_MTX_LCK_SPIN		0x200
 
 #define	ANY_LOCK_DEBUG	(USLOCK_DEBUG || LOCK_DEBUG || MUTEX_DEBUG)
 
@@ -249,7 +248,7 @@ boolean_t
 lck_spin_try_lock(
 	lck_spin_t	*lck)
 {
-	usimple_lock_try((usimple_lock_t) lck);
+	return(usimple_lock_try((usimple_lock_t) lck));
 }
 
 /*
@@ -665,15 +664,14 @@ lock_init(
 	lock_t		*l,
 	boolean_t	can_sleep,
 	__unused unsigned short	tag,
-	unsigned short	tag1)
+	__unused unsigned short	tag1)
 {
-	(void) memset((void *) l, 0, sizeof(lock_t));
-
-	simple_lock_init(&l->interlock, tag1);
+	hw_lock_init(&l->interlock);
 	l->want_write = FALSE;
 	l->want_upgrade = FALSE;
 	l->read_count = 0;
 	l->can_sleep = can_sleep;
+	l->lck_rw_tag = tag;
 }
 
 
@@ -689,162 +687,21 @@ void
 lock_write(
 	register lock_t	* l)
 {
-        register int	   i;
-	boolean_t          lock_miss = FALSE;
-#if	MACH_LDEBUG
-	int		   decrementer;
-#endif	/* MACH_LDEBUG */
-
-	simple_lock(&l->interlock);
-
-#if	MACH_LDEBUG
-	decrementer = DECREMENTER_TIMEOUT;
-#endif	/* MACH_LDEBUG */
-
-	/*
-	 *	Try to acquire the want_write bit.
-	 */
-	while (l->want_write) {
-		if (!lock_miss) {
-			lock_miss = TRUE;
-		}
-
-		i = lock_wait_time[l->can_sleep ? 1 : 0];
-		if (i != 0) {
-			simple_unlock(&l->interlock);
-#if	MACH_LDEBUG
-			if (!--decrementer)
-				Debugger("timeout - want_write");
-#endif	/* MACH_LDEBUG */
-			while (--i != 0 && l->want_write)
-				continue;
-			simple_lock(&l->interlock);
-		}
-
-		if (l->can_sleep && l->want_write) {
-			l->waiting = TRUE;
-			thread_sleep_simple_lock((event_t) l,
-					simple_lock_addr(l->interlock),
-					THREAD_UNINT);
-			/* interlock relocked */
-		}
-	}
-	l->want_write = TRUE;
-
-	/* Wait for readers (and upgrades) to finish */
-
-#if	MACH_LDEBUG
-	decrementer = DECREMENTER_TIMEOUT;
-#endif	/* MACH_LDEBUG */
-	while ((l->read_count != 0) || l->want_upgrade) {
-		if (!lock_miss) {
-			lock_miss = TRUE;
-		}
-
-		i = lock_wait_time[l->can_sleep ? 1 : 0];
-		if (i != 0) {
-			simple_unlock(&l->interlock);
-#if	MACH_LDEBUG
-			if (!--decrementer)
-				Debugger("timeout - wait for readers");
-#endif	/* MACH_LDEBUG */
-			while (--i != 0 && (l->read_count != 0 ||
-					    l->want_upgrade))
-				continue;
-			simple_lock(&l->interlock);
-		}
-
-		if (l->can_sleep && (l->read_count != 0 || l->want_upgrade)) {
-			l->waiting = TRUE;
-			thread_sleep_simple_lock((event_t) l,
-				simple_lock_addr(l->interlock),
-				THREAD_UNINT);
-			/* interlock relocked */
-		}
-	}
-
-	simple_unlock(&l->interlock);
+	lck_rw_lock_exclusive(l);
 }
 
 void
 lock_done(
 	register lock_t	* l)
 {
-	boolean_t	  do_wakeup = FALSE;
-
-
-	simple_lock(&l->interlock);
-
-	if (l->read_count != 0) {
-		l->read_count--;
-	}
-	else	
-		if (l->want_upgrade) {
-			l->want_upgrade = FALSE;
-		}
-	else {
-		l->want_write = FALSE;
-	}
-
-	/*
-	 *	There is no reason to wakeup a waiting thread
-	 *	if the read-count is non-zero.  Consider:
-	 *		we must be dropping a read lock
-	 *		threads are waiting only if one wants a write lock
-	 *		if there are still readers, they can't proceed
-	 */
-
-	if (l->waiting && (l->read_count == 0)) {
-		l->waiting = FALSE;
-		do_wakeup = TRUE;
-	}
-
-	simple_unlock(&l->interlock);
-
-	if (do_wakeup)
-		thread_wakeup((event_t) l);
+	(void) lck_rw_done(l);
 }
 
 void
 lock_read(
 	register lock_t	* l)
 {
-	register int	    i;
-#if	MACH_LDEBUG
-	int		   decrementer;
-#endif	/* MACH_LDEBUG */
-
-	simple_lock(&l->interlock);
-
-#if	MACH_LDEBUG
-	decrementer = DECREMENTER_TIMEOUT;
-#endif	/* MACH_LDEBUG */
-	while (l->want_write || l->want_upgrade) {
-		i = lock_wait_time[l->can_sleep ? 1 : 0];
-
-		if (i != 0) {
-			simple_unlock(&l->interlock);
-#if	MACH_LDEBUG
-			if (!--decrementer)
-				Debugger("timeout - wait no writers");
-#endif	/* MACH_LDEBUG */
-			while (--i != 0 && (l->want_write || l->want_upgrade))
-				continue;
-			simple_lock(&l->interlock);
-		}
-
-		if (l->can_sleep && (l->want_write || l->want_upgrade)) {
-			l->waiting = TRUE;
-			thread_sleep_simple_lock((event_t) l,
-					simple_lock_addr(l->interlock),
-					THREAD_UNINT);
-			/* interlock relocked */
-		}
-	}
-
-	l->read_count++;
-
-	simple_unlock(&l->interlock);
+	lck_rw_lock_shared(l);
 }
 
 
@@ -863,157 +720,16 @@ boolean_t
 lock_read_to_write(
 	register lock_t	* l)
 {
-	register int	    i;
-	boolean_t	    do_wakeup = FALSE;
-#if	MACH_LDEBUG
-	int		   decrementer;
-#endif	/* MACH_LDEBUG */
-
-	simple_lock(&l->interlock);
-
-	l->read_count--;	
-
-	if (l->want_upgrade) {
-		/*
-		 *	Someone else has requested upgrade.
-		 *	Since we've released a read lock, wake
-		 *	him up.
-		 */
-		if (l->waiting && (l->read_count == 0)) {
-			l->waiting = FALSE;
-			do_wakeup = TRUE;
-		}
-
-		simple_unlock(&l->interlock);
-
-		if (do_wakeup)
-			thread_wakeup((event_t) l);
-		return (TRUE);
-	}
-
-	l->want_upgrade = TRUE;
-
-#if	MACH_LDEBUG
-	decrementer = DECREMENTER_TIMEOUT;
-#endif	/* MACH_LDEBUG */
-	while (l->read_count != 0) {
-		i = lock_wait_time[l->can_sleep ? 1 : 0];
-
-		if (i != 0) {
-			simple_unlock(&l->interlock);
-#if	MACH_LDEBUG
-			if (!--decrementer)
-				Debugger("timeout - read_count");
-#endif	/* MACH_LDEBUG */
-			while (--i != 0 && l->read_count != 0)
-				continue;
-			simple_lock(&l->interlock);
-		}
-
-		if (l->can_sleep && l->read_count != 0) {
-			l->waiting = TRUE;
-			thread_sleep_simple_lock((event_t) l,
-					simple_lock_addr(l->interlock),
-					THREAD_UNINT);
-			/* interlock relocked */
-		}
-	}
-
-	simple_unlock(&l->interlock);
-
-	return (FALSE);
+	return lck_rw_lock_shared_to_exclusive(l);
 }
 
 void
 lock_write_to_read(
 	register lock_t	* l)
 {
-	boolean_t	   do_wakeup = FALSE;
-
-	simple_lock(&l->interlock);
-
-	l->read_count++;
-	if (l->want_upgrade)
-		l->want_upgrade = FALSE;
-	else
-	 	l->want_write = FALSE;
-
-	if (l->waiting) {
-		l->waiting = FALSE;
-		do_wakeup = TRUE;
-	}
-
-	simple_unlock(&l->interlock);
-
-	if (do_wakeup)
-		thread_wakeup((event_t) l);
+	lck_rw_lock_exclusive_to_shared(l);
 }
 
-
-#if	0	/* Unused */
-/*
- *	Routine:	lock_try_write
- *	Function:
- *		Tries to get a write lock.
- *
- *		Returns FALSE if the lock is not held on return.
- */
-
-boolean_t
-lock_try_write(
-	register lock_t	* l)
-{
-	pc_t		   pc;
-
-	simple_lock(&l->interlock);
-
-	if (l->want_write || l->want_upgrade || l->read_count) {
-		/*
-		 *	Can't get lock.
-		 */
-		simple_unlock(&l->interlock);
-		return(FALSE);
-	}
-
-	/*
-	 *	Have lock.
-	 */
-
-	l->want_write = TRUE;
-
-	simple_unlock(&l->interlock);
-
-	return(TRUE);
-}
-
-/*
- *	Routine:	lock_try_read
- *	Function:
- *		Tries to get a read lock.
- *
- *		Returns FALSE if the lock is not held on return.
- */
-
-boolean_t
-lock_try_read(
-	register lock_t	* l)
-{
-	pc_t		   pc;
-
-	simple_lock(&l->interlock);
-
-	if (l->want_write || l->want_upgrade) {
-		simple_unlock(&l->interlock);
-		return(FALSE);
-	}
-
-	l->read_count++;
-
-	simple_unlock(&l->interlock);
-
-	return(TRUE);
-}
-#endif		/* Unused */
 
 
 /*
@@ -1049,7 +765,10 @@ void
 lck_rw_init(
 	lck_rw_t	*lck,
 	lck_grp_t	*grp,
-	__unused lck_attr_t	*attr) {
+	lck_attr_t	*attr)
+{
+	lck_attr_t	*lck_attr = (attr != LCK_ATTR_NULL) ?
+					attr : &LockDefaultLckAttr;
 
 	hw_lock_init(&lck->interlock);
 	lck->want_write = FALSE;
@@ -1057,6 +776,8 @@ lck_rw_init(
 	lck->read_count = 0;
 	lck->can_sleep = TRUE;
 	lck->lck_rw_tag = 0;
+	lck->read_priority = (lck_attr->lck_attr_val &
+				 LCK_ATTR_RW_SHARED_PRIORITY) != 0;
 
 	lck_grp_reference(grp);
 	lck_grp_lckcnt_incr(grp, LCK_TYPE_RW);
@@ -1109,6 +830,21 @@ lck_interlock_unlock(lck_rw_t *lck, boolean_t istate)
 	ml_set_interrupts_enabled(istate);
 }
 
+
+/*
+ * This inline is used when busy-waiting for an rw lock.
+ * If interrupts were disabled when the lock primitive was called,
+ * we poll the IPI handler for pending tlb flushes.
+ * XXX This is a hack to avoid deadlocking on the pmap_system_lock.
+ */
+static inline void
+lck_rw_lock_pause(boolean_t interrupts_enabled)
+{
+	if (!interrupts_enabled)
+		handle_pending_TLB_flushes();
+	cpu_pause();
+}
+
 /*
  *      Routine:        lck_rw_lock_exclusive
  */
@@ -1148,7 +884,7 @@ lck_rw_lock_exclusive(
 				Debugger("timeout - want_write");
 #endif	/* MACH_LDEBUG */
 			while (--i != 0 && lck->want_write)
-				continue;
+				lck_rw_lock_pause(istate);
 			istate = lck_interlock_lock(lck);
 		}
 
@@ -1188,7 +924,7 @@ lck_rw_lock_exclusive(
 #endif	/* MACH_LDEBUG */
 			while (--i != 0 && (lck->read_count != 0 ||
 					    lck->want_upgrade))
-				continue;
+				lck_rw_lock_pause(istate);
 			istate = lck_interlock_lock(lck);
 		}
 
@@ -1343,7 +1079,10 @@ lck_rw_lock_shared(
 #if	MACH_LDEBUG
 	decrementer = DECREMENTER_TIMEOUT;
 #endif	/* MACH_LDEBUG */
-	while (lck->want_write || lck->want_upgrade) {
+	while ((lck->want_write && (lck->read_priority ?
+					lck->read_count == 0 : TRUE)) ||
+	       lck->want_upgrade) {
+
 		i = lock_wait_time[lck->can_sleep ? 1 : 0];
 
 		KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_LOCKS, LCK_RW_LCK_SHARED_CODE) | DBG_FUNC_START,
@@ -1355,12 +1094,18 @@ lck_rw_lock_shared(
 			if (!--decrementer)
 				Debugger("timeout - wait no writers");
 #endif	/* MACH_LDEBUG */
-			while (--i != 0 && (lck->want_write || lck->want_upgrade))
-				continue;
+			while (--i != 0 &&
+				((lck->want_write && (lck->read_priority ?
+					lck->read_count == 0 : TRUE)) ||
+				 lck->want_upgrade))
+				lck_rw_lock_pause(istate);
 			istate = lck_interlock_lock(lck);
 		}
 
-		if (lck->can_sleep && (lck->want_write || lck->want_upgrade)) {
+		if (lck->can_sleep &&
+			((lck->want_write && (lck->read_priority ?
+						lck->read_count == 0 : TRUE)) ||
+			  lck->want_upgrade)) {
 			lck->waiting = TRUE;
 			res = assert_wait((event_t) lck, THREAD_UNINT);
 			if (res == THREAD_WAITING) {
@@ -1449,7 +1194,7 @@ lck_rw_lock_shared_to_exclusive(
 				Debugger("timeout - read_count");
 #endif	/* MACH_LDEBUG */
 			while (--i != 0 && lck->read_count != 0)
-				continue;
+				lck_rw_lock_pause(istate);
 			istate = lck_interlock_lock(lck);
 		}
 
@@ -1699,6 +1444,73 @@ lck_mtx_assert(
 {
 }
 
+/*
+ * Routine: 	lck_mtx_lock_spin
+ *
+ * Invoked trying to acquire a mutex when there is contention but
+ * the holder is running on another processor. We spin for up to a maximum
+ * time waiting for the lock to be released.
+ *
+ * Called with the interlock unlocked.
+ */
+void
+lck_mtx_lock_spin(
+	lck_mtx_t		*lck)
+{
+	thread_t		holder;
+	lck_mtx_t		*mutex;
+	uint64_t		deadline;
+
+	if (lck->lck_mtx_tag != LCK_MTX_TAG_INDIRECT)
+		mutex = lck;
+	else
+		mutex = &lck->lck_mtx_ptr->lck_mtx;
+
+        KERNEL_DEBUG(
+		MACHDBG_CODE(DBG_MACH_LOCKS, LCK_MTX_LCK_SPIN) | DBG_FUNC_START,
+		(int)lck, (int)mutex->lck_mtx_locked, 0, 0, 0);
+
+	deadline = mach_absolute_time() + MutexSpin;
+	/*
+	 * Spin while:
+	 *   - mutex is locked, and
+	 *   - owner is running on another processor, and
+	 *   - owner is not is the idle delay, and
+	 *   - we haven't spun for long enough.
+	 */
+	while ((holder = (thread_t) mutex->lck_mtx_locked) != NULL &&
+	       (holder->machine.specFlags & OnProc) != 0 &&
+	       (holder->options & TH_OPT_DELAYIDLE) == 0 &&
+	       mach_absolute_time() < deadline)
+		cpu_pause();
+}
+
+/*
+ * Called from assembly code when a mutex interlock is held.
+ * We spin here re-checking the interlock but panic if we timeout.
+ * Note: here with interrupts disabled.
+ */
+void
+lck_mtx_interlock_spin(
+	lck_mtx_t		*lck)
+{
+	lck_mtx_t		*mutex;
+	uint64_t		deadline;
+
+	if (lck->lck_mtx_tag != LCK_MTX_TAG_INDIRECT)
+		mutex = lck;
+	else
+		mutex = &lck->lck_mtx_ptr->lck_mtx;
+
+	deadline = mach_absolute_time() + LockTimeOut;
+	while (mutex->lck_mtx_ilk != 0) {
+		cpu_pause();
+		if (mach_absolute_time() > deadline)
+			panic("interlock timeout for mutex %p", lck);
+	}
+
+}
+
 #if	MACH_KDB
 
 void	db_show_one_lock(lock_t  *);
@@ -1714,7 +1526,7 @@ db_show_one_lock(
 	db_printf("%swaiting, %scan_sleep\n", 
 		  lock->waiting ? "" : "!", lock->can_sleep ? "" : "!");
 	db_printf("Interlock:\n");
-	db_show_one_simple_lock((db_expr_t)simple_lock_addr(lock->interlock),
+	db_show_one_simple_lock((db_expr_t) ((vm_offset_t)simple_lock_addr(lock->interlock)),
 			TRUE, (db_expr_t)0, (char *)0);
 }
 
@@ -1796,17 +1608,17 @@ _mutex_assert (
  * fashion.
  */
 
-char *simple_lock_labels =	"ENTRY    ILK THREAD   DURATION CALLER";
-char *mutex_labels =		"ENTRY    LOCKED WAITERS   THREAD CALLER";
+const char *simple_lock_labels =	"ENTRY    ILK THREAD   DURATION CALLER";
+const char *mutex_labels =		"ENTRY    LOCKED WAITERS   THREAD CALLER";
 
 void
 db_show_one_simple_lock (
 	db_expr_t	addr,
 	boolean_t	have_addr,
-	db_expr_t	count,
-	char		* modif)
+	__unused db_expr_t	count,
+	__unused char		* modif)
 {
-	simple_lock_t	saddr = (simple_lock_t)addr;
+	simple_lock_t	saddr = (simple_lock_t) ((vm_offset_t) addr);
 
 	if (saddr == (simple_lock_t)0 || !have_addr) {
 		db_error ("No simple_lock\n");
@@ -1838,10 +1650,10 @@ void
 db_show_one_mutex (
 	db_expr_t	addr,
 	boolean_t	have_addr,
-	db_expr_t	count,
-	char		* modif)
+	__unused db_expr_t	count,
+	__unused char		* modif)
 {
-	mutex_t		* maddr = (mutex_t *)addr;
+	mutex_t		* maddr = (mutex_t *)((vm_offset_t) addr);
 
 	if (maddr == (mutex_t *)0 || !have_addr)
 		db_error ("No mutex\n");

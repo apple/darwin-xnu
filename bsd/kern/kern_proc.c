@@ -716,7 +716,7 @@ pgrpdump(void)
 int
 proc_is_classic(struct proc *p)
 {
-    return (p->p_flag & P_CLASSIC) ? 1 : 0;
+    return (p->p_flag & P_TRANSLATED) ? 1 : 0;
 }
 
 /* XXX Why does this function exist?  Need to kill it off... */

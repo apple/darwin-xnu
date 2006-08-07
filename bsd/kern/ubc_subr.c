@@ -70,9 +70,9 @@
 #endif /* DIAGNOSTIC */
 
 int ubc_info_init_internal(struct vnode *vp, int withfsize, off_t filesize);
-int ubc_umcallback(vnode_t, void *);
+static int ubc_umcallback(vnode_t, void *);
 int ubc_isinuse_locked(vnode_t, int, int);
-int ubc_msync_internal(vnode_t, off_t, off_t, off_t *, int, int *);
+static int ubc_msync_internal(vnode_t, off_t, off_t, off_t *, int, int *);
 
 struct zone	*ubc_info_zone;
 

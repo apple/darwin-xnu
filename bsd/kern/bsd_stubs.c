@@ -31,6 +31,8 @@
 #include <sys/proc_internal.h>
 #include <sys/buf.h>	/* for SET */
 #include <sys/user.h>
+#include <sys/sysent.h>
+#include <sys/sysproto.h>
 
 /* Just to satisfy pstat command */
 int     dmmin, dmmax, dmtext;
@@ -41,7 +43,7 @@ kmem_mb_alloc(vm_map_t  mbmap, int size)
         vm_offset_t addr;
 	if (kernel_memory_allocate(mbmap, &addr, size,
    		0,
-		KMA_NOPAGEWAIT|KMA_KOBJECT) == KERN_SUCCESS)
+		KMA_NOPAGEWAIT|KMA_KOBJECT|KMA_LOMEM) == KERN_SUCCESS)
    			return(addr);
 	else
 		return(0);
@@ -292,3 +294,66 @@ tbeproc(void *procp)
 	return;
 }
 
+
+/* 
+ * WARNING - this is a temporary workaround for binary compatibility issues
+ * with anti-piracy software that relies on patching ptrace (3928003).
+ * This KPI will be removed in the system release after Tiger.
+ */
+uintptr_t temp_patch_ptrace(uintptr_t new_ptrace)
+{
+	struct sysent *		callp;
+	sy_call_t *			old_ptrace;
+#ifndef __ppc__
+	boolean_t	funnel_state;
+#endif
+
+	if (new_ptrace == 0)
+		return(0);
+		
+#ifdef __ppc__
+	enter_funnel_section(kernel_flock);
+#else
+	funnel_state = thread_funnel_set(kernel_flock, TRUE);
+#endif
+	callp = &sysent[26];
+	old_ptrace = callp->sy_call;
+	
+	/* only allow one patcher of ptrace */
+	if (old_ptrace == (sy_call_t *) ptrace) {
+		callp->sy_call = (sy_call_t *) new_ptrace;
+	}
+	else {
+		old_ptrace = NULL;
+	}
+#ifdef __ppc__
+	exit_funnel_section( );
+#else
+	(void)thread_funnel_set(kernel_flock, funnel_state);
+#endif
+	
+	return((uintptr_t)old_ptrace);
+}
+
+void temp_unpatch_ptrace(void)
+{
+	struct sysent *		callp;
+#ifndef __ppc__
+	boolean_t	funnel_state;
+#endif
+		
+#ifdef __ppc__
+	enter_funnel_section(kernel_flock);
+#else
+	funnel_state = thread_funnel_set(kernel_flock, TRUE);
+#endif
+	callp = &sysent[26];
+	callp->sy_call = (sy_call_t *) ptrace;
+#ifdef __ppc__
+	exit_funnel_section( );
+#else
+	(void)thread_funnel_set(kernel_flock, funnel_state);
+#endif
+	
+	return;
+}

@@ -238,8 +238,8 @@ random_write (__unused dev_t dev, struct uio *uio, __unused int ioflag)
         
         /* put it in Yarrow */
         if (prngInput(gPrngRef, (BYTE*) rdBuffer,
-			sizeof (rdBuffer), SYSTEM_SOURCE,
-        	sizeof (rdBuffer) * 8) != 0) {
+			bytesToInput, SYSTEM_SOURCE,
+        	bytesToInput * 8) != 0) {
             retCode = EIO;
             goto error_exit;
         }
@@ -279,7 +279,7 @@ random_read(__unused dev_t dev, struct uio *uio, __unused int ioflag)
         int bytesToRead = min(uio_resid(uio), sizeof (wrBuffer));
         
         /* get the data from Yarrow */
-        if (prngOutput(gPrngRef, (BYTE *) wrBuffer, sizeof (wrBuffer)) != 0) {
+        if (prngOutput(gPrngRef, (BYTE *) wrBuffer, bytesToRead) != 0) {
             printf ("Couldn't read data from Yarrow.\n");
             
             /* something's really weird */

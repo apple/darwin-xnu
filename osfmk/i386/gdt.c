@@ -60,65 +60,61 @@
 #include <i386/cpu_data.h>
 #include <i386/mp_desc.h>
 
-#ifdef	MACH_BSD
-extern int	trap_unix_syscall(void), trap_mach25_syscall(void),
-		trap_machdep_syscall(void), syscall(void);
-#endif
-
-struct fake_descriptor gdt[GDTSZ] = {
-/* 0x000 */	{ 0, 0, 0, 0 },		/* always NULL */
-/* 0x008 */	{ 0,
-		  0xfffff,
-		  SZ_32|SZ_G,
-		  ACC_P|ACC_PL_K|ACC_CODE_R
-		},			/* kernel code */
-/* 0x010 */	{ 0,
-		  0xfffff,
-		  SZ_32|SZ_G,
-		  ACC_P|ACC_PL_K|ACC_DATA_W
-		},			/* kernel data */
-/* 0x018 */	{ (unsigned int)ldt,
-		  LDTSZ*sizeof(struct fake_descriptor)-1,
-		  0,
-		  ACC_P|ACC_PL_K|ACC_LDT
-		},			/* local descriptor table */
-/* 0x020 */	{ (unsigned int)&ktss,
-		  sizeof(struct i386_tss)-1,
-		  0,
-		  ACC_P|ACC_PL_K|ACC_TSS
-		},			/* TSS for this processor */
-#ifdef	MACH_BSD
-/* 0x28 */	{ (unsigned int) &trap_unix_syscall,
-		   KERNEL_CS,
-		   0,				/* no parameters */
-		   ACC_P|ACC_PL_U|ACC_CALL_GATE
-		},
-/* 0x30 */	{ (unsigned int) &trap_mach25_syscall,
-		   KERNEL_CS,
-		   0,				/* no parameters */
-		   ACC_P|ACC_PL_U|ACC_CALL_GATE
-		},
-/* 0x38 */	{ (unsigned int) &trap_machdep_syscall,
-		   KERNEL_CS,
-		   0,				/* no parameters */
-		   ACC_P|ACC_PL_U|ACC_CALL_GATE
-		},
-#else
-/* 0x028 */	{ 0, 0, 0, 0 },		/* per-thread LDT */
-/* 0x030 */	{ 0, 0, 0, 0 },		/* per-thread TSS for IO bitmap */
-/* 0x038 */	{ 0, 0, 0, 0 },
-#endif
-/* 0x040 */	{ 0, 0, 0, 0 },
-/* 0x048 */	{ (unsigned int)&cpu_data_master,
-		  sizeof(cpu_data_t)-1,
-		  SZ_32,
-		  ACC_P|ACC_PL_K|ACC_DATA_W
-		},			/* per-CPU current thread address */
+struct fake_descriptor master_gdt[GDTSZ] __attribute__ ((aligned (4096))) = {
+	[SEL_TO_INDEX(KERNEL_CS)] {	/* kernel code */
+		0,
+		0xfffff,
+		SZ_32|SZ_G,
+		ACC_P|ACC_PL_K|ACC_CODE_R,
+	},
+	[SEL_TO_INDEX(KERNEL_DS)] {	/* kernel data */
+		0,
+		0xfffff,
+		SZ_32|SZ_G,
+		ACC_P|ACC_PL_K|ACC_DATA_W
+	},
+	[SEL_TO_INDEX(KERNEL_LDT)] {	/* local descriptor table */
+		(uint32_t) &master_ldt,
+		LDTSZ_MIN*sizeof(struct fake_descriptor)-1,
+		0,
+		ACC_P|ACC_PL_K|ACC_LDT
+	},				/* The slot KERNEL_LDT_2 is reserved. */
+	[SEL_TO_INDEX(KERNEL_TSS)] {	/* TSS for this processor */
+		(uint32_t) &master_ktss,
+		sizeof(struct i386_tss)-1,
+		0,
+		ACC_P|ACC_PL_K|ACC_TSS
+	},				/* The slot KERNEL_TSS_2 is reserved. */
+	[SEL_TO_INDEX(CPU_DATA_GS)] {	/* per-CPU current thread address */
+		(uint32_t) &cpu_data_master,
+		sizeof(cpu_data_t)-1,
+		SZ_32,
+		ACC_P|ACC_PL_K|ACC_DATA_W
+	},
+	[SEL_TO_INDEX(USER_LDT)] {	/* user local descriptor table */
+		(uint32_t) &master_ldt,
+		LDTSZ_MIN*sizeof(struct fake_descriptor)-1,
+		0,
+		ACC_P|ACC_PL_K|ACC_LDT
+	},
+	[SEL_TO_INDEX(KERNEL64_CS)] {	/* kernel 64-bit code */ 
+		0,
+		0xfffff,
+		SZ_64|SZ_G,
+		ACC_P|ACC_PL_K|ACC_CODE_R
+	},
+	[SEL_TO_INDEX(KERNEL64_SS)] {	/* kernel 64-bit syscall stack */ 
+		0,
+		0xfffff,
+		SZ_32|SZ_G,
+		ACC_P|ACC_PL_K|ACC_DATA_W
+	},
 #if	MACH_KDB
-/* 0x050 */	{ (unsigned int)&dbtss,
-		  sizeof(struct i386_tss)-1,
-		  0,
-		  ACC_P|ACC_PL_K|ACC_TSS
-		}			/* TSS for this processor */
+	[SEL_TO_INDEX(DEBUG_TSS)] {	/* TSS for this processor */
+		(uint32_t)&master_dbtss,
+		sizeof(struct i386_tss)-1,
+		0,
+		ACC_P|ACC_PL_K|ACC_TSS
+	},
 #endif	/* MACH_KDB */
 };

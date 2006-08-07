@@ -1165,11 +1165,7 @@ nfsrv_write(nfsd, slp, procp, mrq)
 			*tl++ = txdr_unsigned(stable);
 		else
 			*tl++ = txdr_unsigned(NFSV3WRITE_FILESYNC);
-		/*
-		 * Actually, there is no need to txdr these fields,
-		 * but it may make the values more human readable,
-		 * for debugging purposes.
-		 */
+		/* write verifier */
 		*tl++ = txdr_unsigned(boottime_sec());
 		*tl = txdr_unsigned(0);
 	} else {
@@ -1469,11 +1465,7 @@ loop1:
 			    nfsm_build(tl, u_long *, 4 * NFSX_UNSIGNED);
 			    *tl++ = txdr_unsigned(nfsd->nd_len);
 			    *tl++ = txdr_unsigned(swp->nd_stable);
-			    /*
-			     * Actually, there is no need to txdr these fields,
-			     * but it may make the values more human readable,
-			     * for debugging purposes.
-			     */
+			    /* write verifier */
 			    *tl++ = txdr_unsigned(boottime_sec());
 			    *tl = txdr_unsigned(0);
 			} else {
@@ -3727,6 +3719,7 @@ nfsrv_readdirplus(nfsd, slp, procp, mrq)
 	vnode_t vp, nvp;
 	struct flrep fl;
 	struct nfs_filehandle dnfh, *nfhp = (struct nfs_filehandle *)&fl.fl_fhsize;
+	u_long fhsize;
 	struct nfs_export *nx;
 	struct nfs_export_options *nxo;
 	uio_t auio;
@@ -3938,7 +3931,8 @@ again:
 			 */
 			fp = (struct nfs_fattr *)&fl.fl_fattr;
 			nfsm_srvfillattr(vap, fp);
-			fl.fl_fhsize = txdr_unsigned(nfhp->nfh_len);
+			fhsize = nfhp->nfh_len;
+			fl.fl_fhsize = txdr_unsigned(fhsize);
 			fl.fl_fhok = nfs_true;
 			fl.fl_postopok = nfs_true;
 			if (vnopflag & VNODE_READDIR_SEEKOFF32)
@@ -3983,7 +3977,7 @@ again:
 			/*
 			 * Now copy the flrep structure out.
 			 */
-			xfer = sizeof(struct flrep) - sizeof(fl.fl_nfh) + fl.fl_fhsize;
+			xfer = sizeof(struct flrep) - sizeof(fl.fl_nfh) + fhsize;
 			cp = (caddr_t)&fl;
 			while (xfer > 0) {
 				nfsm_clget;

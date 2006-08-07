@@ -93,7 +93,6 @@ nfs_nhinit(void)
 	nfsnodehashtbl = hashinit(desiredvnodes, M_NFSNODE, &nfsnodehash);
 
 	nfs_node_hash_lck_grp_attr = lck_grp_attr_alloc_init();
-	lck_grp_attr_setstat(nfs_node_hash_lck_grp_attr);
 	nfs_node_hash_lck_grp = lck_grp_alloc_init("nfs_node_hash", nfs_node_hash_lck_grp_attr);
 
 	nfs_node_hash_lck_attr = lck_attr_alloc_init();

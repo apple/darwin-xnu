@@ -206,7 +206,7 @@ public:
     @param fromPosition Starting location of the I/O within a memory descriptor. 
     @param segments Pointer to an array of IOMemoryCursor::PhysicalSegments for the output physical scatter/gather list.
     @param maxSegments Maximum number of segments that can be written to segments array.
-    @param maxTransferSize Maximum transfer size is limited to that many bytes, otherwise it defaults to the maximum transfer size specified when the memory cursor was initialized.
+    @param inMaxTransferSize Maximum transfer size is limited to that many bytes, otherwise it defaults to the maximum transfer size specified when the memory cursor was initialized.
     @param transferSize Pointer to an IOByteCount variable that can contain the total size of the transfer being described.  Defaults to 0 indicating that no transfer size need be returned. 
     @result If the descriptor is exhausted of memory, a zero is returned, otherwise the number of segments that were filled in is returned.
 */
@@ -214,11 +214,11 @@ public:
 				       IOByteCount	   fromPosition,
 				       PhysicalSegment	  *segments,
 				       UInt32		   maxSegments,
-				       UInt32		   maxTransferSize = 0,
+				       UInt32		   inMaxTransferSize = 0,
 				       IOByteCount	  *transferSize = 0)
     {
 	return genPhysicalSegments(descriptor, fromPosition, segments,
-				maxSegments, maxTransferSize, transferSize);
+				maxSegments, inMaxTransferSize, transferSize);
     }
 };
 
@@ -282,7 +282,7 @@ successfully.
     @param fromPosition Starting location of the I/O within a memory descriptor. 
     @param segments Pointer to an array of IOMemoryCursor::PhysicalSegments for the output physical scatter/gather list.
     @param maxSegments Maximum number of segments that can be written to segments array.
-    @param maxTransferSize Maximum transfer size is limited to that many bytes, otherwise it defaults to the maximum transfer size specified when the memory cursor was initialized.
+    @param inMaxTransferSize Maximum transfer size is limited to that many bytes, otherwise it defaults to the maximum transfer size specified when the memory cursor was initialized.
     @param transferSize Pointer to an IOByteCount variable that can contain the total size of the transfer being described.  Defaults to 0 indicating that no transfer size need be returned. 
     @result If the descriptor is exhausted of memory, a zero is returned, otherwise the number of segments that were filled in is returned.
 */
@@ -290,11 +290,11 @@ successfully.
 				       IOByteCount	    fromPosition,
 				       PhysicalSegment *    segments,
 				       UInt32		    maxSegments,
-				       UInt32		    maxTransferSize = 0,
+				       UInt32		    inMaxTransferSize = 0,
 				       IOByteCount	 *  transferSize = 0)
     {
 	return genPhysicalSegments(descriptor, fromPosition, segments,
-				maxSegments, maxTransferSize, transferSize);
+				maxSegments, inMaxTransferSize, transferSize);
     }
 };
 
@@ -356,7 +356,7 @@ public:
     @param fromPosition Starting location of the I/O within a memory descriptor. 
     @param segments Pointer to an array of IOMemoryCursor::PhysicalSegments for the output physical scatter/gather list.
     @param maxSegments Maximum number of segments that can be written to segments array.
-    @param maxTransferSize Maximum transfer size is limited to that many bytes, otherwise it defaults to the maximum transfer size specified when the memory cursor was initialized.
+    @param inMaxTransferSize Maximum transfer size is limited to that many bytes, otherwise it defaults to the maximum transfer size specified when the memory cursor was initialized.
     @param transferSize Pointer to an IOByteCount variable that can contain the total size of the transfer being described.  Defaults to 0 indicating that no transfer size need be returned. 
     @result If the descriptor is exhausted of memory, a zero is returned, otherwise the number of segments that were filled in is returned.
 */
@@ -364,11 +364,11 @@ public:
 				       IOByteCount	    fromPosition,
 				       PhysicalSegment *    segments,
 				       UInt32		    maxSegments,
-				       UInt32		    maxTransferSize = 0,
+				       UInt32		    inMaxTransferSize = 0,
 				       IOByteCount	 *  transferSize = 0)
     {
 	return genPhysicalSegments(descriptor, fromPosition, segments,
-				maxSegments, maxTransferSize, transferSize);
+				maxSegments, inMaxTransferSize, transferSize);
     }
 };
 
@@ -434,7 +434,7 @@ public:
     @param fromPosition Starting location of the I/O within a memory descriptor. 
     @param segments Pointer to an array of DBDMA descriptors for the output physical scatter/gather list.  Be warned no room is left for a preamble in the output array.  'segments' should point to the first memory description slot in a DBDMA command.
     @param maxSegments Maximum number of segments that can be written to the DBDMA descriptor table.
-    @param maxTransferSize Maximum transfer size is limited to that many bytes, otherwise it defaults to the maximum transfer size specified when the memory cursor was initialized.
+    @param inMaxTransferSize Maximum transfer size is limited to that many bytes, otherwise it defaults to the maximum transfer size specified when the memory cursor was initialized.
     @param transferSize Pointer to an IOByteCount variable that can contain the total size of the transfer being described.  Defaults to 0 indicating that no transfer size need be returned. 
     @result If the descriptor is exhausted of memory, a zero is returned, otherwise the number of segments that were filled in is returned.
 */
@@ -442,11 +442,11 @@ public:
 				       IOByteCount	    fromPosition,
 				       IODBDMADescriptor *  segments,
 				       UInt32		    maxSegments,
-				       UInt32		    maxTransferSize = 0,
+				       UInt32		    inMaxTransferSize = 0,
 				       IOByteCount	 *  transferSize = 0)
     {
 	return genPhysicalSegments(descriptor, fromPosition, segments,
-				maxSegments, maxTransferSize, transferSize);
+				maxSegments, inMaxTransferSize, transferSize);
     }
 };
 

@@ -34,11 +34,11 @@
 #include <sys/param.h>
 #include <sys/quota.h>
 #include <ufs/ufs/ufs_byte_order.h>
-#include <architecture/byte_order.h>
+#include <libkern/OSByteOrder.h>
 
-#define	byte_swap_longlong(thing) ((thing) = NXSwapLongLong(thing))
-#define	byte_swap_int(thing) ((thing) = NXSwapLong(thing))
-#define	byte_swap_short(thing) ((thing) = NXSwapShort(thing))
+#define	byte_swap_longlong(thing) ((thing) = OSSwapInt64(thing))
+#define	byte_swap_int(thing) ((thing) = OSSwapInt32(thing))
+#define	byte_swap_short(thing) ((thing) = OSSwapInt16(thing))
 
 void
 byte_swap_longlongs(unsigned long long *array, int count)
@@ -230,32 +230,32 @@ byte_swap_inode_in(struct dinode *di, struct inode *ip)
 {
 	int		i;
 
-	ip->i_mode = NXSwapShort(di->di_mode);
-	ip->i_nlink = NXSwapShort(di->di_nlink);
-	ip->i_oldids[0] = NXSwapShort(di->di_u.oldids[0]);
-	ip->i_oldids[1] = NXSwapShort(di->di_u.oldids[1]);
-	ip->i_size = NXSwapLongLong(di->di_size);
-	ip->i_atime = NXSwapLong(di->di_atime);
-	ip->i_atimensec = NXSwapLong(di->di_atimensec);
-	ip->i_mtime = NXSwapLong(di->di_mtime);
-	ip->i_mtimensec = NXSwapLong(di->di_mtimensec);
-	ip->i_ctime = NXSwapLong(di->di_ctime);
-	ip->i_ctimensec = NXSwapLong(di->di_ctimensec);
+	ip->i_mode = OSSwapInt16(di->di_mode);
+	ip->i_nlink = OSSwapInt16(di->di_nlink);
+	ip->i_oldids[0] = OSSwapInt16(di->di_u.oldids[0]);
+	ip->i_oldids[1] = OSSwapInt16(di->di_u.oldids[1]);
+	ip->i_size = OSSwapInt64(di->di_size);
+	ip->i_atime = OSSwapInt32(di->di_atime);
+	ip->i_atimensec = OSSwapInt32(di->di_atimensec);
+	ip->i_mtime = OSSwapInt32(di->di_mtime);
+	ip->i_mtimensec = OSSwapInt32(di->di_mtimensec);
+	ip->i_ctime = OSSwapInt32(di->di_ctime);
+	ip->i_ctimensec = OSSwapInt32(di->di_ctimensec);
 	if (((ip->i_mode & IFMT) == IFLNK ) && (ip->i_size <= RESYMLNKLEN)) {
 		bcopy(&di->di_shortlink,  &ip->i_shortlink, RESYMLNKLEN);
 	} else {
 		for (i=0; i < NDADDR; i++)	/* direct blocks */
-			ip->i_db[i] = NXSwapLong(di->di_db[i]);
+			ip->i_db[i] = OSSwapInt32(di->di_db[i]);
 		for (i=0; i < NIADDR; i++)	/* indirect blocks */
-			ip->i_ib[i] = NXSwapLong(di->di_ib[i]);
+			ip->i_ib[i] = OSSwapInt32(di->di_ib[i]);
 	} 
-	ip->i_flags = NXSwapLong(di->di_flags);
-	ip->i_blocks = NXSwapLong(di->di_blocks);
-	ip->i_gen = NXSwapLong(di->di_gen);
-	ip->i_uid = NXSwapLong(di->di_uid);
-	ip->i_gid = NXSwapLong(di->di_gid);
-	ip->i_spare[0] = NXSwapLong(di->di_spare[0]);
-	ip->i_spare[1] = NXSwapLong(di->di_spare[1]);
+	ip->i_flags = OSSwapInt32(di->di_flags);
+	ip->i_blocks = OSSwapInt32(di->di_blocks);
+	ip->i_gen = OSSwapInt32(di->di_gen);
+	ip->i_uid = OSSwapInt32(di->di_uid);
+	ip->i_gid = OSSwapInt32(di->di_gid);
+	ip->i_spare[0] = OSSwapInt32(di->di_spare[0]);
+	ip->i_spare[1] = OSSwapInt32(di->di_spare[1]);
 }
 
 void
@@ -267,32 +267,32 @@ byte_swap_inode_out(struct inode *ip, struct dinode *di)
 	mode = (ip->i_mode & IFMT);
 	inosize = ip->i_size;
  
-	di->di_mode = NXSwapShort(ip->i_mode);
-	di->di_nlink = NXSwapShort(ip->i_nlink);
-	di->di_u.oldids[0] = NXSwapShort(ip->i_oldids[0]);
-	di->di_u.oldids[1] = NXSwapShort(ip->i_oldids[1]);
-	di->di_size = NXSwapLongLong(ip->i_size);
-	di->di_atime = NXSwapLong(ip->i_atime);
-	di->di_atimensec = NXSwapLong(ip->i_atimensec);
-	di->di_mtime = NXSwapLong(ip->i_mtime);
-	di->di_mtimensec = NXSwapLong(ip->i_mtimensec);
-	di->di_ctime = NXSwapLong(ip->i_ctime);
-	di->di_ctimensec = NXSwapLong(ip->i_ctimensec);
+	di->di_mode = OSSwapInt16(ip->i_mode);
+	di->di_nlink = OSSwapInt16(ip->i_nlink);
+	di->di_u.oldids[0] = OSSwapInt16(ip->i_oldids[0]);
+	di->di_u.oldids[1] = OSSwapInt16(ip->i_oldids[1]);
+	di->di_size = OSSwapInt64(ip->i_size);
+	di->di_atime = OSSwapInt32(ip->i_atime);
+	di->di_atimensec = OSSwapInt32(ip->i_atimensec);
+	di->di_mtime = OSSwapInt32(ip->i_mtime);
+	di->di_mtimensec = OSSwapInt32(ip->i_mtimensec);
+	di->di_ctime = OSSwapInt32(ip->i_ctime);
+	di->di_ctimensec = OSSwapInt32(ip->i_ctimensec);
 	if ((mode == IFLNK) && (inosize <= RESYMLNKLEN)) {
 		bcopy( &ip->i_shortlink, &di->di_shortlink, RESYMLNKLEN);
 	} else {
 		for (i=0; i < NDADDR; i++)	/* direct blocks */
-			di->di_db[i] = NXSwapLong(ip->i_db[i]);
+			di->di_db[i] = OSSwapInt32(ip->i_db[i]);
 		for (i=0; i < NIADDR; i++)	/* indirect blocks */
-			di->di_ib[i] = NXSwapLong(ip->i_ib[i]);
+			di->di_ib[i] = OSSwapInt32(ip->i_ib[i]);
 	}
-	di->di_flags = NXSwapLong(ip->i_flags);
-	di->di_blocks = NXSwapLong(ip->i_blocks);
-	di->di_gen = NXSwapLong(ip->i_gen);
-	di->di_uid = NXSwapLong(ip->i_uid);
-	di->di_gid = NXSwapLong(ip->i_gid);
-	di->di_spare[0] = NXSwapLong(ip->i_spare[0]);
-	di->di_spare[1] = NXSwapLong(ip->i_spare[1]);
+	di->di_flags = OSSwapInt32(ip->i_flags);
+	di->di_blocks = OSSwapInt32(ip->i_blocks);
+	di->di_gen = OSSwapInt32(ip->i_gen);
+	di->di_uid = OSSwapInt32(ip->i_uid);
+	di->di_gid = OSSwapInt32(ip->i_gid);
+	di->di_spare[0] = OSSwapInt32(ip->i_spare[0]);
+	di->di_spare[1] = OSSwapInt32(ip->i_spare[1]);
 }
 
 void

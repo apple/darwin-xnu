@@ -31,21 +31,6 @@
 #ifndef _BSD_I386_REG_H_
 #define _BSD_I386_REG_H_
 
-/* FIXME - should include mach/i386/thread_status.h and 
-  construct the values from i386_saved_state
- */
-#define	EDX	9
-#define	ECX	10
-#define	EAX	11
-#define	EIP	14
-#define	EFL	16
-#define	ESP	7
-#define	UESP	17
-#define	PS	EFL
-#define	PC	EIP
-#define	SP	UESP
-
-
 
 #endif	/* _BSD_I386_REG_H_ */
 

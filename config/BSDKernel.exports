@@ -124,7 +124,6 @@ _err_bwrite
 _err_close
 _err_copyfile
 _err_create
-_err_devblocksize
 _err_exchange
 _err_fsync
 _err_getattr
@@ -408,7 +407,6 @@ _nop_bwrite
 _nop_close
 _nop_copyfile
 _nop_create
-_nop_devblocksize
 _nop_exchange
 _nop_fsync
 _nop_getattr

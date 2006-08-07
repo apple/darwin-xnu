@@ -813,27 +813,6 @@ err_pageout(struct vnop_pageout_args *ap)
 }
 
 
-struct vnop_devblocksize_args /* {
-	struct vnode *a_vp;
-	register_t *a_retval;
-} */;
-
-int
-nop_devblocksize(struct vnop_devblocksize_args *ap)
-{
-	/* XXX default value because the call sites do not check error */
-	*ap->a_retval = 512;
-	return (0);
-}
-
-int
-err_devblocksize(struct vnop_devblocksize_args *ap)
-{
-	(void)nop_devblocksize(ap);
-	return (ENOTSUP);
-}
-
-
 struct vnop_searchfs /* {
 	struct vnode *a_vp;
 	void *a_searchparams1;

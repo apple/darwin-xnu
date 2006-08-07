@@ -28,8 +28,6 @@
 class IOPMPowerStateQueue;
 class RootDomainUserClient;
 
-#define kRootDomainSupportedFeatures "Supported Features"
-
 enum {
     kRootDomainSleepNotSupported	= 0x00000000,
     kRootDomainSleepSupported 		= 0x00000001,
@@ -37,31 +35,35 @@ enum {
     kPCICantSleep			= 0x00000004
 };
 
-// Constants for use as arguments to the settings callback PMU/SMU defines
-// with registerPMSettingsController
+#define kRootDomainSupportedFeatures "Supported Features"
+
+// Supported Feature bitfields for IOPMrootDomain::publishFeature()
 enum {
-    kIOPMAutoWakeSetting = 1,
-    kIOPMAutoPowerOnSetting,
-    kIOPMWakeOnRingSetting,
-    kIOPMAutoRestartOnPowerLossSetting,
-    kIOPMWakeOnLidSetting,
-    kIOPMWakeOnACChangeSetting,
-    kIOPMTimeZoneSetting
+    kIOPMSupportedOnAC = 1<<0,
+    kIOPMSupportedOnBatt = 1<<1,
+    kIOPMSupportedOnUPS = 1<<2
 };
-typedef int IOPMSystemSettingType;
 
-
-
-typedef IOReturn (*IOPMSettingControllerCallback)(IOPMSystemSettingType arg_type, int arg_val, void *info);
+typedef IOReturn (*IOPMSettingControllerCallback) \
+                    (OSObject *target, const OSSymbol *type, \
+                     OSObject *val, uintptr_t refcon);
 
 extern "C"
 {
-	IONotifier * registerSleepWakeInterest(IOServiceInterestHandler, void *, void * = 0);
-        IONotifier * registerPrioritySleepWakeInterest(IOServiceInterestHandler handler, void * self, void * ref = 0);
-        IOReturn acknowledgeSleepWakeNotification(void * );
-        IOReturn vetoSleepWakeNotification(void * PMrefcon);
-        IOReturn rootDomainRestart ( void );
-        IOReturn rootDomainShutdown ( void );
+    IONotifier * registerSleepWakeInterest(
+               IOServiceInterestHandler, void *, void * = 0);
+               
+    IONotifier * registerPrioritySleepWakeInterest(
+                IOServiceInterestHandler handler, 
+                void * self, void * ref = 0);
+
+    IOReturn acknowledgeSleepWakeNotification(void * );
+
+    IOReturn vetoSleepWakeNotification(void * PMrefcon);
+
+    IOReturn rootDomainRestart ( void );
+
+    IOReturn rootDomainShutdown ( void );
 }
 
 #define IOPM_ROOTDOMAIN_REV		2
@@ -90,24 +92,95 @@ public:
     void stopIgnoringClamshellEventsDuringWakeup ( void );
     void wakeFromDoze( void );
     void broadcast_it (unsigned long, unsigned long );
+
+    // KEXT driver announces support of power management feature
     void publishFeature( const char *feature );
+    
+    // KEXT driver announces support of power management feature
+    // And specifies power sources with kIOPMSupportedOn{AC/Batt/UPS} bitfield.
+    // Returns a unique uint32_t identifier for later removing support for this
+    // feature. 
+    // NULL is acceptable for uniqueFeatureID for kexts without plans to unload.
+    void publishFeature( const char *feature, 
+                            uint32_t supportedWhere,
+                            uint32_t *uniqueFeatureID);
+
+    // KEXT driver announces removal of a previously published power management 
+    // feature. Pass 'uniqueFeatureID' returned from publishFeature()
+    IOReturn removePublishedFeature( uint32_t removeFeatureID );
+
     void unIdleDevice( IOService *, unsigned long );
     void announcePowerSourceChange( void );
-        
+
     // Override of these methods for logging purposes.
     virtual IOReturn changePowerStateTo ( unsigned long ordinal );
     virtual IOReturn changePowerStateToPriv ( unsigned long ordinal );
 
-    IOReturn registerPMSettingController(IOPMSettingControllerCallback, void *);
+/*! @function copyPMSetting
+    @abstract Copy the current value for a PM setting. Returns OSNumber or
+        OSData depending on the setting.
+    @param whichSetting Name of the desired setting. 
+    @result OSObject *value if valid, NULL otherwise. */
+    OSObject *copyPMSetting(OSSymbol *whichSetting);
+    
+/*! @function registerPMSettingController
+    @abstract Register for callbacks on changes to certain PM settings.
+    @param settings NULL terminated array of C strings, each string for a PM 
+        setting that the caller is interested in and wants to get callbacks for. 
+    @param callout C function ptr or member function cast as such.
+    @param target The target of the callback, usually 'this'
+    @param refcon Will be passed to caller in callback; for caller's use.
+    @param handle Caller should keep the OSObject * returned here. If non-NULL,
+        handle will have a retain count of 1 on return. To deregister, pass to
+        unregisterPMSettingController()
+    @result kIOReturnSuccess on success. */
+    IOReturn registerPMSettingController(
+                                 const OSSymbol *settings[],
+                                 IOPMSettingControllerCallback callout,
+                                 OSObject   *target,
+                                 uintptr_t  refcon,
+                                 OSObject   **handle);    // out param
+
+/*! @function registerPMSettingController
+    @abstract Register for callbacks on changes to certain PM settings.
+    @param settings NULL terminated array of C strings, each string for a PM 
+        setting that the caller is interested in and wants to get callbacks for. 
+    @param supportedPowerSources bitfield indicating which power sources these
+        settings are supported for (kIOPMSupportedOnAC, etc.)
+    @param callout C function ptr or member function cast as such.
+    @param target The target of the callback, usually 'this'
+    @param refcon Will be passed to caller in callback; for caller's use.
+    @param handle Caller should keep the OSObject * returned here. If non-NULL,
+        handle will have a retain count of 1 on return. To deregister, pass to
+        unregisterPMSettingController()
+    @result kIOReturnSuccess on success. */
+    IOReturn registerPMSettingController(
+                                 const OSSymbol *settings[],
+                                 uint32_t   supportedPowerSources,
+                                 IOPMSettingControllerCallback callout,
+                                 OSObject   *target,
+                                 uintptr_t  refcon,
+                                 OSObject   **handle);    // out param
 
 private:
 
-    class IORootParent * patriarch;			// points to our parent
-    long		sleepSlider;			// pref: idle time before idle sleep
-    long		longestNonSleepSlider;		// pref: longest of other idle times
-    long		extraSleepDelay;		// sleepSlider - longestNonSleepSlider
-    thread_call_t	extraSleepTimer;		// used to wait between say display idle and system idle
-    thread_call_t   clamshellWakeupIgnore;   // Used to ignore clamshell close events while we're waking from sleep
+    // Points to our parent
+    class IORootParent * patriarch;
+
+    // Pref: idle time before idle sleep
+    long		sleepSlider;			
+
+    // Pref: longest of other idle times (disk and display)
+    long		longestNonSleepSlider;		
+
+    // Difference between sleepSlider and longestNonSleepSlider
+    long		extraSleepDelay;		
+
+    // Used to wait between say display idle and system idle
+    thread_call_t	extraSleepTimer;		
+
+    // Used to ignore clamshell close events while we're waking from sleep
+    thread_call_t   clamshellWakeupIgnore;   
     
     virtual void powerChangeDone ( unsigned long );
     virtual void command_received ( void *, void * , void * , void *);
@@ -127,13 +200,16 @@ private:
     static bool displayWranglerPublished( void * target, void * refCon,
                                     IOService * newService);
 
-    static bool batteryLocationPublished( void * target, void * refCon,
+    static bool batteryPublished( void * target, void * refCon,
                                     IOService * resourceService );
 
+    void adjustPowerState ( void );
     void setQuickSpinDownTimeout ( void );
-    void adjustPowerState( void );
     void restoreUserSpinDownTimeout ( void );
-
+    
+    bool shouldSleepOnClamshellClosed (void );
+    void sendClientClamshellNotification ( void );
+    
     IOLock                  *featuresDictLock;  // guards supportedFeatures
     IOPMPowerStateQueue     *pmPowerStateQueue;
     unsigned int user_spindown;       // User's selected disk spindown value
@@ -149,25 +225,29 @@ private:
 
     unsigned int acAdaptorConnect:1;
     unsigned int ignoringClamshellDuringWakeup:1;
-    unsigned int reservedA:6;
+    unsigned int clamshellIsClosed:1;
+    unsigned int clamshellExists:1;
+    unsigned int reservedA:4;
     unsigned char reservedB[3];
     
-    struct PMSettingCtrl {
-        IOPMSettingControllerCallback       func;
-        void                                *refcon;
-    };
+    OSArray         *allowedPMSettings;
+    
+    // Settings controller info
+    IORecursiveLock        *settingsCtrlLock;  
+    OSDictionary           *settingsCallbacks;
+    OSDictionary           *fPMSettingsDict;
+    IOReturn setPMSetting(const OSSymbol *, OSObject *);
 
-    // Private helper to call PM setting controller
-    IOReturn setPMSetting(int type, OSNumber *);
- 
+    thread_call_t           diskSyncCalloutEntry;
+    IONotifier              *_batteryPublishNotifier;
+    IONotifier              *_displayWranglerNotifier;
+
     struct ExpansionData {    
-        PMSettingCtrl           *_settingController;
-        thread_call_t           diskSyncCalloutEntry;
-        IONotifier              *_batteryLocationNotifier;
-        IONotifier              *_displayWranglerNotifier;
     };
     ExpansionData   *_reserved;
     IOOptionBits platformSleepSupport;
+    
+    friend class PMSettingObject;
 };
 
 class IORootParent: public IOService
@@ -178,6 +258,8 @@ private:
     unsigned long mostRecentChange;
     
 public:
+
+    virtual IOReturn changePowerStateToPriv ( unsigned long ordinal );
 
     bool start ( IOService * nub );
     void shutDownSystem ( void );

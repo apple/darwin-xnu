@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -123,8 +123,6 @@ unix_syscall(struct savearea	*regs)
 		if (old != NOCRED)
 			kauth_cred_rele(old);
 	}
-
-	uthread->uu_ar0 = (int *)regs;
 
 	callp = (code >= nsysent) ? &sysent[63] : &sysent[code];
 
@@ -323,7 +321,6 @@ unix_syscall_return(int error)
 	struct savearea				*regs;
 	unsigned short				code;
 	struct sysent				*callp;
-	int funnel_type;
 	unsigned int cancel_enable;
 
 	thread_act = current_thread();
@@ -441,90 +438,9 @@ unix_syscall_return(int error)
 	/* NOTREACHED */
 }
 
-/* 
- * Time of day and interval timer support.
- *
- * These routines provide the kernel entry points to get and set
- * the time-of-day and per-process interval timers.  Subroutines
- * here provide support for adding and subtracting timeval structures
- * and decrementing interval timers, optionally reloading the interval
- * timers when they expire.
- */
-/*  NOTE THIS implementation is for  ppc architectures only.
- *  It is infrequently called, since the commpage intercepts
- *  most calls in user mode.
- *
- * XXX Y2038 bug because of assumed return of 32 bit seconds value, and
- * XXX first parameter to clock_gettimeofday()
- */
-int
-ppc_gettimeofday(__unused struct proc *p, 
-				 register struct ppc_gettimeofday_args *uap, 
-				 register_t *retval)
-{
-	int error = 0;
-	extern lck_spin_t * tz_slock;
-
-	if (uap->tp)
-		clock_gettimeofday(&retval[0], &retval[1]);
-	
-	if (uap->tzp) {
-		struct timezone ltz;
-
-		lck_spin_lock(tz_slock);
-		ltz = tz;
-		lck_spin_unlock(tz_slock);
-		error = copyout((caddr_t)&ltz, uap->tzp, sizeof (tz));
-	}
-
-	return (error);
-}
-
 #ifdef JOE_DEBUG
 joe_debug(char *p) {
 
         printf("%s\n", p);
 }
 #endif
-
-
-/* 
- * WARNING - this is a temporary workaround for binary compatibility issues
- * with anti-piracy software that relies on patching ptrace (3928003).
- * This KPI will be removed in the system release after Tiger.
- */
-uintptr_t temp_patch_ptrace(uintptr_t new_ptrace)
-{
-	struct sysent *		callp;
-	sy_call_t *			old_ptrace;
-
-	if (new_ptrace == 0)
-		return(0);
-		
-	enter_funnel_section(kernel_flock);
-	callp = &sysent[26];
-	old_ptrace = callp->sy_call;
-	
-	/* only allow one patcher of ptrace */
-	if (old_ptrace == (sy_call_t *) ptrace) {
-		callp->sy_call = (sy_call_t *) new_ptrace;
-	}
-	else {
-		old_ptrace = NULL;
-	}
-	exit_funnel_section( );
-	
-	return((uintptr_t)old_ptrace);
-}
-
-void temp_unpatch_ptrace(void)
-{
-	struct sysent *		callp;
-		
-	enter_funnel_section(kernel_flock);
-	callp = &sysent[26];
-	callp->sy_call = (sy_call_t *) ptrace;
-	exit_funnel_section( );
-	
-	return;
-}

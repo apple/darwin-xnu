@@ -45,9 +45,9 @@
 #  Standard Apple Research Configurations:
 #  -------- ----- -------- ---------------
 #
-#  RELEASE = [intel pc mach medium event vol pst gdb kernobjc libdriver fixpri simple_clock mdebug kernserv driverkit uxpr kernstack ipc_compat ipc_debug nfsclient nfsserver quota fifo fdesc union ffs cd9660 compat_oldsock volfs devfs revfs hfs mrouting ipdivert ipfirewall ipfw2 dummynet ipv6firewall inet6 ipsec gif tcpdrop_synfin ktrace stf compat_43_tty compat_43_socket vlan bond netmibs]
+#  RELEASE = [intel pc mach medium event vol pst gdb kernobjc libdriver fixpri simple_clock mdebug kernserv driverkit uxpr kernstack ipc_compat ipc_debug nfsclient nfsserver quota fifo fdesc union ffs cd9660 compat_oldsock volfs devfs revfs hfs mrouting ipdivert ipfirewall ipfw2 dummynet ipv6firewall inet6 ipsec gif tcpdrop_synfin ktrace stf compat_43_tty compat_43_socket vlan bond netmibs netat]
 #  PROFILE = [RELEASE profile]
-#  DEBUG = [intel pc mach medium event vol pst gdb kernobjc libdriver_g fixpri debug simple_clock mdebug kernserv driverkit xpr_debug uxpr kernstack ipc_compat ipc_debug nfsclient nfsserver quota fifo fdesc union ffs cd9660 compat_oldsock revfs hfs volfs devfs mach_assert mrouting ipdivert ipfirewall ipfw2 dummynet ipv6firewall inet6 ipsec gif tcpdrop_synfin ktrace stf compat_43_tty compat_43_socket vlan bond netmibs]
+#  DEBUG = [intel pc mach medium event vol pst gdb kernobjc libdriver_g fixpri debug simple_clock mdebug kernserv driverkit xpr_debug uxpr kernstack ipc_compat ipc_debug nfsclient nfsserver quota fifo fdesc union ffs cd9660 compat_oldsock revfs hfs volfs devfs mach_assert mrouting ipdivert ipfirewall ipfw2 dummynet ipv6firewall inet6 ipsec gif tcpdrop_synfin ktrace stf compat_43_tty compat_43_socket vlan bond netmibs netat]
 #
 ######################################################################
 #

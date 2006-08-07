@@ -21,8 +21,6 @@ _ml_ppc_sleep
 _ml_set_processor_speed
 _ml_set_processor_voltage
 _ml_throttle
-_temp_patch_ptrace
-_temp_unpatch_ptrace
 _pmsStart
 _pmsPark
 _pmsRun

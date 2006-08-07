@@ -283,7 +283,7 @@ typedef void (pmc_ovf_func_t)(pmc_id_t id, void *state);
  * In-kernel PMC access primitives:
  */
 /* Generic: */
-extern int pmc_init(void);
+extern void *pmc_alloc(void);
 extern int pmc_machine_type(pmc_machine_t *type);
 extern boolean_t pmc_is_reserved(pmc_id_t id);
 extern int pmc_reserve(pmc_id_t id);
@@ -301,5 +301,8 @@ extern int pmc_cccr_write(pmc_id_t id, pmc_cccr_t *cccr);
 extern int pmc_escr_read(pmc_id_t id, pmc_escr_id_t esid, pmc_escr_t *escr);
 extern int pmc_escr_write(pmc_id_t id, pmc_escr_id_t esid, pmc_escr_t *escr);
 extern int pmc_set_ovf_func(pmc_id_t id, pmc_ovf_func_t *func);
+
+extern int pmc_acquire(task_t);
+extern int pmc_release(task_t);
 
 #endif /* _I386_PERFMON_H_ */

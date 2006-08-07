@@ -29,6 +29,7 @@
 /*
  * Here are the Diagnostic interface interfaces
  * Lovingly crafted by Bill Angell using traditional methods
+ *	Keep selectors in sync with the x86 version where possible.	
 */
 #ifdef	KERNEL_PRIVATE
 

@@ -20,6 +20,9 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 
+#ifndef _IOKIT_IONVRAMCONTROLLER_H
+#define _IOKIT_IONVRAMCONTROLLER_H
+
 #include <IOKit/IOService.h>
 
 class IONVRAMController: public IOService
@@ -36,3 +39,5 @@ public:
   virtual IOReturn write(IOByteCount offset, UInt8 *buffer,
 			 IOByteCount length) = 0;
 };
+
+#endif /* !_IOKIT_IONVRAMCONTROLLER_H */

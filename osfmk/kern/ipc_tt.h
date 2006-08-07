@@ -107,6 +107,10 @@ extern ipc_port_t retrieve_task_self_fast(
 extern ipc_port_t retrieve_thread_self_fast(
 	thread_t	thread);
 
+/* Convert from a port to a task name */
+extern task_name_t convert_port_to_task_name(
+	ipc_port_t	port);
+
 /* Convert from a port to a task */
 extern task_t convert_port_to_task(
 	ipc_port_t	port);
@@ -138,6 +142,10 @@ extern thread_t	port_name_to_thread(
 /* Convert from a task to a port */
 extern ipc_port_t convert_task_to_port(
 	task_t			task);
+
+/* Convert from a task name to a port */
+extern ipc_port_t convert_task_name_to_port(
+	task_name_t		task_name);
 
 /* Convert from a thread to a port */
 extern ipc_port_t	convert_thread_to_port(

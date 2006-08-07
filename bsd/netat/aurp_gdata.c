@@ -27,6 +27,9 @@
  *
  *	File: gdata.c
  */
+ 
+#ifdef AURP_SUPPORT
+
 #include <sys/errno.h>
 #include <sys/types.h>
 #include <sys/param.h>
@@ -49,7 +52,6 @@
 #include <netat/at_pcb.h>
 #include <netat/aurp.h>
 
-atlock_t aurpgen_lock;
 gref_t *aurp_gref;
 unsigned char dst_addr_cnt;
 unsigned char net_access_cnt;
@@ -59,3 +61,5 @@ int net_port;
 int update_tmo;
 aurp_state_t aurp_state[256];
 unsigned short net_access[AURP_MaxNetAccess];
+
+#endif  /* AURP_SUPPORT */

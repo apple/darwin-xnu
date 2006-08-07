@@ -209,7 +209,6 @@ int		reverse_lookup(vnode_t start_vp, vnode_t *lookup_vpp,
  * Stats on usefulness of namei caches.
  */
 struct	nchstats {
-        long	ncs_negtotal;
 	long	ncs_goodhits;		/* hits that we can really use */
 	long	ncs_neghits;		/* negative hits that we can use */
 	long	ncs_badhits;		/* hits we must drop */

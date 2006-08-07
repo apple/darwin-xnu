@@ -2868,17 +2868,19 @@ hwpSPrtPhy: cmplw	r0,r0						; Make sure we return CR0_EQ
 
 ;			Function 2 - Set protection in mapping
 
+;			NOTE: Changes to no-execute permission are ignored
+
 			.set	.,hwpOpBase+(2*128)			; Generate error if previous function too long
 
 hwpSPrtMap:	lwz		r9,mpFlags(r31)				; Get the mapping flags
 			lwz		r8,mpVAddr+4(r31)			; Get the protection part of mapping
 			rlwinm.	r9,r9,0,mpPermb,mpPermb		; Is the mapping permanent?
-			li		r0,lo16(mpN|mpPP)			; Get no-execute and protection bits
+			li		r0,lo16(mpPP)				; Get protection bits
 			crnot	cr0_eq,cr0_eq				; Change CR0_EQ to true if mapping is permanent
-			rlwinm	r2,r25,0,mpNb-32,mpPPe-32	; Isolate new no-execute and protection bits 
+			rlwinm	r2,r25,0,mpPP				; Isolate new protection bits 
 			beqlr--								; Leave if permanent mapping (before we trash R5)...
-			andc	r5,r5,r0					; Clear the old no-execute and prot bits
-			or		r5,r5,r2					; Move in the new no-execute and prot bits
+			andc	r5,r5,r0					; Clear the old prot bits
+			or		r5,r5,r2					; Move in the new prot bits
 			rlwimi	r8,r5,0,20,31				; Copy into the mapping copy
 			cmpw	r0,r0						; Make sure we return CR0_EQ
 			stw		r8,mpVAddr+4(r31)			; Set the flag part of mapping

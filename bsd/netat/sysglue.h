@@ -58,20 +58,12 @@ typedef struct {
  * grow when we're dealing with a 64-bit process.
  * WARNING - keep in sync with ioccmd_t
  */
-#if __DARWIN_ALIGN_NATURAL
-#pragma options align=natural
-#endif
-
 typedef struct {
 	int  		ic_cmd;
 	int  		ic_timout;
 	int  		ic_len;
-	user_addr_t	ic_dp;
+	user_addr_t	ic_dp __attribute__((aligned(8)));
 } user_ioccmd_t;
-
-#if __DARWIN_ALIGN_NATURAL
-#pragma options align=reset
-#endif
 
 #endif // KERNEL_PRIVATE
 #endif // KERNEL
@@ -158,10 +150,6 @@ typedef struct {
 typedef int atevent_t;
 
 typedef int atlock_t;
-typedef int *atomic_p; 
-#define ATLOCKINIT(a)  (a = (atlock_t) EVENT_NULL)
-#define ATDISABLE(l, a)
-#define ATENABLE(l, a)
 #define ATEVENTINIT(a)  (a = (atevent_t) EVENT_NULL)
 #define DDP_OUTPUT(m) ddp_putmsg(0,m)
 #define StaticProc static

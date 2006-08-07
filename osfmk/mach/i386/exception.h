@@ -82,6 +82,7 @@
 #define EXC_I386_EXTERR			5
 #define EXC_I386_EMERR			6
 #define EXC_I386_BOUND			7
+#define EXC_I386_SSEEXTERR              8
 
 /*
  *	EXC_SOFTWARE

@@ -37,6 +37,8 @@
 #include <sys/mbuf.h>
 #include <sys/systm.h>
 #include <sys/tty.h>
+#include <sys/vnode.h>
+#include <sys/sysctl.h>
 #include <dev/ppc/cons.h>
 
 extern vm_map_t mb_map;
@@ -47,20 +49,28 @@ extern u_long   tcp_recvspace;
 void            bsd_bufferinit(void);
 extern void     md_prepare_for_shutdown(int, int, char *);
 
+int		bsd_mbuf_cluster_reserve(void);
+
 /*
  * Declare these as initialized data so we can patch them.
  */
 
 #ifdef	NBUF
-int             nbuf = NBUF;
+int             max_nbuf_headers = NBUF;
 int             niobuf = NBUF / 2;
-
+int 		nbuf_hashelements = NBUF;
+int 		nbuf = NBUF;
 #else
-int             nbuf = 0;
+int             max_nbuf_headers = 0;
 int             niobuf = 0;
-
+int 		nbuf_hashelements = 0;
+int		nbuf = 0;
 #endif
 
+SYSCTL_INT (_kern, OID_AUTO, nbuf, CTLFLAG_RD, &nbuf, 0, "");
+SYSCTL_INT (_kern, OID_AUTO, maxnbuf, CTLFLAG_RW, &max_nbuf_headers, 0, "");
+
+__private_extern__ int customnbuf = 0;
 int             srv = 0;	/* Flag indicates a server boot when set */
 int             ncl = 0;
 
@@ -77,21 +87,30 @@ bsd_startupearly(void)
 	vm_size_t       size;
 	kern_return_t   ret;
 
-	if (nbuf == 0)
-		nbuf = atop(sane_size / 100);	/* Get 1% of ram, but no more than we can map */
-	if (nbuf > 8192)
-		nbuf = 8192;
-	if (nbuf < 256)
-		nbuf = 256;
+	/* clip the number of buf headers upto 16k */
+	if (max_nbuf_headers == 0)
+		max_nbuf_headers = atop(sane_size / 50);	/* Get 2% of ram, but no more than we can map */
+	if ((customnbuf == 0) && (max_nbuf_headers > 16384))
+		max_nbuf_headers = 16384;
+	if (max_nbuf_headers < 256)
+		max_nbuf_headers = 256;
+
+	/* clip the number of hash elements  to 200000 */
+	if ( (customnbuf == 0 ) && nbuf_hashelements == 0) {
+		nbuf_hashelements = atop(sane_size / 50);
+		if (nbuf_hashelements > 200000)
+			nbuf_hashelements = 200000;
+	} else
+		nbuf_hashelements = max_nbuf_headers;
 
 	if (niobuf == 0)
-		niobuf = nbuf;
+		niobuf = max_nbuf_headers;
 	if (niobuf > 4096)
 		niobuf = 4096;
 	if (niobuf < 128)
 		niobuf = 128;
 
-	size = (nbuf + niobuf) * sizeof(struct buf);
+	size = (max_nbuf_headers + niobuf) * sizeof(struct buf);
 	size = round_page(size);
 
 	ret = kmem_suballoc(kernel_map,
@@ -116,13 +135,11 @@ bsd_startupearly(void)
 	buf = (struct buf *) firstaddr;
 	bzero(buf, size);
 
-	if (sane_size > (64 * 1024 * 1024) || ncl) {
+	{
 		int             scale;
 
-		if ((nmbclusters = ncl) == 0) {
-			if ((nmbclusters = ((sane_size / 16)/MCLBYTES)) > 32768)
-				nmbclusters = 32768;
-		}
+		nmbclusters = bsd_mbuf_cluster_reserve() / MCLBYTES;
+
 		if ((scale = nmbclusters / NMBCLUSTERS) > 1) {
 			tcp_sendspace *= scale;
 			tcp_recvspace *= scale;
@@ -133,6 +150,17 @@ bsd_startupearly(void)
 				tcp_recvspace = 32 * 1024;
 		}
 	}
+
+	/*
+	 * Size vnodes based on memory 
+	 * Number vnodes  is (memsize/64k) + 1024 
+	 * This is the calculation that is used by launchd in tiger
+	 * we are clipping the max based on 16G 
+	 * ie ((16*1024*1024*1024)/(64 *1024)) + 1024 = 263168;
+	 */
+	desiredvnodes  = (sane_size/65536) + 1024;
+	if (desiredvnodes > 263168)
+		desiredvnodes = 263168;
 }
 
 void
@@ -158,4 +186,25 @@ bsd_bufferinit(void)
 	 * Set up buffers, so they can be used to read disk labels.
 	 */
 	bufinit();
+}
+
+/*
+ * this has been broken out into a separate routine that
+ * can be called from the x86 early vm initialization to
+ * determine how much lo memory to reserve on systems with
+ * DMA hardware that can't fully address all of the physical
+ * memory that is present.
+ */
+int
+bsd_mbuf_cluster_reserve(void)
+{
+	if (sane_size > (64 * 1024 * 1024) || ncl) {
+
+	        if ((nmbclusters = ncl) == 0) {
+		        if ((nmbclusters = ((sane_size / 16)/MCLBYTES)) > 32768)
+			        nmbclusters = 32768;
+		}
+	}
+
+	return (nmbclusters * MCLBYTES);
 }

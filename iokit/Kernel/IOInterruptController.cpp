@@ -666,7 +666,8 @@ IOReturn IOSharedInterruptController::disableInterrupt(IOService *nub,
 
 IOInterruptAction IOSharedInterruptController::getInterruptHandlerAddress(void)
 {
-    return (IOInterruptAction)&IOSharedInterruptController::handleInterrupt;
+    return OSMemberFunctionCast(IOInterruptAction,
+			this, &IOSharedInterruptController::handleInterrupt);
 }
 
 IOReturn IOSharedInterruptController::handleInterrupt(void * /*refCon*/,

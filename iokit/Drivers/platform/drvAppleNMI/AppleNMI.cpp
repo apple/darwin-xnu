@@ -67,7 +67,9 @@ bool AppleNMI::start(IOService *provider)
   addNotification( gIOPublishNotification, serviceMatching("IOPMrootDomain"), (IOServiceNotificationHandler)RootRegistered, this, 0 );
 
   // Register the interrupt.
-  provider->registerInterrupt(0, this, (IOInterruptAction) &AppleNMI::handleInterrupt, 0);
+  IOInterruptAction handler = OSMemberFunctionCast(IOInterruptAction,
+	  				this, &AppleNMI::handleInterrupt);
+  provider->registerInterrupt(0, this, handler, 0);
   provider->enableInterrupt(0);
 
   return true;
@@ -119,24 +121,24 @@ IOReturn AppleNMI::powerStateWillChangeTo ( IOPMPowerFlags theFlags, unsigned lo
         {
             // Mask NMI and change from edge to level whilst sleeping (copied directly from OS9 code)
             nmiIntSourceAddr = (volatile unsigned long *)kExtInt9_NMIIntSource;
-            nmiIntSource = ml_phys_read(nmiIntSourceAddr);
+            nmiIntSource = ml_phys_read((vm_address_t)nmiIntSourceAddr);
             nmiIntSource |= kNMIIntLevelMask;
-            ml_phys_write(nmiIntSourceAddr, nmiIntSource);
+            ml_phys_write((vm_address_t)nmiIntSourceAddr, nmiIntSource);
             eieio();
             nmiIntSource |= kNMIIntMask;
-            ml_phys_write(nmiIntSourceAddr, nmiIntSource);
+            ml_phys_write((vm_address_t)nmiIntSourceAddr, nmiIntSource);
             eieio();
         }
         else
         {
             // Unmask NMI and change back to edge (copied directly from OS9 code)
             nmiIntSourceAddr = (volatile unsigned long *)kExtInt9_NMIIntSource;
-            nmiIntSource = ml_phys_read(nmiIntSourceAddr);
+            nmiIntSource = ml_phys_read((vm_address_t)nmiIntSourceAddr);
             nmiIntSource &= ~kNMIIntLevelMask;
-            ml_phys_write(nmiIntSourceAddr, nmiIntSource);
+            ml_phys_write((vm_address_t)nmiIntSourceAddr, nmiIntSource);
             eieio();
             nmiIntSource &= ~kNMIIntMask;
-            ml_phys_write(nmiIntSourceAddr, nmiIntSource);
+            ml_phys_write((vm_address_t)nmiIntSourceAddr, nmiIntSource);
             eieio();
         }
     }

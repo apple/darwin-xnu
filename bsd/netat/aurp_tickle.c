@@ -27,6 +27,9 @@
  *
  *	File: tickle.c
  */
+ 
+#ifdef AURP_SUPPORT
+
 #include <sys/errno.h>
 #include <sys/types.h>
 #include <sys/param.h>
@@ -156,3 +159,5 @@ void AURPrcvTickleAck(state, m)
 	/* update state info */
 	state->tickle_retry = 0;
 }
+
+#endif  /* AURP_SUPPORT */

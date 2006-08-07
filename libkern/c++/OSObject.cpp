@@ -75,6 +75,8 @@ OSMetaClassDefineReservedUnused(OSObject, 12);
 OSMetaClassDefineReservedUnused(OSObject, 13);
 OSMetaClassDefineReservedUnused(OSObject, 14);
 OSMetaClassDefineReservedUnused(OSObject, 15);
+
+#ifdef __ppc__
 OSMetaClassDefineReservedUnused(OSObject, 16);
 OSMetaClassDefineReservedUnused(OSObject, 17);
 OSMetaClassDefineReservedUnused(OSObject, 18);
@@ -91,6 +93,7 @@ OSMetaClassDefineReservedUnused(OSObject, 28);
 OSMetaClassDefineReservedUnused(OSObject, 29);
 OSMetaClassDefineReservedUnused(OSObject, 30);
 OSMetaClassDefineReservedUnused(OSObject, 31);
+#endif
 
 static const char *getClassName(const OSObject *obj)
 {
@@ -271,7 +274,7 @@ void *OSObject::operator new(size_t size)
 
 void OSObject::operator delete(void *mem, size_t size)
 {
-    kfree((vm_offset_t) mem, size);
+    kfree(mem, size);
 
     ACCUMSIZE(-size);
 }

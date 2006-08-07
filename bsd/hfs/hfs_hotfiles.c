@@ -288,12 +288,9 @@ hfs_recording_stop(struct hfsmount *hfsmp)
 	if (hfsmp->hfc_stage != HFC_RECORDING)
 		return (EPERM);
 
-	hotfiles_collect(hfsmp);
-
-	if (hfsmp->hfc_stage != HFC_RECORDING)
-		return (0);
-
 	hfsmp->hfc_stage = HFC_BUSY;
+
+	hotfiles_collect(hfsmp);
 
 	/*
 	 * Convert hot file data into a simple file id list....
@@ -759,6 +756,7 @@ hfs_addhotfile_internal(struct vnode *vp)
 
 	if ((ffp->ff_bytesread == 0) ||
 	    (ffp->ff_blocks == 0) ||
+	    (ffp->ff_size == 0) ||
 	    (ffp->ff_blocks > hotdata->maxblocks) ||
 	    (cp->c_flag & (C_DELETED | C_NOEXISTS)) ||
 	    (cp->c_flags & UF_NODUMP) ||
@@ -822,7 +820,7 @@ hfs_removehotfile(struct vnode *vp)
 	cp = VTOC(vp);
 
 	if ((ffp->ff_bytesread == 0) || (ffp->ff_blocks == 0) ||
-	    (cp->c_atime < hfsmp->hfc_timebase)) {
+	    (ffp->ff_size == 0) || (cp->c_atime < hfsmp->hfc_timebase)) {
 		return (0);
 	}
 

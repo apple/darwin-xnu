@@ -136,13 +136,7 @@
 100	NONE	KERN	ALL	{ int getpriority(int which, int who); } 
 101	NONE	NONE	ALL	{ int nosys(void); }   { old send }
 102	NONE	NONE	ALL	{ int nosys(void); }   { old recv }
-
-#ifdef __ppc__
 103	NONE	NONE	ALL	{ int nosys(void); }   { old sigreturn }
-#else
-103	NONE	KERN	UALL	{ int sigreturn(struct sigcontext *sigcntxp); } 
-#endif
-
 104	NONE	NONE	ALL	{ int bind(int s, caddr_t name, socklen_t namelen); } 
 105	NONE	NONE	ALL	{ int setsockopt(int s, int level, int name, caddr_t val, socklen_t valsize); } 
 106	NONE	NONE	ALL	{ int listen(int s, int backlog); } 
@@ -155,13 +149,7 @@
 113	NONE	NONE	ALL	{ int nosys(void); }   { old recvmsg }
 114	NONE	NONE	ALL	{ int nosys(void); }   { old sendmsg }	
 115	NONE	NONE	ALL	{ int nosys(void); }   { old vtrace }
-
-#ifdef __ppc__
-116	NONE	NONE	ALL	{ int ppc_gettimeofday(struct timeval *tp, struct timezone *tzp); } 
-#else
 116	NONE	NONE	ALL	{ int gettimeofday(struct timeval *tp, struct timezone *tzp); } 
-#endif
-
 117	NONE	KERN	ALL	{ int getrusage(int who, struct rusage *rusage); } 
 118	NONE	NONE	ALL	{ int getsockopt(int s, int level, int name, caddr_t val, socklen_t *avalsize); } 
 119	NONE	NONE	ALL	{ int nosys(void); }   { old resuba }
@@ -241,14 +229,8 @@
 181	NONE	KERN	ALL	{ int setgid(gid_t gid); } 
 182	NONE	KERN	ALL	{ int setegid(gid_t egid); } 
 183	NONE	KERN	ALL	{ int seteuid(uid_t euid); } 
-
-#ifdef __ppc__
 184	NONE	KERN	ALL	{ int sigreturn(struct ucontext *uctx, int infostyle); } 
-#else
-184	NONE	NONE	ALL	{ int nosys(void); } 
-#endif
-
-185	NONE	NONE	ALL	{ int nosys(void); } 
+185	NONE	NONE	UALL { int chud(int code, int arg1, int arg2, int arg3, int arg4, int arg5); } 
 186	NONE	NONE	ALL	{ int nosys(void); } 
 187	NONE	NONE	ALL	{ int nosys(void); } 
 188	NONE	NONE	ALL	{ int stat(user_addr_t path, user_addr_t ub); } 
@@ -276,7 +258,6 @@
 204	NONE	NONE	ALL	{ int munlock(caddr_t addr, size_t len); } 
 205	NONE	NONE	ALL	{ int undelete(user_addr_t path); } 
 
-#ifdef __ppc__
 206	NONE	NONE	ALL	{ int ATsocket(int proto); } 
 207	NONE	NONE	UALL	{ int ATgetmsg(int fd, void *ctlptr, void *datptr, int *flags); } 
 208	NONE	NONE	UALL	{ int ATputmsg(int fd, void *ctlptr, void *datptr, int flags); } 
@@ -285,16 +266,6 @@
 211	NONE	NONE	UALL	{ int ATPgetreq(int fd, unsigned char *buf, int buflen); } 
 212	NONE	NONE	UALL	{ int ATPgetrsp(int fd, unsigned char *bdsp); } 
 213	NONE	NONE	ALL	{ int nosys(void); } 	{ Reserved for AppleTalk }
-#else
-206	NONE	NONE	HN	{ int ATsocket(int proto); } 
-207	NONE	NONE	UHN	{ int ATgetmsg(int fd, void *ctlptr, void *datptr, int *flags); } 
-208	NONE	NONE	UHN	{ int ATputmsg(int fd, void *ctlptr, void *datptr, int flags); } 
-209	NONE	NONE	UHN	{ int ATPsndreq(int fd, unsigned char *buf, int len, int nowait); } 
-210	NONE	NONE	UHN	{ int ATPsndrsp(int fd, unsigned char *respbuff, int resplen, int datalen); } 
-211	NONE	NONE	UHN	{ int ATPgetreq(int fd, unsigned char *buf, int buflen); } 
-212	NONE	NONE	UHN	{ int ATPgetrsp(int fd, unsigned char *bdsp); } 
-213	NONE	NONE	ALL	{ int nosys(void); } 	{ Reserved for AppleTalk }
-#endif /* __ppc__ */
 
 214	NONE	KERN	ALL	{ int kqueue_from_portset_np(int portset); } 
 215	NONE	KERN	ALL	{ int kqueue_portset_np(int fd); } 
@@ -438,7 +409,7 @@
 333	NONE	NONE	ALL	{ int __pthread_canceled(int  action); } 
 334	POST	NONE	ALL	{ int __semwait_signal(int cond_sem, int mutex_sem, int timeout, int relative, time_t tv_sec, int32_t tv_nsec); } 
 335	NONE	KERN	ALL	{ int utrace(const void *addr, size_t len); } 
-336	NONE	NONE	ALL	{ int nosys(void); } 
+336	NONE	NONE	ALL	{ int proc_info(int32_t callnum,int32_t pid,uint32_t flavor, uint64_t arg,user_addr_t buffer,int32_t buffersize); } 
 337	NONE	NONE	ALL	{ int nosys(void); } 
 338	NONE	NONE	ALL	{ int nosys(void); } 
 339	NONE	NONE	ALL	{ int nosys(void); } 
@@ -467,7 +438,7 @@
 362	NONE	NONE	ALL	{ int kqueue(void); } 
 363	NONE	NONE	ALL	{ int kevent(int fd, const struct kevent *changelist, int nchanges, struct kevent *eventlist, int nevents, const struct timespec *timeout); } 
 364	NONE	NONE	ALL	{ int lchown(user_addr_t path, uid_t owner, gid_t group); }
-365	NONE	NONE	ALL	{ int nosys(void); } 
+365	NONE	NONE	ALL	{ int stack_snapshot(pid_t pid, user_addr_t tracebuf, uint32_t tracebuf_size, uint32_t options); }
 366	NONE	NONE	ALL	{ int nosys(void); } 
 367	NONE	NONE	ALL	{ int nosys(void); } 
 368	NONE	NONE	ALL	{ int nosys(void); } 

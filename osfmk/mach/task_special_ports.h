@@ -68,6 +68,8 @@ typedef	int	task_special_port_t;
 
 #define TASK_HOST_PORT		2	/* The host (priv) port for task.  */
 
+#define TASK_NAME_PORT		3	/* the name (unpriv) port for task */
+
 #define TASK_BOOTSTRAP_PORT	4	/* Bootstrap environment for task. */
 
 /*

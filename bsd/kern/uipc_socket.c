@@ -182,7 +182,6 @@ void socketinit()
 	 * allocate lock group attribute and group for socket cache mutex
 	 */
 	so_cache_mtx_grp_attr = lck_grp_attr_alloc_init();
-	lck_grp_attr_setdefault(so_cache_mtx_grp_attr);
 
 	so_cache_mtx_grp = lck_grp_alloc_init("so_cache", so_cache_mtx_grp_attr);
 		
@@ -190,7 +189,6 @@ void socketinit()
 	 * allocate the lock attribute for socket cache mutex
 	 */
 	so_cache_mtx_attr = lck_attr_alloc_init();
-	lck_attr_setdefault(so_cache_mtx_attr);
 
     so_cache_init_done = 1;
 
@@ -465,6 +463,9 @@ socreate(dom, aso, type, proto)
 	so->so_rcv.sb_flags |= SB_RECV;	/* XXX */
 	so->so_rcv.sb_so = so->so_snd.sb_so = so;
 #endif
+	so->next_lock_lr = 0;
+	so->next_unlock_lr = 0;
+	
 	
 //### Attachement will create the per pcb lock if necessary and increase refcount
 	so->so_usecount++;	/* for creation, make sure it's done before socket is inserted in lists */
@@ -967,13 +968,16 @@ soconnect2(so1, so2)
 	struct socket *so2;
 {
 	int error;
-//####### Assumes so1 is already locked /
 
-	socket_lock(so2, 1);
+	socket_lock(so1, 1);
+	if (so2->so_proto->pr_lock) 
+		socket_lock(so2, 1);
 
 	error = (*so1->so_proto->pr_usrreqs->pru_connect2)(so1, so2);
 	
-	socket_unlock(so2, 1);
+	socket_unlock(so1, 1);
+	if (so2->so_proto->pr_lock) 
+		socket_unlock(so2, 1);
 	return (error);
 }
 
@@ -2011,7 +2015,7 @@ static int sodelayed_copy(struct socket *so, struct uio *uio, struct mbuf **free
 int
 soshutdown(so, how)
 	register struct socket *so;
-	register int how;
+	int how;
 {
 	register struct protosw *pr = so->so_proto;
 	int ret;
@@ -2846,11 +2850,9 @@ socket_lock(so, refcount)
 	struct socket *so;
 	int refcount;
 {
-	int error = 0, lr, lr_saved;
-#ifdef __ppc__
-	__asm__ volatile("mflr %0" : "=r" (lr));
-        lr_saved = lr;
-#endif 
+	int error = 0, lr_saved;
+
+	lr_saved = (unsigned int) __builtin_return_address(0);
 
 	if (so->so_proto->pr_lock) {
 		error = (*so->so_proto->pr_lock)(so, refcount, lr_saved);
@@ -2862,7 +2864,8 @@ socket_lock(so, refcount)
 		lck_mtx_lock(so->so_proto->pr_domain->dom_mtx);
 		if (refcount)
 			so->so_usecount++;
-		so->reserved3 = (void*)lr_saved; /* save caller for refcount going to zero */
+		so->lock_lr[so->next_lock_lr] = (void *)lr_saved;
+		so->next_lock_lr = (so->next_lock_lr+1) % SO_LCKDBG_MAX;
 	}
 
 	return(error);
@@ -2874,15 +2877,10 @@ socket_unlock(so, refcount)
 	struct socket *so;
 	int refcount;
 {
-	int error = 0, lr, lr_saved;
+	int error = 0, lr_saved;
 	lck_mtx_t * mutex_held;
 
-#ifdef __ppc__
-__asm__ volatile("mflr %0" : "=r" (lr));
-        lr_saved = lr;
-#endif
-
-
+	lr_saved = (unsigned int) __builtin_return_address(0);
 
 	if (so->so_proto == NULL)
 		panic("socket_unlock null so_proto so=%x\n", so);
@@ -2894,6 +2892,9 @@ __asm__ volatile("mflr %0" : "=r" (lr));
 #ifdef MORE_LOCKING_DEBUG
 		lck_mtx_assert(mutex_held, LCK_MTX_ASSERT_OWNED);
 #endif
+		so->unlock_lr[so->next_unlock_lr] = (void *)lr_saved;
+		so->next_unlock_lr = (so->next_unlock_lr+1) % SO_LCKDBG_MAX;
+
 		if (refcount) {
 			if (so->so_usecount <= 0)
 				panic("socket_unlock: bad refcount so=%x value=%d\n", so, so->so_usecount);
@@ -2901,8 +2902,6 @@ __asm__ volatile("mflr %0" : "=r" (lr));
 			if (so->so_usecount == 0) {
 				sofreelastref(so, 1);
 			}
-			else 
-				so->reserved4 = (void*)lr_saved; /* save caller */
 		}
 		lck_mtx_unlock(mutex_held);
 	}
@@ -2915,12 +2914,7 @@ sofree(so)
 	struct socket *so;
 {
 
-	int lr, lr_saved;
 	lck_mtx_t * mutex_held;
-#ifdef __ppc__
-	__asm__ volatile("mflr %0" : "=r" (lr));
-	lr_saved = lr;
-#endif
 	if (so->so_proto->pr_getlock != NULL)  
 		mutex_held = (*so->so_proto->pr_getlock)(so, 0);
 	else  

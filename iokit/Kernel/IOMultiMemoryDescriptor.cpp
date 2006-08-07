@@ -270,9 +270,35 @@ IOReturn IOMultiMemoryDescriptor::complete(IODirection forDirection)
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-IOPhysicalAddress IOMultiMemoryDescriptor::getPhysicalSegment(
-                                                       IOByteCount   offset,
-                                                       IOByteCount * length )
+addr64_t IOMultiMemoryDescriptor::getPhysicalSegment64( 
+				    IOByteCount   offset, IOByteCount * length )
+{
+    //
+    // This method returns the physical address of the byte at the given offset
+    // into the memory,  and optionally the length of the physically contiguous
+    // segment from that offset.
+    //
+
+    assert(offset <= _length);
+
+    for ( unsigned index = 0; index < _descriptorsCount; index++ ) 
+    {
+        if ( offset < _descriptors[index]->getLength() )
+        {
+            return _descriptors[index]->getPhysicalSegment64(offset, length);
+        }
+        offset -= _descriptors[index]->getLength();
+    }
+
+    if ( length )  *length = 0;
+
+    return 0;
+}
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+IOPhysicalAddress IOMultiMemoryDescriptor::getPhysicalSegment( 
+				    IOByteCount   offset, IOByteCount * length )
 {
     //
     // This method returns the physical address of the byte at the given offset

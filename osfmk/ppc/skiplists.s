@@ -362,7 +362,7 @@ LEXT(mapSearchFull)
             ;	r7 = current skip list number * 8
             ;	r8 = ptr to skip list vector of mapping pointed to by r9
             ;	r9 = prev ptr, ie highest mapping that comes before search target (initially the pmap)
-            ;  r10 = lowest expected next va, 0 at the beginning of the search 
+            ;  r10 = lowest expected next va, 0 at the beginning of the search
             ;  r12 = ptr to the skipListPrev vector in the per-proc
             
             .align	5
@@ -445,7 +445,7 @@ mapSrchFull64Found:							; WARNING: can drop down to here
             ;	r7 = current skip list number * 8
             ;	r8 = ptr to skip list vector of mapping pointed to by r9
             ;	r9 = prev ptr, ie highest mapping that comes before search target (initially the pmap)
-            ;  r10 = lowest expected next va, 0 at the beginning of the search 
+            ;  r10 = lowest expected next va, 0 at the beginning of the search
             ;  r12 = ptr to the skipListPrev vector in the per-proc
             
             .align	4
@@ -474,7 +474,7 @@ mapSrchFull32b:
             la		r8,mpList0+4(r3)		; point to skip list vector in this mapping
             mr		r9,r3					; current becomes previous
             lwzx	r3,r7,r8				; get ptr to next mapping in current list
-            addi	r10,r4,0x1000			; Get the lowest VA we can get next
+            addi	r10,r4,0x1000					; Get the lowest VA we can get next
 mapSrchFull32c:
             mr.		r3,r3					; next becomes current
             bne+	mapSrchFull32a			; was another, so loop

@@ -50,7 +50,6 @@ struct adsp_debug adsp_dtable[1025];
 int ad_entry = 0;
 #endif
 
-extern atlock_t adspgen_lock;
 
 adspAllocateCCB(gref)
     register gref_t *gref;	/* READ queue */
@@ -69,9 +68,6 @@ adspAllocateCCB(gref)
     sp->pid = gref->pid; /* save the caller process pointer */
     sp->gref = gref;		/* save a back pointer to the WRITE queue */
     sp->sp_mp = ccb_mp;		/* and its message block */
-    ATLOCKINIT(sp->lock);
-    ATLOCKINIT(sp->lockClose);
-    ATLOCKINIT(sp->lockRemove);
     return 1;
 }
 
@@ -79,19 +75,14 @@ adspRelease(gref)
     register gref_t *gref;	/* READ queue */
 {
     register CCBPtr sp;
-    int s, l;
 
-    ATDISABLE(l, adspgen_lock);
     if (gref->info) {
 	sp = (CCBPtr)gbuf_rptr(((gbuf_t *)gref->info));
-	ATDISABLE(s, sp->lock);
-	ATENABLE(s, adspgen_lock);
 				/* Tells completion routine of close */
 				/* packet to remove us. */
 
 	if (sp->state == sPassive || sp->state == sClosed || 
 	    sp->state == sOpening || sp->state == sListening) {
-	    ATENABLE(l, sp->lock);
 	    if (sp->state == sListening)
 		CompleteQueue(&sp->opb, errAborted);
 	    sp->removing = 1;	/* Prevent allowing another dspClose. */
@@ -100,7 +91,6 @@ adspRelease(gref)
 	} else {			/* sClosing & sOpen */
 	    sp->state = sClosing;
 	}
-	ATENABLE(l, sp->lock);
 
 	if (CheckOkToClose(sp)) { /* going to close */
 	    sp->sendCtl = B_CTL_CLOSE; /* Send close advice */
@@ -110,13 +100,10 @@ adspRelease(gref)
 		    sp->sendCtl = B_CTL_CLOSE; /* Setup to send close advice */
 	}
 	CheckSend(sp);		/* and force out the close */
-	ATDISABLE(s, sp->lock);
 	    sp->removing = 1;	/* Prevent allowing another dspClose. */
 	    sp->state = sClosed;
-	ATENABLE(s, sp->lock);
 	    DoClose(sp, errAborted, 0);  /* to closed and remove CCB */
-    } else
-	ATENABLE(l, adspgen_lock);
+    } 
 }
 
 
@@ -359,11 +346,11 @@ adsp_sendddp(sp, mp, length, dstnetaddr, ddptype)
    /* Set up the DDP header */
 
    ddp = (DDPX_FRAME *) gbuf_rptr(mp);
-   UAS_ASSIGN(ddp->ddpx_length, (length + DDPL_FRAME_LEN));
+   UAS_ASSIGN_HTON(ddp->ddpx_length, (length + DDPL_FRAME_LEN));
    UAS_ASSIGN(ddp->ddpx_cksm, 0);
    if (sp) {
 	if (sp->useCheckSum)
-	   UAS_ASSIGN(ddp->ddpx_cksm, 1);
+	   UAS_ASSIGN_HTON(ddp->ddpx_cksm, 1);
    }
 
    NET_ASSIGN(ddp->ddpx_dnet, dstnetaddr->a.net);

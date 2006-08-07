@@ -310,7 +310,6 @@ nfs_bind_resv_nopriv(struct nfsmount *nmp)
 	if (nfs_bind_resv_thread_state < NFS_BIND_RESV_THREAD_STATE_RUNNING) {
 		if (nfs_bind_resv_thread_state < NFS_BIND_RESV_THREAD_STATE_INITTED) {
 			nfs_bind_resv_lck_grp_attr = lck_grp_attr_alloc_init();
-			lck_grp_attr_setstat(nfs_bind_resv_lck_grp_attr);
 			nfs_bind_resv_lck_grp = lck_grp_alloc_init("nfs_bind_resv", nfs_bind_resv_lck_grp_attr);
 			nfs_bind_resv_lck_attr = lck_attr_alloc_init();
 			nfs_bind_resv_mutex = lck_mtx_alloc_init(nfs_bind_resv_lck_grp, nfs_bind_resv_lck_attr);
