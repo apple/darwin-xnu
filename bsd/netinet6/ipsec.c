@@ -2904,7 +2904,7 @@ ipsec6_output_trans(state, nexthdrp, mprev, sp, flags, tun)
 		printf("ipsec6_output_trans: applyed SP\n");
 		kdebug_secpolicy(sp));
 	
-	lck_mtx_lock(sadb_mutex);
+	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 	*tun = 0;
 	for (isr = sp->req; isr; isr = isr->next) {
 		if (isr->saidx.mode == IPSEC_MODE_TUNNEL) {
@@ -2963,10 +2963,10 @@ ipsec6_output_trans(state, nexthdrp, mprev, sp, flags, tun)
 			 * XXX: should we directly notify sockets via
 			 *      pfctlinputs?
 			 */
-			lck_mtx_unlock(ip6_mutex);
+			lck_mtx_unlock(sadb_mutex);
 			icmp6_error(state->m, ICMP6_DST_UNREACH,
 				    ICMP6_DST_UNREACH_ADMIN, 0);
-			lck_mtx_lock(ip6_mutex);
+			lck_mtx_lock(sadb_mutex);
 			state->m = NULL; /* icmp6_error freed the mbuf */
 			goto bad;
 		}
@@ -3036,11 +3036,9 @@ ipsec6_output_trans(state, nexthdrp, mprev, sp, flags, tun)
 	if (isr != NULL)
 		*tun = 1;
 
-	lck_mtx_unlock(sadb_mutex);
 	return 0;
 
 bad:
-	lck_mtx_unlock(sadb_mutex);
 	m_freem(state->m);
 	state->m = NULL;
 	return error;

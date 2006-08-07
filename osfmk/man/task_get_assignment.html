@@ -1,1 +1,39 @@
-<h2>task_get_assignment</h2><hr><p><strong>Function</strong> - Return the processor set to which a task is assigned.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   task_get_assignment</strong>                <strong>(task_t</strong>                                    <var>task</var>,                 <strong>processor_set_name_t</strong>             <var>processor_set</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><dt> <var>task</var> <dd>[in task send right]The port for the task whose assignment is desired.<dt> <var>processor_set</var> <dd>[out processor-set-name send right]The name port for the processor set into which the task is assigned.</dl><h3>DESCRIPTION</h3><p>The <strong>task_get_assignment</strong> function returns the name portto the processor set to which <var>task</var> is currently assigned.  This port can only be used to obtaininformation about the processor set.<h3>RETURN VALUES</h3><p>Only generic errors apply.<h3>RELATED INFORMATION</h3><p>Functions:<a href="task_assign.html"><strong>task_assign</strong></a>,<a href="task_assign_default.html"><strong>task_assign_default</strong></a>,<a href="processor_set_create.html"><strong>processor_set_create</strong></a>,<a href="processor_set_info.html"><strong>processor_set_info</strong></a>,<a href="thread_assign.html"><strong>thread_assign</strong></a>.
+<h2>task_get_assignment</h2>
+<hr>
+<p>
+<strong>Function</strong> - Return the processor set to which a task is assigned.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   task_get_assignment</strong>
+                <strong>(task_t</strong>                                    <var>task</var>,
+                 <strong>processor_set_name_t</strong>             <var>processor_set</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<dt> <var>task</var> 
+<dd>
+[in task send right]
+The port for the task whose assignment is desired.
+<dt> <var>processor_set</var> 
+<dd>
+[out processor-set-name send right]
+The name port for the processor 
+set into which the task is assigned.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>task_get_assignment</strong> function returns the name port
+to the processor set to 
+which <var>task</var> is currently assigned.  This port can only be used to obtain
+information about the processor set.
+<h3>RETURN VALUES</h3>
+<p>
+Only generic errors apply.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="task_assign.html"><strong>task_assign</strong></a>,
+<a href="task_assign_default.html"><strong>task_assign_default</strong></a>,
+<a href="processor_set_create.html"><strong>processor_set_create</strong></a>,
+<a href="processor_set_info.html"><strong>processor_set_info</strong></a>,
+<a href="thread_assign.html"><strong>thread_assign</strong></a>.

@@ -1,1 +1,95 @@
-<h2>mach_port_status</h2><hr><p><strong>Structure</strong> - Used to present a port's current status with respect to various important attributes.<h3>SYNOPSIS</h3><pre><strong>struct mach_port_status</strong><strong>{</strong>       <strong>natural_t</strong>                <var>mps_pset_count</var><strong>;</strong>       <strong>mach_port_seqno_t</strong>         <var>mps_seqno</var><strong>;</strong>       <strong>mach_port_mscount_t</strong>     <var>mps_mscount</var><strong>;</strong>       <strong>mach_port_msgcount_t</strong>     <var>mps_qlimit</var><strong>;</strong>       <strong>mach_port_msgcount_t</strong>   <var>mps_msgcount</var><strong>;</strong>       <strong>mach_port_rights_t</strong>     <var>mps_sorights</var><strong>;</strong>       <strong>mach_port_srights_t</strong>     <var>mps_srights</var><strong>;</strong>       <strong>boolean_t</strong>             <var>mps_pdrequest</var><strong>;</strong>       <strong>boolean_t</strong>             <var>mps_nsrequest</var><strong>;</strong>       <strong>unsigned int</strong>              <var>mps_flags</var><strong>;</strong><strong>};</strong><strong>typedef struct mach_port_status mach_port_status_t;</strong></pre><h3>FIELDS</h3><dl><dt> <var>mps_pset</var><dd>Containing port set.     <p><dt> <var>mps_seqno</var><dd>Current sequence number for the port.     <p>     <dt> <var>mps_mscount</var>	  <dd>	       Make-send count.	       <p><dt> <var>mps_msgcount</var><dd>Upper limit for the number of messages that may be queued to the port     before the system blocks send operations.     <p>     <dt> <var>mps_msgcount</var><dd>     Number of messages currently queued on the port.     <p><dt> <var>mps_sorights</var><dd>How many send-once rights.     <p><dt> <var>mps_srights</var><dd>Specifies whether or not send rights exist.  Valid values are as follows:     <dl>       <p>       <dt> MPS_FALSE	    <dd>		 No send rights currently in existence.		        <p>       <dt> MPS_TRUE	    <dd>		 Send rights exist and no-more-senders notification is enabled.		        <p>       <dt> MPS_UNKNOWN	    <dd>		 The port does not permit no-more-senders notification requests;		 consequently, the system does not know whether or not send rights		 exist.		 </dl>     <p><dt> <var>mps_pdrequest</var><dd>     Specifies whether or not a port-deleted notification has been requested.     <p><dt> <var>mps_nsrequest</var><dd>True if no-senders requested.          <p><dt> <var>mps_flags</var><dd>     Flags associated with the port.</dl><h3>DESCRIPTION</h3><p>The <strong>mach_port_status</strong> structure is used to provideinformation about a port in response to an invocation of the<strong>mach_port_get_attributes</strong> interface.<h3>NOTES</h3><p>This structure is machine word length sensitive dueto the presence of the port set name.<h3>RELATED INFORMATION</h3><p>Functions:<a href="mach_port_get_attributes.html"><strong>mach_port_get_attributes</strong></a>.
+<h2>mach_port_status</h2>
+<hr>
+<p>
+<strong>Structure</strong> - Used to present a port's current status with respect to various important attributes.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>struct mach_port_status</strong>
+<strong>{</strong>
+       <strong>natural_t</strong>                <var>mps_pset_count</var><strong>;</strong>
+       <strong>mach_port_seqno_t</strong>         <var>mps_seqno</var><strong>;</strong>
+       <strong>mach_port_mscount_t</strong>     <var>mps_mscount</var><strong>;</strong>
+       <strong>mach_port_msgcount_t</strong>     <var>mps_qlimit</var><strong>;</strong>
+       <strong>mach_port_msgcount_t</strong>   <var>mps_msgcount</var><strong>;</strong>
+       <strong>mach_port_rights_t</strong>     <var>mps_sorights</var><strong>;</strong>
+       <strong>mach_port_srights_t</strong>     <var>mps_srights</var><strong>;</strong>
+       <strong>boolean_t</strong>             <var>mps_pdrequest</var><strong>;</strong>
+       <strong>boolean_t</strong>             <var>mps_nsrequest</var><strong>;</strong>
+       <strong>unsigned int</strong>              <var>mps_flags</var><strong>;</strong>
+<strong>};</strong>
+
+<strong>typedef struct mach_port_status mach_port_status_t;</strong>
+</pre>
+<h3>FIELDS</h3>
+<dl>
+<dt> <var>mps_pset</var>
+<dd>
+Containing port set.
+     <p>
+<dt> <var>mps_seqno</var>
+<dd>
+Current sequence number for the port.
+     <p>
+     <dt> <var>mps_mscount</var>
+	  <dd>
+	       Make-send count.
+	       <p>
+<dt> <var>mps_msgcount</var>
+<dd>
+Upper limit for the number of messages that may be queued to the port
+     before the system blocks send operations.
+     <p>
+     <dt> <var>mps_msgcount</var>
+<dd>
+     Number of messages currently queued on the port.
+     <p>
+<dt> <var>mps_sorights</var>
+<dd>
+How many send-once rights.
+     <p>
+<dt> <var>mps_srights</var>
+<dd>
+Specifies whether or not send rights exist.  Valid values are as follows:
+     <dl>
+       <p>
+       <dt> MPS_FALSE
+	    <dd>
+		 No send rights currently in existence.
+		        <p>
+       <dt> MPS_TRUE
+	    <dd>
+		 Send rights exist and no-more-senders notification is enabled.
+		        <p>
+       <dt> MPS_UNKNOWN
+	    <dd>
+		 The port does not permit no-more-senders notification requests;
+		 consequently, the system does not know whether or not send rights
+		 exist.
+		 </dl>
+     <p>
+<dt> <var>mps_pdrequest</var>
+<dd>
+     Specifies whether or not a port-deleted notification has been requested.
+     <p>
+<dt> <var>mps_nsrequest</var>
+<dd>
+True if no-senders requested.
+          <p>
+<dt> <var>mps_flags</var>
+<dd>
+     Flags associated with the port.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>mach_port_status</strong> structure is used to provide
+information about a port in response to an invocation of the
+<strong>mach_port_get_attributes</strong> interface.
+<h3>NOTES</h3>
+<p>
+This structure is machine word length sensitive due
+to the presence of the port 
+set name.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="mach_port_get_attributes.html"><strong>mach_port_get_attributes</strong></a>.

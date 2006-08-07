@@ -1,1 +1,58 @@
-<h2>lock_set_destroy</h2><hr><p><strong>Function</strong> - Destroy a lock set and its associated locks.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   lock_set_destroy</strong>                <strong>(task_t</strong>                                    <var>task</var>,                 <strong>lock_set_t</strong>                            <var>lock_set</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>task</var><dd>The task associated with the lock set.<p><dt> <var>lock_set</var><dd>[in send right] The port naming the lock set being destroyed.</dl><h3>DESCRIPTION</h3><p>The <strong>lock_set_destroy</strong> function will destroy a lock set and all of itsassociated locks. Threads that are blocked on locks represented by thedestroyed lock set are unblocked and will receive aKERN_LOCK_SET_DESTROYED error message indicating that the lock set wasdestroyed. The <strong>lock_set_destroy</strong> function will only succeed if thespecified task is associated with the specified lock set.<h3>RETURN VALUES</h3><dl><p><dt> <strong>KERN_INVALID_ARGUMENT</strong><dd>The specified lock set or task is invalid.     <p>     <dt> <strong>KERN_INVALID_RIGHT</strong>	  <dd>	       The specified task does not own the specified lock set.<p>     <dt> <strong>KERN_LOCK_SET_DESTROYED</strong>	  <dd>	       The specified lock set does not exist.<p><dt> <strong>KERN_SUCCESS</strong><dd>The lock set was destroyed.</dl><h3>RELATED INFORMATION</h3><p>Functions:<a href="lock_acquire.html"><strong>lock_acquire</strong></a>,<a href="lock_make_stable.html"><strong>lock_make_stable</strong></a>,<a href="lock_try.html"><strong>lock_try</strong></a>,<a href="lock_handoff.html"><strong>lock_handoff</strong></a>,<a href="lock_handoff_accept.html"><strong>lock_handoff_accept</strong></a>,<a href="lock_try.html"><strong>lock_try</strong></a>,<a href="lock_set_create.html"><strong>lock_set_create</strong></a>.
+<h2>lock_set_destroy</h2>
+<hr>
+<p>
+<strong>Function</strong> - Destroy a lock set and its associated locks.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   lock_set_destroy</strong>
+                <strong>(task_t</strong>                                    <var>task</var>,
+                 <strong>lock_set_t</strong>                            <var>lock_set</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>task</var>
+<dd>
+The task associated with the lock set.
+<p>
+<dt> <var>lock_set</var>
+<dd>
+[in send right] The port naming the lock set being destroyed.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>lock_set_destroy</strong> function will destroy a lock set and all of its
+associated locks. Threads that are blocked on locks represented by the
+destroyed lock set are unblocked and will receive a
+KERN_LOCK_SET_DESTROYED error message indicating that the lock set was
+destroyed. The <strong>lock_set_destroy</strong> function will only succeed if the
+specified task is associated with the specified lock set.
+<h3>RETURN VALUES</h3>
+<dl>
+<p>
+<dt> <strong>KERN_INVALID_ARGUMENT</strong>
+<dd>
+The specified lock set or task is invalid.
+     <p>
+     <dt> <strong>KERN_INVALID_RIGHT</strong>
+	  <dd>
+	       The specified task does not own the specified lock set.
+<p>
+     <dt> <strong>KERN_LOCK_SET_DESTROYED</strong>
+	  <dd>
+	       The specified lock set does not exist.
+<p>
+<dt> <strong>KERN_SUCCESS</strong>
+<dd>
+The lock set was destroyed.
+</dl>
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="lock_acquire.html"><strong>lock_acquire</strong></a>,
+<a href="lock_make_stable.html"><strong>lock_make_stable</strong></a>,
+<a href="lock_try.html"><strong>lock_try</strong></a>,
+<a href="lock_handoff.html"><strong>lock_handoff</strong></a>,
+<a href="lock_handoff_accept.html"><strong>lock_handoff_accept</strong></a>,
+<a href="lock_try.html"><strong>lock_try</strong></a>,
+<a href="lock_set_create.html"><strong>lock_set_create</strong></a>.

@@ -278,6 +278,7 @@ extern pmapTransTab *pmapTrans;			/* Space to pmap translate table */
  */
 extern vm_offset_t phystokv(vm_offset_t pa);					/* Get kernel virtual address from physical */
 extern vm_offset_t kvtophys(vm_offset_t va);					/* Get physical address from kernel virtual */
+extern vm_map_offset_t kvtophys64(vm_map_offset_t va);				/* Get 64-bit physical address from kernel virtual */
 extern vm_offset_t	pmap_map(vm_offset_t va,
 				 vm_offset_t spa,
 				 vm_offset_t epa,

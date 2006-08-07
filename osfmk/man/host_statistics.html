@@ -1,1 +1,65 @@
-<h2>host_statistics</h2><hr><p><strong>Function</strong> - Return statistics for a host.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   host_statistics</strong>                <strong>(host_priv_t</strong>                          <var>host_priv</var>,                 <strong>host_flavor_t</strong>                           <var>flavor</var>,                 <strong>host_info_t</strong>                          <var>host_info</var>,                 <strong>mach_msg_type_number_t</strong>         <var>host_info_count</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>host_priv</var> <dd>[in host-control send right]The control port for the host for whichinformation is to be obtained.<p><dt> <var>flavor</var> <dd>[in scalar]The type of statistics desired.<dl><p><dt> <strong>HOST_LOAD_INFO</strong><dd>System loading statistics.  The returned structure is<strong>host_load_info</strong>.<p><dt> <strong>HOST_VM_INFO</strong><dd>Virtual memory statistics.  The returned structure is<strong>vm_statistics</strong>.</dl><p><dt> <var>host_info</var> <dd>[out structure]Statistics about the specified host.<p><dt> <var>host_info_count</var> <dd>[in/out scalar]On input, the maximum size of the buffer; on output, the size returned (in natural-sized units).</dl><h3>DESCRIPTION</h3><p>The <strong>host_statistics</strong> function returns scheduling andvirtual memory statistics concerning the host as specified by <var>flavor</var>.<h3>RETURN VALUES</h3><p>Only generic errors apply.<h3>RELATED INFORMATION</h3><p>Functions:<a href="host_info.html"><strong>host_info</strong></a>,<a href="processor_set_statistics.html"><strong>processor_set_statistics</strong></a>.<p>Data Structures:<a href="host_load_info.html"><strong>host_load_info</strong></a>,<a href="vm_statistics.html"><strong>vm_statistics</strong></a>.
+<h2>host_statistics</h2>
+<hr>
+<p>
+<strong>Function</strong> - Return statistics for a host.<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   host_statistics</strong>
+                <strong>(host_priv_t</strong>                          <var>host_priv</var>,
+                 <strong>host_flavor_t</strong>                           <var>flavor</var>,
+                 <strong>host_info_t</strong>                          <var>host_info</var>,
+                 <strong>mach_msg_type_number_t</strong>         <var>host_info_count</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>host_priv</var> 
+<dd>
+[in host-control send right]
+The control port for the host for which
+information is to be obtained.
+<p>
+<dt> <var>flavor</var> 
+<dd>
+[in scalar]
+The type of statistics desired.
+<dl>
+<p>
+<dt> <strong>HOST_LOAD_INFO</strong>
+<dd>
+System loading statistics.  The returned structure is
+<strong>host_load_info</strong>.
+<p>
+<dt> <strong>HOST_VM_INFO</strong>
+<dd>
+Virtual memory statistics.  The returned structure is
+<strong>vm_statistics</strong>.
+</dl>
+<p>
+<dt> <var>host_info</var> 
+<dd>
+[out structure]
+Statistics about the specified host.
+<p>
+<dt> <var>host_info_count</var> 
+<dd>
+[in/out scalar]
+On input, the maximum size of the buffer; on output, the 
+size returned (in natural-sized units).
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>host_statistics</strong> function returns scheduling and
+virtual memory statistics 
+concerning the host as specified by <var>flavor</var>.
+<h3>RETURN VALUES</h3>
+<p>
+Only generic errors apply.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="host_info.html"><strong>host_info</strong></a>,
+<a href="processor_set_statistics.html"><strong>processor_set_statistics</strong></a>.
+<p>
+Data Structures:
+<a href="host_load_info.html"><strong>host_load_info</strong></a>,
+<a href="vm_statistics.html"><strong>vm_statistics</strong></a>.

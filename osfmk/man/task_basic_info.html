@@ -1,1 +1,63 @@
-<h2>task_basic_info</h2><hr><p><strong>Structure</strong> - Defines basic information for a task.<h3>SYNOPSIS</h3><pre><strong>struct task_basic_info</strong><strong>{</strong>       <strong>integer_t</strong>      <var>suspend_count</var><strong>;</strong>       <strong>vm_size_t</strong>       <var>virtual_size</var><strong>;</strong>       <strong>vm_size_t</strong>      <var>resident_size</var><strong>;</strong>       <strong>time_value_t</strong>       <var>user_time</var><strong>;</strong>       <strong>time_value_t</strong>     <var>system_time</var><strong>;</strong>       <strong>policy_t</strong>              <var>policy</var><strong>;</strong><strong>};</strong><strong>typedef struct task_basic_info* task_basic_info_t;</strong></pre><h3>FIELDS</h3><dl><dt> <var>suspend_count</var><dd>The current suspend count for the task.     <p><dt> <var>virtual_size</var><dd>The number of virtual pages for the task.          <p><dt> <var>resident_size</var><dd>The number of resident pages for the task          <p><dt> <var>user_time</var><dd>The total user run time for terminated threads within the task.          <p><dt> <var>system_time</var><dd>The total system run time for terminated threads within the task.          <p><dt> <var>policy</var><dd>Default scheduling policy to apply to new threads.</dl><h3>DESCRIPTION</h3><p>The <strong>task_basic_info</strong> structure defines the basic information array for tasks.  The <strong>task_info</strong> function returns this array for a specified task.<h3>NOTES</h3><p>This structure is machine word length sensitive dueto the presence of thevirtual address sizes.<h3>RELATED INFORMATION</h3><p>Functions:<a href="task_info.html"><strong>task_info</strong></a>.<p>Data Structures:<a href="task_thread_times_info.html"><strong>task_thread_times_info</strong></a>,<a href="policy_fifo_info.html"><strong>policy_fifo_info</strong></a>,<a href="policy_rr_info.html"><strong>policy_rr_info</strong></a>,<a href="policy_timeshare_info.html"><strong>policy_timeshare_info</strong></a>.
+<h2>task_basic_info</h2>
+<hr>
+<p>
+<strong>Structure</strong> - Defines basic information for a task.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>struct task_basic_info</strong>
+<strong>{</strong>
+       <strong>integer_t</strong>      <var>suspend_count</var><strong>;</strong>
+       <strong>vm_size_t</strong>       <var>virtual_size</var><strong>;</strong>
+       <strong>vm_size_t</strong>      <var>resident_size</var><strong>;</strong>
+       <strong>time_value_t</strong>       <var>user_time</var><strong>;</strong>
+       <strong>time_value_t</strong>     <var>system_time</var><strong>;</strong>
+       <strong>policy_t</strong>              <var>policy</var><strong>;</strong>
+<strong>};</strong>
+
+<strong>typedef struct task_basic_info* task_basic_info_t;</strong>
+</pre>
+<h3>FIELDS</h3>
+<dl>
+<dt> <var>suspend_count</var>
+<dd>
+The current suspend count for the task.
+     <p>
+<dt> <var>virtual_size</var>
+<dd>
+The number of virtual pages for the task.
+          <p>
+<dt> <var>resident_size</var>
+<dd>
+The number of resident pages for the task
+          <p>
+<dt> <var>user_time</var>
+<dd>
+The total user run time for terminated threads within the task.
+          <p>
+<dt> <var>system_time</var>
+<dd>
+The total system run time for terminated threads within the task.
+          <p>
+<dt> <var>policy</var>
+<dd>
+Default scheduling policy to apply to new threads.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>task_basic_info</strong> structure defines the basic information array for 
+tasks.  The <strong>task_info</strong> function returns this array for a specified task.
+<h3>NOTES</h3>
+<p>
+This structure is machine word length sensitive due
+to the presence of the
+virtual address sizes.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="task_info.html"><strong>task_info</strong></a>.
+<p>
+Data Structures:
+<a href="task_thread_times_info.html"><strong>task_thread_times_info</strong></a>,
+<a href="policy_fifo_info.html"><strong>policy_fifo_info</strong></a>,
+<a href="policy_rr_info.html"><strong>policy_rr_info</strong></a>,
+<a href="policy_timeshare_info.html"><strong>policy_timeshare_info</strong></a>.

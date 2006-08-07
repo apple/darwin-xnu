@@ -1,1 +1,73 @@
-<h2>lock_set_create</h2><hr><p><strong>Function</strong> - Create a new lock set.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   lock_set_create</strong>                <strong>(task_t</strong>                                    <var>task</var>,                 <strong>lock_set_t</strong>                            <var>lock_set</var>,                 <strong>int</strong>                                      <var>locks</var>,                 <strong>int</strong>                                     <var>policy</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>task</var><dd>The task receiving the send right to the newly created lock set.<p><dt> <var>lock_set</var><dd>[out send right] The port naming the lock set which represents the lock.<p><dt> <var>locks</var><dd>[in scalar] The number of locks the lock set will represent (must be a positive value).<p><dt> <var>policy</var><dd>[in scalar] The blocked thread wakeup policy for the newly created lock set. Valid policies are:     <dl><p><dt> SYNC_POLICY_FIFO<dd>a first-in-first-out policy for scheduling thread wakeup.<p><dt> SYNC_POLICY_FIXED_PRIORITY<dd>a fixed priority policy for scheduling thread wakeup.</dl></dl><h3>DESCRIPTION</h3><p>The <strong>lock_set_create</strong> function creates a new lock set representing acollection of associated locks. The lock set is associated with thespecified task. A send right naming the lock set is returned to thecaller.<h3>RETURN VALUES</h3><dl><p><dt> <strong>KERN_SUCCESS</strong><dd>The lock set was created.<p><dt> <strong>KERN_INVALID_ARGUMENT</strong><dd>Either the task or policy argument is invalid, or the locks argumenthas a value that is less than or equal to zero.<p><dt> <strong>KERN_RESOURCE_SHORTAGE</strong><dd>The kernel could not allocate the lock set.</dl><h3>RELATED INFORMATION</h3><p>Functions:<a href="lock_acquire.html"><strong>lock_acquire</strong></a>,<a href="lock_make_stable.html"><strong>lock_make_stable</strong></a>,<a href="lock_try.html"><strong>lock_try</strong></a>,<a href="lock_handoff.html"><strong>lock_handoff</strong></a>,<a href="lock_handoff_accept.html"><strong>lock_handoff_accept</strong></a>,<a href="lock_try.html"><strong>lock_try</strong></a>,<a href="lock_set_destroy.html"><strong>lock_set_destroy</strong></a>.
+<h2>lock_set_create</h2>
+<hr>
+<p>
+<strong>Function</strong> - Create a new lock set.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   lock_set_create</strong>
+                <strong>(task_t</strong>                                    <var>task</var>,
+                 <strong>lock_set_t</strong>                            <var>lock_set</var>,
+                 <strong>int</strong>                                      <var>locks</var>,
+                 <strong>int</strong>                                     <var>policy</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>task</var>
+<dd>
+The task receiving the send right to the newly created lock set.
+<p>
+<dt> <var>lock_set</var>
+<dd>
+[out send right] The port naming the lock set which represents the lock.
+<p>
+<dt> <var>locks</var>
+<dd>
+[in scalar] The number of locks the lock set will represent (must be a positive value).
+<p>
+<dt> <var>policy</var>
+<dd>
+[in scalar] The blocked thread wakeup policy for the newly created lock set. Valid policies are:
+     <dl>
+<p>
+<dt> SYNC_POLICY_FIFO
+<dd>
+a first-in-first-out policy for scheduling thread wakeup.
+<p>
+<dt> SYNC_POLICY_FIXED_PRIORITY
+<dd>
+a fixed priority policy for scheduling thread wakeup.
+</dl>
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>lock_set_create</strong> function creates a new lock set representing a
+collection of associated locks. The lock set is associated with the
+specified task. A send right naming the lock set is returned to the
+caller.
+<h3>RETURN VALUES</h3>
+<dl>
+<p>
+<dt> <strong>KERN_SUCCESS</strong>
+<dd>
+The lock set was created.
+<p>
+<dt> <strong>KERN_INVALID_ARGUMENT</strong>
+<dd>
+Either the task or policy argument is invalid, or the locks argument
+has a value that is less than or equal to zero.
+<p>
+<dt> <strong>KERN_RESOURCE_SHORTAGE</strong>
+<dd>
+The kernel could not allocate the lock set.
+</dl>
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="lock_acquire.html"><strong>lock_acquire</strong></a>,
+<a href="lock_make_stable.html"><strong>lock_make_stable</strong></a>,
+<a href="lock_try.html"><strong>lock_try</strong></a>,
+<a href="lock_handoff.html"><strong>lock_handoff</strong></a>,
+<a href="lock_handoff_accept.html"><strong>lock_handoff_accept</strong></a>,
+<a href="lock_try.html"><strong>lock_try</strong></a>,
+<a href="lock_set_destroy.html"><strong>lock_set_destroy</strong></a>.

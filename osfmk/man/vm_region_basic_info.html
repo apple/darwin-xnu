@@ -1,1 +1,80 @@
-<h2>vm_region_basic_info</h2><hr><p><strong>Structure</strong> - Defines the attributes of a task's memory region.<h3>SYNOPSIS</h3><pre><strong>struct vm_region_basic_info</strong><strong>{</strong>       <strong>vm_prot_t</strong>             <var>protection</var><strong>;</strong>       <strong>vm_prot_t</strong>         <var>max_protection</var><strong>;</strong>       <strong>vm_inherit_t</strong>         <var>inheritance</var><strong>;</strong>       <strong>boolean_t</strong>                 <var>shared</var><strong>;</strong>       <strong>boolean_t</strong>               <var>reserved</var><strong>;</strong>       <strong>vm_offset_t</strong>               <var>offset</var><strong>;</strong>       <strong>vm_behavior_t</strong>           <var>behavior</var><strong>;</strong>       <strong>unsigned short</strong>  <var>user_wired_count</var><strong>;</strong><strong>};</strong><strong>typedef struct vm_region_basic_info* vm_region_basic_info_t;</strong></pre><h3>FIELDS</h3><dl><dt> <var>protection</var><dd>The current protection for the region.<p><dt> <var>max_protection</var><dd>The maximum protection allowed for the region.<p><dt> <var>inheritance</var><dd>The inheritance attribute for the region.<p><dt> <var>shared</var><dd>Shared indicator.  If true, the region is shared by another task.  If false, the region is not shared.<p><dt> <var>reserved</var><dd>If true the region is protected from random allocation.<p><dt> <var>offset</var><dd>The region's offset into the memory object.  The region begins at this offset.<p><dt> <var>behavior</var><dd>Expected reference pattern for the memory.  Valid values are:<dl><p><dt> <strong>VM_BEHAVIOR_DEFAULT</strong><dd>The system's default behavior.<p><dt> <strong>VM_BEHAVIOR_RANDOM</strong><dd>No particular order expected.<p><dt> <strong>VM_BEHAVIOR_SEQUENTIAL</strong><dd>Forward sequential order.<p><dt> <strong>VM_BEHAVIOR_RSEQNTL</strong><dd>Reverse sequential order.</dl></dl><h3>DESCRIPTION</h3><p>The <strong>vm_region_basic_info</strong> structure defines the attributesof a memory region returned by <strong>vm_region</strong>.<h3>RELATED INFORMATION</h3><p>Functions:<a href="vm_region.html"><strong>vm_region</strong></a>,<a href="vm_inherit.html"><strong>vm_inherit</strong></a>,<a href="vm_protect.html"><strong>vm_protect</strong></a>.
+<h2>vm_region_basic_info</h2>
+<hr>
+<p>
+<strong>Structure</strong> - Defines the attributes of a task's memory region.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>struct vm_region_basic_info</strong>
+<strong>{</strong>
+       <strong>vm_prot_t</strong>             <var>protection</var><strong>;</strong>
+       <strong>vm_prot_t</strong>         <var>max_protection</var><strong>;</strong>
+       <strong>vm_inherit_t</strong>         <var>inheritance</var><strong>;</strong>
+       <strong>boolean_t</strong>                 <var>shared</var><strong>;</strong>
+       <strong>boolean_t</strong>               <var>reserved</var><strong>;</strong>
+       <strong>vm_offset_t</strong>               <var>offset</var><strong>;</strong>
+       <strong>vm_behavior_t</strong>           <var>behavior</var><strong>;</strong>
+       <strong>unsigned short</strong>  <var>user_wired_count</var><strong>;</strong>
+<strong>};</strong>
+
+<strong>typedef struct vm_region_basic_info* vm_region_basic_info_t;</strong>
+</pre>
+<h3>FIELDS</h3>
+<dl>
+<dt> <var>protection</var>
+<dd>
+The current protection for the region.
+<p>
+<dt> <var>max_protection</var>
+<dd>
+The maximum protection allowed for the region.
+<p>
+<dt> <var>inheritance</var>
+<dd>
+The inheritance attribute for the region.
+<p>
+<dt> <var>shared</var>
+<dd>
+Shared indicator.  If true, the region is shared by another task.  If false, 
+the region is not shared.
+<p>
+<dt> <var>reserved</var>
+<dd>
+If true the region is protected from random allocation.
+<p>
+<dt> <var>offset</var>
+<dd>
+The region's offset into the memory object.  The region begins at this 
+offset.
+<p>
+<dt> <var>behavior</var>
+<dd>
+Expected reference pattern for the memory.  Valid values are:
+<dl>
+<p>
+<dt> <strong>VM_BEHAVIOR_DEFAULT</strong>
+<dd>
+The system's default behavior.
+<p>
+<dt> <strong>VM_BEHAVIOR_RANDOM</strong>
+<dd>
+No particular order expected.
+<p>
+<dt> <strong>VM_BEHAVIOR_SEQUENTIAL</strong>
+<dd>
+Forward sequential order.
+<p>
+<dt> <strong>VM_BEHAVIOR_RSEQNTL</strong>
+<dd>
+Reverse sequential order.
+</dl>
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>vm_region_basic_info</strong> structure defines the attributes
+of a memory region returned by <strong>vm_region</strong>.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="vm_region.html"><strong>vm_region</strong></a>,
+<a href="vm_inherit.html"><strong>vm_inherit</strong></a>,
+<a href="vm_protect.html"><strong>vm_protect</strong></a>.

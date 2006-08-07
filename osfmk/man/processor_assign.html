@@ -1,1 +1,59 @@
-<h2>processor_assign</h2><hr><p><strong>Function</strong> - Assign a processor to a processor set.<h3>SYNOPSIS</h3><pre><strong>kern_return_t	processor_assign</strong>		<strong>(processor_t</strong>	<var>processor</var>,		<strong>processor_set_t</strong>	<var>new_set</var>,		<strong>boolean_t</strong>	<var>wait</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><dt> <var>processor</var> <dd>[in processor send right]The processor to be assigned.<dt> <var>new_set</var> <dd>[in processor-set-control send right]The control port for the processor set into which the processor is to be assigned.<dt> <var>wait</var> <dd>[in scalar]True if the call should wait for the completion of theassignment.</dl><h3>DESCRIPTION</h3><p>The <strong>processor_assign</strong> function assigns <var>processor</var> tothe set <var>new_set</var>.  After the assignment is completed, the processor only executes threads that are assigned to that processor set.  Any previous assignment of the processoris nullified.  The master processor cannot be re-assigned.<p>The <var>wait</var> argument indicates whether the caller should wait for the assignment to be completed or should return immediately.  Dedicated kernel threads are used to perform processor assignment, so setting <var>wait</var> to <strong>FALSE</strong> allowsassignment requests to be queued and performed more quickly, especiallyif the kernel has more than one dedicated internal thread for processor assignment.<p>All processors take clock interrupts at all times.  Redirection of other deviceinterrupts away from processors assigned to other than the defaultprocessor set is machine dependent.<h3>RETURN VALUES</h3><p>Only generic errors apply.<h3>RELATED INFORMATION</h3><p>Functions:<a href="processor_set_create.html">processor_set_create</a>,<a href="processor_set_info.html">processor_set_info</a>,<a href="task_assign.html">task_assign</a>,<a href="thread_assign.html">thread_assign</a>.
+<h2>processor_assign</h2>
+<hr>
+<p>
+<strong>Function</strong> - Assign a processor to a processor set.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t	processor_assign</strong>
+		<strong>(processor_t</strong>	<var>processor</var>,
+		<strong>processor_set_t</strong>	<var>new_set</var>,
+		<strong>boolean_t</strong>	<var>wait</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<dt> <var>processor</var> 
+<dd>
+[in processor send right]
+The processor to be assigned.
+<dt> <var>new_set</var> 
+<dd>
+[in processor-set-control send right]
+The control port for the processor 
+set into which the processor is to be assigned.
+<dt> <var>wait</var> 
+<dd>
+[in scalar]
+True if the call should wait for the completion of the
+assignment.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>processor_assign</strong> function assigns <var>processor</var> to
+the set <var>new_set</var>.  After the 
+assignment is completed, the processor only executes threads that are assigned 
+to that processor set.  Any previous assignment of the processor
+is nullified.  The 
+master processor cannot be re-assigned.
+<p>
+The <var>wait</var> argument indicates whether the 
+caller should wait for the assignment 
+to be completed or should return immediately.  Dedicated kernel threads are 
+used to perform processor assignment, so setting <var>wait</var> to <strong>FALSE</strong> allows
+assignment requests to be queued and performed more quickly, especially
+if the kernel has 
+more than one dedicated internal thread for processor assignment.
+<p>
+All processors take clock interrupts at all times.  Redirection of other device
+interrupts away from processors assigned to other than the default
+processor set is 
+machine dependent.
+<h3>RETURN VALUES</h3>
+<p>
+Only generic errors apply.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="processor_set_create.html">processor_set_create</a>,
+<a href="processor_set_info.html">processor_set_info</a>,
+<a href="task_assign.html">task_assign</a>,
+<a href="thread_assign.html">thread_assign</a>.

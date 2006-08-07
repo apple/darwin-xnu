@@ -11,7 +11,7 @@
  *	Revision 1.3  2002/06/16 20:36:02  lindak
  *	Merged PR-2957314 into Jaguar (siegmund: netboot kernel code needs to set
  *	com.apple.AppleDiskImageController.load to boolean Yes)
- *	
+ *
  *	Revision 1.2.40.2  2002/06/15 03:50:38  dieter
  *	- corrected com.apple.AppleDiskImageController.load string
  *	

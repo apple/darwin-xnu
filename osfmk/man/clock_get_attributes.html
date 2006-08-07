@@ -1,1 +1,79 @@
-<h2>clock_get_attributes</h2><hr><p><strong>Function</strong> - Return attributes of a clock.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   clock_get_attributes</strong>                <strong>(clock_t</strong>                             <var>clock_name</var>,                 <strong>clock_flavor_t</strong>                          <var>flavor</var>,                 <strong>clock_attr_t</strong>                         <var>attribute</var>,                 <strong>mach_msg_type_number_t</strong>         <var>attribute_count</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>clock_name</var> <dd>[in clock-name send right]The name (or control) port for the clock.<p><dt> <var>flavor</var> <dd>[in scalar]Type of information desired.  Defined values are:<dl><p><dt> <strong>CLOCK_GET_TIME_RES</strong><dd>The resolution, in nanoseconds, with which the value returned by <strong>clock_get_time</strong> is updated.<p><dt> <strong>CLOCK_MAP_TIME_RES</strong><dd>The resolution, in nanoseconds, with which the value visible via <strong>clock_map_time</strong> is updated.<p><dt> <strong>CLOCK_ALARM_CURRES</strong><dd>The resolution, in nanoseconds, at which clock alarm and sleep timers are currently serviced.<p><dt> <strong>CLOCK_ALARM_MINRES</strong><dd>The minimum resolution, in nanoseconds, at which clock alarm and sleep timers can be serviced.<p><dt> <strong>CLOCK_ALARM_MAXRES</strong><dd>The maximum resolution, in nanoseconds, at which clock alarm and sleep timers can be serviced.</dl><p><dt> <var>attribute</var> <dd>[out scalar]The returned attribute.<p><dt> <var>attribute_count</var> <dd>[in/out scalar]On input, the maximum size of the buffer; on output, the size returned (in natural-sized units).</dl><h3>DESCRIPTION</h3><p>The <strong>clock_get_attributes</strong> function returns attributes of a clock'simplementation or operation.<h3>RETURN VALUES</h3><p>Only generic errors apply.<h3>RELATED INFORMATION</h3><p>Functions:<a href="host_get_clock_service.html"><strong>host_get_clock_service</strong></a>,<a href="clock_get_time.html"><strong>clock_get_time</strong></a>,<a href="clock_map_time.html"><strong>clock_map_time</strong></a>,<a href="clock_sleep.html"><strong>clock_sleep</strong></a>,<a href="clock_alarm.html"><strong>clock_alarm</strong></a>,<a href="clock_set_attributes.html"><strong>clock_set_attributes</strong></a>.
+<h2>clock_get_attributes</h2>
+<hr>
+<p>
+<strong>Function</strong> - Return attributes of a clock.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   clock_get_attributes</strong>
+                <strong>(clock_t</strong>                             <var>clock_name</var>,
+                 <strong>clock_flavor_t</strong>                          <var>flavor</var>,
+                 <strong>clock_attr_t</strong>                         <var>attribute</var>,
+                 <strong>mach_msg_type_number_t</strong>         <var>attribute_count</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>clock_name</var> 
+<dd>
+[in clock-name send right]
+The name (or control) port for the clock.
+<p>
+<dt> <var>flavor</var> 
+<dd>
+[in scalar]
+Type of information desired.  Defined values are:
+<dl>
+<p>
+<dt> <strong>CLOCK_GET_TIME_RES</strong>
+<dd>
+The resolution, in nanoseconds, with which the value returned 
+by <strong>clock_get_time</strong> is updated.
+<p>
+<dt> <strong>CLOCK_MAP_TIME_RES</strong>
+<dd>
+The resolution, in nanoseconds, with which the value visible 
+via <strong>clock_map_time</strong> is updated.
+<p>
+<dt> <strong>CLOCK_ALARM_CURRES</strong>
+<dd>
+The resolution, in nanoseconds, at which clock alarm and 
+sleep timers are currently serviced.
+<p>
+<dt> <strong>CLOCK_ALARM_MINRES</strong>
+<dd>
+The minimum resolution, in nanoseconds, at which clock 
+alarm and sleep timers can be serviced.
+<p>
+<dt> <strong>CLOCK_ALARM_MAXRES</strong>
+<dd>
+The maximum resolution, in nanoseconds, at which clock 
+alarm and sleep timers can be serviced.
+</dl>
+<p>
+<dt> <var>attribute</var> 
+<dd>
+[out scalar]
+The returned attribute.
+<p>
+<dt> <var>attribute_count</var> 
+<dd>
+[in/out scalar]
+On input, the maximum size of the buffer; on output, the 
+size returned (in natural-sized units).
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>clock_get_attributes</strong> function returns attributes of a clock's
+implementation or operation.
+<h3>RETURN VALUES</h3>
+<p>
+Only generic errors apply.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="host_get_clock_service.html"><strong>host_get_clock_service</strong></a>,
+<a href="clock_get_time.html"><strong>clock_get_time</strong></a>,
+<a href="clock_map_time.html"><strong>clock_map_time</strong></a>,
+<a href="clock_sleep.html"><strong>clock_sleep</strong></a>,
+<a href="clock_alarm.html"><strong>clock_alarm</strong></a>,
+<a href="clock_set_attributes.html"><strong>clock_set_attributes</strong></a>.

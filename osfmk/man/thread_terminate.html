@@ -1,1 +1,31 @@
-<h2>thread_terminate</h2><hr><p><strong>Function</strong> - Destroy a thread.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   thread_terminate</strong>                <strong>(thread_act_t</strong>                     <var>target_thread</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>target_thread</var> <dd>[in thread send right]The thread to be destroyed.</dl><h3>DESCRIPTION</h3><p>The <strong>thread_terminate</strong> function kills <var>target_thread</var>.<h3>RETURN VALUES</h3><p>Only generic errors apply.<h3>RELATED INFORMATION</h3><p>Functions:<a href="task_terminate.html"><strong>task_terminate</strong></a>,<a href="task_threads.html"><strong>task_threads</strong></a>,<a href="thread_create.html"><strong>thread_create</strong></a>,<a href="thread_resume.html"><strong>thread_resume</strong></a>,<a href="thread_suspend.html"><strong>thread_suspend</strong></a>.
+<h2>thread_terminate</h2>
+<hr>
+<p>
+<strong>Function</strong> - Destroy a thread.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   thread_terminate</strong>
+                <strong>(thread_act_t</strong>                     <var>target_thread</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>target_thread</var> 
+<dd>
+[in thread send right]
+The thread to be destroyed.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>thread_terminate</strong> function kills <var>target_thread</var>.
+<h3>RETURN VALUES</h3>
+<p>
+Only generic errors apply.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="task_terminate.html"><strong>task_terminate</strong></a>,
+<a href="task_threads.html"><strong>task_threads</strong></a>,
+<a href="thread_create.html"><strong>thread_create</strong></a>,
+<a href="thread_resume.html"><strong>thread_resume</strong></a>,
+<a href="thread_suspend.html"><strong>thread_suspend</strong></a>.

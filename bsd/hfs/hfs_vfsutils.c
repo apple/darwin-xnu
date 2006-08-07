@@ -529,6 +529,8 @@ OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 	/* Pick up volume name and create date */
 	retval = cat_idlookup(hfsmp, kHFSRootFolderID, &cndesc, &cnattr, NULL);
 	if (retval) {
+		if (hfsmp->hfs_attribute_vp)
+			hfs_unlock(VTOC(hfsmp->hfs_attribute_vp));
 		hfs_unlock(VTOC(hfsmp->hfs_allocation_vp));
 		hfs_unlock(VTOC(hfsmp->hfs_catalog_vp));
 		hfs_unlock(VTOC(hfsmp->hfs_extents_vp));

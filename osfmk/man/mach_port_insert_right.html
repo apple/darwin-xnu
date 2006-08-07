@@ -1,1 +1,101 @@
-<h2>mach_port_insert_right</h2><hr><p><strong>Function</strong> - Insert the specified port right into the target task.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   mach_port_insert_right</strong>                <strong>(ipc_space_t</strong>                               <var>task</var>,                 <strong>mach_port_name_t</strong>                          <var>name</var>,                 <strong>mach_port_poly_t</strong>                         <var>right</var>,                 <strong>mach_msg_type_name_t</strong>                <var>right_type</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>task</var> <dd>[in task send right]The task which gets the caller's right.<p><dt> <var>name</var> <dd>[in scalar]The name by which <var>task</var> will know the right.<p><dt> <var>right</var> <dd>[in random right]The port right.<p><dt> <var>right_type</var> <dd>[in scalar]IPC type of the sent right; e.g., <strong>MACH_MSG_TYPE_COPY_SEND</strong> or <strong>MACH_MSG_TYPE_MOVE_RECEIVE</strong>.</dl><h3>DESCRIPTION</h3><p>The <strong>mach_port_insert_right</strong> function inserts into <var>task</var>the caller's right for a port, using a specified name for the right in the target task. <p>The specified <var>name</var> can't be one of the reserved values <strong>MACH_PORT_NULL</strong> or <strong>MACH_PORT_DEAD</strong>.  The <var>right</var> can't be <strong>MACH_PORT_NULL</strong> or <strong>MACH_PORT_DEAD</strong>. <p>The argument <var>right_type</var> specifies a right to be inserted and how that right should be extracted from the caller.  It should be a value appropriate for <strong>mach_msg</strong>.<p>If <var>right_type</var> is <strong>MACH_MSG_TYPE_MAKE_SEND</strong>, <strong>MACH_MSG_TYPE_MOVE_SEND</strong>,or <strong>MACH_MSG_TYPE_COPY_SEND</strong>, then a send right is inserted.  If the target already holds send or receive rights for the port, then <var>name</var> should denote those rights in the target.  Otherwise, <var>name</var> should be unused in the target.  If the target already has send rights, then thosesend rights gain anadditional user reference.  Otherwise, the target gains a sendright, with a userreference count of one.<p>If <var>right_type</var> is <strong>MACH_MSG_TYPE_MAKE_SEND_ONCE</strong> or <strong>MACH_MSG_TYPE_MOVE_SEND_ONCE</strong>, then a send-once right is inserted.  The <var>name</var> should be unused in the target.  The target gains a send-once right. <p>If <var>right_type</var> is <strong>MACH_MSG_TYPE_MOVE_RECEIVE</strong>, then a receive right is inserted.  If the target already holds send rights for the port,then <var>name</var> shoulddenote those rights in the target.  Otherwise, <var>name</var> should beunused in the target. The receive right is moved into the target task.<h3>NOTES</h3><p>This interface is machine word length specific because of the port nameparameter.<h3>RETURN VALUES</h3><dl><p><dt> <strong>KERN_NAME_EXISTS</strong><dd><var>name</var> already denoted a right.<p><dt> <strong>KERN_INVALID_CAPABILITY</strong><dd><var>right</var> was null or dead.<p><dt> <strong>KERN_UREFS_OVERFLOW</strong><dd>Inserting the right would overflow <var>name</var>'s user-reference count.<p><dt> <strong>KERN_RIGHT_EXISTS</strong><dd><var>task</var> already had rights for the port, with a different name.</dl><h3>RELATED INFORMATION</h3><p>Functions:<a href="mach_port_extract_right.html"><strong>mach_port_extract_right</strong></a>,<a href="mach_msg.html"><strong>mach_msg</strong></a>.
+<h2>mach_port_insert_right</h2>
+<hr>
+<p>
+<strong>Function</strong> - Insert the specified port right into the target task.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   mach_port_insert_right</strong>
+                <strong>(ipc_space_t</strong>                               <var>task</var>,
+                 <strong>mach_port_name_t</strong>                          <var>name</var>,
+                 <strong>mach_port_poly_t</strong>                         <var>right</var>,
+                 <strong>mach_msg_type_name_t</strong>                <var>right_type</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>task</var> 
+<dd>
+[in task send right]
+The task which gets the caller's right.
+<p>
+<dt> <var>name</var> 
+<dd>
+[in scalar]
+The name by which <var>task</var> will know the right.
+<p>
+<dt> <var>right</var> 
+<dd>
+[in random right]
+The port right.
+<p>
+<dt> <var>right_type</var> 
+<dd>
+[in scalar]
+IPC type of the sent right; e.g., 
+<strong>MACH_MSG_TYPE_COPY_SEND</strong> or <strong>MACH_MSG_TYPE_MOVE_RECEIVE</strong>.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>mach_port_insert_right</strong> function inserts into <var>task</var>
+the caller's right for a 
+port, using a specified name for the right in the target task. 
+<p>
+The specified <var>name</var> can't be one of the reserved values <strong>MACH_PORT_NULL</strong> 
+or <strong>MACH_PORT_DEAD</strong>.  The <var>right</var> can't be <strong>MACH_PORT_NULL</strong> or 
+<strong>MACH_PORT_DEAD</strong>. 
+<p>
+The argument <var>right_type</var> specifies a right to be inserted and how that right 
+should be extracted from the caller.  It should be a value appropriate for 
+<strong>mach_msg</strong>.
+<p>
+If <var>right_type</var> is <strong>MACH_MSG_TYPE_MAKE_SEND</strong>, <strong>MACH_MSG_TYPE_MOVE_SEND</strong>,
+or 
+<strong>MACH_MSG_TYPE_COPY_SEND</strong>, then a send right is inserted.  If the target 
+already holds send or receive rights for the port, then <var>name</var> 
+should denote those rights in the target.  Otherwise, <var>name</var> should 
+be unused in 
+the target.  If the target already has send rights, then those
+send rights gain an
+additional user reference.  Otherwise, the target gains a send
+right, with a user
+reference count of one.
+<p>
+If <var>right_type</var> is <strong>MACH_MSG_TYPE_MAKE_SEND_ONCE</strong> or 
+<strong>MACH_MSG_TYPE_MOVE_SEND_ONCE</strong>, then a send-once right is inserted.  
+The <var>name</var> should be unused in the target.  The 
+target gains a send-once right. 
+<p>
+If <var>right_type</var> is <strong>MACH_MSG_TYPE_MOVE_RECEIVE</strong>, then a receive right is 
+inserted.  If the target already holds send rights for the port,
+then <var>name</var> should
+denote those rights in the target.  Otherwise, <var>name</var> should be
+unused in the target. 
+The receive right is moved into the target task.
+<h3>NOTES</h3>
+<p>
+This interface is machine word length specific because of the port name
+parameter.
+<h3>RETURN VALUES</h3>
+<dl>
+<p>
+<dt> <strong>KERN_NAME_EXISTS</strong>
+<dd>
+<var>name</var> already denoted a right.
+<p>
+<dt> <strong>KERN_INVALID_CAPABILITY</strong>
+<dd>
+<var>right</var> was null or dead.
+<p>
+<dt> <strong>KERN_UREFS_OVERFLOW</strong>
+<dd>
+Inserting the right would overflow <var>name</var>'s user-reference count.
+<p>
+<dt> <strong>KERN_RIGHT_EXISTS</strong>
+<dd>
+<var>task</var> already had rights for the port, with a different name.
+</dl>
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="mach_port_extract_right.html"><strong>mach_port_extract_right</strong></a>,
+<a href="mach_msg.html"><strong>mach_msg</strong></a>.

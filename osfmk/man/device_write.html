@@ -1,1 +1,98 @@
-<h2>device_write</h2><hr><p><strong>Function</strong> - Write a sequence of bytes to a specific device.<h3>SYNOPSIS</h3><pre><strong>#include&ltdevice/device.h&gt</strong><strong>kern_return_t   device_write</strong>                <strong>(device_t</strong>                                <var>device</var>,                 <strong>mach_port_t</strong>                         <var>reply_port</var>,                 <strong>dev_mode_t</strong>                                <var>mode</var>,                 <strong>recnum_t</strong>                                <var>recnum</var>,                 <strong>io_buf_ptr_t</strong>                              <var>data</var>,                 <strong>mach_msg_type_number_t</strong>              <var>data_count</var>,                 <strong>io_buf_len_t</strong>                      <var>io_buf_len_t</var><strong>);</strong><strong>#include&ltdevice/device_request.h&gt</strong><strong>kern_return_t   device_write_request</strong>                <strong>(mach_port_t</strong>                             <var>device</var>,                 <strong>mach_port_t</strong>                         <var>reply_port</var>,                 <strong>dev_mode_t</strong>                                <var>mode</var>,                 <strong>recnum_t</strong>                                <var>recnum</var>,                 <strong>io_buf_ptr_t</strong>                              <var>data</var>,                 <strong>mach_msg_type_number_t</strong>              <var>data_count</var><strong>);</strong><strong>kern_return_t   ds_device_write_reply</strong>                <strong>(mach_port_t</strong>                         <var>reply_port</var>,                 <strong>kern_return_t</strong>                      <var>return_code</var>,                 <strong>io_buf_len_t</strong>                     <var>bytes_written</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>device</var> <dd>[in device send right]A device port to the device to be written.<p><dt> <var>reply_port</var> <dd>[in reply receive (to be converted to send-once) right]The port to which the reply message is to be sent.<p><dt> <var>mode</var> <dd>[in scalar]I/O mode value.  Meaningful options are:<dl><p><dt> <strong>D_NOWAIT</strong><dd>Do not wait for I/O completion.</dl><p><dt> <var>recnum</var> <dd>[in scalar]Record number to be written.<p><dt> <var>data</var> <dd>[pointer to in array of bytes]Data bytes to be written.<p><dt> <var>data_count</var> <dd>[in scalar]Number of data bytes to be written.<p><dt> <var>return_code</var> <dd>[in scalar]The return status code from the write.<p><dt> <var>bytes_written</var> <dd>[out scalar, in for asynchronous form]Size of data transfer.</dl><h3>DESCRIPTION</h3><p>The <strong>device_write</strong> function writes a sequence of bytesto a device object.  The meaning of <var>recnum</var> as well as the specific operation performed is devicedependent.<h3>RETURN VALUES</h3><p>Only generic errors apply.<h3>RELATED INFORMATION</h3><p>Functions:<a href="device_write_inband.html"><strong>device_write_inband</strong></a>,<a href="device_reply_server.html"><strong>device_reply_server</strong></a>.
+<h2>device_write</h2>
+<hr>
+<p>
+<strong>Function</strong> - Write a sequence of bytes to a specific device.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>#include&ltdevice/device.h&gt</strong>
+
+<strong>kern_return_t   device_write</strong>
+                <strong>(device_t</strong>                                <var>device</var>,
+                 <strong>mach_port_t</strong>                         <var>reply_port</var>,
+                 <strong>dev_mode_t</strong>                                <var>mode</var>,
+                 <strong>recnum_t</strong>                                <var>recnum</var>,
+                 <strong>io_buf_ptr_t</strong>                              <var>data</var>,
+                 <strong>mach_msg_type_number_t</strong>              <var>data_count</var>,
+                 <strong>io_buf_len_t</strong>                      <var>io_buf_len_t</var><strong>);</strong>
+
+
+<strong>#include&ltdevice/device_request.h&gt</strong>
+
+<strong>kern_return_t   device_write_request</strong>
+                <strong>(mach_port_t</strong>                             <var>device</var>,
+                 <strong>mach_port_t</strong>                         <var>reply_port</var>,
+                 <strong>dev_mode_t</strong>                                <var>mode</var>,
+                 <strong>recnum_t</strong>                                <var>recnum</var>,
+                 <strong>io_buf_ptr_t</strong>                              <var>data</var>,
+                 <strong>mach_msg_type_number_t</strong>              <var>data_count</var><strong>);</strong>
+
+
+<strong>kern_return_t   ds_device_write_reply</strong>
+                <strong>(mach_port_t</strong>                         <var>reply_port</var>,
+                 <strong>kern_return_t</strong>                      <var>return_code</var>,
+                 <strong>io_buf_len_t</strong>                     <var>bytes_written</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>device</var> 
+<dd>
+[in device send right]
+A device port to the device to be written.
+<p>
+<dt> <var>reply_port</var> 
+<dd>
+[in reply receive (to be converted to send-once) right]
+The port to 
+which the reply message is to be sent.
+<p>
+<dt> <var>mode</var> 
+<dd>
+[in scalar]
+I/O mode value.  Meaningful options are:
+<dl>
+<p>
+<dt> <strong>D_NOWAIT</strong>
+<dd>
+Do not wait for I/O completion.
+</dl>
+<p>
+<dt> <var>recnum</var> 
+<dd>
+[in scalar]
+Record number to be written.
+<p>
+<dt> <var>data</var> 
+<dd>
+[pointer to in array of bytes]
+Data bytes to be written.
+<p>
+<dt> <var>data_count</var> 
+<dd>
+[in scalar]
+Number of data bytes to be written.
+<p>
+<dt> <var>return_code</var> 
+<dd>
+[in scalar]
+The return status code from the write.
+<p>
+<dt> <var>bytes_written</var> 
+<dd>
+[out scalar, in for asynchronous form]
+Size of data transfer.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>device_write</strong> function writes a sequence of bytes
+to a device object.  The 
+meaning of <var>recnum</var> as well as the specific operation performed is device
+dependent.
+<h3>RETURN VALUES</h3>
+<p>
+Only generic errors apply.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="device_write_inband.html"><strong>device_write_inband</strong></a>,
+<a href="device_reply_server.html"><strong>device_reply_server</strong></a>.

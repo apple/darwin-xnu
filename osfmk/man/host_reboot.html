@@ -1,1 +1,35 @@
-<h2>host_reboot</h2><hr><p><strong>Function</strong> - Reboot this host.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   host_reboot</strong>                <strong>(host_priv_t</strong>                          <var>host_priv</var>,                 <strong>int</strong>                                    <var>options</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>host_priv</var> <dd>[in host-control send right]The control port the host to be re-booted.<p><dt> <var>options</var> <dd>[in scalar]Reboot options.  See \*L<mach/host_reboot.h>\*O for details.</dl><h3>DESCRIPTION</h3><p>The <strong>host_reboot</strong> function reboots the specified host.<h3>NOTES</h3><p>If successful, this call will not return.<h3>RETURN VALUES</h3><p>Only generic errors apply.<h3>RELATED INFORMATION</h3><p>None.
+<h2>host_reboot</h2>
+<hr>
+<p>
+<strong>Function</strong> - Reboot this host.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   host_reboot</strong>
+                <strong>(host_priv_t</strong>                          <var>host_priv</var>,
+                 <strong>int</strong>                                    <var>options</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>host_priv</var> 
+<dd>
+[in host-control send right]
+The control port the host to be re-booted.
+<p>
+<dt> <var>options</var> 
+<dd>
+[in scalar]
+Reboot options.  See \*L<mach/host_reboot.h>\*O for details.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>host_reboot</strong> function reboots the specified host.
+<h3>NOTES</h3>
+<p>
+If successful, this call will not return.
+<h3>RETURN VALUES</h3>
+<p>
+Only generic errors apply.
+<h3>RELATED INFORMATION</h3>
+<p>
+None.

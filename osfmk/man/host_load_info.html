@@ -1,1 +1,47 @@
-<h2>host_load_info</h2><hr><p><strong>Structure</strong> - Used to present a host's processor load information.<h3>SYNOPSIS</h3><pre><strong>#define CPU_STATE_USER     0</strong><strong>#define CPU_STATE_SYSTEM   1</strong><strong>#define CPU_STATE_IDLE     2</strong><strong>struct host_load_info</strong><strong>{</strong>       <strong>integer_t</strong>        <var>avenrun</var><strong>[3];</strong>       <strong>integer_t</strong>    <var>mach_factor</var><strong>[3];</strong><strong>};</strong><strong>typedef struct host_load_info* host_load_info_t;</strong></pre><h3>FIELDS</h3><dl><dt> <var>avenrun</var><dd>load average--average number of runnable processes divided bynumber of CPUs<p><dt> <var>mach_factor</var><dd>The processing resources available to a new thread--the number of CPUs divided by (1 + the number of threads)</dl><h3>DESCRIPTION</h3><p>The <strong>host_load_info</strong> structure defines the loading informationavailable about a host.  The information returned is exponential averages over three periods of time: 5, 30 and 60 seconds.<h3>RELATED INFORMATION</h3><p>Functions:<a href="host_statistics.html"><strong>host_statistics</strong></a>.<p>Data Structures:<a href="host_basic_info.html"><strong>host_basic_info</strong></a>,<a href="host_sched_info.html"><strong>host_sched_info</strong></a>.
+<h2>host_load_info</h2>
+<hr>
+<p>
+<strong>Structure</strong> - Used to present a host's processor load information.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>#define CPU_STATE_USER     0</strong>
+
+<strong>#define CPU_STATE_SYSTEM   1</strong>
+
+<strong>#define CPU_STATE_IDLE     2</strong>
+
+<strong>struct host_load_info</strong>
+<strong>{</strong>
+       <strong>integer_t</strong>        <var>avenrun</var><strong>[3];</strong>
+       <strong>integer_t</strong>    <var>mach_factor</var><strong>[3];</strong>
+<strong>};</strong>
+
+<strong>typedef struct host_load_info* host_load_info_t;</strong>
+</pre>
+<h3>FIELDS</h3>
+<dl>
+<dt> <var>avenrun</var>
+<dd>
+load average--average number of runnable processes divided by
+number of CPUs
+<p>
+<dt> <var>mach_factor</var>
+<dd>
+The processing resources available to a new thread--the number of 
+CPUs divided by (1 + the number of threads)
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>host_load_info</strong> structure defines the loading information
+available about a 
+host.  The information returned is exponential averages over three periods of 
+time: 5, 30 and 60 seconds.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="host_statistics.html"><strong>host_statistics</strong></a>.
+<p>
+Data Structures:
+<a href="host_basic_info.html"><strong>host_basic_info</strong></a>,
+<a href="host_sched_info.html"><strong>host_sched_info</strong></a>.
+

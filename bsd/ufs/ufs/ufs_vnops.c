@@ -1491,10 +1491,19 @@ ufs_readdirext(vnode_t vp, uio_t uio, int *eofflag, int *numdirent,
 #if (BYTE_ORDER == LITTLE_ENDIAN)
 		u_char tmp;
 
-		tmp = dp->d_namlen;
-		dp->d_namlen = dp->d_type;
-		dp->d_type = tmp;
+		/*
+		 * We only need to swap the d_namlen and
+		 * d_type fields for older versions of UFS,
+		 * which we check by looking at the mnt_maxsymlinklen
+		 * field.
+		 */
+		if (vp->v_mount->mnt_maxsymlinklen <= 0) {
+			tmp = dp->d_namlen;
+			dp->d_namlen = dp->d_type;
+			dp->d_type = tmp;
+		}
 #endif
+
 		xdp->d_reclen = EXT_DIRENT_LEN(dp->d_namlen);
 		if (xdp->d_reclen > uio_resid(uio)) {
 			break;  /* user buffer is full */
@@ -1502,6 +1511,7 @@ ufs_readdirext(vnode_t vp, uio_t uio, int *eofflag, int *numdirent,
 		xdp->d_ino = dp->d_ino;
 		xdp->d_namlen = dp->d_namlen;
 		xdp->d_type = dp->d_type;
+
 		bcopy(dp->d_name, xdp->d_name, dp->d_namlen + 1);
 		off += dp->d_reclen;
 		xdp->d_seekoff = off;

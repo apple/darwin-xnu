@@ -307,8 +307,13 @@ uipc_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *nam,
 		goto release;
 	}
 
-	if (control && (error = unp_internalize(control, p)))
-		goto release;
+	if (control) {
+		socket_unlock(so, 0); /* release global lock to avoid deadlock (4436174) */ 
+		error = unp_internalize(control, p);
+		socket_lock(so, 0);
+		if (error)
+			goto release;
+	}
 
 	switch (so->so_type) {
 	case SOCK_DGRAM: 

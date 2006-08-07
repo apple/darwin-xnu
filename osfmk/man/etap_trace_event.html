@@ -1,1 +1,108 @@
-<h2>etap_trace_event</h2><hr><p><strong>System Trap</strong> -manipulate event probes and lock event tracing.<h3>SYNOPSIS</h3><pre><strong>#include&ltmach/etap.h&gt</strong><strong>kern_return_t   etap_trace_event</strong>                <strong>(etap_data_t</strong>                               <var>mode</var>,                 <strong>mode</strong>                                      <var>type</var>,                 <strong>boolean_t</strong>                               <var>enable</var>,                 <strong>enable</strong>                                   <var>nargs</var>,                 <strong>mode</strong>                                      <var>mode</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>mode</var><dd>indicates the desired trace flavor or reset option and may be one,or more, of the following:<ul><p>  <li>ETAP_CUMULATIVE: cumulative lock event trace mode.     <p><li>ETAP_MONITORED: monitored event trace mode (for probes or locks)<p><li>ETAP_RESET: reset mode, clears all trace status and cumulative buffer entries</ul><p><dt> <var>type</var><dd>used when measuring lock event contention or durationsand may be one, or more, of the following:<ul><p>  <li>ETAP_CONTENT<p>  <li>ETAP_DURATION</ul><p><dt> <var>enable</var><dd>a boolean value  indicattin whether the event trace operation isto be enabled (TRUE) or disabled (FALSE). <p><dt> <var>nargs</var><dd>specifies how many arguments are passed in the args array.<p><dt> <var>args</var><dd>an array, each element of which is a character stringrepresenting a specific subsystem or event type. These values mustcorrespond to the ones the kernel uses to represent the samesubsystems and event types. The maximum length of a character stringis EVENT_NAME_LENGTH (defined in <strong>mach/etap.h</strong>).</dl><h3>DESCRIPTION</h3><p>The <strong>etap_trace_event</strong> system call is used to enableand disable kernel event probes (of a specified type) and all modes of lock eventtracing. The call also supports a reset option, where the cumulativebuffer data and all event type tracing is reset to zero. When thereset option is used, a new interval width can also be defined, usingthe <var>nargs</var> parameter.<p>To reset the ETAP instrumentation,the system call would utilize the mode parameter, passing the value ofETAP_RESET (All other parameters may equal NULL). If, at the time ofreset, the <var>nargs</var> parameter is assigned a value, then thecumulative buffer interval width will be adjusted to be the size ofthat value.  For example, the following system call would reset theETAP instrumentation and adjust the cumulative buffer's interval widthto 100ms:<pre>         etap_trace_event(ETAP_RESET, 0, 0, 100, 0);</pre><h3>RETURN VALUES</h3><dl>  <dt> <strong>KERN_SUCCESS</strong>       <dd>	    The call was performed successfully.<p>  <dt> <strong>KERN_NO_SPACE</strong>       <dd>	    A shortage of kernel resources prevented the operation from completing;	    the kernel has cleaned up all residual state (the error indicates a "clean"	    failure).<p>  <dt> <strong>KERN_FAILURE</strong>       <dd>	    ETAP is not configured in the kernel.</dl><h3>RELATED INFORMATION</h3><p>Functions:<a href="etap_probe.html"><strong>etap_probe</strong></a>,<a href="etap_trace_thread.html"><strong>etap_trace_thread</strong></a>,<a href="etap_get_info.html"><strong>etap_get_info</strong></a>.
+<h2>etap_trace_event</h2>
+<hr>
+<p>
+<strong>System Trap</strong> -
+manipulate event probes and lock event tracing.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>#include&ltmach/etap.h&gt</strong>
+
+<strong>kern_return_t   etap_trace_event</strong>
+                <strong>(etap_data_t</strong>                               <var>mode</var>,
+                 <strong>mode</strong>                                      <var>type</var>,
+                 <strong>boolean_t</strong>                               <var>enable</var>,
+                 <strong>enable</strong>                                   <var>nargs</var>,
+                 <strong>mode</strong>                                      <var>mode</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>mode</var>
+<dd>
+indicates the desired trace flavor or reset option and may be one,
+or more, of the following:
+<ul>
+<p>
+  <li>
+ETAP_CUMULATIVE: cumulative lock event trace mode.
+     <p>
+<li>
+ETAP_MONITORED: monitored event trace mode (for probes or locks)
+<p>
+<li>
+ETAP_RESET: reset mode, clears all trace status and cumulative buffer entries
+</ul>
+<p>
+<dt> <var>type</var>
+<dd>
+used when measuring lock event contention or durations
+and may be one, or more, of the following:
+<ul>
+<p>
+  <li>
+ETAP_CONTENT
+<p>
+  <li>
+ETAP_DURATION
+</ul>
+<p>
+<dt> <var>enable</var>
+<dd>
+a boolean value  indicattin whether the event trace operation is
+to be enabled (TRUE) or disabled (FALSE). 
+<p>
+<dt> <var>nargs</var>
+<dd>
+specifies how many arguments are passed in the args array.
+<p>
+<dt> <var>args</var>
+<dd>
+an array, each element of which is a character string
+representing a specific subsystem or event type. These values must
+correspond to the ones the kernel uses to represent the same
+subsystems and event types. The maximum length of a character string
+is EVENT_NAME_LENGTH (defined in <strong>mach/etap.h</strong>).
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>etap_trace_event</strong> system call is used to enable
+and disable kernel event probes (of a specified type) and all modes of lock event
+tracing. The call also supports a reset option, where the cumulative
+buffer data and all event type tracing is reset to zero. When the
+reset option is used, a new interval width can also be defined, using
+the <var>nargs</var> parameter.
+<p>
+To reset the ETAP instrumentation,
+the system call would utilize the mode parameter, passing the value of
+ETAP_RESET (All other parameters may equal NULL). If, at the time of
+reset, the <var>nargs</var> parameter is assigned a value, then the
+cumulative buffer interval width will be adjusted to be the size of
+that value.  For example, the following system call would reset the
+ETAP instrumentation and adjust the cumulative buffer's interval width
+to 100ms:
+<pre>
+         etap_trace_event(ETAP_RESET, 0, 0, 100, 0);
+
+</pre>
+<h3>RETURN VALUES</h3>
+<dl>
+  <dt> <strong>KERN_SUCCESS</strong>
+       <dd>
+	    The call was performed successfully.
+<p>
+  <dt> <strong>KERN_NO_SPACE</strong>
+       <dd>
+	    A shortage of kernel resources prevented the operation from completing;
+	    the kernel has cleaned up all residual state (the error indicates a "clean"
+	    failure).
+<p>
+  <dt> <strong>KERN_FAILURE</strong>
+       <dd>
+	    ETAP is not configured in the kernel.
+</dl>
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="etap_probe.html"><strong>etap_probe</strong></a>,
+<a href="etap_trace_thread.html"><strong>etap_trace_thread</strong></a>,
+<a href="etap_get_info.html"><strong>etap_get_info</strong></a>.

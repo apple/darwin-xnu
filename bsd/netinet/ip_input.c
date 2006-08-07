@@ -2277,8 +2277,12 @@ ip_savecontrol(
 		ifnet_head_lock_shared();
 		if (((ifp = m->m_pkthdr.rcvif)) 
 		&& ( ifp->if_index && (ifp->if_index <= if_index))) {
-			sdp = (struct sockaddr_dl *)(ifnet_addrs
-					[ifp->if_index - 1]->ifa_addr);
+			struct ifaddr *ifa = ifnet_addrs[ifp->if_index - 1];
+			
+			if (!ifa || !ifa->ifa_addr)
+				goto makedummy;
+			
+			sdp = (struct sockaddr_dl *)ifa->ifa_addr;
 			/*
 			 * Change our mind and don't try copy.
 			 */

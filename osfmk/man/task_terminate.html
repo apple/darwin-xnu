@@ -1,1 +1,35 @@
-<h2>task_terminate</h2><hr><p><strong>Function</strong> - Terminate the target task and deallocate its resources.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   task_terminate</strong>                <strong>(task_t</strong>            <var>task</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>task</var> <dd>[in task send right]The port for the task to be destroyed.</dl><h3>DESCRIPTION</h3><p>The <strong>task_terminate</strong> function kills task and all itsthreads, if any.  The kernel frees all resources that are in use by the task.  The kerneldestroys any port for which the task holds the receive right.<h3>RETURN VALUES</h3><p>Only generic errors apply.<h3>RELATED INFORMATION</h3><p>Functions:<a href="task_create.html"><strong>task_create</strong></a>,<a href="task_suspend.html"><strong>task_suspend</strong></a>,<a href="task_resume.html"><strong>task_resume</strong></a>,<a href="thread_terminate.html"><strong>thread_terminate</strong></a>,<a href="thread_suspend.html"><strong>thread_suspend</strong></a>.
+<h2>task_terminate</h2>
+<hr>
+<p>
+<strong>Function</strong> - Terminate the target task and deallocate its resources.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   task_terminate</strong>
+                <strong>(task_t</strong>            <var>task</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>task</var> 
+<dd>
+[in task send right]
+The port for the task to be destroyed.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>task_terminate</strong> function kills task and all its
+threads, if any.  The kernel 
+frees all resources that are in use by the task.  The kernel
+destroys any port for 
+which the task holds the receive right.
+<h3>RETURN VALUES</h3>
+<p>
+Only generic errors apply.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="task_create.html"><strong>task_create</strong></a>,
+<a href="task_suspend.html"><strong>task_suspend</strong></a>,
+<a href="task_resume.html"><strong>task_resume</strong></a>,
+<a href="thread_terminate.html"><strong>thread_terminate</strong></a>,
+<a href="thread_suspend.html"><strong>thread_suspend</strong></a>.

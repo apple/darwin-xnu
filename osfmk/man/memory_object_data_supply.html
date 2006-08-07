@@ -1,1 +1,140 @@
-<h2>memory_object_data_supply</h2><hr><p><strong>Function</strong> - Provide kernel with data previously requested by the kernel's Memory Management facility.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   memory_object_data_supply</strong>                <strong>(mem_object_control_port_t</strong>       <var>memory_control</var>,                 <strong>vm_offset_t</strong>                             <var>offset</var>,                 <strong>pointer_t</strong>                                 <var>data</var>,                 <strong>mach_msg_type_number_t</strong>              <var>data_count</var>,                 <strong>boolean_t</strong>                           <var>deallocate</var>,                 <strong>vm_prot_t</strong>                           <var>lock_value</var>,                 <strong>boolean_t</strong>                             <var>precious</var>,                 <strong>mach_port_t</strong>                         <var>reply_port</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><dt> <var>memory_control</var> <dd>[in memory-cache-control send right]The memory cache control port to be used by the memory manager for cache management requests. This port is provided by the kernel in a <strong>memory_object_init</strong>     or <strong>memory_object_create</strong> call.<p><p><dt> <var>offset</var> <dd>[in scalar]The offset within the memory object, in bytes.<p><p><dt> <var>data</var> <dd>[pointer to page aligned in array of bytes]The address of the databeing provided to the kernel.<p><p><dt> <var>data_count</var> <dd>[in scalar]The amount of data to be provided.  The number must be an integral number of memory object pages.<p><p><dt> <var>deallocate</var> <dd>[in scalar]If <strong>TRUE</strong>, the pages to be copied (starting at data) will bedeallocated from the memory manager's address space as a result ofbeing copied into the message, allowing the pages to be moved into the kernel instead of being physically copied.<p><p><dt> <var>lock_value</var> <dd>[in scalar]One or more forms of access <var>not</var> permitted for the specified data.  Valid values are:<dl><p><p><dt> <strong>VM_PROT_NONE</strong><dd>Prohibits no access (that is, all forms of access are permitted).<p><p><dt> <strong>VM_PROT_READ</strong><dd>Prohibits read access.<p><p><dt> <strong>VM_PROT_WRITE</strong><dd>Prohibits write access.<p><p><dt> <strong>VM_PROT_EXECUTE</strong><dd>Prohibits execute access.<p><p><dt> <strong>VM_PROT_ALL</strong><dd>Prohibits all forms of access.</dl><p><p><dt> <var>precious</var> <dd>[in scalar]If <strong>TRUE</strong>, the pages being supplied are "precious," that is, the memory manager is not (necessarily) retaining its own copy.  These pages must be returned to the manager when evicted from memory, even if not modified.<p><p><dt> <var>reply_port</var> <dd>[in reply receive (to be converted to send) right]A port to which the kernel should send a <strong>memory_object_supply_completed</strong> to indicate the status of the accepted data.  <strong>MACH_PORT_NULL</strong> is allowed.  The reply message indicates which pages have been accepted.</dl><h3>DESCRIPTION</h3><p>The <strong>memory_object_data_supply</strong> function supplies thekernel with a range of data for the specified memory object.  A memory manager can only provide data that was requested by a <strong>memory_object_data_request</strong>call from the kernel.<h3>NOTES</h3><p>The kernel accepts only integral numbers of pages.  It discardsany partial pages without notification.<h3>CAUTIONS</h3><p>A memory manager must be careful that it not attempt to provide data that has not been explicitly requested.  In particular, a memory managermust ensure that it does not provide writable data again before it receives back modifications from the kernel.  This may require that the memory manager remember which pages it has provided, or that it exercise other cache control functions (via<strong>memory_object_lock_request</strong>) before proceeding.  The kernel prohibits theoverwriting of live data pages and will not accept pages it has not requested.<h3>RETURN VALUES</h3><p>Only generic errors apply.<h3>RELATED INFORMATION</h3><p>Functions:<a href="memory_object_data_error.html"><strong>memory_object_data_error</strong></a>,<a href="memory_object_data_request.html"><strong>memory_object_data_request</strong></a>,<a href="MO_data_unavailable.html"><strong>memory_object_data_unavailable</strong></a>,<a href="memory_object_lock_request.html"><strong>memory_object_lock_request</strong></a>,<a href="MO_supply_completed.html"><strong>memory_object_supply_completed</strong></a>.
+<h2>memory_object_data_supply</h2>
+<hr>
+<p>
+<strong>Function</strong> - Provide kernel with data previously requested by the kernel's Memory Management facility.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   memory_object_data_supply</strong>
+                <strong>(mem_object_control_port_t</strong>       <var>memory_control</var>,
+                 <strong>vm_offset_t</strong>                             <var>offset</var>,
+                 <strong>pointer_t</strong>                                 <var>data</var>,
+                 <strong>mach_msg_type_number_t</strong>              <var>data_count</var>,
+                 <strong>boolean_t</strong>                           <var>deallocate</var>,
+                 <strong>vm_prot_t</strong>                           <var>lock_value</var>,
+                 <strong>boolean_t</strong>                             <var>precious</var>,
+                 <strong>mach_port_t</strong>                         <var>reply_port</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<dt> <var>memory_control</var> 
+<dd>
+[in memory-cache-control send right]
+The memory cache control port 
+to be used by the memory manager for cache management requests. 
+This port is provided by the kernel in a <strong>memory_object_init</strong>
+     or <strong>memory_object_create</strong> call.
+<p>
+<p>
+<dt> <var>offset</var> 
+<dd>
+[in scalar]
+The offset within the memory object, in bytes.
+<p>
+<p>
+<dt> <var>data</var> 
+<dd>
+[pointer to page aligned in array of bytes]
+The address of the data
+being provided to the kernel.
+<p>
+<p>
+<dt> <var>data_count</var> 
+<dd>
+[in scalar]
+The amount of data to be provided.  The number must be an 
+integral number of memory object pages.
+<p>
+<p>
+<dt> <var>deallocate</var> 
+<dd>
+[in scalar]
+If <strong>TRUE</strong>, the pages to be copied (starting at data) will be
+deallocated from the memory manager's address space as a result of
+being copied into the message, allowing the pages to be moved into the 
+kernel instead of being physically copied.
+<p>
+<p>
+<dt> <var>lock_value</var> 
+<dd>
+[in scalar]
+One or more forms of access <var>not</var> permitted for the specified 
+data.  Valid values are:
+<dl>
+<p>
+<p>
+<dt> <strong>VM_PROT_NONE</strong>
+<dd>
+Prohibits no access (that is, all forms of access are permitted).
+<p>
+<p>
+<dt> <strong>VM_PROT_READ</strong>
+<dd>
+Prohibits read access.
+<p>
+<p>
+<dt> <strong>VM_PROT_WRITE</strong>
+<dd>
+Prohibits write access.
+<p>
+<p>
+<dt> <strong>VM_PROT_EXECUTE</strong>
+<dd>
+Prohibits execute access.
+<p>
+<p>
+<dt> <strong>VM_PROT_ALL</strong>
+<dd>
+Prohibits all forms of access.
+</dl>
+<p>
+<p>
+<dt> <var>precious</var> 
+<dd>
+[in scalar]
+If <strong>TRUE</strong>, the pages being supplied are "precious," that is, 
+the memory manager is not (necessarily) retaining its own copy.  These 
+pages must be returned to the manager when evicted from memory, 
+even if not modified.
+<p>
+<p>
+<dt> <var>reply_port</var> 
+<dd>
+[in reply receive (to be converted to send) right]
+A port to which the 
+kernel should send a <strong>memory_object_supply_completed</strong> to indicate 
+the status of the accepted data.  <strong>MACH_PORT_NULL</strong> is allowed.  The 
+reply message indicates which pages have been accepted.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>memory_object_data_supply</strong> function supplies the
+kernel with a range of 
+data for the specified memory object.  A memory manager can only provide data 
+that was requested by a <strong>memory_object_data_request</strong>
+call from the kernel.
+<h3>NOTES</h3>
+<p>
+The kernel accepts only integral numbers of pages.  It discards
+any partial pages 
+without notification.
+<h3>CAUTIONS</h3>
+<p>
+A memory manager must be careful that it not attempt to provide data that has 
+not been explicitly requested.  In particular, a memory manager
+must ensure that 
+it does not provide writable data again before it receives back modifications 
+from the kernel.  This may require that the memory manager remember which 
+pages it has provided, or that it exercise other cache control functions (via
+<strong>memory_object_lock_request</strong>) before proceeding.  The kernel prohibits the
+overwriting of live data pages and will not accept pages it has not requested.
+<h3>RETURN VALUES</h3>
+<p>
+Only generic errors apply.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="memory_object_data_error.html"><strong>memory_object_data_error</strong></a>,
+<a href="memory_object_data_request.html"><strong>memory_object_data_request</strong></a>,
+<a href="MO_data_unavailable.html"><strong>memory_object_data_unavailable</strong></a>,
+<a href="memory_object_lock_request.html"><strong>memory_object_lock_request</strong></a>,
+<a href="MO_supply_completed.html"><strong>memory_object_supply_completed</strong></a>.

@@ -1,1 +1,47 @@
-<h2>host_default_memory_manager</h2><hr><p><strong>Function</strong> - Establish the official connection between the kernel and its default pager task.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   host_default_memory_manager</strong>                <strong>(host_priv_t</strong>                          <var>host_priv</var>,                 <strong>mach_port_make_send_t</strong>          <var>default_manager</var>,                 <strong>vm_size_t</strong>                         <var>cluster_size</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>host_priv</var> <dd>[in host-control send right]The control port naming the host for which the default memory manager is to be set.<p><dt> <var>default_manager</var> <dd>[pointer to in/out default-pager send right]A memory manager port to the new default memory manager.  If this value is <strong>MACH_PORT_NULL</strong>, the old memory manager is not changed.  The old memorymanager port is returned in this variable.<p><dt> <var>cluster_size</var> <dd>[in scalar]The preferred cluster size (in bytes) for temporary memory objects.</dl><h3>DESCRIPTION</h3><p>The <strong>host_default_memory_manager</strong> function establishes the defaultmemory manager for a host.  The named manager will be the target for future<strong>memory_object_create</strong> calls.<h3>RETURN VALUES</h3><p>Only generic errors apply.<h3>RELATED INFORMATION</h3><p>Functions:<a href="memory_object_create.html"><strong>memory_object_create</strong></a>,<a href="vm_allocate.html"><strong>vm_allocate</strong></a>.
+<h2>host_default_memory_manager</h2>
+<hr>
+<p>
+<strong>Function</strong> - Establish the official connection between the kernel and its default pager task.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   host_default_memory_manager</strong>
+                <strong>(host_priv_t</strong>                          <var>host_priv</var>,
+                 <strong>mach_port_make_send_t</strong>          <var>default_manager</var>,
+                 <strong>vm_size_t</strong>                         <var>cluster_size</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>host_priv</var> 
+<dd>
+[in host-control send right]
+The control port naming the host for which 
+the default memory manager is to be set.
+<p>
+<dt> <var>default_manager</var> 
+<dd>
+[pointer to in/out default-pager send right]
+A memory manager port to 
+the new default memory manager.  If this value is <strong>MACH_PORT_NULL</strong>, 
+the old memory manager is not changed.  The old memory
+manager port is returned in this variable.
+<p>
+<dt> <var>cluster_size</var> 
+<dd>
+[in scalar]
+The preferred cluster size (in bytes) for temporary memory 
+objects.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>host_default_memory_manager</strong> function establishes the default
+memory manager for a host.  The named manager will be the target for future
+<strong>memory_object_create</strong> calls.
+<h3>RETURN VALUES</h3>
+<p>
+Only generic errors apply.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="memory_object_create.html"><strong>memory_object_create</strong></a>,
+<a href="vm_allocate.html"><strong>vm_allocate</strong></a>.

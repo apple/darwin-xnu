@@ -1,1 +1,96 @@
-<h2>mach_port_allocate_full</h2><hr><p><strong>Function</strong> - Create a port right with full Mach port semantics.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   mach_port_allocate_full</strong>                <strong>(ipc_space_t</strong>                               <var>task</var>,                 <strong>mach_port_right_t</strong>                        <var>right</var>,                 <strong>subsystem_t</strong>                          <var>subsystem</var>,                 <strong>mach_port_qos_t</strong>                            <var>qos</var>,                 <strong>task</strong>                                      <var>name</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>task</var><dd>[in task send right] The task acquiring the port right.<p><dt> <var>right</var><dd>[in scalar] The kind of entity to be created. This is one of the following:<dl><p><dt> <strong>MACH_PORT_RIGHT_RECEIVE</strong><dd><strong>mach_port_allocate_full</strong> creates a port. The new port is not a memberof any port set. It doesn't have any extant send or send-oncerights. Its make-send count is zero, its sequence number is zero, itsqueue limit is MACH_PORT_QLIMIT_DEFAULT, and it has no queuedmessages. The <var>name</var> parameterdenotes the receive right for the new port.The owning task does not hold send rights for the new port, only the receiveright. The <strong>mach_port_insert_right</strong>and <strong>mach_port_extract_right</strong> interfaces can be usedto convert the receive right to a combined send/receive right.<p><dt> <strong>MACH_PORT_RIGHT_PORT_SET</strong><dd><strong>mach_port_allocate_full</strong> creates a port set. The new port set has no members.<p><dt> <strong>MACH_PORT_RIGHT_DEAD_NAME</strong><dd><strong>mach_port_allocate_full</strong> creates a dead name. The new dead name has one user reference.</dl><p><dt> <var>subsystem</var><dd>[in scalar] The port right naming the subsystem the newly created port is to be associated with.<p><p><dt> <var>qos</var><dd>[pointer to an in/out structure] Structure used to specifythe desired "quality of service." This structure may be usedto mandate the name of the returned port right and/or the port's "qualityof service" attribute.  The current implementation recognizes two suchattributes: regular and realtime.<dt> <var>name</var><dd>[out scalar] The task's name for the port right. This can be any name that wasn't in use.</dl><h3>DESCRIPTION</h3><p>The <strong>mach_port_allocate_full</strong> function creates a new right in thespecified task.  The new right's name is returned via the <var>name</var> parameter.The new port supports the full set of Mach port semantics (i.e. no_more_sendersdetection will work, if requested).<h3>NOTES</h3><p>This interface is machine word length specific because of the portname parameter.<h3>RETURN VALUES</h3><dl><p><dt> <strong>KERN_NO_SPACE</strong><dd>There was no room in task's IPC name space for another right.</dl><h3>RELATED INFORMATION</h3><p>Functions:<a href="mach_port_allocate.html"><strong>mach_port_allocate</strong></a>,<a href="mach_port_allocate.html"><strong>mach_port_allocate_qos</strong></a>,<a href="mach_port_allocate_name.html"><strong>mach_port_allocate_name</strong></a>,<a href="mach_port_deallocate.html"><strong>mach_port_deallocate</strong></a>,<a href="mach_port_insert_right.html"><strong>mach_port_insert_right</strong></a>,<a href="mach_port_extract_right.html"><strong>mach_port_extract_right</strong></a>.<p>Structures:<a href="mach_port_qos.html"><strong>mach_port_qos</strong></a>.
+<h2>mach_port_allocate_full</h2>
+<hr>
+<p>
+<strong>Function</strong> - Create a port right with full Mach port semantics.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   mach_port_allocate_full</strong>
+                <strong>(ipc_space_t</strong>                               <var>task</var>,
+                 <strong>mach_port_right_t</strong>                        <var>right</var>,
+                 <strong>subsystem_t</strong>                          <var>subsystem</var>,
+                 <strong>mach_port_qos_t</strong>                            <var>qos</var>,
+                 <strong>task</strong>                                      <var>name</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>task</var>
+<dd>
+[in task send right] The task acquiring the port right.
+<p>
+<dt> <var>right</var>
+<dd>
+[in scalar] The kind of entity to be created. This is one of the following:
+<dl>
+<p>
+<dt> <strong>MACH_PORT_RIGHT_RECEIVE</strong>
+<dd>
+<strong>mach_port_allocate_full</strong> creates a port. The new port is not a member
+of any port set. It doesn't have any extant send or send-once
+rights. Its make-send count is zero, its sequence number is zero, its
+queue limit is MACH_PORT_QLIMIT_DEFAULT, and it has no queued
+messages. The <var>name</var> parameter
+denotes the receive right for the new port.
+The owning task does not hold send rights for the new port, only the receive
+right. The <strong>mach_port_insert_right</strong>
+and <strong>mach_port_extract_right</strong> interfaces can be used
+to convert the receive right to a combined send/receive right.
+<p>
+<dt> <strong>MACH_PORT_RIGHT_PORT_SET</strong>
+<dd>
+<strong>mach_port_allocate_full</strong> creates a port set. The new port set 
+has no members.
+<p>
+<dt> <strong>MACH_PORT_RIGHT_DEAD_NAME</strong>
+<dd>
+<strong>mach_port_allocate_full</strong> creates a dead name. The new dead 
+name has one user reference.
+</dl>
+<p>
+<dt> <var>subsystem</var>
+<dd>
+[in scalar] The port right naming the subsystem the newly created port 
+is to be associated with.
+<p>
+<p>
+<dt> <var>qos</var>
+<dd>
+[pointer to an in/out structure] Structure used to specify
+the desired "quality of service." This structure may be used
+to mandate the name of the returned port right and/or the port's "quality
+of service" attribute.  The current implementation recognizes two such
+attributes: regular and realtime.
+<dt> <var>name</var>
+<dd>
+[out scalar] The task's name for the port right. This can be any name 
+that wasn't in use.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>mach_port_allocate_full</strong> function creates a new right in the
+specified task.  The new right's name is returned via the <var>name</var> parameter.
+The new port supports the full set of Mach port semantics (i.e. no_more_senders
+detection will work, if requested).
+<h3>NOTES</h3>
+<p>
+This interface is machine word length specific because of the port
+name parameter.
+<h3>RETURN VALUES</h3>
+<dl>
+<p>
+<dt> <strong>KERN_NO_SPACE</strong>
+<dd>
+There was no room in task's IPC name space for another right.
+</dl>
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="mach_port_allocate.html"><strong>mach_port_allocate</strong></a>,
+<a href="mach_port_allocate.html"><strong>mach_port_allocate_qos</strong></a>,
+<a href="mach_port_allocate_name.html"><strong>mach_port_allocate_name</strong></a>,
+<a href="mach_port_deallocate.html"><strong>mach_port_deallocate</strong></a>,
+<a href="mach_port_insert_right.html"><strong>mach_port_insert_right</strong></a>,
+<a href="mach_port_extract_right.html"><strong>mach_port_extract_right</strong></a>.
+<p>
+Structures:
+<a href="mach_port_qos.html"><strong>mach_port_qos</strong></a>.

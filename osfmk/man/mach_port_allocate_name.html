@@ -1,1 +1,79 @@
-<h2>mach_port_allocate_name</h2><hr><p><strong>Function</strong> - Create a port right with the caller-specified name.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   mach_port_allocate_name</strong>                <strong>(ipc_space_t</strong>                               <var>task</var>,                 <strong>mach_port_right_t</strong>                        <var>right</var>,                 <strong>mach_port_name_t</strong>                          <var>name</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>task</var> <dd>[in task send right]The task acquiring the port right.<p><dt> <var>right</var> <dd>[in scalar]The kind of entity to be created.  This is one of the following:<dl><p><dt> <strong>MACH_PORT_RIGHT_RECEIVE</strong><dd><strong>mach_port_allocate_name</strong> creates a port.  The new port is not a member of any port set.  It doesn't have any extant send or send-once rights.  Its make-send count is zero, its sequence number is zero, its queue limit is <strong>MACH_PORT_QLIMIT_DEFAULT</strong>, and it has no queued messages. <var>name</var> denotes the receive right for the new port.<var>task</var> does not hold send rights for the new port, only thereceive right.  <strong>mach_port_insert_right</strong> and<strong>mach_port_extract_right</strong> can be used to convert the receive right into a combined send/receive right.<p><dt> <strong>MACH_PORT_RIGHT_PORT_SET</strong><dd><strong>mach_port_allocate_name</strong> creates a port set.  The new port set has no members.<p><dt> <strong>MACH_PORT_RIGHT_DEAD_NAME</strong><dd><strong>mach_port_allocate_name</strong> creates a dead name.  The new dead name has one user reference.</dl><p><dt> <var>name</var> <dd>[in scalar]The task's name for the port right. name must not already be in use for some right, and it can't be the reserved values <strong>MACH_PORT_NULL</strong> and <strong>MACH_PORT_DEAD</strong>. </dl><h3>DESCRIPTION</h3><p>The <strong>mach_port_allocate_name</strong> function creates a newright in the specified task, with a specified name for the new right.<h3>NOTES</h3><p>This interface is machine word length specific because of the port nameparameter.<h3>RETURN VALUES</h3><dl><p><dt> <strong>KERN_NAME_EXISTS</strong><dd>name was already in use for a port right.</dl><h3>RELATED INFORMATION</h3><p>Functions:<a href="mach_port_allocate.html"><strong>mach_port_allocate</strong></a>,<a href="mach_port_deallocate.html"><strong>mach_port_deallocate</strong></a>,<a href="mach_port_insert_right.html"><strong>mach_port_insert_right</strong></a>,<a href="mach_port_extract_right.html"><strong>mach_port_extract_right</strong></a>.
+<h2>mach_port_allocate_name</h2>
+<hr>
+<p>
+<strong>Function</strong> - Create a port right with the caller-specified name.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   mach_port_allocate_name</strong>
+                <strong>(ipc_space_t</strong>                               <var>task</var>,
+                 <strong>mach_port_right_t</strong>                        <var>right</var>,
+                 <strong>mach_port_name_t</strong>                          <var>name</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>task</var> 
+<dd>
+[in task send right]
+The task acquiring the port right.
+<p>
+<dt> <var>right</var> 
+<dd>
+[in scalar]
+The kind of entity to be created.  This is one of the following:
+<dl>
+<p>
+<dt> <strong>MACH_PORT_RIGHT_RECEIVE</strong>
+<dd>
+<strong>mach_port_allocate_name</strong> creates a port.  The new port is 
+not a member of any port set.  It doesn't have any extant send 
+or send-once rights.  Its make-send count is zero, its sequence 
+number is zero, its queue limit is <strong>MACH_PORT_QLIMIT_DEFAULT</strong>, 
+and it has no queued messages. 
+<var>name</var> denotes the receive right for the new port.
+<var>task</var> does not hold send rights for the new port, only the
+receive right.  <strong>mach_port_insert_right</strong> and
+<strong>mach_port_extract_right</strong> can be used to convert the receive right into a 
+combined send/receive right.
+<p>
+<dt> <strong>MACH_PORT_RIGHT_PORT_SET</strong>
+<dd>
+<strong>mach_port_allocate_name</strong> creates a port set.  The new port 
+set has no members.
+<p>
+<dt> <strong>MACH_PORT_RIGHT_DEAD_NAME</strong>
+<dd>
+<strong>mach_port_allocate_name</strong> creates a dead name.  The new 
+dead name has one user reference.
+</dl>
+<p>
+<dt> <var>name</var> 
+<dd>
+[in scalar]
+The task's name for the port right. name must not already be 
+in use for some right, and it can't be the reserved values 
+<strong>MACH_PORT_NULL</strong> and <strong>MACH_PORT_DEAD</strong>. 
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>mach_port_allocate_name</strong> function creates a new
+right in the specified 
+task, with a specified name for the new right.
+<h3>NOTES</h3>
+<p>
+This interface is machine word length specific because of the port name
+parameter.
+<h3>RETURN VALUES</h3>
+<dl>
+<p>
+<dt> <strong>KERN_NAME_EXISTS</strong>
+<dd>
+name was already in use for a port right.
+</dl>
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="mach_port_allocate.html"><strong>mach_port_allocate</strong></a>,
+<a href="mach_port_deallocate.html"><strong>mach_port_deallocate</strong></a>,
+<a href="mach_port_insert_right.html"><strong>mach_port_insert_right</strong></a>,
+<a href="mach_port_extract_right.html"><strong>mach_port_extract_right</strong></a>.

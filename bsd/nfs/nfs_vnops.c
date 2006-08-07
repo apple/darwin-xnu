@@ -4145,12 +4145,12 @@ again:
 		goto again;
 	}
 
-	if ((waitfor == MNT_WAIT) && !LIST_EMPTY(&np->n_dirtyblkhd)) {
-		goto again;
-	}
-	/* if we have no dirty blocks, we can clear the modified flag */
-	if (LIST_EMPTY(&np->n_dirtyblkhd))
+	if (waitfor == MNT_WAIT) {
+		if (!LIST_EMPTY(&np->n_dirtyblkhd))
+			goto again;
+		/* if we have no dirty blocks, we can clear the modified flag */
 		np->n_flag &= ~NMODIFIED;
+	}
 
 	FSDBG(526, np->n_flag, np->n_error, 0, 0);
 	if (!ignore_writeerr && (np->n_flag & NWRITEERR)) {

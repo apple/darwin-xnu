@@ -14,7 +14,7 @@
  *	Changes from Josh(networking), Rick(IOKit), Jim & David(osfmk), Umesh, Dan & Ramesh(BSD)
  *	Submitted by: Ramesh
  *	Reviewed by: Vincent
- *	
+ *
  *	Revision 1.2.12.1  2002/05/21 23:08:14  aramesh
  *	Kernel API Cleanup
  *	Bug #: 2853781

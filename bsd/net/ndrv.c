@@ -551,6 +551,9 @@ ndrv_do_detach(struct ndrv_cb *np)
 		if (cur_np == NULL) {
 			dlil_detach_protocol(np->nd_if, PF_NDRV);
 		}
+	} else {
+		/* Remove from the linked list of control blocks */
+		TAILQ_REMOVE(&ndrvl, np, nd_next);
 	}
     
 	FREE((caddr_t)np, M_PCB);

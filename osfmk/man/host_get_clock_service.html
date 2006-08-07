@@ -1,1 +1,68 @@
-<h2>host_get_clock_service</h2><hr><p><strong>Function</strong> - Return a send right to a kernel clock's service port.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   host_get_clock_service</strong>                <strong>(host_t</strong>                                    <var>host</var>,                 <strong>clock_id_t</strong>                                  <var>id</var>,                 <strong>clock_t</strong>                             <var>clock_name</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>host</var> <dd>[in host-name send right]The name (or control) port for the hostowning the clock.<p><dt> <var>id</var> <dd>[in scalar]The identification of the desired kernel clock.  These values are defined in \*L<mach/clock_types.h>\*O.  Although an implementation may define additional values, the following values are always defined (although only the REALTIME clock is required to be implemented):<dl><p><dt> <strong>REALTIME_CLOCK</strong><dd>A moderate resolution clock service that (typically) tracks time since the system last boot.<p><dt> <strong>BATTERY_CLOCK</strong><dd>A (typically) low resolution clock (to the second) thatsurvives power failures or service outages.<p><dt> <strong>HIGHRES_CLOCK</strong><dd>A high resolution clock.</dl><p><dt> <var>clock_name</var> <dd>[out clock-name send right]Name port for the clock.</dl><h3>DESCRIPTION</h3><p>The <strong>host_get_clock_service</strong> function returns a sendright to the name port for a kernel clock object.  This right is used to get the time andresolutions of the clock and to set clock alarms.<h3>RETURN VALUES</h3><p>Only generic errors apply.<h3>RELATED INFORMATION</h3><p>Functions:<a href="clock_get_time.html"><strong>clock_get_time</strong></a>,<a href="clock_get_attributes.html"><strong>clock_get_attributes</strong></a>,<a href="clock_map_time.html"><strong>clock_map_time</strong></a>,<a href="clock_sleep.html"><strong>clock_sleep</strong></a>,<a href="clock_alarm.html"><strong>clock_alarm</strong></a>,<a href="host_get_clock_control.html"><strong>host_get_clock_control</strong></a>.
+<h2>host_get_clock_service</h2>
+<hr>
+<p>
+<strong>Function</strong> - Return a send right to a kernel clock's service port.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   host_get_clock_service</strong>
+                <strong>(host_t</strong>                                    <var>host</var>,
+                 <strong>clock_id_t</strong>                                  <var>id</var>,
+                 <strong>clock_t</strong>                             <var>clock_name</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>host</var> 
+<dd>
+[in host-name send right]
+The name (or control) port for the host
+owning the clock.
+<p>
+<dt> <var>id</var> 
+<dd>
+[in scalar]
+The identification of the desired kernel clock.  These values 
+are defined in \*L<mach/clock_types.h>\*O.  Although an implementation 
+may define additional values, the following values are always defined 
+(although only the REALTIME clock is required to be implemented):
+<dl>
+<p>
+<dt> <strong>REALTIME_CLOCK</strong>
+<dd>
+A moderate resolution clock service that (typically) tracks 
+time since the system last boot.
+<p>
+<dt> <strong>BATTERY_CLOCK</strong>
+<dd>
+A (typically) low resolution clock (to the second) that
+survives power failures or service outages.
+<p>
+<dt> <strong>HIGHRES_CLOCK</strong>
+<dd>
+A high resolution clock.
+</dl>
+<p>
+<dt> <var>clock_name</var> 
+<dd>
+[out clock-name send right]
+Name port for the clock.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>host_get_clock_service</strong> function returns a send
+right to the name port for a 
+kernel clock object.  This right is used to get the time and
+resolutions of the 
+clock and to set clock alarms.
+<h3>RETURN VALUES</h3>
+<p>
+Only generic errors apply.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="clock_get_time.html"><strong>clock_get_time</strong></a>,
+<a href="clock_get_attributes.html"><strong>clock_get_attributes</strong></a>,
+<a href="clock_map_time.html"><strong>clock_map_time</strong></a>,
+<a href="clock_sleep.html"><strong>clock_sleep</strong></a>,
+<a href="clock_alarm.html"><strong>clock_alarm</strong></a>,
+<a href="host_get_clock_control.html"><strong>host_get_clock_control</strong></a>.

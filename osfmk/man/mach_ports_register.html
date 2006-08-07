@@ -1,1 +1,115 @@
-<h2>mach_ports_register</h2><hr><p><strong>Function</strong> - Register an array of well-known ports on behalf of the target task.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   mach_ports_register</strong>                <strong>(task_t</strong>                             <var>target_task</var>,                 <strong>mach_port_array_t</strong>                <var>init_port_set</var>,                 <strong>target_task</strong>              <var>init_port_array_count</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>target_task</var> <dd>[in task send right]The task for which the ports are to be registered.<p><dt> <var>init_port_set</var> <dd>[in pointer to array of registered send rights]The array of ports toregister.<p><dt> <var>init_port_array_count</var> <dd>[in scalar]The number of ports in the array.  Note that while this is a variable, the kernel accepts only a limited number of ports.  Themaximum number of ports is defined by the global constant<strong>MACH_PORTS_SLOTS_USED</strong>.</dl><h3>DESCRIPTION</h3><p>The <strong>mach_ports_register</strong> function registers an arrayof well-known system ports for the specified task.  The task holds only send rightsfor the registered ports.  The valid well-known system ports are:<ul><li>The port for the Name Server<li>The port for the Environment Manager<li>The port for the Service server</ul><p>Each port must be placed in a specific slot in the array.  The slot numbers aredefined (in <strong>mach.h</strong>) by the global constants <strong>NAME_SERVER_SLOT</strong>,<strong>ENVIRONMENT_SLOT</strong>, and <strong>SERVICE_SLOT</strong>.<p>A task can retrieve the currently registered ports by using the<strong>mach_ports_lookup</strong> function.<h3>NOTES</h3><p>When a new task is created (with <strong>task_create</strong>), the child task can inherit theparent's registered ports.  Note that child tasks do not automaticallyacquire rights to these ports.  They must use <strong>mach_ports_lookup</strong> toget them.  It is intended that port registration be used only for task initialization, and then only byrun-time support modules.<p>A parent task has three choices when passing registered ports to child tasks:<ul><li>The parent task can do nothing.  In this case, all child tasksinherit access to the same ports that the parent has.<li>The parent task can use <strong>mach_ports_register</strong> to modifyits set of registered ports before creating child tasks.  In this case, the child tasks get access to the modified set of ports.  After creating its child tasks. the parent can use <strong>mach_ports_register</strong> again to reset its registered ports.<li>The parent task can first create a specific child task and then use<strong>mach_ports_register</strong> to modify the child's inheritedset of ports, before starting the child's thread(s).  The parent must specify the child's task port, rather than its own, on the call to <strong>mach_ports_register</strong>. </ul><p>Tasks other than the Name Server and the Environment Manager should not need access to the Service port.  The Name Server port is the same for all tasks on a given machine.  The Environment portis the only port likely to have different values for different tasks.<p>Registered ports are restricted to those ports that are used by the run-timesystem to initialize a task.  A parent task can pass other portsto its child tasks through:<ul><li>An initial message (see <strong>mach_msg</strong>).<li>The Name Server, for public ports.<li>The Environment Manager, for private ports.<li>The task bootstrap port (see <strong>task_get_special_port</strong>).</ul><h3>RETURN VALUES</h3><p>Only generic errors apply.<h3>RELATED INFORMATION</h3><p>Functions:<a href="mach_msg.html"><strong>mach_msg</strong></a>,<a href="mach_ports_lookup.html"><strong>mach_ports_lookup</strong></a>.
+<h2>mach_ports_register</h2>
+<hr>
+<p>
+<strong>Function</strong> - Register an array of well-known ports on behalf of the target task.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   mach_ports_register</strong>
+                <strong>(task_t</strong>                             <var>target_task</var>,
+                 <strong>mach_port_array_t</strong>                <var>init_port_set</var>,
+                 <strong>target_task</strong>              <var>init_port_array_count</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>target_task</var> 
+<dd>
+[in task send right]
+The task for which the ports are to be registered.
+<p>
+<dt> <var>init_port_set</var> 
+<dd>
+[in pointer to array of registered send rights]
+The array of ports to
+register.
+<p>
+<dt> <var>init_port_array_count</var> 
+<dd>
+[in scalar]
+The number of ports in the array.  Note that while this is a 
+variable, the kernel accepts only a limited number of ports.  The
+maximum number of ports is defined by the global constant
+<strong>MACH_PORTS_SLOTS_USED</strong>.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>mach_ports_register</strong> function registers an array
+of well-known system 
+ports for the specified task.  The task holds only send rights
+for the registered 
+ports.  The valid well-known system ports are:
+<ul>
+<li>
+The port for the Name Server
+<li>
+The port for the Environment Manager
+<li>
+The port for the Service server
+</ul>
+<p>
+Each port must be placed in a specific slot in the array.  The slot numbers are
+defined (in <strong>mach.h</strong>) by the global constants <strong>NAME_SERVER_SLOT</strong>,
+<strong>ENVIRONMENT_SLOT</strong>, and <strong>SERVICE_SLOT</strong>.
+<p>
+A task can retrieve the currently registered ports by using the
+<strong>mach_ports_lookup</strong> function.
+<h3>NOTES</h3>
+<p>
+When a new task is created (with <strong>task_create</strong>), 
+the child task can inherit the
+parent's registered ports.  Note that child tasks do not automatically
+acquire rights 
+to these ports.  They must use <strong>mach_ports_lookup</strong> to
+get them.  It is intended 
+that port registration be used only for task initialization, and then only by
+run-time support modules.
+<p>
+A parent task has three choices when passing registered ports to child tasks:
+<ul>
+<li>
+The parent task can do nothing.  In this case, all child tasks
+inherit access to 
+the same ports that the parent has.
+<li>
+The parent task can use <strong>mach_ports_register</strong> to modify
+its set of registered 
+ports before creating child tasks.  In this case, the child tasks get access 
+to the 
+modified set of ports.  After creating its child tasks. the parent can use 
+<strong>mach_ports_register</strong> again to reset its registered ports.
+<li>
+The parent task can first create a specific child task and then use
+<strong>mach_ports_register</strong> to modify the child's inherited
+set of ports, before starting 
+the child's thread(s).  The parent must specify the child's task port, rather 
+than its own, on the call to <strong>mach_ports_register</strong>. 
+</ul>
+<p>
+Tasks other than the Name Server and the Environment Manager 
+should not need access to the Service port.  The Name Server port is 
+the same for all tasks on a given machine.  The Environment port
+is the only port 
+likely to have different values for different tasks.
+<p>
+Registered ports are restricted to those ports that are used by the run-time
+system to initialize a task.  A parent task can pass other ports
+to its child tasks 
+through:
+<ul>
+<li>
+An initial message (see <strong>mach_msg</strong>).
+<li>
+The Name Server, for public ports.
+<li>
+The Environment Manager, for private ports.
+<li>
+The task bootstrap port (see <strong>task_get_special_port</strong>).
+</ul>
+<h3>RETURN VALUES</h3>
+<p>
+Only generic errors apply.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="mach_msg.html"><strong>mach_msg</strong></a>,
+<a href="mach_ports_lookup.html"><strong>mach_ports_lookup</strong></a>.

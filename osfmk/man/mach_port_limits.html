@@ -1,1 +1,34 @@
-<h2>mach_port_limits</h2><hr><p><strong>Structure</strong> - Specifies a port's resource and message queue limits.<h3>SYNOPSIS</h3><pre><strong>struct mach_port_limits</strong><strong>{</strong>       <strong>mach_port_msgcount_t</strong>      <var>queue_limit</var><strong>;</strong><strong>};</strong><strong>typedef struct mach_port_limits* mach_port_limits_t;</strong></pre><h3>FIELDS</h3><dl><dt> <var>queue_limit</var><dd>Number of messages allowed to be on the message queue at any given time.  Attempts to queue more messages than this limit will block.</dl><h3>DESCRIPTION</h3><p>The <strong>mach_port_limits</strong> structure defines various limitsgoverning the messages that can be sent through the port. (In the currentimplementation, the structure maintains only a queue length limit.)<h3>RELATED INFORMATION</h3><p>Functions:<a href="mach_port_get_attributes.html"><strong>mach_port_get_attributes</strong></a>,<a href="mach_port_set_attributes.html"><strong>mach_port_set_attributes</strong></a>.<p>Structures:<a href="mach_port_qos.html"><strong>mach_port_qos</strong></a>.
+<h2>mach_port_limits</h2>
+<hr>
+<p>
+<strong>Structure</strong> - Specifies a port's resource and message queue limits.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>struct mach_port_limits</strong>
+<strong>{</strong>
+       <strong>mach_port_msgcount_t</strong>      <var>queue_limit</var><strong>;</strong>
+<strong>};</strong>
+
+<strong>typedef struct mach_port_limits* mach_port_limits_t;</strong>
+</pre>
+<h3>FIELDS</h3>
+<dl>
+<dt> <var>queue_limit</var>
+<dd>
+Number of messages allowed to be on the message queue at any given 
+time.  Attempts to queue more messages than this limit will block.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>mach_port_limits</strong> structure defines various limits
+governing the messages that can be sent through the port. (In the current
+implementation, the structure maintains only a queue length limit.)
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="mach_port_get_attributes.html"><strong>mach_port_get_attributes</strong></a>,
+<a href="mach_port_set_attributes.html"><strong>mach_port_set_attributes</strong></a>.
+<p>
+Structures:
+<a href="mach_port_qos.html"><strong>mach_port_qos</strong></a>.
+

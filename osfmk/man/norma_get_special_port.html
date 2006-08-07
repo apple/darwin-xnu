@@ -1,1 +1,102 @@
-<h2>norma_get_special_port</h2><hr><p><strong>Function</strong> - Acquire a send right for a specified node-specific special port.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   norma_get_special_port</strong>                <strong>(host_priv_t</strong>                          <var>host_priv</var>,                 <strong>int</strong>                                       <var>node</var>,                 <strong>int</strong>                                 <var>which_port</var>,                 <strong>mach_port_t</strong>                       <var>special_port</var><strong>);</strong></pre><h4>Macro forms:</h4><pre><strong>#include&ltmach/norma_special_ports.h&gt</strong><strong>kern_return_t   norma_get_device_port</strong>                <strong>(host_priv_t</strong>                          <var>host_priv</var>,                 <strong>int</strong>                                       <var>node</var>,                 <strong>mach_port_t</strong>                       <var>special_port</var><strong>);</strong><strong>kern_return_t   norma_get_host_port</strong>                <strong>(host_priv_t</strong>                          <var>host_priv</var>,                 <strong>int</strong>                                       <var>node</var>,                 <strong>mach_port_t</strong>                       <var>special_port</var><strong>);</strong><strong>kern_return_t   norma_get_host_priv_port</strong>                <strong>(host_priv_t</strong>                          <var>host_priv</var>,                 <strong>int</strong>                                       <var>node</var>,                 <strong>mach_port_t</strong>                       <var>special_port</var><strong>);</strong><strong>kern_return_t   norma_get_nameserver_port</strong>                <strong>(host_priv_t</strong>                          <var>host_priv</var>,                 <strong>int</strong>                                       <var>node</var>,                 <strong>mach_port_t</strong>                       <var>special_port</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><dt> <var>host_priv</var> <dd>[in host-control send right]The control port for the host for which to return the special port's send right.<p><dt> <var>node</var> <dd>[in scalar]The index of the node for which the port is desired.<p><dt> <var>which_port</var> <dd>[in scalar]The index of the special port for which the send right isrequested.  Valid values are:     <dl>       <p><dt> <strong>NORMA_DEVICE_PORT</strong><dd>[device-master send right] The device master port for the node.<p><dt> <strong>NORMA_HOST_PORT</strong><dd>[host-name send right] The host name port for the node.<p><dt> <strong>NORMA_HOST_PRIV_PORT</strong><dd>[host-control send right] The host control port for the node.<p><dt> <strong>NORMA_NAMESERVER_PORT</strong><dd>[name-server send right] The registered name server port for the node.</dl><p><dt> <var>special_port</var> <dd>[out norma-special send right]The returned value for the port.</dl><h3>DESCRIPTION</h3><p>The <strong>norma_get_special_port</strong> function returns a sendright for a special port belonging to <var>node</var> on <var>host_priv</var>.<p>Each node maintains a (small) set of node specific ports.  The device master port,  host name, and host control ports aremaintained by the kernel.  The kernel also permits a small setof server specified node specific ports; the name server port is an example and is given (byconvention) an assigned special port index.<h3>RETURN VALUES</h3><p>Only generic errors apply.<h3>RELATED INFORMATION</h3><p>Functions:<a href="mach_host_self.html"><strong>mach_host_self</strong></a>,<a href="norma_set_special_port.html"><strong>norma_get_special_port</strong></a>,<a href="bootstrap_ports.html"><strong>bootstrap_ports</strong></a>.
+<h2>norma_get_special_port</h2>
+<hr>
+<p>
+<strong>Function</strong> - Acquire a send right for a specified node-specific special port.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   norma_get_special_port</strong>
+                <strong>(host_priv_t</strong>                          <var>host_priv</var>,
+                 <strong>int</strong>                                       <var>node</var>,
+                 <strong>int</strong>                                 <var>which_port</var>,
+                 <strong>mach_port_t</strong>                       <var>special_port</var><strong>);</strong>
+
+</pre>
+<h4>Macro forms:</h4>
+<pre>
+
+<strong>#include&ltmach/norma_special_ports.h&gt</strong>
+
+<strong>kern_return_t   norma_get_device_port</strong>
+                <strong>(host_priv_t</strong>                          <var>host_priv</var>,
+                 <strong>int</strong>                                       <var>node</var>,
+                 <strong>mach_port_t</strong>                       <var>special_port</var><strong>);</strong>
+
+<strong>kern_return_t   norma_get_host_port</strong>
+                <strong>(host_priv_t</strong>                          <var>host_priv</var>,
+                 <strong>int</strong>                                       <var>node</var>,
+                 <strong>mach_port_t</strong>                       <var>special_port</var><strong>);</strong>
+
+<strong>kern_return_t   norma_get_host_priv_port</strong>
+                <strong>(host_priv_t</strong>                          <var>host_priv</var>,
+                 <strong>int</strong>                                       <var>node</var>,
+                 <strong>mach_port_t</strong>                       <var>special_port</var><strong>);</strong>
+
+<strong>kern_return_t   norma_get_nameserver_port</strong>
+                <strong>(host_priv_t</strong>                          <var>host_priv</var>,
+                 <strong>int</strong>                                       <var>node</var>,
+                 <strong>mach_port_t</strong>                       <var>special_port</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<dt> <var>host_priv</var> 
+<dd>
+[in host-control send right]
+The control port for the host for which to 
+return the special port's send right.
+<p>
+<dt> <var>node</var> 
+<dd>
+[in scalar]
+The index of the node for which the port is desired.
+<p>
+<dt> <var>which_port</var> 
+<dd>
+[in scalar]
+The index of the special port for which the send right is
+requested.  Valid values are:
+     <dl>
+       <p>
+<dt> <strong>NORMA_DEVICE_PORT</strong>
+<dd>
+[device-master send right] The device master port for the 
+node.
+<p>
+<dt> <strong>NORMA_HOST_PORT</strong>
+<dd>
+[host-name send right] The host name port for the node.
+<p>
+<dt> <strong>NORMA_HOST_PRIV_PORT</strong>
+<dd>
+[host-control send right] The host control port for the node.
+<p>
+<dt> <strong>NORMA_NAMESERVER_PORT</strong>
+<dd>
+[name-server send right] The registered name server port for 
+the node.
+</dl>
+<p>
+<dt> <var>special_port</var> 
+<dd>
+[out norma-special send right]
+The returned value for the port.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>norma_get_special_port</strong> function returns a send
+right for a special port belonging to <var>node</var> on <var>host_priv</var>.
+<p>
+Each node maintains a (small) set of node specific ports.  The device master 
+port,  host name, and host control ports are
+maintained by the kernel.  The kernel also permits a small set
+of server specified 
+node specific ports; the name server port is an example and is given (by
+convention) an assigned special port index.
+<h3>RETURN VALUES</h3>
+<p>
+Only generic errors apply.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="mach_host_self.html"><strong>mach_host_self</strong></a>,
+<a href="norma_set_special_port.html"><strong>norma_get_special_port</strong></a>,
+<a href="bootstrap_ports.html"><strong>bootstrap_ports</strong></a>.

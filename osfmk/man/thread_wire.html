@@ -1,1 +1,53 @@
-<h2>thread_wire</h2><hr><p><strong>Function</strong> - Mark the thread as privileged with respect to kernel resources.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   thread_wire</strong>                <strong>(host_priv_t</strong>                          <var>host_priv</var>,                 <strong>thread_act_t</strong>                            <var>thread</var>,                 <strong>boolean_t</strong>                                <var>wired</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>host_priv</var> <dd>[in host-control send right]The privileged control port for the host on which the thread executes.<p><dt> <var>thread</var> <dd>[in thread send right]The thread to be wired.<p><dt> <var>wired</var> <dd>[in scalar]<strong>TRUE</strong> if the thread is to be wired.</dl><h3>DESCRIPTION</h3><p>The <strong>thread_wire</strong> function marks the thread as "wired".A "wired" thread isalways eligible to be scheduled and can consume physical memory even when free memory is scarce.  This property should be assigned to threads in thedefault page-out path.  Threads not in the default page-out pathshould not have this property to prevent the kernel's free list of pages from being exhausted.<h3>RETURN VALUES</h3><dl><p><dt> <strong>KERN_INVALID_ARGUMENT</strong><dd><var>thread</var> is not a thread port..P<var>host_priv</var> is not the control port for the host on which <var>thread</var>executes.</dl><h3>RELATED INFORMATION</h3><p>Functions:<a href="vm_wire.html"><strong>vm_wire</strong></a>.
+<h2>thread_wire</h2>
+<hr>
+<p>
+<strong>Function</strong> - Mark the thread as privileged with respect to kernel resources.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   thread_wire</strong>
+                <strong>(host_priv_t</strong>                          <var>host_priv</var>,
+                 <strong>thread_act_t</strong>                            <var>thread</var>,
+                 <strong>boolean_t</strong>                                <var>wired</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>host_priv</var> 
+<dd>
+[in host-control send right]
+The privileged control port for the host on 
+which the thread executes.
+<p>
+<dt> <var>thread</var> 
+<dd>
+[in thread send right]
+The thread to be wired.
+<p>
+<dt> <var>wired</var> 
+<dd>
+[in scalar]
+<strong>TRUE</strong> if the thread is to be wired.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>thread_wire</strong> function marks the thread as "wired".
+A "wired" thread is
+always eligible to be scheduled and can consume physical memory even when 
+free memory is scarce.  This property should be assigned to threads in the
+default page-out path.  Threads not in the default page-out path
+should not have 
+this property to prevent the kernel's free list of pages from being exhausted.
+<h3>RETURN VALUES</h3>
+<dl>
+<p>
+<dt> <strong>KERN_INVALID_ARGUMENT</strong>
+<dd>
+<var>thread</var> is not a thread port.
+.P
+<var>host_priv</var> is not the control port for the host on which <var>thread</var>
+executes.
+</dl>
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="vm_wire.html"><strong>vm_wire</strong></a>.

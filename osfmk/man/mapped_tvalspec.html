@@ -1,1 +1,54 @@
-<h2>mapped_tvalspec</h2><hr><p><strong>Structure</strong> - Specifies the format the kernel uses to maintain a mapped clock's time.<h3>SYNOPSIS</h3><pre><strong>struct mapped_tvalspec</strong><strong>{</strong>       <strong>tvalspec_t</strong>          <var>mtv_time</var><strong>;</strong>       <strong>unsigned int</strong>        <var>mtv_csec</var><strong>;</strong><strong>};</strong><strong>typedef struct mapped_tvalspec mapped_tvalspec_t;</strong></pre><h3>FIELDS</h3><dl><dt> <var>mtv_time</var><dd>Clock time.<p><dt> <var>mtv_csec</var><dd>A field used to synchronize with the kernel's setting of the time.</dl><h3>DESCRIPTION</h3><p>The <strong>mapped_tvalspec</strong> structure defines the format of the current-time structure maintained by the kernel and visible through a mapped clock (<strong>clock_map_time</strong>).  The data in this structure is updated at the clock's current resolution and contains the same <strong>tvalspec</strong> value that would be returned by <strong>clock_get_time</strong>.<h3>NOTES</h3><p>Because of the race between the referencing of the multiple fieldsin the clock value and the kernel's setting them, they should be referenced as follows:<p><pre>   <strong>tvalspec_t* ts;</strong>   <strong>do</strong>   <strong>{</strong>              <strong>ts-> tv_sec = mtime -> mtv_time.tv_sec;</strong>              <strong>ts  -> tv_nsec = mtime -> mtv_time.tv_nsec;</strong>   <strong>} while (ts  -> tv_sec != mtime -> mtv_csec);</strong></pre><h3>RELATED INFORMATION</h3><p>Functions:<a href="clock_map_time.html"><strong>clock_map_time</strong></a>,<a href="clock_get_time.html"><strong>clock_get_time</strong></a>.<p>Data Structures:<a href="tvalspec.html"><strong>tvalspec</strong></a>.
+<h2>mapped_tvalspec</h2>
+<hr>
+<p>
+<strong>Structure</strong> - Specifies the format the kernel uses to maintain a mapped clock's time.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>struct mapped_tvalspec</strong>
+<strong>{</strong>
+       <strong>tvalspec_t</strong>          <var>mtv_time</var><strong>;</strong>
+       <strong>unsigned int</strong>        <var>mtv_csec</var><strong>;</strong>
+<strong>};</strong>
+
+<strong>typedef struct mapped_tvalspec mapped_tvalspec_t;</strong>
+</pre>
+<h3>FIELDS</h3>
+<dl>
+<dt> <var>mtv_time</var>
+<dd>
+Clock time.
+<p>
+<dt> <var>mtv_csec</var>
+<dd>
+A field used to synchronize with the kernel's setting of the time.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>mapped_tvalspec</strong> structure defines the format of the 
+current-time structure 
+maintained by the kernel and visible through a mapped clock 
+(<strong>clock_map_time</strong>).  The data in this structure is updated at the 
+clock's current resolution and contains the same <strong>tvalspec</strong> value that 
+would be returned by <strong>clock_get_time</strong>.
+<h3>NOTES</h3>
+<p>
+Because of the race between the referencing of the multiple fields
+in the clock 
+value and the kernel's setting them, they should be referenced as follows:
+<p>
+<pre>
+   <strong>tvalspec_t* ts;</strong>
+   <strong>do</strong>
+   <strong>{</strong>
+              <strong>ts-> tv_sec = mtime -> mtv_time.tv_sec;</strong>
+              <strong>ts  -> tv_nsec = mtime -> mtv_time.tv_nsec;</strong>
+   <strong>} while (ts  -> tv_sec != mtime -> mtv_csec);</strong>
+</pre>
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="clock_map_time.html"><strong>clock_map_time</strong></a>,
+<a href="clock_get_time.html"><strong>clock_get_time</strong></a>.
+<p>
+Data Structures:
+<a href="tvalspec.html"><strong>tvalspec</strong></a>.

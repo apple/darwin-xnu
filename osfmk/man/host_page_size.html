@@ -1,1 +1,34 @@
-<h2>host_page_size</h2><hr><p><strong>Function</strong> - Provide the system's virtual page size.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   host_page_size</strong>                <strong>(host_t</strong>                                    <var>host</var>,                 <strong>vm_size_t</strong>                            <var>page_size</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>host</var> <dd>[in host-name send right]The name (or control) port for the host for which the page size is desired.<p><dt> <var>page_size</var> <dd>[out scalar]The host's page size (in bytes).</dl><h3>DESCRIPTION</h3><p>The <strong>host_page_size</strong> function returns the page size for the given host.<h3>RETURN VALUES</h3><p>Only generic errors apply.<h3>RELATED INFORMATION</h3><p>Functions:<a href="mach_host_self.html"><strong>mach_host_self</strong></a>.
+<h2>host_page_size</h2>
+<hr>
+<p>
+<strong>Function</strong> - Provide the system's virtual page size.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   host_page_size</strong>
+                <strong>(host_t</strong>                                    <var>host</var>,
+                 <strong>vm_size_t</strong>                            <var>page_size</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>host</var> 
+<dd>
+[in host-name send right]
+The name (or control) port for the host for 
+which the page size is desired.
+<p>
+<dt> <var>page_size</var> 
+<dd>
+[out scalar]
+The host's page size (in bytes).
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>host_page_size</strong> function returns the page size for the given host.
+<h3>RETURN VALUES</h3>
+<p>
+Only generic errors apply.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="mach_host_self.html"><strong>mach_host_self</strong></a>.

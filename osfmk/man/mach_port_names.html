@@ -1,1 +1,70 @@
-<h2>mach_port_names</h2><hr><p><strong>Function</strong> - Return information about a task's port name space.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   mach_port_names</strong>                <strong>(ipc_space_t</strong>                               <var>task</var>,                 <strong>mach_port_name_array_t</strong>                  <var>*names</var>,                 <strong>mach_msg_type_number_t</strong>               <var>*namesCnt</var>,                 <strong>mach_port_type_array_</strong>                   <var>*types</var>,                 <strong>mach_msg_type_number_t</strong>               <var>*typesCnt</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>task</var> <dd>[in task send right]The task whose port name space is queried.<p><dt> <var>names</var> <dd>[out pointer to dynamic array of <var>mach_port_name_t</var>]The names of the ports, port sets, and dead names in the task's port name space, in no particular order.<p><dt> <var>namesCnt</var> <dd>[out scalar]The number of names returned.<p><dt> <var>types</var> <dd>[out pointer to dynamic array of <var>mach_port_type_t</var>]The type of each corresponding name.  Indicates what kind of rights the task holds with that name.<p><dt> <var>typesCnt</var> <dd>[out scalar]The number of types returned.</dl><h3>DESCRIPTION</h3><p>The <strong>mach_port_names</strong> returns information about <var>task</var>'sport name space.  Itreturns task's currently active names, which represent some port,port set, or dead name right.  For each name, it also returns what type of rights<var>task</var> holds (the same information returned by <strong>mach_port_type</strong>).<p>Note that when a call to <strong>mach_port_names</strong> returns, thenumber of entries in the two output arrays (<var>names</var> and <var>types</var>)are equal (<var>namesCnt</var> equals <var>typesCnt</var>).  The fact that thisinterface returns two separate counts is an artifact of the Mach Interface Generator.<h3>NOTES</h3><p>This interface is machine word length specific because of the port nameparameter and the returned port names.<h3>RETURN VALUES</h3><p>Only generic errors apply.<h3>RELATED INFORMATION</h3><p>Functions:<a href="mach_port_type.html"><strong>mach_port_type</strong></a>.
+<h2>mach_port_names</h2>
+<hr>
+<p>
+<strong>Function</strong> - Return information about a task's port name space.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   mach_port_names</strong>
+                <strong>(ipc_space_t</strong>                               <var>task</var>,
+                 <strong>mach_port_name_array_t</strong>                  <var>*names</var>,
+                 <strong>mach_msg_type_number_t</strong>               <var>*namesCnt</var>,
+                 <strong>mach_port_type_array_</strong>                   <var>*types</var>,
+                 <strong>mach_msg_type_number_t</strong>               <var>*typesCnt</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>task</var> 
+<dd>
+[in task send right]
+The task whose port name space is queried.
+<p>
+<dt> <var>names</var> 
+<dd>
+[out pointer to dynamic array of <var>mach_port_name_t</var>]
+The names of the 
+ports, port sets, and dead names in the task's port name space, in no 
+particular order.
+<p>
+<dt> <var>namesCnt</var> 
+<dd>
+[out scalar]
+The number of names returned.
+<p>
+<dt> <var>types</var> 
+<dd>
+[out pointer to dynamic array of <var>mach_port_type_t</var>]
+The type of each 
+corresponding name.  Indicates what kind of rights the task holds with 
+that name.
+<p>
+<dt> <var>typesCnt</var> 
+<dd>
+[out scalar]
+The number of types returned.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>mach_port_names</strong> returns information about <var>task</var>'s
+port name space.  It
+returns task's currently active names, which represent some port,
+port set, or dead 
+name right.  For each name, it also returns what type of rights
+<var>task</var> holds (the 
+same information returned by <strong>mach_port_type</strong>).
+<p>
+Note that when a call to <strong>mach_port_names</strong> returns, the
+number of entries in the two output arrays (<var>names</var> and <var>types</var>)
+are equal (<var>namesCnt</var> equals <var>typesCnt</var>).  The fact that this
+interface returns two separate counts is an artifact of the Mach Interface Generator.
+<h3>NOTES</h3>
+<p>
+This interface is machine word length specific because of the port name
+parameter and the returned port names.
+<h3>RETURN VALUES</h3>
+<p>
+Only generic errors apply.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="mach_port_type.html"><strong>mach_port_type</strong></a>.

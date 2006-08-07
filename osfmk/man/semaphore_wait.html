@@ -1,1 +1,52 @@
-<h2>semaphore_wait</h2><hr><p><strong>Function</strong> - Wait on the specified semaphore.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   semaphore_wait</strong>                <strong>(semaphore_t</strong>                          <var>semaphore</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>semaphore</var><dd>[in send right] The port naming the semaphore that the wait operation is being performed upon.</dl><h3>DESCRIPTION</h3><p>The <strong>semaphore_wait</strong> function decrements the semaphore count. If thesemaphore count is negative after decrementing, the calling threadblocks.  Device driver interrupt service routines (ISR) should neverexecute <strong>semaphore_wait</strong>, since waiting on a semaphore at the ISR levelmay, and often will, lead to a deadlock.<h3>RETURN VALUES</h3><dl><p><dt> <strong>KERN_INVALID_ARGUMENT</strong><dd>The specified semaphore is invalid.<p><dt> <strong>KERN_TERMINATED</strong><dd>The specified semaphore has been destroyed.<p><dt> <strong>KERN_ABORTED</strong><dd>The caller was blocked due to a negative count on the semaphore, and was     awoken for a reason not related to the semaphore subsystem     (e.g. <strong>thread_terminate</strong>).<p><dt> <strong>KERN_SUCCESS</strong><dd>The semaphore wait operation was successful.</dl><h3>RELATED INFORMATION</h3><p>Functions:<a href="semaphore_create.html"><strong>semaphore_create</strong></a>,<a href="semaphore_destroy.html"><strong>semaphore_destroy</strong></a>,<a href="semaphore_signal.html"><strong>semaphore_signal</strong></a>,<a href="semaphore_signal_all.html"><strong>semaphore_signal_all</strong></a>,<a href="device_get_status.html"><strong>device_get_status</strong></a>.
+<h2>semaphore_wait</h2>
+<hr>
+<p>
+<strong>Function</strong> - Wait on the specified semaphore.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   semaphore_wait</strong>
+                <strong>(semaphore_t</strong>                          <var>semaphore</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>semaphore</var>
+<dd>
+[in send right] The port naming the semaphore that the wait operation is being performed upon.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>semaphore_wait</strong> function decrements the semaphore count. If the
+semaphore count is negative after decrementing, the calling thread
+blocks.  Device driver interrupt service routines (ISR) should never
+execute <strong>semaphore_wait</strong>, since waiting on a semaphore at the ISR level
+may, and often will, lead to a deadlock.
+<h3>RETURN VALUES</h3>
+<dl>
+<p>
+<dt> <strong>KERN_INVALID_ARGUMENT</strong>
+<dd>
+The specified semaphore is invalid.
+<p>
+<dt> <strong>KERN_TERMINATED</strong>
+<dd>
+The specified semaphore has been destroyed.
+<p>
+<dt> <strong>KERN_ABORTED</strong>
+<dd>
+The caller was blocked due to a negative count on the semaphore, and was
+     awoken for a reason not related to the semaphore subsystem
+     (e.g. <strong>thread_terminate</strong>).
+<p>
+<dt> <strong>KERN_SUCCESS</strong>
+<dd>
+The semaphore wait operation was successful.
+</dl>
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="semaphore_create.html"><strong>semaphore_create</strong></a>,
+<a href="semaphore_destroy.html"><strong>semaphore_destroy</strong></a>,
+<a href="semaphore_signal.html"><strong>semaphore_signal</strong></a>,
+<a href="semaphore_signal_all.html"><strong>semaphore_signal_all</strong></a>,
+<a href="device_get_status.html"><strong>device_get_status</strong></a>.

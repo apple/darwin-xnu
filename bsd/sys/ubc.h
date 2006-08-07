@@ -50,6 +50,8 @@ int	ubc_setsize(struct vnode *, off_t);
 
 struct ucred *ubc_getcred(struct vnode *);
 int	ubc_setcred(struct vnode *, struct proc *);
+struct thread;
+int	ubc_setthreadcred(struct vnode *, struct proc *, struct thread *);
 
 int     ubc_sync_range(vnode_t, off_t, off_t, int);
 errno_t ubc_msync(vnode_t, off_t, off_t, off_t *, int);

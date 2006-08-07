@@ -1,1 +1,50 @@
-<h2>evc_wait</h2><hr><p><strong>System Trap</strong> - Wait for a kernel (device) signalled event.<h3>SYNOPSIS</h3><pre><strong>kern_return_t	evc_wait</strong>		<strong>(unsigned int</strong>	<var>event</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><dt> <var>event</var><dd>[in scalar] The task local event ID of the kernel event object.</dl><h3>DESCRIPTION</h3><p>The <strong>evc_wait</strong> function causes the invoking thread to wait until thespecified kernel (device) generated <var>event</var> occurs. Device drivers(typically mapped devices intended to be supported by user spacedrivers) may supply an <var>event</var> service.  The <var>event</var> service defines oneor more <var>event</var> objects, named by task local <var>event</var> IDs. Each of these<var>event</var> objects has an associated <var>event</var> count, initially zero. Wheneverthe associated <var>event</var> occurs (typically a device interrupt), the <var>event</var>count is incremented. If this count is zero when <strong>evc_wait</strong> is called,the calling thread waits for the next <var>event</var> to occur. Only one threadmay be waiting for the <var>event</var> to occur. If the count is non-zero when<strong>evc_wait</strong> is called, the count is simply decremented without causingthe thread to wait. The <var>event</var> count guarantees that no <var>event</var>s arelost.<h3>NOTES</h3><p>The typical use of this service is within user space devicedrivers. When a device interrupt occurs, the (in this case, simple)kernel device driver would place device status in a shared (with theuser device driver) memory window (established by <strong>device_map</strong>) andsignal the associated <var>event</var>. The user space device driver wouldnormally be waiting with <strong>evc_wait</strong>. The user thread then wakes,processes the device status, typically interacting with the device viaits shared memory window, then waits for the next interrupt.<h3>RETURN VALUES</h3><dl><dt> <strong>KERN_NO_SPACE</strong><dd>There is already a thread waiting for this event.</dl><h3>RELATED INFORMATION</h3><p>Functions:<a href="device_map.html"><strong>device_map</strong></a>.
+<h2>evc_wait</h2>
+<hr>
+<p>
+<strong>System Trap</strong> - Wait for a kernel (device) signalled event.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t	evc_wait</strong>
+		<strong>(unsigned int</strong>	<var>event</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<dt> <var>event</var>
+<dd>
+[in scalar] The task local event ID of the kernel event object.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>evc_wait</strong> function causes the invoking thread to wait until the
+specified kernel (device) generated <var>event</var> occurs. Device drivers
+(typically mapped devices intended to be supported by user space
+drivers) may supply an <var>event</var> service.  The <var>event</var> service defines one
+or more <var>event</var> objects, named by task local <var>event</var> IDs. Each of these
+<var>event</var> objects has an associated <var>event</var> count, initially zero. Whenever
+the associated <var>event</var> occurs (typically a device interrupt), the <var>event</var>
+count is incremented. If this count is zero when <strong>evc_wait</strong> is called,
+the calling thread waits for the next <var>event</var> to occur. Only one thread
+may be waiting for the <var>event</var> to occur. If the count is non-zero when
+<strong>evc_wait</strong> is called, the count is simply decremented without causing
+the thread to wait. The <var>event</var> count guarantees that no <var>event</var>s are
+lost.
+<h3>NOTES</h3>
+<p>
+The typical use of this service is within user space device
+drivers. When a device interrupt occurs, the (in this case, simple)
+kernel device driver would place device status in a shared (with the
+user device driver) memory window (established by <strong>device_map</strong>) and
+signal the associated <var>event</var>. The user space device driver would
+normally be waiting with <strong>evc_wait</strong>. The user thread then wakes,
+processes the device status, typically interacting with the device via
+its shared memory window, then waits for the next interrupt.
+<h3>RETURN VALUES</h3>
+<dl>
+<dt> <strong>KERN_NO_SPACE</strong>
+<dd>
+There is already a thread waiting for this event.
+</dl>
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="device_map.html"><strong>device_map</strong></a>.

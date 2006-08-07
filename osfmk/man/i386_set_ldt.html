@@ -1,1 +1,90 @@
-<h2>i386_set_ldt</h2><hr><p><strong>Function</strong> - Set per-thread segment descriptors.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   i386_set_ldt</strong>                <strong>(thread_act_t</strong>                        <var>target_act</var>,                 <strong>int</strong>                             <var>first_selector</var>,                 <strong>descriptor_list_t</strong>                    <var>desc_list</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>target_act</var> <dd>[in thread send right]Thread whose segment descriptors are to be set.<p><dt> <var>first_selector</var> <dd>[in scalar]Selector value (segment register value) corresponding to the first segment whose descriptor is to be set.<p><dt> <var>desc_list</var> <dd>[pointer to in array of <strong>descriptor_t</strong>]Array of segment descriptors.  The following forms are permitted:<ul><p><li>Empty descriptor. The <strong>ACC_P</strong> flag (segment present) may or may not be set.<p><li><strong>ACC_CALL_GATE</strong>--Converted into a system call gate.  The <strong>ACC_P</strong> flag must be set.</ul><p>All other descriptors must have both the <strong>ACC_P</strong> flag set and specify user mode access (<strong>ACC_PL_U</strong>).<ul><p><li><strong>ACC_DATA</strong>.<p><li><strong>ACC_DATA_W</strong>.<p><li><strong>ACC_DATA_E</strong>.<p><li><strong>ACC_DATA_EW</strong>.<p><li><strong>ACC_CODE</strong>.<p><li><strong>ACC_CODE_R</strong>.<p><li><strong>ACC_CODE_C</strong>.<p><li><strong>ACC_CODE_CR</strong>.<p><li><strong>ACC_CALL_GATE_16</strong>.<p><li><strong>ACC_CALL_GATE</strong>.</ul></dl><h3>DESCRIPTION</h3><p>The <strong>i386_set_ldt</strong> function allows a thread to have aprivate local descriptortable (LDT) which allows its local segments to map various rangesof its address space.<h3>RETURN VALUES</h3><p>Only generic errors apply.<h3>RELATED INFORMATION</h3><p>Functions:<a href="i386_get_ldt.html"><strong>i386_get_ldt<strong></a>.
+<h2>i386_set_ldt</h2>
+<hr>
+<p>
+<strong>Function</strong> - Set per-thread segment descriptors.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   i386_set_ldt</strong>
+                <strong>(thread_act_t</strong>                        <var>target_act</var>,
+                 <strong>int</strong>                             <var>first_selector</var>,
+                 <strong>descriptor_list_t</strong>                    <var>desc_list</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>target_act</var> 
+<dd>
+[in thread send right]
+Thread whose segment descriptors are to be set.
+<p>
+<dt> <var>first_selector</var> 
+<dd>
+[in scalar]
+Selector value (segment register value) corresponding to the 
+first segment whose descriptor is to be set.
+<p>
+<dt> <var>desc_list</var> 
+<dd>
+[pointer to in array of <strong>descriptor_t</strong>]
+Array of segment descriptors.  The 
+following forms are permitted:
+<ul>
+<p>
+<li>
+Empty descriptor. The <strong>ACC_P</strong> flag (segment present) may or may 
+not be set.
+<p>
+<li>
+<strong>ACC_CALL_GATE</strong>--Converted into a system call gate.  The 
+<strong>ACC_P</strong> flag must be set.
+</ul>
+<p>
+All other descriptors must have both the <strong>ACC_P</strong> flag set and specify 
+user mode access (<strong>ACC_PL_U</strong>).
+<ul>
+<p>
+<li>
+<strong>ACC_DATA</strong>.
+<p>
+<li>
+<strong>ACC_DATA_W</strong>.
+<p>
+<li>
+<strong>ACC_DATA_E</strong>.
+<p>
+<li>
+<strong>ACC_DATA_EW</strong>.
+<p>
+<li>
+<strong>ACC_CODE</strong>.
+<p>
+<li>
+<strong>ACC_CODE_R</strong>.
+<p>
+<li>
+<strong>ACC_CODE_C</strong>.
+<p>
+<li>
+<strong>ACC_CODE_CR</strong>.
+<p>
+<li>
+<strong>ACC_CALL_GATE_16</strong>.
+<p>
+<li>
+<strong>ACC_CALL_GATE</strong>.
+</ul>
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>i386_set_ldt</strong> function allows a thread to have a
+private local descriptor
+table (LDT) which allows its local segments to map various ranges
+of its address 
+space.
+<h3>RETURN VALUES</h3>
+<p>
+Only generic errors apply.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="i386_get_ldt.html"><strong>i386_get_ldt<strong></a>.

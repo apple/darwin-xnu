@@ -1,1 +1,147 @@
-<h2>mach_port_request_notification</h2><hr><p><strong>Function</strong> - Request notification of the specified port event type.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   mach_port_request_notification</strong>                <strong>(ipc_space_t</strong>                               <var>task</var>,                 <strong>mach_port_name_t</strong>                          <var>name</var>,                 <strong>mach_msg_id_t</strong>                          <var>variant</var>,                 <strong>mach_port_mscount_t</strong>                       <var>sync</var>,                 <strong>mach_port_send_once_t</strong>                   <var>notify</var>,                 <strong>mach_msg_type_name_t</strong>               <var>notify_type</var>,                 <strong>mach_port_send_once_t</strong>                <var>*previous</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>task</var> <dd>[in task send right]The task holding the specified right.<p><dt> <var>name</var> <dd>[in scalar]The task's name for the right.<p><dt> <var>variant</var> <dd>[in scalar]The type of notification.<p><dt> <var>sync</var> <dd>[in scalar]Some variants use this value to overcome race conditions.<p><dt> <var>notify</var> <dd>[in notify send-once or receive (to be converted to send-once) right]A send-once right, to which the notification will be sent.<p><dt> <var>notify_type</var> <dd>[in scalar]IPC type of the <var>notify</var> right; either<strong>MACH_MSG_TYPE_MAKE_SEND_ONCE</strong> or <strong>MACH_MSG_TYPE_MOVE_SEND_ONCE</strong>.<p><dt> <var>previous</var> <dd>[out notify send-once right]The previously registered send-once right.</dl><h3>DESCRIPTION</h3><p>The <strong>mach_port_request_notification</strong> function registers a request for anotification and supplies a send-once right that the notificationwill use.  It is an atomic swap, returning the previously registered send-once right (or<strong>MACH_PORT_NULL</strong> for none).  A notification request may becancelled by providing <strong>MACH_PORT_NULL</strong>.<p>The <var>variant</var> argument takes the following values:<dl><dt> <strong>MACH_NOTIFY_PORT_DESTROYED</strong><dd><var>sync</var> must be zero.  The <var>name</var> must specify a receive right,and the call requests a port-destroyed notification for the receiveright.  If the receive right were to have been destroyed, for instanceby <strong>mach_port_destroy</strong>, then instead the receive right will besent in a port-destroyed notification to the registered send-once right.<p><dt> <strong>MACH_NOTIFY_DEAD_NAME</strong><dd>The call requests a dead-name notification.  <var>name</var> specifies send,receive, or send-once rights for a port.  If the port is destroyed (and the right remains, becoming a dead name), then a dead-name notification which carries the name of the right will be sent to the registeredsend-once right.  If <var>sync</var> is non-zero, the <var>name</var> may specify a dead name, and a dead-name notification is immediately generated.<p>Whenever a dead-name notification is generated, the user reference count of the dead name is incremented.  For example, a send right with two user refs has a registered dead-name request.  If the port isdestroyed, the send right turns into a dead name with three user refs(instead of two), and a dead-name notification is generated. <p>If the name is made available for reuse, perhaps because of<strong>mach_port_destroy</strong> or <strong>mach_port_mod_refs</strong>,or the name denotes asend-once right which has a message sent to it, then the registered send-once right is used to generate a port-deleted notification instead.<p><dt> <strong>MACH_NOTIFY_NO_SENDERS</strong><dd>The call requests a no-senders notification.  <var>name</var> must specify areceive right.  If the receive right's make-send count is greater than or equal to the sync value, and it has no extant send rights, than animmediate no-senders notification is generated.  Otherwise the notification is generated when the receive right next loses its last extant send right.  In either case, any previously registered send-once right is returned.<p>The no-senders notification carries the value the port's make-send count had when it was generated.  The make-send count is incremented whenever a send right is made directly from a receive right.  Themake-send count is reset to zero when the receive right is carried in amessage.<p>When moving a receive right, no-senders notifications are canceled, with a send-once notification sent to indicate the cancelation.</dl><h3>NOTES</h3><p>This interface is machine word length specific because of the port nameparameter.<h3>RETURN VALUES</h3><dl><p><dt> <strong>KERN_INVALID_NAME</strong><dd><var>name</var> did not denote a right.<p><dt> <strong>KERN_INVALID_RIGHT</strong><dd><var>name</var> denoted an invalid right.<p><dt> <strong>KERN_INVALID_CAPABILITY</strong><dd><var>notify</var> was invalid.</dl><p>When using <strong>MACH_NOTIFY_DEAD_NAME</strong>:<dl><p><dt> <strong>KERN_UREFS_OVERFLOW</strong><dd><var>name</var> denotes a dead name, but generating an immediate dead-name notification would overflow the name's user-reference count.</dl><h3>RELATED INFORMATION</h3><p>Functions:<a href="mach_msg.html"><strong>mach_msg</strong></a>,<a href="mach_port_get_attributes.html"><strong>mach_port_get_attributes</strong></a>.
+<h2>mach_port_request_notification</h2>
+<hr>
+<p>
+<strong>Function</strong> - Request notification of the specified port event type.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   mach_port_request_notification</strong>
+                <strong>(ipc_space_t</strong>                               <var>task</var>,
+                 <strong>mach_port_name_t</strong>                          <var>name</var>,
+                 <strong>mach_msg_id_t</strong>                          <var>variant</var>,
+                 <strong>mach_port_mscount_t</strong>                       <var>sync</var>,
+                 <strong>mach_port_send_once_t</strong>                   <var>notify</var>,
+                 <strong>mach_msg_type_name_t</strong>               <var>notify_type</var>,
+                 <strong>mach_port_send_once_t</strong>                <var>*previous</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>task</var> 
+<dd>
+[in task send right]
+The task holding the specified right.
+<p>
+<dt> <var>name</var> 
+<dd>
+[in scalar]
+The task's name for the right.
+<p>
+<dt> <var>variant</var> 
+<dd>
+[in scalar]
+The type of notification.
+<p>
+<dt> <var>sync</var> 
+<dd>
+[in scalar]
+Some variants use this value to overcome race conditions.
+<p>
+<dt> <var>notify</var> 
+<dd>
+[in notify send-once or receive (to be converted to send-once) right]
+A 
+send-once right, to which the notification will be sent.
+<p>
+<dt> <var>notify_type</var> 
+<dd>
+[in scalar]
+IPC type of the <var>notify</var> right; either
+<strong>MACH_MSG_TYPE_MAKE_SEND_ONCE</strong> or <strong>MACH_MSG_TYPE_MOVE_SEND_ONCE</strong>.
+<p>
+<dt> <var>previous</var> 
+<dd>
+[out notify send-once right]
+The previously registered send-once right.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>mach_port_request_notification</strong> function registers a request for a
+notification and supplies a send-once right that the notification
+will use.  It is an atomic 
+swap, returning the previously registered send-once right (or
+<strong>MACH_PORT_NULL</strong> for none).  A notification request may be
+cancelled by providing <strong>MACH_PORT_NULL</strong>.
+<p>
+The <var>variant</var> argument takes the following values:
+<dl>
+<dt> <strong>MACH_NOTIFY_PORT_DESTROYED</strong>
+<dd>
+<var>sync</var> must be zero.  The <var>name</var> must specify a receive right,
+and the call requests a port-destroyed notification for the receive
+right.  If the receive right were to have been destroyed, for instance
+by <strong>mach_port_destroy</strong>, then instead the receive right will be
+sent in a port-destroyed notification to the registered send-once right.
+<p>
+<dt> <strong>MACH_NOTIFY_DEAD_NAME</strong>
+<dd>
+The call requests a dead-name notification.  <var>name</var> specifies send,
+receive, or send-once rights for a port.  If the port is destroyed (and the 
+right remains, becoming a dead name), then a dead-name notification 
+which carries the name of the right will be sent to the registered
+send-once right.  If <var>sync</var> is non-zero, 
+the <var>name</var> may specify a dead name, and 
+a dead-name notification is immediately generated.
+<p>
+Whenever a dead-name notification is generated, the user reference 
+count of the dead name is incremented.  For example, a send right with 
+two user refs has a registered dead-name request.  If the port is
+destroyed, the send right turns into a dead name with three user refs
+(instead of two), and a dead-name notification is generated. 
+<p>
+If the name is made available for reuse, perhaps because of
+<strong>mach_port_destroy</strong> or <strong>mach_port_mod_refs</strong>,
+or the name denotes a
+send-once right which has a message sent to it, then the registered send-once 
+right is used to generate a port-deleted notification instead.
+<p>
+<dt> <strong>MACH_NOTIFY_NO_SENDERS</strong>
+<dd>
+The call requests a no-senders notification.  <var>name</var> must specify a
+receive right.  If the receive right's make-send count is greater than or 
+equal to the sync value, and it has no extant send rights, than an
+immediate no-senders notification is generated.  Otherwise the notification is 
+generated when the receive right next loses its last extant send right.  In 
+either case, any previously registered send-once right is returned.
+<p>
+The no-senders notification carries the value the port's make-send 
+count had when it was generated.  The make-send count is incremented 
+whenever a send right is made directly from a receive right.  The
+make-send count is reset to zero when the receive right is carried in a
+message.
+<p>
+When moving a receive right, no-senders notifications are canceled, 
+with a send-once notification sent to indicate the cancelation.
+</dl>
+<h3>NOTES</h3>
+<p>
+This interface is machine word length specific because of the port name
+parameter.
+<h3>RETURN VALUES</h3>
+<dl>
+<p>
+<dt> <strong>KERN_INVALID_NAME</strong>
+<dd>
+<var>name</var> did not denote a right.
+<p>
+<dt> <strong>KERN_INVALID_RIGHT</strong>
+<dd>
+<var>name</var> denoted an invalid right.
+<p>
+<dt> <strong>KERN_INVALID_CAPABILITY</strong>
+<dd>
+<var>notify</var> was invalid.
+</dl>
+<p>
+When using <strong>MACH_NOTIFY_DEAD_NAME</strong>:
+<dl>
+<p>
+<dt> <strong>KERN_UREFS_OVERFLOW</strong>
+<dd>
+<var>name</var> denotes a dead name, but generating an immediate dead-name 
+notification would overflow the name's user-reference count.
+</dl>
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="mach_msg.html"><strong>mach_msg</strong></a>,
+<a href="mach_port_get_attributes.html"><strong>mach_port_get_attributes</strong></a>.

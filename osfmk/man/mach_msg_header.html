@@ -1,1 +1,183 @@
-<h2>mach_msg_header</h2><hr><p><strong>Structure</strong> - Specifies the content of an IPC message header.<h3>SYNOPSIS</h3><pre><strong>typedef struct</strong><strong>{</strong>       <strong>mach_msg_bits_t </strong>                    <var>msgh_bits</var><strong>;</strong>       <strong>mach_msg_size_t</strong>                     <var>msgh_size</var><strong>;</strong>       <strong>mach_port_t</strong>                  <var>msgh_remote_port</var><strong>;</strong>       <strong>mach_port_t</strong>                   <var>msgh_local_port</var><strong>;</strong>       <strong>mach_msg_size_t</strong>                 <var>msgh_reserved</var><strong>;</strong>       <strong>mach_msg_id_t</strong>                         <var>msgh_id</var><strong>;</strong><strong>} mach_msg_header_t;</strong><strong>typedef struct</strong><strong>{</strong>       <strong>mach_msg_size_t</strong>         <var>msgh_descriptor_count</var><strong>;</strong><strong>} mach_msg_body_t;</strong><strong>typedef struct</strong><strong>{</strong>       <strong>mach_msg_trailer_type_t</strong>     <var>msgh_trailer_type</var><strong>;</strong>       <strong>mach_msg_trailer_size_t</strong>     <var>msgh_trailer_size</var><strong>;</strong><strong>} mach_msg_trailer_t;</strong><strong>typedef struct</strong><strong>{</strong>       <strong>mach_msg_trailer_type_t</strong>     <var>msgh_trailer_type</var><strong>;</strong>       <strong>mach_msg_trailer_size_t</strong>     <var>msgh_trailer_size</var><strong>;</strong>       <strong>mach_port_seqno_t</strong>                  <var>msgh_seqno</var><strong>;</strong><strong>} mach_msg_seqno_trailer_t;</strong><strong>typedef struct</strong><strong>{</strong>       <strong>mach_msg_trailer_type_t</strong>    <var>msgh_trailer_type</var><strong>;</strong>       <strong>mach_msg_trailer_size_t</strong>    <var>msgh_trailer_size</var><strong>;</strong>       <strong>mach_port_seqno_t</strong>                 <var>msgh_seqno</var><strong>;</strong>       <strong>security_token_t</strong>                 <var>msgh_sender</var><strong>;</strong><strong>} mach_msg_security_trailer_t;</strong><strong>typedef struct</strong><strong>{</strong>       <strong>mach_msg_trailer_type_t</strong>    <var>msgh_trailer_type</var><strong>;</strong>       <strong>mach_msg_trailer_size_t</strong>    <var>msgh_trailer_size</var><strong>;</strong>       <strong>mach_port_seqno_t</strong>                 <var>msgh_seqno</var><strong>;</strong>       <strong>security_token_t</strong>                  <var>msgh_sender</var><strong>;</strong>       <strong>unsigned int</strong>                 <var>dipc_sender_kmsg</var><strong>;</strong><strong>} mach_msg_dipc_trailer_t;</strong></pre><h3>FIELDS</h3><dl><dt> <var>msgh_bits</var><dd>This field specifies the following properties of the message:<dl>  <p><dt> <strong>MACH_MSGH_BITS_REMOTE_MASK</strong><dd>Encodes <var>mach_msg_type_name_t</var> values that specify the port rights in the <var>msgh_remote_port</var> field.  The value must specify a send or send-once right for the destination of the message.     <p><dt> <strong>MACH_MSGH_BITS_LOCAL_MASK</strong><dd>Encodes <var>mach_msg_type_name_t</var> values that specify the port rights in the <var>msgh_local_port</var> field.  If the value doesn'tspecify a send or send-once right for the message's reply port, it must be zero and <var>msgh_local_port</var> must be <strong>MACH_PORT_NULL</strong>.     <p><dt> <strong>MACH_MSGH_BITS_COMPLEX</strong><dd>The complex bit must be specified if the message bodycontains additional port rights or out-of-line memory regions.     <p><dt> <strong>MACH_MSGH_BITS_REMOTE</strong>(<var>bits</var>)<dd>This macro returns the appropriate <var>mach_msg_type_name_t</var> values, given a <var>msgh_bits</var> value.     <p><dt> <strong>MACH_MSGH_BITS_LOCAL</strong>(<var>bits</var>)<dd>This macro returns the appropriate <var>mach_msg_type_name_t</var> values, given a <var>msgh_bits</var> value.     <p><dt> <strong>MACH_MSGH_BITS</strong>(<var>remote</var>, <var>local</var>)<dd>This macro constructs a value for <var>msgh_bits</var>, given two <var>mach_msg_type_name_t</var> values. </dl><p><dt> <var>msgh_size</var><dd>This field is ignored on send (the size to send is specified by the<var>send_size</var> parameter to <strong>mach_msg</strong>); the field is set on receive to the sum of the message header and body sizes (in bytes).  Note that this value may be different from the send size specified by the sender if the sender and receiver machines have differing sizes for port names, memoryaddresses or memory range sizes.     <p><dt> <var>msgh_remote_port</var><dd>When sending, specifies the destination port of the message.  The field must carry a legitimate send or send-once right for a port.  Whenreceived, this field is swapped with <var>msgh_local_port</var>.     <p><dt> <var>msgh_local_port</var><dd>When sending, specifies an auxiliary port right, which isconventionally used as a reply port by the recipient of the message.The field must carry a send right, a send-once right, <strong>MACH_PORT_NULL</strong>, or <strong>MACH_PORT_DEAD</strong>.  When received, this field is swapped with<var>msgh_remote_port</var>.     <p><dt> <var>msgh_id</var><dd>Not set or read by the <strong>mach_msg</strong> call.  The conventional meaning is to convey an operation or function ID.     <p><dt> <var>msgh_descriptor_count</var><dd>The number of descriptors of kernel processed data (port rights andout-of-line data).     <p><dt> <var>msgh_trailer_type</var><dd>An identifier of the trailer version.  Different values indicate notnecessarily compatible trailer formats.  The current (and only) trailer format is <strong>MACH_MSG_TRAILER_FORMAT_0</strong>.  There is currently only one attribute defined within this trailer type: the sender's identity.     <p><dt> <var>msgh_trailer_size</var><dd>The length, in bytes, of the message trailer, including the trailer type and length fields.     <p><dt> <var>msgh_seqno</var><dd>The sequence number of this message relative to the port from which it is received.     <p><dt> <var>msgh_sender</var><dd>The security ID of the sender of the message.</dl><h3>DESCRIPTION</h3><p>The <strong>mach_msg_header</strong> structure defines the fixed size header of a Machmessage.  The header is followed by a message body containing data and portdescriptors and zero or more data bytes.<p>If the <strong>MACH_MSGH_BITS_COMPLEX</strong> flag in the <var>msgh_bits</var> field is not set, then this is a simple message described by <strong>mach_msg_header_t</strong>.  In this case, the header is immediately followed by untyped data.<p>If the complex flag is set, then this is a "complex" message consisting of a <strong>mach_msg_header_t</strong> structure followed by a <strong>mach_msg_body_t</strong> structurecontaining a count followed by an array of descriptors specifyingthe disposition (processing) to be performed for the out-of-line memory regions and additional port rights.<p>Following the header (and any kernel processed descriptors), at naturalalignment can be additional (un-typed) data, up to the size of the message (<var>msgh_size</var>).  This extra data typically carries informationused to decode the data stream and out-of-line data.<p>At the next natural boundary following the message data is the message trailer (<strong>mach_msg_trailer_t</strong>).  This structure indicates the type and length of thetrailer.  If the length is greater than sizeof (<strong>mach_msg_trailer_t</strong>),additional fields follow providing kernel-generated message attributes.<h3>RELATED INFORMATION</h3><p>Functions:<a href="mach_msg.html"><strong>mach_msg</strong></a>.<p>Data Structures:<a href="mach_msg_descriptor.html"><strong>mach_msg_descriptor</strong></a>.
+<h2>mach_msg_header</h2>
+<hr>
+<p>
+<strong>Structure</strong> - Specifies the content of an IPC message header.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>typedef struct</strong>
+<strong>{</strong>
+       <strong>mach_msg_bits_t </strong>                    <var>msgh_bits</var><strong>;</strong>
+       <strong>mach_msg_size_t</strong>                     <var>msgh_size</var><strong>;</strong>
+       <strong>mach_port_t</strong>                  <var>msgh_remote_port</var><strong>;</strong>
+       <strong>mach_port_t</strong>                   <var>msgh_local_port</var><strong>;</strong>
+       <strong>mach_msg_size_t</strong>                 <var>msgh_reserved</var><strong>;</strong>
+       <strong>mach_msg_id_t</strong>                         <var>msgh_id</var><strong>;</strong>
+<strong>} mach_msg_header_t;</strong>
+
+<strong>typedef struct</strong>
+<strong>{</strong>
+       <strong>mach_msg_size_t</strong>         <var>msgh_descriptor_count</var><strong>;</strong>
+<strong>} mach_msg_body_t;</strong>
+
+<strong>typedef struct</strong>
+<strong>{</strong>
+       <strong>mach_msg_trailer_type_t</strong>     <var>msgh_trailer_type</var><strong>;</strong>
+       <strong>mach_msg_trailer_size_t</strong>     <var>msgh_trailer_size</var><strong>;</strong>
+<strong>} mach_msg_trailer_t;</strong>
+
+<strong>typedef struct</strong>
+<strong>{</strong>
+       <strong>mach_msg_trailer_type_t</strong>     <var>msgh_trailer_type</var><strong>;</strong>
+       <strong>mach_msg_trailer_size_t</strong>     <var>msgh_trailer_size</var><strong>;</strong>
+       <strong>mach_port_seqno_t</strong>                  <var>msgh_seqno</var><strong>;</strong>
+<strong>} mach_msg_seqno_trailer_t;</strong>
+
+<strong>typedef struct</strong>
+<strong>{</strong>
+       <strong>mach_msg_trailer_type_t</strong>    <var>msgh_trailer_type</var><strong>;</strong>
+       <strong>mach_msg_trailer_size_t</strong>    <var>msgh_trailer_size</var><strong>;</strong>
+       <strong>mach_port_seqno_t</strong>                 <var>msgh_seqno</var><strong>;</strong>
+       <strong>security_token_t</strong>                 <var>msgh_sender</var><strong>;</strong>
+<strong>} mach_msg_security_trailer_t;</strong>
+
+<strong>typedef struct</strong>
+<strong>{</strong>
+       <strong>mach_msg_trailer_type_t</strong>    <var>msgh_trailer_type</var><strong>;</strong>
+       <strong>mach_msg_trailer_size_t</strong>    <var>msgh_trailer_size</var><strong>;</strong>
+       <strong>mach_port_seqno_t</strong>                 <var>msgh_seqno</var><strong>;</strong>
+       <strong>security_token_t</strong>                  <var>msgh_sender</var><strong>;</strong>
+       <strong>unsigned int</strong>                 <var>dipc_sender_kmsg</var><strong>;</strong>
+<strong>} mach_msg_dipc_trailer_t;</strong>
+</pre>
+<h3>FIELDS</h3>
+<dl>
+<dt> <var>msgh_bits</var>
+<dd>
+This field specifies the following properties of the message:
+<dl>
+  <p>
+<dt> <strong>MACH_MSGH_BITS_REMOTE_MASK</strong>
+<dd>
+Encodes <var>mach_msg_type_name_t</var> values that specify the port 
+rights in the <var>msgh_remote_port</var> field.  The value must specify 
+a send or send-once right for the destination of the message.
+     <p>
+<dt> <strong>MACH_MSGH_BITS_LOCAL_MASK</strong>
+<dd>
+Encodes <var>mach_msg_type_name_t</var> values that specify the port 
+rights in the <var>msgh_local_port</var> field.  If the value doesn't
+specify a send or send-once right for the message's reply port, it 
+must be zero and <var>msgh_local_port</var> must be <strong>MACH_PORT_NULL</strong>.
+     <p>
+<dt> <strong>MACH_MSGH_BITS_COMPLEX</strong>
+<dd>
+The complex bit must be specified if the message body
+contains additional port rights or out-of-line memory regions.
+     <p>
+<dt> <strong>MACH_MSGH_BITS_REMOTE</strong>(<var>bits</var>)
+<dd>
+This macro returns the appropriate <var>mach_msg_type_name_t</var> 
+values, given a <var>msgh_bits</var> value.
+     <p>
+<dt> <strong>MACH_MSGH_BITS_LOCAL</strong>(<var>bits</var>)
+<dd>
+This macro returns the appropriate <var>mach_msg_type_name_t</var> 
+values, given a <var>msgh_bits</var> value.
+     <p>
+<dt> <strong>MACH_MSGH_BITS</strong>(<var>remote</var>, <var>local</var>)
+<dd>
+This macro constructs a value for <var>msgh_bits</var>, given two 
+<var>mach_msg_type_name_t</var> values. 
+</dl>
+<p>
+<dt> <var>msgh_size</var>
+<dd>
+This field is ignored on send (the size to send is specified by the
+<var>send_size</var> parameter to <strong>mach_msg</strong>); the field is set on 
+receive to the sum of 
+the message header and body sizes (in bytes).  Note that this value may 
+be different from the send size specified by the sender if the sender and 
+receiver machines have differing sizes for port names, memory
+addresses or memory range sizes.
+     <p>
+<dt> <var>msgh_remote_port</var>
+<dd>
+When sending, specifies the destination port of the message.  The field 
+must carry a legitimate send or send-once right for a port.  When
+received, this field is swapped with <var>msgh_local_port</var>.
+     <p>
+<dt> <var>msgh_local_port</var>
+<dd>
+When sending, specifies an auxiliary port right, which is
+conventionally used as a reply port by the recipient of the message.
+The field must 
+carry a send right, a send-once right, <strong>MACH_PORT_NULL</strong>, or 
+<strong>MACH_PORT_DEAD</strong>.  When received, this field is swapped with
+<var>msgh_remote_port</var>.
+     <p>
+<dt> <var>msgh_id</var>
+<dd>
+Not set or read by the <strong>mach_msg</strong> call.  The conventional meaning is to 
+convey an operation or function ID.
+     <p>
+<dt> <var>msgh_descriptor_count</var>
+<dd>
+The number of descriptors of kernel processed data (port rights and
+out-of-line data).
+     <p>
+<dt> <var>msgh_trailer_type</var>
+<dd>
+An identifier of the trailer version.  Different values indicate not
+necessarily compatible trailer formats.  The current (and only) trailer format 
+is <strong>MACH_MSG_TRAILER_FORMAT_0</strong>.  There is currently only one 
+attribute defined within this trailer type: the sender's identity.
+     <p>
+<dt> <var>msgh_trailer_size</var>
+<dd>
+The length, in bytes, of the message trailer, including the trailer type 
+and length fields.
+     <p>
+<dt> <var>msgh_seqno</var>
+<dd>
+The sequence number of this message relative to the port from which it 
+is received.
+     <p>
+<dt> <var>msgh_sender</var>
+<dd>
+The security ID of the sender of the message.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>mach_msg_header</strong> structure defines the fixed size header of a Mach
+message.  The header is followed by a message body containing data and port
+descriptors and zero or more data bytes.
+<p>
+If the <strong>MACH_MSGH_BITS_COMPLEX</strong> flag in the <var>msgh_bits</var> field is not set, 
+then this is a simple message described by <strong>mach_msg_header_t</strong>.  
+In this case, the header is immediately followed by untyped data.
+<p>
+If the complex flag is set, then this is a "complex" message consisting of a 
+<strong>mach_msg_header_t</strong> structure followed by a <strong>mach_msg_body_t</strong> structure
+containing a count followed by an array of descriptors specifying
+the disposition 
+(processing) to be performed for the out-of-line memory regions and additional 
+port rights.
+<p>
+Following the header (and any kernel processed descriptors), at natural
+alignment can be additional (un-typed) data, up to the size of the message 
+(<var>msgh_size</var>).  This extra data typically carries information
+used to decode the data stream and out-of-line data.
+<p>
+At the next natural boundary following the message data is the message trailer 
+(<strong>mach_msg_trailer_t</strong>).  This structure indicates the type and length of the
+trailer.  If the length is greater than sizeof (<strong>mach_msg_trailer_t</strong>),
+additional fields 
+follow providing kernel-generated message attributes.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="mach_msg.html"><strong>mach_msg</strong></a>.
+<p>
+Data Structures:
+<a href="mach_msg_descriptor.html"><strong>mach_msg_descriptor</strong></a>.
+

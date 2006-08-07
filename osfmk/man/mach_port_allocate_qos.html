@@ -1,1 +1,65 @@
-<h2>mach_port_allocate_qos</h2><hr><p><strong>Function</strong> - Allocate a port with specified "quality of service."<h3>SYNOPSIS</h3><pre><strong>kern_return_t	mach_port_allocate_qos</strong>		<strong>(ipc_space_t</strong>	<var>task</var>,		<strong>mach_port_right_t</strong>	<var>right</var>,		<strong>mach_port_qos_t</strong>	<var>qos</var>,		<strong>mach_port_name_t*</strong>	<var>name</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><dt> <var>task</var><dd>[in task send right] The task acquiring the port right to the allocated port.<dt> <var>right</var><dd>[in scalar] The type of port right to map to the allocated port.<dt> <var>qos</var><dd>[pointer to an in/out structure] Structure used to specifythe desired "quality of service." This structure indicates whether     or not the caller is providing a name for the port and whether or not     the port will exhibit realtime behavior.<dt> <var>name</var><dd>[in/out scalar] The name of the installed port right, either specified by the     caller or chosen by the system.</dl><h3>DESCRIPTION</h3><p>The <strong>mach_port_allocate_qos</strong> function allocates a port withcaller-specified "quality of service" characteristics with or without acaller-specified name; in other words, the caller may specify a desired nameor it may let the kernel generate the name.  The new port is capable ofsupporting full Mach port semantics (i.e no-more-senders notification can berequested on the port).<h3>NOTES</h3><p>This interface is machine word length specific because of the portname parameter.<h3>RETURN VALUES</h3><dl><dt> <strong>KERN_NO_SPACE</strong><dd>There was no room in task's IPC name space for another right.<dt> <strong>KERN_INVALID_VALUE</strong><dd>The type of right specified by <var>right</var> is either invalid or conflictswith the requested "quality of service" as specified via <var>qos</var>.</dl><h3>RELATED INFORMATION</h3><p>Functions:<a href="mach_port_allocate.html"><strong>mach_port_allocate</strong></a>,<a href="mach_port_allocate_full.html"><strong>mach_port_allocate_full</strong></a>,<a href="mach_port_allocate_name.html"><strong>mach_port_allocate_name</strong></a>,<a href="mach_port_deallocate.html"><strong>mach_port_deallocate</strong></a>,<a href="mach_port_insert_right.html"><strong>mach_port_insert_right</strong></a>,<a href="mach_port_extract_right.html"><strong>mach_port_extract_right</strong></a>.<p>Structures:<a href="mach_port_qos.html"><strong>mach_port_qos</strong></a>.
+<h2>mach_port_allocate_qos</h2>
+<hr>
+<p>
+<strong>Function</strong> - Allocate a port with specified "quality of service."
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t	mach_port_allocate_qos</strong>
+		<strong>(ipc_space_t</strong>	<var>task</var>,
+		<strong>mach_port_right_t</strong>	<var>right</var>,
+		<strong>mach_port_qos_t</strong>	<var>qos</var>,
+		<strong>mach_port_name_t*</strong>	<var>name</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<dt> <var>task</var>
+<dd>
+[in task send right] The task acquiring the port right to the allocated port.
+<dt> <var>right</var>
+<dd>
+[in scalar] The type of port right to map to the allocated port.
+<dt> <var>qos</var>
+<dd>
+[pointer to an in/out structure] Structure used to specify
+the desired "quality of service." This structure indicates whether
+     or not the caller is providing a name for the port and whether or not
+     the port will exhibit realtime behavior.
+<dt> <var>name</var>
+<dd>
+[in/out scalar] The name of the installed port right, either specified by the
+     caller or chosen by the system.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>mach_port_allocate_qos</strong> function allocates a port with
+caller-specified "quality of service" characteristics with or without a
+caller-specified name; in other words, the caller may specify a desired name
+or it may let the kernel generate the name.  The new port is capable of
+supporting full Mach port semantics (i.e no-more-senders notification can be
+requested on the port).
+<h3>NOTES</h3>
+<p>
+This interface is machine word length specific because of the port
+name parameter.
+<h3>RETURN VALUES</h3>
+<dl>
+<dt> <strong>KERN_NO_SPACE</strong>
+<dd>
+There was no room in task's IPC name space for another right.
+<dt> <strong>KERN_INVALID_VALUE</strong>
+<dd>
+The type of right specified by <var>right</var> is either invalid or conflicts
+with the requested "quality of service" as specified via <var>qos</var>.
+</dl>
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="mach_port_allocate.html"><strong>mach_port_allocate</strong></a>,
+<a href="mach_port_allocate_full.html"><strong>mach_port_allocate_full</strong></a>,
+<a href="mach_port_allocate_name.html"><strong>mach_port_allocate_name</strong></a>,
+<a href="mach_port_deallocate.html"><strong>mach_port_deallocate</strong></a>,
+<a href="mach_port_insert_right.html"><strong>mach_port_insert_right</strong></a>,
+<a href="mach_port_extract_right.html"><strong>mach_port_extract_right</strong></a>.
+<p>
+Structures:
+<a href="mach_port_qos.html"><strong>mach_port_qos</strong></a>.

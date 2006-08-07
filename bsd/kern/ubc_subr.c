@@ -45,6 +45,7 @@
 #include <sys/proc_internal.h>
 #include <sys/kauth.h>
 #include <sys/buf.h>
+#include <sys/user.h>
 
 #include <mach/mach_types.h>
 #include <mach/memory_object_types.h>
@@ -54,6 +55,7 @@
 
 #include <kern/kern_types.h>
 #include <kern/zalloc.h>
+#include <kern/thread.h>
 #include <vm/vm_kern.h>
 #include <vm/vm_protos.h> /* last */
 
@@ -344,6 +346,35 @@ ubc_getcred(struct vnode *vp)
 	        return (vp->v_ubcinfo->ui_ucred);
 
 	return (NOCRED);
+}
+
+int
+ubc_setthreadcred(struct vnode *vp, struct proc *p, thread_t thread)
+{
+	struct ubc_info *uip;
+	kauth_cred_t credp;
+	struct uthread *uthread = get_bsdthread_info(thread);
+
+	if (!UBCINFOEXISTS(vp))
+		return (1);
+
+	vnode_lock(vp);
+
+	uip = vp->v_ubcinfo;
+	credp = uip->ui_ucred;
+
+	if (credp == NOCRED) {
+		/* use per-thread cred, if assumed identity, else proc cred */
+		if (uthread == NULL || (uthread->uu_flag & UT_SETUID) == 0) {
+			uip->ui_ucred = kauth_cred_proc_ref(p);
+		} else {
+			uip->ui_ucred = uthread->uu_ucred;
+			kauth_cred_ref(uip->ui_ucred);
+		}
+	}
+	vnode_unlock(vp);
+
+	return (0);
 }
 
 /*

@@ -1,1 +1,63 @@
-<h2>etap_probe</h2><hr><p><strong>System Trap</strong> - Record event data in the kernel'sETAP buffer(s).<h3>SYNOPSIS</h3><pre><strong>#include&ltmach/etap.h&gt</strong><strong>kern_return_t   etap_probe</strong>                <strong>(int</strong>                                   <var>event_id</var>,                 <strong>event_id</strong>                             <var>data_size</var>,                 <strong>etap_data_t</strong>                        <var>etap_data_t</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>event_id</var><dd>A user defined value used to identify the event. <p><dt> <var>data_size</var><dd>The size (in bytes) of the data being passed.Note: The data size is limited to ETAP_DATA_SIZE,(defined in <strong>mach/etap.h</strong>).<p><dt> <var>data</var><dd>A pointer to the event data being passed.</dl><h3>DESCRIPTION</h3><p>Application programmers may instrument their applications withuser-level probes, using the<strong>etap_probe</strong> system call. Allevent data passed to the kernel via<strong>etap_probe</strong> is recorded in thekernel's ETAP monitored buffer(s).  Each record includes a time stamp.<h3>RETURN VALUES</h3><dl>  <dt> <strong>KERN_SUCCESS</strong>       <dd>	    The call was performed successfully.<p>  <dt> <strong>KERN_INVALID_ARGUMENT</strong>       <dd>	    The specified data size exceeds ETAP_DATA_SIZE.<p>  <dt> <strong>KERN_NO_ACCESS</strong>       <dd>	    The tracing of user events is currently enabled.<p>  <dt> <strong>KERN_FAILURE</strong>       <dd>	    ETAP is not configured in the kernel.</dl><h3>RELATED INFORMATION</h3><p>Functions:<a href="etap_trace_thread.html"><strong>etap_trace_thread</strong></a>,<a href="etap_trace_event.html"><strong>etap_trace_event</strong></a>,<a href="etap_get_info.html"><strong>etap_get_info</strong></a>.
+<h2>etap_probe</h2>
+<hr>
+<p>
+<strong>System Trap</strong> - Record event data in the kernel's
+ETAP buffer(s).
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>#include&ltmach/etap.h&gt</strong>
+
+<strong>kern_return_t   etap_probe</strong>
+                <strong>(int</strong>                                   <var>event_id</var>,
+                 <strong>event_id</strong>                             <var>data_size</var>,
+                 <strong>etap_data_t</strong>                        <var>etap_data_t</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>event_id</var>
+<dd>
+A user defined value used to identify the event. 
+<p>
+<dt> <var>data_size</var>
+<dd>
+The size (in bytes) of the data being passed.
+Note: The data size is limited to ETAP_DATA_SIZE,
+(defined in <strong>mach/etap.h</strong>).
+<p>
+<dt> <var>data</var>
+<dd>
+A pointer to the event data being passed.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+Application programmers may instrument their applications with
+user-level probes, using the
+<strong>etap_probe</strong> system call. All
+event data passed to the kernel via
+<strong>etap_probe</strong> is recorded in the
+kernel's ETAP monitored buffer(s).  Each record includes a time stamp.
+<h3>RETURN VALUES</h3>
+<dl>
+  <dt> <strong>KERN_SUCCESS</strong>
+       <dd>
+	    The call was performed successfully.
+<p>
+  <dt> <strong>KERN_INVALID_ARGUMENT</strong>
+       <dd>
+	    The specified data size exceeds ETAP_DATA_SIZE.
+<p>
+  <dt> <strong>KERN_NO_ACCESS</strong>
+       <dd>
+	    The tracing of user events is currently enabled.
+<p>
+  <dt> <strong>KERN_FAILURE</strong>
+       <dd>
+	    ETAP is not configured in the kernel.
+</dl>
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="etap_trace_thread.html"><strong>etap_trace_thread</strong></a>,
+<a href="etap_trace_event.html"><strong>etap_trace_event</strong></a>,
+<a href="etap_get_info.html"><strong>etap_get_info</strong></a>.

@@ -1527,6 +1527,19 @@ vm_offset_t kvtophys(vm_offset_t va) {
 }
 
 /*
+ *	kvtophys64(addr)
+ *
+ *	Convert a kernel virtual address to a 64-bit physical address
+ */
+vm_map_offset_t kvtophys64(vm_map_offset_t va) {
+	ppnum_t pa = pmap_find_phys(kernel_pmap, (addr64_t)va);
+
+	if (!pa)
+		return (vm_map_offset_t)0;
+	return (((vm_map_offset_t)pa) << 12) | (va & 0xfff);
+}
+
+/*
  *		void ignore_zero_fault(boolean_t) - Sets up to ignore or honor any fault on 
  *		page 0 access for the current thread.
  *

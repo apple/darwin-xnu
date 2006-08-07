@@ -1,1 +1,29 @@
-<h2>thread_depress_abort</h2><hr><p><strong>Function</strong> - Cancel thread scheduling depression.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   thread_depress_abort</strong>                <strong>(thread_act_t</strong>                            <var>thread</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>thread</var> <dd>[in thread send right]Thread whose scheduling depression is canceled.</dl><h3>DESCRIPTION</h3><p>The <strong>thread_depress_abort</strong> function cancels any scheduling depressioneffective for <var>thread</var> caused by a <strong>thread_switch</strong> call.<h3>RETURN VALUES</h3><p>Only generic errors apply.<h3>RELATED INFORMATION</h3><p>Functions:<a href="thread_abort.html"><strong>thread_abort</strong></a>,<a href="thread_switch.html"><strong>thread_switch</strong></a>.
+<h2>thread_depress_abort</h2>
+<hr>
+<p>
+<strong>Function</strong> - Cancel thread scheduling depression.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   thread_depress_abort</strong>
+                <strong>(thread_act_t</strong>                            <var>thread</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>thread</var> 
+<dd>
+[in thread send right]
+Thread whose scheduling depression is canceled.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>thread_depress_abort</strong> function cancels any scheduling depression
+effective for <var>thread</var> caused by a <strong>thread_switch</strong> call.
+<h3>RETURN VALUES</h3>
+<p>
+Only generic errors apply.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="thread_abort.html"><strong>thread_abort</strong></a>,
+<a href="thread_switch.html"><strong>thread_switch</strong></a>.

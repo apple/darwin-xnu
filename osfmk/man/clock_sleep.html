@@ -1,1 +1,79 @@
-<h2>clock_sleep</h2><hr><p><strong>System Trap</strong> - Sleep until a given time.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   clock_sleep</strong>                <strong>(mach_port_t</strong>                         <var>clock_name</var>,                 <strong>sleep_type_t</strong>                        <var>sleep_type</var>,                 <strong>tvalspec_t</strong>                          <var>sleep_time</var>,                 <strong>clock_name</strong>                           <var>wake_time</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt><var>clock_name</var><dd>[in clock-name send right] The name (or control) port for the clock.<p><dt><var>sleep_type</var><dd>[in scalar] How to interpret the sleep_time value:     <dl><p><dt><strong>TIME_RELATIVE</strong><dd>Interpret the sleep time as relative to the current time.<p><dt><strong>TIME_ABSOLUTE</strong><dd>Interpret the sleep time as an absolute time.     </dl><p><dt><var>sleep_time</var><dd>[in structure] The time when the sleep is to terminate.<p><dt><var>wake_time</var><dd>[out structure] The actual (absolute) time at which the sleep terminated.</dl><h3>DESCRIPTION</h3><p>The <strong>clock_sleep</strong> system trap delays the invokingthread until a specified time.  This sleep may be aborted by<strong>thread_abort</strong>.  Not all clocks provide this servicebut the REALTIME clock must.<p>If the specified time is in the past, the call returns immediatelywith the wake time being the current time.  If the clock's time ischanged (<strong>clock_set_time</strong>), the sleep will beinterrupted.  The thread will waken at the service time nearest thespecified sleep time as governed by the current clock alarmresolution.<h3>RETURN VALUES</h3><dl><p><dt> <strong>KERN_FAILURE</strong><dd>The clock does not support a sleep service.<p><dt> <strong>KERN_ABORTED</strong><dd>The sleep was interrupted by thread_abort or terminated via use of clock_set_time.</dl><h3>RELATED INFORMATION</h3><p>Functions:<a href="host_get_clock_service.html"><strong>host_get_clock_service</strong></a>,<a href="clock_get_attributes.html"><strong>clock_get_attributes</strong></a>,<a href="clock_get_time.html"><strong>clock_get_time</strong></a>,<a href="clock_alarm.html"><strong>clock_alarm</strong></a>,<a href="clock_set_time.html"><strong>clock_set_time</strong></a>,<a href="thread_abort.html"><strong>thread_abort</strong></a>,<p>Data Structures:tvalspec.
+<h2>clock_sleep</h2>
+<hr>
+<p>
+<strong>System Trap</strong> - Sleep until a given time.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   clock_sleep</strong>
+                <strong>(mach_port_t</strong>                         <var>clock_name</var>,
+                 <strong>sleep_type_t</strong>                        <var>sleep_type</var>,
+                 <strong>tvalspec_t</strong>                          <var>sleep_time</var>,
+                 <strong>clock_name</strong>                           <var>wake_time</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt><var>clock_name</var>
+<dd>
+[in clock-name send right] The name (or control) port for the clock.
+<p>
+<dt><var>sleep_type</var>
+<dd>
+[in scalar] How to interpret the sleep_time value:
+     <dl>
+<p>
+<dt><strong>TIME_RELATIVE</strong>
+<dd>
+Interpret the sleep time as relative to the current time.
+<p>
+<dt><strong>TIME_ABSOLUTE</strong>
+<dd>
+Interpret the sleep time as an absolute time.
+     </dl>
+<p>
+<dt><var>sleep_time</var>
+<dd>
+[in structure] The time when the sleep is to terminate.
+<p>
+<dt><var>wake_time</var>
+<dd>
+[out structure] The actual (absolute) time at which the sleep terminated.
+</dl>
+
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>clock_sleep</strong> system trap delays the invoking
+thread until a specified time.  This sleep may be aborted by
+<strong>thread_abort</strong>.  Not all clocks provide this service
+but the REALTIME clock must.
+<p>
+If the specified time is in the past, the call returns immediately
+with the wake time being the current time.  If the clock's time is
+changed (<strong>clock_set_time</strong>), the sleep will be
+interrupted.  The thread will waken at the service time nearest the
+specified sleep time as governed by the current clock alarm
+resolution.
+<h3>RETURN VALUES</h3>
+<dl>
+<p>
+<dt> <strong>KERN_FAILURE</strong>
+<dd>
+The clock does not support a sleep service.
+<p>
+<dt> <strong>KERN_ABORTED</strong>
+<dd>
+The sleep was interrupted by thread_abort or terminated via use of 
+clock_set_time.
+</dl>
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="host_get_clock_service.html"><strong>host_get_clock_service</strong></a>,
+<a href="clock_get_attributes.html"><strong>clock_get_attributes</strong></a>,
+<a href="clock_get_time.html"><strong>clock_get_time</strong></a>,
+<a href="clock_alarm.html"><strong>clock_alarm</strong></a>,
+<a href="clock_set_time.html"><strong>clock_set_time</strong></a>,
+<a href="thread_abort.html"><strong>thread_abort</strong></a>,
+<p>
+Data Structures:
+tvalspec.

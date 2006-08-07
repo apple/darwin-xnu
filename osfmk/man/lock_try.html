@@ -1,1 +1,62 @@
-<h2>lock_try</h2><hr><p><strong>Function</strong> - Attempt to acquire access rights to a lock.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   lock_try</strong>                <strong>(lock_set_t</strong>                            <var>lock_set</var>,                 <strong>int</strong>                                    <var>lock_id</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>lock_set</var><dd>[in send right] The port naming the lock set which represents the lock.<p><dt> <var>lock_id</var><dd>[in scalar] The lock, represented by the lock set, to be acquired.</dl><h3>DESCRIPTION</h3><p>The <strong>lock_try</strong> function attempts to acquire the specified lock withoutblocking. The return value indicates whether the lock was acquired.<h3>RETURN VALUES</h3><dl><p><dt> <strong>KERN_INVALID_ARGUMENT</strong><dd>The specified lock_set is invalid, or the lock_id is out of range.<p><dt> <strong>KERN_SUCCESS</strong><dd>The lock was acquired.<p><dt> <strong>KERN_LOCK_UNSTABLE</strong><dd>The acquired lock has an unstable state.<p><dt> <strong>KERN_LOCK_SET_DESTROYED</strong><dd>The specified lock has been destroyed.<p><dt> <strong>KERN_LOCK_OWNED</strong><dd>Another thread currently owns the requested lock.<p><dt> <strong>KERN_LOCK_OWNED_SELF</strong><dd>The calling thread already owns the lock.</dl><h3>RELATED INFORMATION</h3><p>Functions:<a href="lock_acquire.html"><strong>lock_acquire</strong></a>,<a href="lock_make_stable.html"><strong>lock_make_stable</strong></a>,<a href="lock_release.html"><strong>lock_release</strong></a>,<a href="lock_handoff.html"><strong>lock_handoff</strong></a>,<a href="lock_handoff_accept.html"><strong>lock_handoff_accept</strong></a>,<a href="lock_set_create.html"><strong>lock_set_create</strong></a>,<a href="lock_set_destroy.html"><strong>lock_set_destroy</strong></a>.
+<h2>lock_try</h2>
+<hr>
+<p>
+<strong>Function</strong> - Attempt to acquire access rights to a lock.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   lock_try</strong>
+                <strong>(lock_set_t</strong>                            <var>lock_set</var>,
+                 <strong>int</strong>                                    <var>lock_id</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>lock_set</var>
+<dd>
+[in send right] The port naming the lock set which represents the lock.
+<p>
+<dt> <var>lock_id</var>
+<dd>
+[in scalar] The lock, represented by the lock set, to be acquired.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>lock_try</strong> function attempts to acquire the specified lock without
+blocking. The return value indicates whether the lock was acquired.
+<h3>RETURN VALUES</h3>
+<dl>
+<p>
+<dt> <strong>KERN_INVALID_ARGUMENT</strong>
+<dd>
+The specified lock_set is invalid, or the lock_id is out of range.
+<p>
+<dt> <strong>KERN_SUCCESS</strong>
+<dd>
+The lock was acquired.
+<p>
+<dt> <strong>KERN_LOCK_UNSTABLE</strong>
+<dd>
+The acquired lock has an unstable state.
+<p>
+<dt> <strong>KERN_LOCK_SET_DESTROYED</strong>
+<dd>
+The specified lock has been destroyed.
+<p>
+<dt> <strong>KERN_LOCK_OWNED</strong>
+<dd>
+Another thread currently owns the requested lock.
+<p>
+<dt> <strong>KERN_LOCK_OWNED_SELF</strong>
+<dd>
+The calling thread already owns the lock.
+</dl>
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="lock_acquire.html"><strong>lock_acquire</strong></a>,
+<a href="lock_make_stable.html"><strong>lock_make_stable</strong></a>,
+<a href="lock_release.html"><strong>lock_release</strong></a>,
+<a href="lock_handoff.html"><strong>lock_handoff</strong></a>,
+<a href="lock_handoff_accept.html"><strong>lock_handoff_accept</strong></a>,
+<a href="lock_set_create.html"><strong>lock_set_create</strong></a>,
+<a href="lock_set_destroy.html"><strong>lock_set_destroy</strong></a>.

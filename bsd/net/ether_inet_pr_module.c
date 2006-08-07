@@ -128,8 +128,8 @@ inet_ether_arp_input(
 		return;
 	}
 	
-	/* Verify the sender is not broadcast or multicast */
-	if ((ea->arp_sha[0] & 0x01) != 0) {
+	/* Verify the sender is not broadcast */
+	if (bcmp(ea->arp_sha, etherbroadcastaddr, ETHER_ADDR_LEN) == 0) {
 		mbuf_free(m);
 		return;
 	}

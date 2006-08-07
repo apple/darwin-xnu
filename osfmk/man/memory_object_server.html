@@ -1,1 +1,63 @@
-<h2>memory_object_server</h2><hr><p><strong>Function</strong> - Handle kernel operation request aimed at a given memory manager.<h3>SYNOPSIS</h3><pre><strong>boolean_t	memory_object_server</strong>		<strong>(mach_msg_header_t</strong>	<var>request_msg</var>,		<strong>mach_msg_header_t</strong>	<var>reply_ms</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>in_msg</var> <dd>[pointer to in structure]The memory manager message received from the kernel.<p><dt> <var>out_msg</var> <dd>[out structure]A reply message.  No messages to a memory manager expect a direct reply, so this field is not used.</dl><h3>DESCRIPTION</h3><p>The <strong>memory_object_server</strong> function is the MIG generatedserver handling function to handle messages from the kernel targeted to a memory manager.<p>A \*Vmemory manager\*O is a server task that responds to specific messages from the kernel in order to handle memory management functions for the kernel.  The <strong>memory_object_server</strong> function performs all necessaryargument handling for a kernel message and calls one of the memory manager functions to interpret the message.<h3>RETURN VALUES</h3><dl><p><dt> <strong>TRUE</strong><dd>The message was handled and the appropriate function was called.<p><dt> <strong>FALSE</strong><dd>The message did not apply to this memory management interface and no other action was taken.</dl><h3>RELATED INFORMATION</h3><p>Functions:<a href="MO_default_server.html"><strong>memory_object_default_server<strong></a>,<a href="memory_object_data_request.html"><strong>memory_object_data_request<strong></a>,<a href="memory_object_data_return.html"><strong>memory_object_data_return<strong></a>,<a href="memory_object_data_unlock.html"><strong>memory_object_data_unlock<strong></a>,<a href="MO_lock_completed.html"><strong>memory_object_lock_completed<strong></a>,<a href="MO_change_completed.html"><strong>memory_object_change_completed<strong></a>,<a href="MO_supply_completed.html"><strong>memory_object_supply_completed<strong></a>,<a href="memory_object_terminate.html"><strong>memory_object_terminate<strong></a>, <a href="memory_object_synchronize.html"><strong>memory_object_synchronize<strong></a>,<a href="SMO_server.html"><strong>seqnos_memory_object_server<strong></a>.
+<h2>memory_object_server</h2>
+<hr>
+<p>
+<strong>Function</strong> - Handle kernel operation request aimed at a given memory manager.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>boolean_t	memory_object_server</strong>
+		<strong>(mach_msg_header_t</strong>	<var>request_msg</var>,
+		<strong>mach_msg_header_t</strong>	<var>reply_ms</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>in_msg</var> 
+<dd>
+[pointer to in structure]
+The memory manager message received from 
+the kernel.
+<p>
+<dt> <var>out_msg</var> 
+<dd>
+[out structure]
+A reply message.  No messages to a memory manager 
+expect a direct reply, so this field is not used.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>memory_object_server</strong> function is the MIG generated
+server handling 
+function to handle messages from the kernel targeted to a memory manager.
+<p>
+A \*Vmemory manager\*O 
+is a server task that responds to specific messages from the 
+kernel in order to handle memory management functions for the kernel.  The 
+<strong>memory_object_server</strong> function performs all necessary
+argument handling for 
+a kernel message and calls one of the memory manager functions to interpret 
+the message.
+<h3>RETURN VALUES</h3>
+<dl>
+<p>
+<dt> <strong>TRUE</strong>
+<dd>
+The message was handled and the appropriate function was called.
+<p>
+<dt> <strong>FALSE</strong>
+<dd>
+The message did not apply to this memory management interface and 
+no other action was taken.
+</dl>
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="MO_default_server.html"><strong>memory_object_default_server<strong></a>,
+<a href="memory_object_data_request.html"><strong>memory_object_data_request<strong></a>,
+<a href="memory_object_data_return.html"><strong>memory_object_data_return<strong></a>,
+<a href="memory_object_data_unlock.html"><strong>memory_object_data_unlock<strong></a>,
+<a href="MO_lock_completed.html"><strong>memory_object_lock_completed<strong></a>,
+<a href="MO_change_completed.html"><strong>memory_object_change_completed<strong></a>,
+<a href="MO_supply_completed.html"><strong>memory_object_supply_completed<strong></a>,
+<a href="memory_object_terminate.html"><strong>memory_object_terminate<strong></a>, 
+<a href="memory_object_synchronize.html"><strong>memory_object_synchronize<strong></a>,
+<a href="SMO_server.html"><strong>seqnos_memory_object_server<strong></a>.

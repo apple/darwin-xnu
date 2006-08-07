@@ -1,1 +1,38 @@
-<h2>i386_io_port_list</h2><hr><p><strong>Function</strong> - List the devices that permit target thread to invoke operations.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   i386_io_port_list</strong>                <strong>(thread_act_t</strong>                        <var>target_act</var>,                 <strong>device_list_t</strong>                      <var>device_list</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>target_act</var> <dd>[in thread send right]Thread whose permission list is to be returned.<p><dt> <var>device_list</var> <dd>[out pointer to dynamic array of device send rights]Device portspermitting I/O.</dl><h3>DESCRIPTION</h3><p>The <strong>i386_io_port_list</strong> function returns a list of thedevices named in the thread's I/O permission bitmap, namely those permitting I/O instructions to beexecuted against them.<h3>RETURN VALUES</h3><p>Only generic errors apply.<h3>RELATED INFORMATION</h3><p>Functions:<a href="i386_io_port_add.html"><strong>i386_io_port_add<strong></a>,<a href="i386_io_port_remove.html"><strong>i386_io_port_remove<strong></a>.
+<h2>i386_io_port_list</h2>
+<hr>
+<p>
+<strong>Function</strong> - List the devices that permit target thread to invoke operations.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   i386_io_port_list</strong>
+                <strong>(thread_act_t</strong>                        <var>target_act</var>,
+                 <strong>device_list_t</strong>                      <var>device_list</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>target_act</var> 
+<dd>
+[in thread send right]
+Thread whose permission list is to be returned.
+<p>
+<dt> <var>device_list</var> 
+<dd>
+[out pointer to dynamic array of device send rights]
+Device ports
+permitting I/O.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>i386_io_port_list</strong> function returns a list of the
+devices named in the 
+thread's I/O permission bitmap, namely those permitting I/O instructions to be
+executed against them.
+<h3>RETURN VALUES</h3>
+<p>
+Only generic errors apply.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="i386_io_port_add.html"><strong>i386_io_port_add<strong></a>,
+<a href="i386_io_port_remove.html"><strong>i386_io_port_remove<strong></a>.

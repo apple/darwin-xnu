@@ -1,1 +1,56 @@
-<h2>bootstrap_environment</h2><hr><p><strong>Function</strong> - Return to the bootstrap task an array of strings specifying the task's environment.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   bootstrap_environment</strong>                <strong>(mach_port_t</strong>                          <var>bootstrap</var>,                 <strong>task_t</strong>                                    <var>task</var>,                 <strong>pointer_t</strong>                            <var>pointer_t</var>,                 <strong>mach_msg_type_number_t</strong>  <var>mach_msg_type_number_t</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>bootstrap</var> <dd>[in bootstrap send right]The bootstrap port for the task, obtained from <strong>task_get_special_ports</strong>.<p><dt> <var>task</var> <dd>[in task send right]The task port for the task whose argument strings are requested.<p><dt> <var>environment</var> <dd>[pointer to dynamic out array of characters]The environment strings for the task. This is an array of \*V*_environmentCnt_\*O bytes, containing NUL charactersseparating the strings.<p><dt> <var>environmentCnt</var> <dd>[out pointer to scalar]Number of bytes contained in <var>_environment_</var>.</dl><h3>DESCRIPTION</h3>The kernel will respond to the bootstrap task (task 1) with thearguments and environment specified to the boot loader. The bootstraptask can act as a server on this interface for the tasks that itcreates in order to pass an environment to them. The \*Llibsa_mach.a\*Ostandalone Mach C runtime startup code uses <strong>bootstrap_arguments</strong> and<strong>bootstrap_environment</strong> to initialize <var>argc</var>, <var>argv</var>, and <var>envp</var> for <strong>main</strong>.<h3>RETURN VALUES</h3><p>Only generic errors apply.<h3>RELATED INFORMATION</h3><p>Functions:<a href="bootstrap_ports.html"><strong>bootstrap_ports</strong></a>,<a href="bootstrap_arguments.html"><strong>bootstrap_arguments</strong></a>.
+<h2>bootstrap_environment</h2>
+<hr>
+<p>
+<strong>Function</strong> - Return to the bootstrap task an array of strings specifying the task's environment.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   bootstrap_environment</strong>
+                <strong>(mach_port_t</strong>                          <var>bootstrap</var>,
+                 <strong>task_t</strong>                                    <var>task</var>,
+                 <strong>pointer_t</strong>                            <var>pointer_t</var>,
+                 <strong>mach_msg_type_number_t</strong>  <var>mach_msg_type_number_t</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>bootstrap</var> 
+<dd>
+[in bootstrap send right]
+The bootstrap port for the task, obtained from 
+<strong>task_get_special_ports</strong>.
+<p>
+<dt> <var>task</var> 
+<dd>
+[in task send right]
+The task port for the task whose argument strings are requested.
+<p>
+<dt> <var>environment</var> 
+<dd>
+[pointer to dynamic out array of characters]
+The environment strings for the task. This is an array of 
+\*V*_environmentCnt_\*O bytes, containing NUL characters
+separating the strings.
+<p>
+<dt> <var>environmentCnt</var> 
+<dd>
+[out pointer to scalar]
+Number of bytes contained in <var>_environment_</var>.
+</dl>
+<h3>DESCRIPTION</h3>
+The kernel will respond to the bootstrap task (task 1) with the
+arguments and environment specified to the boot loader. The bootstrap
+task can act as a server on this interface for the tasks that it
+creates in order to pass an environment to them. The \*Llibsa_mach.a\*O
+standalone Mach C runtime startup code uses <strong>bootstrap_arguments</strong> and
+<strong>bootstrap_environment</strong> to initialize <var>argc</var>, <var>argv</var>, 
+and <var>envp</var> for <strong>main</strong>.
+<h3>RETURN VALUES</h3>
+<p>
+Only generic errors apply.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="bootstrap_ports.html"><strong>bootstrap_ports</strong></a>,
+<a href="bootstrap_arguments.html"><strong>bootstrap_arguments</strong></a>.
+
+

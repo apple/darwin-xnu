@@ -596,6 +596,7 @@ _ubc_page_op
 _ubc_range_op
 _ubc_setcred
 _ubc_setsize
+_ubc_setthreadcred
 _ubc_sync_range
 _ubc_upl_abort
 _ubc_upl_abort_range

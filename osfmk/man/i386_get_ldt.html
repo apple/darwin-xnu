@@ -1,1 +1,49 @@
-<h2>i386_get_ldt</h2><hr><p><strong>Function</strong> - Return per-thread segment descriptors.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   i386_get_ldt</strong>                <strong>(thread_act_t</strong>                        <var>target_act</var>,                 <strong>int</strong>                             <var>first_selector</var>,                 <strong>int</strong>                              <var>desired_count</var>,                 <strong>descriptor_list_t</strong>                    <var>desc_list</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>target_act</var> <dd>[in thread send right]Thread whose segment descriptors are to bereturned.<p><dt> <var>first_selector</var><dd>[in scalar] Selector value (segment register value) corresponding to the first segment whose descriptor is to be returned.<p><dt> <var>desired_count</var> <dd>[in scalar]Number of returned descriptors desired.<p><dt> <var>desc_list</var> <dd>[out pointer to dynamic array of <strong>descriptor_t</strong>]Array of segmentdescriptors.</dl><h3>DESCRIPTION</h3><p>The <strong>i386_get_ldt</strong> function returns per-thread segmentdescriptors from the thread's local descriptor table (LDT).<h3>RETURN VALUES</h3><p>Only generic errors apply.<h3>RELATED INFORMATION</h3><p>Functions:<a href="i386_set_ldt.html"><strong>i386_set_ldt<strong></a>.
+<h2>i386_get_ldt</h2>
+<hr>
+<p>
+<strong>Function</strong> - Return per-thread segment descriptors.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   i386_get_ldt</strong>
+                <strong>(thread_act_t</strong>                        <var>target_act</var>,
+                 <strong>int</strong>                             <var>first_selector</var>,
+                 <strong>int</strong>                              <var>desired_count</var>,
+                 <strong>descriptor_list_t</strong>                    <var>desc_list</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>target_act</var> 
+<dd>
+[in thread send right]
+Thread whose segment descriptors are to be
+returned.
+<p>
+<dt> <var>first_selector</var>
+<dd>
+[in scalar] Selector value (segment register value) corresponding to the 
+first segment whose descriptor is to be returned.
+<p>
+<dt> <var>desired_count</var> 
+<dd>
+[in scalar]
+Number of returned descriptors desired.
+<p>
+<dt> <var>desc_list</var> 
+<dd>
+[out pointer to dynamic array of <strong>descriptor_t</strong>]
+Array of segment
+descriptors.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>i386_get_ldt</strong> function returns per-thread segment
+descriptors from the 
+thread's local descriptor table (LDT).
+<h3>RETURN VALUES</h3>
+<p>
+Only generic errors apply.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="i386_set_ldt.html"><strong>i386_set_ldt<strong></a>.

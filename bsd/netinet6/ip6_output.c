@@ -456,8 +456,12 @@ ip6_output(
 
 		bzero(&state, sizeof(state));
 		state.m = m;
+		lck_mtx_unlock(ip6_mutex);
+		lck_mtx_lock(sadb_mutex);
 		error = ipsec6_output_trans(&state, nexthdrp, mprev, sp, flags,
 			&needipsectun);
+		lck_mtx_unlock(sadb_mutex);
+		lck_mtx_lock(ip6_mutex);
 		m = state.m;
 		if (error) {
 			/* mbuf is already reclaimed in ipsec6_output_trans. */
@@ -583,10 +587,11 @@ skip_ipsec2:;
 		state.m = m;
 		state.ro = (struct route *)ro;
 		state.dst = (struct sockaddr *)dst;
-		
+		lck_mtx_unlock(ip6_mutex);
 		lck_mtx_lock(sadb_mutex);
 		error = ipsec6_output_tunnel(&state, sp, flags);
 		lck_mtx_unlock(sadb_mutex);
+		lck_mtx_lock(ip6_mutex);
 		m = state.m;
 		ro = (struct route_in6 *)state.ro;
 		dst = (struct sockaddr_in6 *)state.dst;

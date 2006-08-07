@@ -56,8 +56,14 @@
 
 static __inline__ int _OSRosettaCheck(void)
 {
-    int isCrossEndian = 0;
+    int isCrossEndian;
 
+    __asm__ (  "b 0f\n"
+	    "	.long 0x14400004\n"
+	    "	li %0,1\n"
+	    "0:"
+	: "=r" (isCrossEndian) : "0" (0)
+    );
 
     return isCrossEndian;
 }

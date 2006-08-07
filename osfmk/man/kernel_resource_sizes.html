@@ -1,1 +1,50 @@
-<h2>kernel_resource_sizes</h2><hr><p><strong>Structure</strong> - Used to present the sizes of kernel's major structures.<h3>SYNOPSIS</h3><pre><strong>struct kernel_resource_sizes</strong><strong>{</strong>       <strong>vm_size_t</strong>               <var>task</var><strong>;</strong>       <strong>vm_size_t</strong>             <var>thread</var><strong>;</strong>       <strong>vm_size_t</strong>               <var>port</var><strong>;</strong>       <strong>vm_size_t</strong>      <var>memory_region</var><strong>;</strong>       <strong>vm_size_t</strong>      <var>memory_object</var><strong>;</strong><strong>};</strong><strong>typedef struct kernel_resource_sizes* kernel_resource_sizes_t;</strong></pre><h3>FIELDS</h3><dl><dt> <var>task</var><dd>Space consumed by an empty task.<p><dt> <var>thread</var><dd>Space consumed by a thread.<p><dt> <var>port</var><dd>Space consumed by a port with an empty message queue.<p><dt> <var>memory_region</var><dd>Space consumed by each distinct memory region (as reported by<strong>vm_region</strong>) in a task's address space.<p><dt> <var>memory_object</var><dd>Space consumed to manage a memory object with no resident pages or copy objects.</dl><h3>DESCRIPTION</h3><p>The <strong>kernel_resource_sizes</strong> structure defines the sizesof significant kernelstructures.<h3>RELATED INFORMATION</h3><p>Functions:<a href="host_info.html"><strong>host_info</strong></a>.
+<h2>kernel_resource_sizes</h2>
+<hr>
+<p>
+<strong>Structure</strong> - Used to present the sizes of kernel's major structures.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>struct kernel_resource_sizes</strong>
+<strong>{</strong>
+       <strong>vm_size_t</strong>               <var>task</var><strong>;</strong>
+       <strong>vm_size_t</strong>             <var>thread</var><strong>;</strong>
+       <strong>vm_size_t</strong>               <var>port</var><strong>;</strong>
+       <strong>vm_size_t</strong>      <var>memory_region</var><strong>;</strong>
+       <strong>vm_size_t</strong>      <var>memory_object</var><strong>;</strong>
+<strong>};</strong>
+
+<strong>typedef struct kernel_resource_sizes* kernel_resource_sizes_t;</strong>
+</pre>
+<h3>FIELDS</h3>
+<dl>
+<dt> <var>task</var>
+<dd>
+Space consumed by an empty task.
+<p>
+<dt> <var>thread</var>
+<dd>
+Space consumed by a thread.
+<p>
+<dt> <var>port</var>
+<dd>
+Space consumed by a port with an empty message queue.
+<p>
+<dt> <var>memory_region</var>
+<dd>
+Space consumed by each distinct memory region (as reported by
+<strong>vm_region</strong>) in a task's address space.
+<p>
+<dt> <var>memory_object</var>
+<dd>
+Space consumed to manage a memory object with no resident pages or 
+copy objects.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>kernel_resource_sizes</strong> structure defines the sizes
+of significant kernel
+structures.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="host_info.html"><strong>host_info</strong></a>.

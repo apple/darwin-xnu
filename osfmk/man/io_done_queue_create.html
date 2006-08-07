@@ -1,1 +1,48 @@
-<h2>io_done_queue_create</h2><hr><p><strong>Function</strong> - Create an <strong>io_done_queue</strong> kernel object.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   io_done_queue_create</strong>                <strong>(mach_port_t</strong>                               <var>host</var>,                 <strong>mach_port_t</strong>                               <var>queue</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>host</var><dd>[in host-name send right] The name (or control) port for the host on which the io_done_queue should be created.<p><dt> <var>queue</var><dd>[out io-done-queue send right] The port referencing the createdio_done_queue.</dl><h3>DESCRIPTION</h3><p>The io_done_queue_create function is called to create a newinstatiation of the kernel object supporting asynchronous read/writeoperations on a device.<h3>RETURN VALUES</h3><dl><dt> <strong>KERN_INVALID_ARGUMENT</strong><dd>     Invalid <var>host</var> parameter.     <p>     <dt> <strong>KERN_RESOURCE_SHORTAGE</strong><dd>     Insufficient kernel resources to allocate kernel object.</dl><h3>RELATED INFORMATION</h3><p>Functions:<a href="io_done_queue_terminate.html"><strong>io_done_queue_terminate</strong></a>,<a href="io_done_queue_wait.html"><strong>io_done_queue_wait</strong></a>,<a href="device_read_async.html"><strong>device_read_async</strong></a>,<a href="device_read_async_inband.html"><strong>device_read_async_inband</strong></a>,<a href="DR_overwrite_async.html"><strong>device_read_overwrite_async</strong></a>,<a href="device_write_async.html"><strong>device_write_async</strong></a>,<a href="device_write_async_inband.html"><strong>device_write_async_inband</strong></a>.
+<h2>io_done_queue_create</h2>
+<hr>
+<p>
+<strong>Function</strong> - Create an <strong>io_done_queue</strong> kernel object.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   io_done_queue_create</strong>
+                <strong>(mach_port_t</strong>                               <var>host</var>,
+                 <strong>mach_port_t</strong>                               <var>queue</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>host</var>
+<dd>
+[in host-name send right] The name (or control) port for the host on 
+which the io_done_queue should be created.
+<p>
+<dt> <var>queue</var>
+<dd>
+[out io-done-queue send right] The port referencing the created
+io_done_queue.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The io_done_queue_create function is called to create a new
+instatiation of the kernel object supporting asynchronous read/write
+operations on a device.
+<h3>RETURN VALUES</h3>
+<dl>
+<dt> <strong>KERN_INVALID_ARGUMENT</strong>
+<dd>
+     Invalid <var>host</var> parameter.
+     <p>
+     <dt> <strong>KERN_RESOURCE_SHORTAGE</strong>
+<dd>
+     Insufficient kernel resources to allocate kernel object.
+</dl>
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="io_done_queue_terminate.html"><strong>io_done_queue_terminate</strong></a>,
+<a href="io_done_queue_wait.html"><strong>io_done_queue_wait</strong></a>,
+<a href="device_read_async.html"><strong>device_read_async</strong></a>,
+<a href="device_read_async_inband.html"><strong>device_read_async_inband</strong></a>,
+<a href="DR_overwrite_async.html"><strong>device_read_overwrite_async</strong></a>,
+<a href="device_write_async.html"><strong>device_write_async</strong></a>,
+<a href="device_write_async_inband.html"><strong>device_write_async_inband</strong></a>.

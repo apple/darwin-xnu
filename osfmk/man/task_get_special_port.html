@@ -1,1 +1,104 @@
-<h2>task_get_special_port</h2><hr><p><strong>Function</strong> - Return a send write to the indicated special port.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   task_get_special_port</strong>                <strong>(task_t</strong>                                    <var>task</var>,                 <strong>int</strong>                                 <var>which_port</var>,                 <strong>task</strong>                              <var>special_port</var><strong>);</strong><strong>Macro Forms:</strong><strong>kern_return_t   task_get_bootstrap_port</strong>                <strong>(task_t</strong>                                    <var>task</var>,                 <strong>task</strong>                              <var>special_port</var><strong>);</strong><strong>kern_return_t   task_get_kernel_port</strong>                <strong>(task_t</strong>                                    <var>task</var>,                 <strong>task</strong>                              <var>special_port</var><strong>);</strong><strong>kern_return_t   task_get_host_name_port</strong>                <strong>(task_t</strong>                                    <var>task</var>,                 <strong>task</strong>                              <var>special_port</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>task</var> <dd>[in task send right]The port for the task for which to return the port's send right.<p><dt> <var>which_port</var> <dd>[in scalar]The special port for which the send right is requested.  Valid values are:<dl><p><dt> <strong>TASK_KERNEL_PORT</strong><dd>[task-self send right] The port used to control this task.  Used to send messages that affect the task.  This is the port returned by <strong>mach_task_self</strong>.<p><dt> <strong>TASK_BOOTSTRAP_PORT</strong><dd>[bootstrap send right] The task's bootstrap port.  Used to send messages requesting return of other system service ports.<p><dt> <strong>TASK_HOST_NAME_PORT</strong><dd>[host-self send right] The port used to request information of the containing host.  This is the port returned by<strong>mach_host_self</strong>.<p><dt> <strong>TASK_WIRED_LEDGER_PORT</strong><dd>[ledger send right] The port naming the source from which this task draws its wired kernel memory.<p><dt> <strong>TASK_PAGED_LEDGER_PORT</strong><dd>[ledger send right] The port naming the source from which this task draws its default memory managed memory.</dl><p><dt> <var>special_port</var> <dd>[out task-special send right]The returned value for the port.</dl><h3>DESCRIPTION</h3><p>The <strong>task_get_special_port</strong> function returns a send rightfor a special port belonging to <var>task</var>.<p>If one task has a send right for the kernel port of another task, it can use the port to perform kernel operations for the other task.  Send rights for a kernel port normally are held only by the task to which the port belongs,or by the task's parent task.  Using the <strong>mach_msg</strong> function, however, any task can pass a send right for its kernel port to another task.<h3>NOTES</h3><p>The current implementation does not support the <strong>TASK_HOST_NAME_PORT</strong>features associated with this interface.<h3>RETURN VALUES</h3><p>Only generic errors apply.<h3>RELATED INFORMATION</h3><p>Functions:<a href="mach_task_self.html"><strong>mach_task_self</strong></a>,<a href="task_create.html"><strong>task_create</strong></a>,<a href="task_set_special_port.html"><strong>task_set_special_port</strong></a>,<a href="thread_get_special_port.html"><strong>thread_get_special_port</strong></a>,<a href="thread_set_special_port.html"><strong>thread_set_special_port</strong></a>,<a href="mach_host_self.html"><strong>mach_host_self</strong></a>.
+<h2>task_get_special_port</h2>
+<hr>
+<p>
+<strong>Function</strong> - Return a send write to the indicated special port.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   task_get_special_port</strong>
+                <strong>(task_t</strong>                                    <var>task</var>,
+                 <strong>int</strong>                                 <var>which_port</var>,
+                 <strong>task</strong>                              <var>special_port</var><strong>);</strong>
+
+
+<strong>Macro Forms:</strong>
+
+
+<strong>kern_return_t   task_get_bootstrap_port</strong>
+                <strong>(task_t</strong>                                    <var>task</var>,
+                 <strong>task</strong>                              <var>special_port</var><strong>);</strong>
+
+
+<strong>kern_return_t   task_get_kernel_port</strong>
+                <strong>(task_t</strong>                                    <var>task</var>,
+                 <strong>task</strong>                              <var>special_port</var><strong>);</strong>
+
+
+<strong>kern_return_t   task_get_host_name_port</strong>
+                <strong>(task_t</strong>                                    <var>task</var>,
+                 <strong>task</strong>                              <var>special_port</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>task</var> 
+<dd>
+[in task send right]
+The port for the task for which to return the port's 
+send right.
+<p>
+<dt> <var>which_port</var> 
+<dd>
+[in scalar]
+The special port for which the send right is requested.  Valid 
+values are:
+<dl>
+<p>
+<dt> <strong>TASK_KERNEL_PORT</strong>
+<dd>
+[task-self send right] The port used to control this task.  Used 
+to send messages that affect the task.  This is the port returned 
+by <strong>mach_task_self</strong>.
+<p>
+<dt> <strong>TASK_BOOTSTRAP_PORT</strong>
+<dd>
+[bootstrap send right] The task's bootstrap port.  Used to send 
+messages requesting return of other system service ports.
+<p>
+<dt> <strong>TASK_HOST_NAME_PORT</strong>
+<dd>
+[host-self send right] The port used to request information of 
+the containing host.  This is the port returned by
+<strong>mach_host_self</strong>.
+<p>
+<dt> <strong>TASK_WIRED_LEDGER_PORT</strong>
+<dd>
+[ledger send right] The port naming the source from which 
+this task draws its wired kernel memory.
+<p>
+<dt> <strong>TASK_PAGED_LEDGER_PORT</strong>
+<dd>
+[ledger send right] The port naming the source from which 
+this task draws its default memory managed memory.
+</dl>
+<p>
+<dt> <var>special_port</var> 
+<dd>
+[out task-special send right]
+The returned value for the port.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>task_get_special_port</strong> function returns a send right
+for a special port belonging to <var>task</var>.
+<p>
+If one task has a send right for the kernel port of another task, it can use 
+the port to perform kernel operations for the other task.  Send rights for a 
+kernel port normally are held only by the task to which the port belongs,
+or by the task's parent task.  Using the <strong>mach_msg</strong> function, however, 
+any task can pass a send right for its kernel port to another task.
+<h3>NOTES</h3>
+<p>
+The current implementation does not support the <strong>TASK_HOST_NAME_PORT</strong>
+features associated with this interface.
+<h3>RETURN VALUES</h3>
+<p>
+Only generic errors apply.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="mach_task_self.html"><strong>mach_task_self</strong></a>,
+<a href="task_create.html"><strong>task_create</strong></a>,
+<a href="task_set_special_port.html"><strong>task_set_special_port</strong></a>,
+<a href="thread_get_special_port.html"><strong>thread_get_special_port</strong></a>,
+<a href="thread_set_special_port.html"><strong>thread_set_special_port</strong></a>,
+<a href="mach_host_self.html"><strong>mach_host_self</strong></a>.

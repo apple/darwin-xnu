@@ -1,1 +1,47 @@
-<h2>processor_set_max_priority</h2><hr><p><strong>Function</strong> - Sets the maximum scheduling priority for a processor set.<h3>SYNOPSIS</h3><pre><strong>#include&lt mach/mach_host.h&gt</strong><strong>kern_return_t	processor_set_max_priority</strong>		<strong>(processor_set_t</strong>	<var>processor_set</var>,		<strong>int</strong>	<var>priority</var>,		<strong>boolean_t</strong>	<var>change_threads</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><dt> <var>processor_set</var><dd>[in processor-set-control port] The control port for the processor set whose maximum scheduling priority is to be set.<dt> <var>priority</var><dd>[in scalar] The new priority for the processor set.<dt> <var>change_threads</var><dd>[in scalar] True if the maximum priority of existing threads assigned to this processor set should also be changed.</dl><h3>DESCRIPTION</h3><p>The <strong>processor_set_max_priority</strong>function sets the maximum scheduling <var>priority</var> for<var>processor_set</var>. The maximum <var>priority</var> of aprocessor set is used only when creating new threads. A new thread'smaximum <var>priority</var> is set to that of its assigned processorset. When assigned to a processor set, a thread's maximum<var>priority</var> is reduced, if necessary, to that of its newprocessor set; its current <var>priority</var> is also reduced, asneeded. Changing the maximum <var>priority</var> of a processor setdoes not affect the <var>priority</var> of the currently assignedthreads unless <var>change_threads</var> is TRUE. If this<var>priority</var> change violates the maximum <var>priority</var> ofsome threads, their maximum priorities will be reduced to match.<h3>RETURN VALUES</h3><p>Only generic errors apply.<h3>RELATED INFORMATION</h3><p>Functions:<a href="thread_assign.html">thread_assign</a>.
+<h2>processor_set_max_priority</h2>
+<hr>
+<p>
+<strong>Function</strong> - Sets the maximum scheduling priority for a processor set.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>#include&lt mach/mach_host.h&gt</strong>
+
+<strong>kern_return_t	processor_set_max_priority</strong>
+		<strong>(processor_set_t</strong>	<var>processor_set</var>,
+		<strong>int</strong>	<var>priority</var>,
+		<strong>boolean_t</strong>	<var>change_threads</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<dt> <var>processor_set</var>
+<dd>
+[in processor-set-control port] The control port for the processor set whose maximum scheduling priority is to be set.
+<dt> <var>priority</var>
+<dd>
+[in scalar] The new priority for the processor set.
+<dt> <var>change_threads</var>
+<dd>
+[in scalar] True if the maximum priority of existing threads assigned to this processor set should also be changed.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>processor_set_max_priority</strong>
+function sets the maximum scheduling <var>priority</var> for
+<var>processor_set</var>. The maximum <var>priority</var> of a
+processor set is used only when creating new threads. A new thread's
+maximum <var>priority</var> is set to that of its assigned processor
+set. When assigned to a processor set, a thread's maximum
+<var>priority</var> is reduced, if necessary, to that of its new
+processor set; its current <var>priority</var> is also reduced, as
+needed. Changing the maximum <var>priority</var> of a processor set
+does not affect the <var>priority</var> of the currently assigned
+threads unless <var>change_threads</var> is TRUE. If this
+<var>priority</var> change violates the maximum <var>priority</var> of
+some threads, their maximum priorities will be reduced to match.
+<h3>RETURN VALUES</h3>
+<p>
+Only generic errors apply.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="thread_assign.html">thread_assign</a>.

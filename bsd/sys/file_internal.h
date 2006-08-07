@@ -122,7 +122,8 @@ struct fileglob {
 		int	(*fo_write)	__P((struct fileproc *fp, struct uio *uio,
 					    struct ucred *cred, int flags,
 					    struct proc *p));
-#define	FOF_OFFSET	1
+#define	FOF_OFFSET	0x00000001	/* offset supplied to vn_write */
+#define FOF_PCRED	0x00000002	/* cred from proc, not current thread */
 		int	(*fo_ioctl)	__P((struct fileproc *fp, u_long com,
 					    caddr_t data, struct proc *p));
 		int	(*fo_select)	__P((struct fileproc *fp, int which,

@@ -1,1 +1,46 @@
-<h2>task_set_emulation</h2><hr><p><strong>Function</strong> - Establish a user-level handler for a system call.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   task_set_emulation</strong>                <strong>(task_t</strong>                                    <var>task</var>,                 <strong>vm_address_t</strong>                  <var>routine_entry_pt</var>,                 <strong>int</strong>                             <var>syscall_number</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>task</var><dd>[in task port] The port for the task for which to establish the system call handler.<p><dt> <var>routine_entry_pt</var><dd>[in scalar] The address within the task of the handler for this particular system call.<p><dt> <var>syscall_number</var><dd>[in scalar] The number of the system call to be handled by this handler.</dl><h3>DESCRIPTION</h3><p>The <strong>task_set_emulation</strong> function establishes a handler within the taskfor a particular system call. When a thread executes a system callwith this particular number, the system call will be redirected to thespecified routine within the task's address space. This is expected tobe an address within the transparent emulation library.  Theseemulation handler addresses are inherited by child processes.<h3>NOTES</h3><p>This interface is machine word length specific because of the virtualaddress parameter.<h3>RETURN VALUES</h3><p>Only generic errors apply.<h3>RELATED INFORMATION</h3><p>Functions:<a href="task_set_emulation_vector.html"><strong>task_set_emulation_vector</strong></a>,<a href="task_get_emulation_vector.html"><strong>task_get_emulation_vector</strong></a>.
+<h2>task_set_emulation</h2>
+<hr>
+<p>
+<strong>Function</strong> - Establish a user-level handler for a system call.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   task_set_emulation</strong>
+                <strong>(task_t</strong>                                    <var>task</var>,
+                 <strong>vm_address_t</strong>                  <var>routine_entry_pt</var>,
+                 <strong>int</strong>                             <var>syscall_number</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>task</var>
+<dd>
+[in task port] The port for the task for which to establish the system call handler.
+<p>
+<dt> <var>routine_entry_pt</var>
+<dd>
+[in scalar] The address within the task of the handler for this particular system call.
+<p>
+<dt> <var>syscall_number</var>
+<dd>
+[in scalar] The number of the system call to be handled by this handler.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>task_set_emulation</strong> function establishes a handler within the task
+for a particular system call. When a thread executes a system call
+with this particular number, the system call will be redirected to the
+specified routine within the task's address space. This is expected to
+be an address within the transparent emulation library.  These
+emulation handler addresses are inherited by child processes.
+<h3>NOTES</h3>
+<p>
+This interface is machine word length specific because of the virtual
+address parameter.
+<h3>RETURN VALUES</h3>
+<p>
+Only generic errors apply.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="task_set_emulation_vector.html"><strong>task_set_emulation_vector</strong></a>,
+<a href="task_get_emulation_vector.html"><strong>task_get_emulation_vector</strong></a>.

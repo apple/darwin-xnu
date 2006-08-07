@@ -1,1 +1,49 @@
-<h2>mach_ports_lookup</h2><hr><p><strong>Function</strong> - Provide caller with an array of the target task's well-known ports.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   mach_ports_lookup</strong>                <strong>(task_t</strong>                             <var>target_task</var>,                 <strong>mach_port_array_t</strong>                <var>init_port_set</var>,                 <strong>mach_msg_type_number_t</strong>         <var>init_port_count</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>target_task</var> <dd>[in task send right]The task whose currently registered ports are to be returned.<p><dt> <var>init_port_set</var> <dd>[out pointer to dynamic array of registered send rights]The returnedarray of ports.<p><dt> <var>init_port_count</var> <dd>[out scalar]The number of returned port rights.</dl><h3>DESCRIPTION</h3><p>The <strong>mach_ports_lookup</strong> function returns an array ofthe well-known system ports that are currently registered for the specified task. Note that the task holds only send rights for the ports.<p>Registered ports are those ports that are used by the run-timesystem to initialize a task.  To register system ports for a task, use the <strong>mach_ports_register</strong> function.<h3>RETURN VALUES</h3><p>Only generic errors apply.<h3>RELATED INFORMATION</h3><p>Functions:<a href="mach_ports_register.html"><strong>mach_ports_register</strong></a>.
+<h2>mach_ports_lookup</h2>
+<hr>
+<p>
+<strong>Function</strong> - Provide caller with an array of the target task's well-known ports.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   mach_ports_lookup</strong>
+                <strong>(task_t</strong>                             <var>target_task</var>,
+                 <strong>mach_port_array_t</strong>                <var>init_port_set</var>,
+                 <strong>mach_msg_type_number_t</strong>         <var>init_port_count</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>target_task</var> 
+<dd>
+[in task send right]
+The task whose currently registered ports are to be 
+returned.
+<p>
+<dt> <var>init_port_set</var> 
+<dd>
+[out pointer to dynamic array of registered send rights]
+The returned
+array of ports.
+<p>
+<dt> <var>init_port_count</var> 
+<dd>
+[out scalar]
+The number of returned port rights.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>mach_ports_lookup</strong> function returns an array of
+the well-known system 
+ports that are currently registered for the specified task. 
+Note that the task holds 
+only send rights for the ports.
+<p>
+Registered ports are those ports that are used by the run-time
+system to initialize a task.  To register system ports for a task, 
+use the <strong>mach_ports_register</strong> function.
+<h3>RETURN VALUES</h3>
+<p>
+Only generic errors apply.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="mach_ports_register.html"><strong>mach_ports_register</strong></a>.

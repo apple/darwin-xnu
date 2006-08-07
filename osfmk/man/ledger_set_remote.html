@@ -1,1 +1,39 @@
-<h2>ledger_set_remote</h2><hr><p><strong>Function</strong> - Set this host's remote ledger port.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   ledger_set_remote</strong>                <strong>(ledger_port_t</strong>                           <var>ledger</var>,                 <strong>ledger_port_t</strong>                     <var>service_port</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>ledger</var> <dd>[in ledger send right]The ledger whose service port is to be set.<p><dt> <var>service_port</var> <dd>[in ledger-service send right]The ledger service port</dl><h3>DESCRIPTION</h3><p>The <strong>ledger_set_remote</strong> function sets the remote ledger service port for the ledger.  This is the port the ledger will return for <strong>ledger_get_remote</strong> requests.<h3>NOTES</h3><p>This interface is not implemented in OSF/1 R1.3.<h3>RETURN VALUES</h3><p>Only generic errors apply.<h3>RELATED INFORMATION</h3><p>Functions:<a href="ledger_create.html"><strong>ledger_create</strong></a>,<a href="ledger_get_remote.html"><strong>ledger_get_remote</strong></a>.
+<h2>ledger_set_remote</h2>
+<hr>
+<p>
+<strong>Function</strong> - Set this host's remote ledger port.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   ledger_set_remote</strong>
+                <strong>(ledger_port_t</strong>                           <var>ledger</var>,
+                 <strong>ledger_port_t</strong>                     <var>service_port</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>ledger</var> 
+<dd>
+[in ledger send right]
+The ledger whose service port is to be set.
+<p>
+<dt> <var>service_port</var> 
+<dd>
+[in ledger-service send right]
+The ledger service port
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>ledger_set_remote</strong> function sets the remote ledger service port 
+for the ledger.  This is the port the ledger will return for 
+<strong>ledger_get_remote</strong> requests.
+<h3>NOTES</h3>
+<p>
+This interface is not implemented in OSF/1 R1.3.
+<h3>RETURN VALUES</h3>
+<p>
+Only generic errors apply.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="ledger_create.html"><strong>ledger_create</strong></a>,
+<a href="ledger_get_remote.html"><strong>ledger_get_remote</strong></a>.

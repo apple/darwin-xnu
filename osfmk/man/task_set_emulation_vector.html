@@ -1,1 +1,61 @@
-<h2>task_set_emulation_vector</h2><hr><p><strong>Function</strong> - Establish the target task's user-level system call handlers. <h3>SYNOPSIS</h3><pre><strong>kern_return_t   task_set_emulation_vector</strong>                <strong>(task_t</strong>                                    <var>task</var>,                 <strong>int</strong>                               <var>vector_start</var>,                 <strong>emulation_vector_t</strong>            <var>emulation_vector</var>,                 <strong>mach_msg_type_number_t</strong>  <var>emulation_vector_count</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>task</var> <dd>[in task send right]The port for the task for which to establish thesystem call handler.<p><dt> <var>vector_start</var> <dd>[in scalar]The syscall number corresponding to the first element of<var>emulation_vector</var>.<p><dt> <var>emulation_vector</var> <dd>[pointer to in array of <strong>vm_address_t</strong>]An array of routine entrypoints for the system calls starting with syscall number <var>vector_start</var>.<p><dt> <var>emulation_vector_count</var> <dd>[in scalar]The number of elements in <var>emulation_vector</var>.</dl><h3>DESCRIPTION</h3><p>The <strong>task_set_emulation_vector</strong> function establishesa handler within the task for a set of system calls.  When a thread executes a system callwith one of these numbers, the system call will be redirected to the correspondingroutine within the task's address space.<p>These emulation handler addresses are inherited by child processes.<h3>NOTES</h3><p>This interface is machine word length specific because of thevirtual addresses in the <var>emulation_vector</var> parameter.<h3>RETURN VALUES</h3><p>Only generic errors apply.<h3>RELATED INFORMATION</h3><p>Functions:<a href="task_get_emulation_vector.html"><strong>task_get_emulation_vector</strong></a>.
+<h2>task_set_emulation_vector</h2>
+<hr>
+<p>
+<strong>Function</strong> - Establish the target task's user-level system call handlers. 
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   task_set_emulation_vector</strong>
+                <strong>(task_t</strong>                                    <var>task</var>,
+                 <strong>int</strong>                               <var>vector_start</var>,
+                 <strong>emulation_vector_t</strong>            <var>emulation_vector</var>,
+                 <strong>mach_msg_type_number_t</strong>  <var>emulation_vector_count</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>task</var> 
+<dd>
+[in task send right]
+The port for the task for which to establish the
+system call handler.
+<p>
+<dt> <var>vector_start</var> 
+<dd>
+[in scalar]
+The syscall number corresponding to the first element of
+<var>emulation_vector</var>.
+<p>
+<dt> <var>emulation_vector</var> 
+<dd>
+[pointer to in array of <strong>vm_address_t</strong>]
+An array of routine entrypoints 
+for the system calls starting with syscall number <var>vector_start</var>.
+<p>
+<dt> <var>emulation_vector_count</var> 
+<dd>
+[in scalar]
+The number of elements in <var>emulation_vector</var>.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>task_set_emulation_vector</strong> function establishes
+a handler within the task 
+for a set of system calls.  When a thread executes a system call
+with one of these 
+numbers, the system call will be redirected to the corresponding
+routine within 
+the task's address space.
+<p>
+These emulation handler addresses are inherited by child processes.
+<h3>NOTES</h3>
+<p>
+This interface is machine word length specific because of the
+virtual addresses 
+in the <var>emulation_vector</var> parameter.
+<h3>RETURN VALUES</h3>
+<p>
+Only generic errors apply.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="task_get_emulation_vector.html"><strong>task_get_emulation_vector</strong></a>.

@@ -1,1 +1,59 @@
-<h2>norma_task_create</h2><hr><p><strong>Function</strong> - Create a remote task using task_create semantics.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   norma_task_create</strong>                <strong>(task_t</strong>                             <var>parent_task</var>,                 <strong>boolean_t</strong>                       <var>inherit_memory</var>,                 <strong>int</strong>                                 <var>child_node</var>,                 <strong>task_t</strong>                              <var>child_task</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>parent_task</var> <dd>[in task send right]The port for the task from which to draw the child task's port rights, resource limits, and address space.<p><dt> <var>inherit_memory</var> <dd>[in scalar]Address space inheritance indicator.  If true, the child taskinherits the address space of the parent task.  If false, the kernel assigns the child task an empty address space.<p><dt> <var>child_node</var> <dd>[in scalar]The node index of the node on which to create the child.<p><dt> <var>child_task</var> <dd>[out task send right]The kernel-assigned port name for the new task.</dl><h3>DESCRIPTION</h3><p>The <strong>norma_task_create</strong> function creates a new task from<var>parent_task</var> on the specified <var>node</var> and returns the name of the new task in <var>child_task</var>.  The child task acquires shared or copied parts of the parent's address space (see<strong>vm_inherit</strong>).  The child task initially contains no threads.<p>By way of comparison, tasks created by the standard <strong>task_create</strong>primitive are created on the same node as the parent.<p>Other than being created on a different node, the new task has the sameproperties as if created by <strong>task_create</strong>.<h3>RETURN VALUES</h3><p>Only generic errors apply.<h3>RELATED INFORMATION</h3><p>Functions:<a href="task_create.html"><strong>task_create</strong></a>,<a href="norma_task_clone.html"><strong>norma_task_clone</strong></a>.
+<h2>norma_task_create</h2>
+<hr>
+<p>
+<strong>Function</strong> - Create a remote task using task_create semantics.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   norma_task_create</strong>
+                <strong>(task_t</strong>                             <var>parent_task</var>,
+                 <strong>boolean_t</strong>                       <var>inherit_memory</var>,
+                 <strong>int</strong>                                 <var>child_node</var>,
+                 <strong>task_t</strong>                              <var>child_task</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>parent_task</var> 
+<dd>
+[in task send right]
+The port for the task from which to draw the child 
+task's port rights, resource limits, and address space.
+<p>
+<dt> <var>inherit_memory</var> 
+<dd>
+[in scalar]
+Address space inheritance indicator.  If true, the child task
+inherits the address space of the parent task.  If false, the kernel assigns 
+the child task an empty address space.
+<p>
+<dt> <var>child_node</var> 
+<dd>
+[in scalar]
+The node index of the node on which to create the child.
+<p>
+<dt> <var>child_task</var> 
+<dd>
+[out task send right]
+The kernel-assigned port name for the new task.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>norma_task_create</strong> function creates a new task from
+<var>parent_task</var> on the specified <var>node</var> and returns the name of the 
+new task in <var>child_task</var>.  The child 
+task acquires shared or copied parts of the parent's address space (see
+<strong>vm_inherit</strong>).  The child task initially contains no threads.
+<p>
+By way of comparison, tasks created by the standard <strong>task_create</strong>
+primitive are created on the same node as the parent.
+<p>
+Other than being created on a different node, the new task has the same
+properties as if created by <strong>task_create</strong>.
+<h3>RETURN VALUES</h3>
+<p>
+Only generic errors apply.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="task_create.html"><strong>task_create</strong></a>,
+<a href="norma_task_clone.html"><strong>norma_task_clone</strong></a>.

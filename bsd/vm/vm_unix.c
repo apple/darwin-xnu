@@ -396,9 +396,13 @@ task_for_pid(
 	if (
 		(p != (struct proc *) 0)
 		&& (p1 != (struct proc *) 0)
-		&& (((kauth_cred_getuid(p->p_ucred) == kauth_cred_getuid(kauth_cred_get())) && 
-			((p->p_ucred->cr_ruid == kauth_cred_get()->cr_ruid)))
-		|| !(suser(kauth_cred_get(), 0)))
+		&& (
+			(p1 == p)
+			|| !(suser(kauth_cred_get(), 0))
+			 || ((kauth_cred_getuid(p->p_ucred) == kauth_cred_getuid(kauth_cred_get())) 
+				&& (p->p_ucred->cr_ruid == kauth_cred_get()->cr_ruid)
+				&& ((p->p_flag & P_SUGID) == 0))
+		  )
 		&& (p->p_stat != SZOMB)
 		) {
 			if (p->task != TASK_NULL) {

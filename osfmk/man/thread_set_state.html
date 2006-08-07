@@ -1,1 +1,55 @@
-<h2>thread_set_state</h2><hr><p><strong>Function</strong> - Set the target thread's user-mode execution state.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   thread_set_state</strong>                <strong>(thread_act_t</strong>                     <var>target_thread</var>,                 <strong>thread_state_flavor_t</strong>                   <var>flavor</var>,                 <strong>thread_state_t</strong>                       <var>new_state</var>,                 <strong>target_thread</strong>                  <var>new_state_count</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>target_thread</var> <dd>[in thread send right]The thread for which to set the execution state. The calling thread cannot specify itself.<p><dt> <var>flavor</var> <dd>[in scalar]The type of state to set.  Valid values correspond tosupported machine architecture features.<p><dt> <var>new_state</var> <dd>[pointer to in structure]State information for the specified thread.<p><dt> <var>new_state_count</var> <dd>[in scalar]The size of the buffer (in natural-sized units).</dl><h3>DESCRIPTION</h3><p>The <strong>thread_set_state</strong> function sets the execution state(for example, themachine registers) for <var>target_thread</var>.  <var>flavor</var> specifies the typeof state to set.<p>The format of the state to set is machine specific; it is defined in<strong>mach/thread_status.h</strong>.<h3>RETURN VALUES</h3><p>Only generic errors apply.<h3>RELATED INFORMATION</h3><p>Functions:<a href="task_info.html"><strong>task_info</strong></a>,<a href="thread_get_state.html"><strong>thread_get_state</strong></a>,<a href="thread_info.html"><strong>thread_info</strong></a>.
+<h2>thread_set_state</h2>
+<hr>
+<p>
+<strong>Function</strong> - Set the target thread's user-mode execution state.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   thread_set_state</strong>
+                <strong>(thread_act_t</strong>                     <var>target_thread</var>,
+                 <strong>thread_state_flavor_t</strong>                   <var>flavor</var>,
+                 <strong>thread_state_t</strong>                       <var>new_state</var>,
+                 <strong>target_thread</strong>                  <var>new_state_count</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>target_thread</var> 
+<dd>
+[in thread send right]
+The thread for which to set the execution state. 
+The calling thread cannot specify itself.
+<p>
+<dt> <var>flavor</var> 
+<dd>
+[in scalar]
+The type of state to set.  Valid values correspond to
+supported machine architecture features.
+<p>
+<dt> <var>new_state</var> 
+<dd>
+[pointer to in structure]
+State information for the specified thread.
+<p>
+<dt> <var>new_state_count</var> 
+<dd>
+[in scalar]
+The size of the buffer (in natural-sized units).
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>thread_set_state</strong> function sets the execution state
+(for example, the
+machine registers) for <var>target_thread</var>.  <var>flavor</var> specifies the type
+of state to set.
+<p>
+The format of the state to set is machine specific; it is defined in
+<strong>mach/thread_status.h</strong>.
+<h3>RETURN VALUES</h3>
+<p>
+Only generic errors apply.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="task_info.html"><strong>task_info</strong></a>,
+<a href="thread_get_state.html"><strong>thread_get_state</strong></a>,
+<a href="thread_info.html"><strong>thread_info</strong></a>.

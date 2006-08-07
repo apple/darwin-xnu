@@ -1,1 +1,104 @@
-<h2>memory_object_supply_completed</h2><hr><p><strong>Server Interface</strong> - Return results associated with the kernel's handling of a particular memory manager request.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   memory_object_supply_completed</strong>                <strong>(memory_object_t</strong>                     <var>reply_port</var>,                 <strong>memory_object_control_t</strong>         <var>memory_control</var>,                 <strong>vm_offset_t</strong>                             <var>offset</var>,                 <strong>vm_size_t</strong>                               <var>length</var>,                 <strong>kern_return_t</strong>                           <var>result</var>,                 <strong>vm_offset_t</strong>                       <var>error_offset</var><strong>);</strong><strong>kern_return_t   seqnos_memory_object_supply_completed</strong>                <strong>(memory_object_t</strong>                     <var>reply_port</var>,                 <strong>mach_port_seqno_t</strong>                        <var>seqno</var>,                 <strong>memory_object_control_t</strong>         <var>memory_control</var>,                 <strong>vm_offset_t</strong>                             <var>offset</var>,                 <strong>vm_size_t</strong>                               <var>length</var>,                 <strong>kern_return_t</strong>                           <var>result</var>,                 <strong>vm_offset_t</strong>                       <var>error_offset</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>reply_port</var> <dd>[in reply (receive) right]The port supplied in the corresponding<strong>memory_object_data_supply</strong> call.<p><dt> <var>seqno</var> <dd>[in scalar]The sequence number of this message relative to the port named in the <strong>memory_object_data_supply</strong> call.<p><dt> <var>memory_control</var> <dd>[in memory-cache-control send right]The memory cache control port to be used for a response by the memory manager.  If the memoryobject has been supplied to more than one kernel, this parameteridentifies the kernel that is making the call.<p><dt> <var>offset</var> <dd>[in scalar]The offset within the memory object from the corresponding data supply call.<p><dt> <var>length</var> <dd>[in scalar]The number of bytes accepted.  The number converts to an integral number of memory object pages.<p><dt> <var>result</var> <dd>[in scalar]A kernel return code indicating the result of the supplyoperation, possibly <strong>KERN_SUCCESS</strong>.  <strong>KERN_MEMORY_PRESENT</strong> is currently the only error returned; other errors (invalid arguments, for example) abort the data supply operation.<p><dt> <var>error_offset</var> <dd>[in scalar]The offset within the memory object where the first erroroccurred.</dl><h3>DESCRIPTION</h3><p>A <strong>memory_object_supply_completed</strong> function is calledas the result of akernel message confirming the kernel's action in response to a <strong>memory_object_data_supply</strong> call from the memory manager.<p>When the kernel accepts the pages, it calls <strong>memory_object_supply_completed</strong> (asynchronously) using the port explicitly provided in the<strong>memory_object_data_supply</strong> call.  Because the data supplycall can provide multiple pages, not all of which the kernel may necessarily accept and some of which the kernel may have to return to the manager (if precious), the kernel provides thisresponse.  If the kernel does not accept all of the pages inthe data supply message, it will indicate so in the completion response.  If the pages not accepted areprecious, they will be returned (in <strong>memory_object_data_return</strong>messages) before it sends this completion message.  The completion call includes the offset and length values from the supply request to distinguish it from other supplyrequests.<h3>RETURN VALUES</h3><p>Only generic errors apply.<h3>RELATED INFORMATION</h3><p>Functions:<a href="memory_object_data_supply.html"><strong>memory_object_data_supply</strong></a>,<a href="memory_object_server.html"><strong>memory_object_server</strong></a>,<a href="SMO_server.html"><strong>seqnos_memory_object_server</strong></a>.
+<h2>memory_object_supply_completed</h2>
+<hr>
+<p>
+<strong>Server Interface</strong> - Return results associated with the kernel's handling of a particular memory manager request.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   memory_object_supply_completed</strong>
+                <strong>(memory_object_t</strong>                     <var>reply_port</var>,
+                 <strong>memory_object_control_t</strong>         <var>memory_control</var>,
+                 <strong>vm_offset_t</strong>                             <var>offset</var>,
+                 <strong>vm_size_t</strong>                               <var>length</var>,
+                 <strong>kern_return_t</strong>                           <var>result</var>,
+                 <strong>vm_offset_t</strong>                       <var>error_offset</var><strong>);</strong>
+
+
+<strong>kern_return_t   seqnos_memory_object_supply_completed</strong>
+                <strong>(memory_object_t</strong>                     <var>reply_port</var>,
+                 <strong>mach_port_seqno_t</strong>                        <var>seqno</var>,
+                 <strong>memory_object_control_t</strong>         <var>memory_control</var>,
+                 <strong>vm_offset_t</strong>                             <var>offset</var>,
+                 <strong>vm_size_t</strong>                               <var>length</var>,
+                 <strong>kern_return_t</strong>                           <var>result</var>,
+                 <strong>vm_offset_t</strong>                       <var>error_offset</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>reply_port</var> 
+<dd>
+[in reply (receive) right]
+The port supplied in the corresponding
+<strong>memory_object_data_supply</strong> call.
+<p>
+<dt> <var>seqno</var> 
+<dd>
+[in scalar]
+The sequence number of this message relative to the port 
+named in the <strong>memory_object_data_supply</strong> call.
+<p>
+<dt> <var>memory_control</var> 
+<dd>
+[in memory-cache-control send right]
+The memory cache control port 
+to be used for a response by the memory manager.  If the memory
+object has been supplied to more than one kernel, this parameter
+identifies the kernel that is making the call.
+<p>
+<dt> <var>offset</var> 
+<dd>
+[in scalar]
+The offset within the memory object from the corresponding 
+data supply call.
+<p>
+<dt> <var>length</var> 
+<dd>
+[in scalar]
+The number of bytes accepted.  The number converts to an 
+integral number of memory object pages.
+<p>
+<dt> <var>result</var> 
+<dd>
+[in scalar]
+A kernel return code indicating the result of the supply
+operation, possibly <strong>KERN_SUCCESS</strong>.  <strong>KERN_MEMORY_PRESENT</strong> is 
+currently the only error returned; other errors (invalid arguments, for 
+example) abort the data supply operation.
+<p>
+<dt> <var>error_offset</var> 
+<dd>
+[in scalar]
+The offset within the memory object where the first error
+occurred.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+A <strong>memory_object_supply_completed</strong> function is called
+as the result of a
+kernel message confirming the kernel's action in response to a 
+<strong>memory_object_data_supply</strong> call from the memory manager.
+<p>
+When the kernel accepts the pages, it calls 
+<strong>memory_object_supply_completed</strong> 
+(asynchronously) using the port explicitly provided in the
+<strong>memory_object_data_supply</strong> call.  Because the data supply
+call can provide multiple pages, not 
+all of which the kernel may necessarily accept and some of which the kernel 
+may have to return to the manager (if precious), the kernel provides this
+response.  If the kernel does not accept all of the pages in
+the data supply message, 
+it will indicate so in the completion response.  If the pages not accepted are
+precious, they will be returned (in <strong>memory_object_data_return</strong>
+messages) before 
+it sends this completion message.  The completion call includes the offset and 
+length values from the supply request to distinguish it from other supply
+requests.
+<h3>RETURN VALUES</h3>
+<p>
+Only generic errors apply.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="memory_object_data_supply.html"><strong>memory_object_data_supply</strong></a>,
+<a href="memory_object_server.html"><strong>memory_object_server</strong></a>,
+<a href="SMO_server.html"><strong>seqnos_memory_object_server</strong></a>.

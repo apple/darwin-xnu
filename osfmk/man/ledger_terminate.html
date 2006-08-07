@@ -1,1 +1,35 @@
-<h2>ledger_terminate</h2><hr><p><strong>Function</strong> - Destroy a ledger.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   ledger_terminate</strong>                <strong>(ledger_port_t</strong>                           <var>ledger</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>ledger</var> <dd>[in ledger send right]The ledger to destroy</dl><h3>DESCRIPTION</h3><p>The <strong>ledger_terminate</strong> function destroys a ledger.  Allresources drawn from this ledger will also be destroyed.  The resource limits in the ledgerare returned to the ledger's parent.<h3>NOTES</h3><p>This interface is not implemented in OSF/1 R1.3.<h3>RETURN VALUES</h3><p>Only generic errors apply.<h3>RELATED INFORMATION</h3><p>Functions:<a href="ledger_create.html"><strong>ledger_create</strong></a>,<a href="ledger_read.html"><strong>ledger_read</strong></a>,<a href="ledger_transfer.html"><strong>ledger_transfer</strong></a>.
+<h2>ledger_terminate</h2>
+<hr>
+<p>
+<strong>Function</strong> - Destroy a ledger.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   ledger_terminate</strong>
+                <strong>(ledger_port_t</strong>                           <var>ledger</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>ledger</var> 
+<dd>
+[in ledger send right]
+The ledger to destroy
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>ledger_terminate</strong> function destroys a ledger.  All
+resources drawn from this 
+ledger will also be destroyed.  The resource limits in the ledger
+are returned to the ledger's parent.
+<h3>NOTES</h3>
+<p>
+This interface is not implemented in OSF/1 R1.3.
+<h3>RETURN VALUES</h3>
+<p>
+Only generic errors apply.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="ledger_create.html"><strong>ledger_create</strong></a>,
+<a href="ledger_read.html"><strong>ledger_read</strong></a>,
+<a href="ledger_transfer.html"><strong>ledger_transfer</strong></a>.

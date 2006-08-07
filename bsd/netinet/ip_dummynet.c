@@ -1177,12 +1177,13 @@ dummynet_io(struct mbuf *m, int pipe_nr, int dir, struct ip_fw_args *fwa)
 
     /* XXX expensive to zero, see if we can remove it*/
     mtag = m_tag_alloc(KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_DUMMYNET,
-    		sizeof(struct dn_pkt_tag), M_NOWAIT|M_ZERO);
+    		sizeof(struct dn_pkt_tag), M_NOWAIT);
     if ( mtag == NULL )
 		goto dropit ;		/* cannot allocate packet header	*/
     m_tag_prepend(m, mtag);	/* attach to mbuf chain */
 
     pkt = (struct dn_pkt_tag *)(mtag+1);
+    bzero(pkt, sizeof(struct dn_pkt_tag));
     /* ok, i can handle the pkt now... */
     /* build and enqueue packet + parameters */
     pkt->rule = fwa->rule ;

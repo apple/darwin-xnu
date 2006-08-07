@@ -1,1 +1,46 @@
-<h2>mach_port_qos</h2><hr><p><strong>Structure</strong> - Specifies a port's attributes with respect to "Quality Of Service."<h3>SYNOPSIS</h3><pre><strong>typedef struct mach_port_qos</strong>        <strong>{</strong>               <strong>boolean_t</strong>      <var>name</var><strong>;</strong>               <strong>boolean_t</strong>      <var>rt</var><strong>;</strong>               <strong>boolean_t</strong>      <var>pad1</var><strong>;</strong>               <strong>boolean_t</strong>      <var>pad2</var><strong>;</strong>        <strong>} mach_port_qos_t;</strong></pre><h3>FIELDS</h3><dl><dt> <var>name</var><dd>     If TRUE, the system will bestow the user-specified name on the newly allocated port.     Otherwise, the system will choose the port's name.     <p>     <dt> <var>rt</var><dd>     If TRUE, this field causes a realtime port to be allocated.     Otherwise, a regular port will be allocated.<p>     <dt> <var>pad1</var><dd>     A 30 bit padding field.<p>     <dt> <var>pad2</var><dd>A 32 bit padding field; with the <var>pad1</var> field, lengthens the     structure to 64 bits.</dl><h3>DESCRIPTION</h3><p>The <strong>mach_port_qos</strong> structure is used to specify a port's"quality of service" attributes when allocating the port via the<strong>mach_port_allocate_qos</strong> interface.<h3>RELATED INFORMATION</h3><p>Functions:<a href="mach_port_allocate_qos.html"><strong>mach_port_allocate_qos</strong></a>,<a href="mach_port_get_attributes.html"><strong>mach_port_get_attributes</strong></a>,<a href="mach_port_set_attributes.html"><strong>mach_port_set_attributes</strong></a>.
+<h2>mach_port_qos</h2>
+<hr>
+<p>
+<strong>Structure</strong> - Specifies a port's attributes with respect to "Quality Of Service."
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>typedef struct mach_port_qos</strong>
+        <strong>{</strong>
+               <strong>boolean_t</strong>      <var>name</var><strong>;</strong>
+               <strong>boolean_t</strong>      <var>rt</var><strong>;</strong>
+               <strong>boolean_t</strong>      <var>pad1</var><strong>;</strong>
+               <strong>boolean_t</strong>      <var>pad2</var><strong>;</strong>
+        <strong>} mach_port_qos_t;</strong>
+</pre>
+<h3>FIELDS</h3>
+<dl>
+<dt> <var>name</var>
+<dd>
+     If TRUE, the system will bestow the user-specified name on the newly allocated port.
+     Otherwise, the system will choose the port's name.
+     <p>
+     <dt> <var>rt</var>
+<dd>
+     If TRUE, this field causes a realtime port to be allocated.
+     Otherwise, a regular port will be allocated.
+<p>
+     <dt> <var>pad1</var>
+<dd>
+     A 30 bit padding field.
+<p>
+     <dt> <var>pad2</var>
+<dd>
+A 32 bit padding field; with the <var>pad1</var> field, lengthens the
+     structure to 64 bits.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>mach_port_qos</strong> structure is used to specify a port's
+"quality of service" attributes when allocating the port via the
+<strong>mach_port_allocate_qos</strong> interface.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="mach_port_allocate_qos.html"><strong>mach_port_allocate_qos</strong></a>,
+<a href="mach_port_get_attributes.html"><strong>mach_port_get_attributes</strong></a>,
+<a href="mach_port_set_attributes.html"><strong>mach_port_set_attributes</strong></a>.

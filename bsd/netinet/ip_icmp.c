@@ -91,6 +91,13 @@
 #include <net/if_types.h>
 #endif
 
+ /* XXX This one should go in sys/mbuf.h. It is used to avoid that
+ * a firewall-generated packet loops forever through the firewall.
+ */
+#ifndef M_SKIP_FIREWALL
+#define M_SKIP_FIREWALL         0x4000
+#endif
+
 /*
  * ICMP routines: error generation, receive packet processing, and
  * routines to turnaround packets back to the originator, and
@@ -200,6 +207,12 @@ icmp_error(
 	m = m_gethdr(M_DONTWAIT, MT_HEADER);
 	if (m == NULL)
 		goto freeit;
+
+	if (n->m_flags & M_SKIP_FIREWALL) {
+		/* set M_SKIP_FIREWALL to skip firewall check, since we're called from firewall */
+		m->m_flags |= M_SKIP_FIREWALL;
+	}
+
 	icmplen = min(oiplen + 8, oip->ip_len);
 	if (icmplen < sizeof(struct ip)) {
 		printf("icmp_error: bad length\n");

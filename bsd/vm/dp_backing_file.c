@@ -269,7 +269,7 @@ macx_swapon(
 	/* Mark this vnode as being used for swapfile */
 	SET(vp->v_flag, VSWAP);
 
-	ubc_setcred(vp, p);
+	ubc_setthreadcred(vp, p, current_thread());
 
 	/*
 	 * take a long term reference on the vnode to keep

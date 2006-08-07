@@ -1,1 +1,41 @@
-<h2>task_thread_times_info</h2><hr><p><strong>Structure</strong> - Defines thread execution times information for tasks.<h3>SYNOPSIS</h3><pre><strong>struct task_thread_times_info</strong><strong>{</strong>       <strong>time_value_t</strong>         <var>user_time</var><strong>;</strong>       <strong>time_value_t</strong>       <var>system_time</var><strong>;</strong><strong>};</strong><strong>typedef struct task_thread_times_info* task_thread_times_info_t;</strong></pre><h3>FIELDS</h3><dl>  <p><dt> <var>user_time</var><dd>Total user run time for live threads.     <p><dt> <var>system_time</var><dd>Total system run time for live threads.</dl><h3>DESCRIPTION</h3><p>The <strong>task_thread_times_info</strong> structure defines threadexecution time statistics for tasks.  The <strong>task_info</strong> function returns these timesfor a specified task.  The <strong>thread_info</strong> function returns this information for a specific thread.<h3>RELATED INFORMATION</h3><p>Functions:<a href="task_info.html"><strong>task_info</strong></a>,<a href="thread_info.html"><strong>thread_info</strong></a>.<p>Data Structures:<a href="task_basic_info.html"><strong>task_basic_info</strong></a>,<a href="thread_basic_info.html"><strong>thread_basic_info</strong></a>.
+<h2>task_thread_times_info</h2>
+<hr>
+<p>
+<strong>Structure</strong> - Defines thread execution times information for tasks.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>struct task_thread_times_info</strong>
+<strong>{</strong>
+       <strong>time_value_t</strong>         <var>user_time</var><strong>;</strong>
+       <strong>time_value_t</strong>       <var>system_time</var><strong>;</strong>
+<strong>};</strong>
+
+<strong>typedef struct task_thread_times_info* task_thread_times_info_t;</strong>
+</pre>
+<h3>FIELDS</h3>
+<dl>
+  <p>
+<dt> <var>user_time</var>
+<dd>
+Total user run time for live threads.
+     <p>
+<dt> <var>system_time</var>
+<dd>
+Total system run time for live threads.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>task_thread_times_info</strong> structure defines thread
+execution time statistics 
+for tasks.  The <strong>task_info</strong> function returns these times
+for a specified task.  The 
+<strong>thread_info</strong> function returns this information for a specific thread.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="task_info.html"><strong>task_info</strong></a>,
+<a href="thread_info.html"><strong>thread_info</strong></a>.
+<p>
+Data Structures:
+<a href="task_basic_info.html"><strong>task_basic_info</strong></a>,
+<a href="thread_basic_info.html"><strong>thread_basic_info</strong></a>.

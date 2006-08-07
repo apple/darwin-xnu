@@ -1,1 +1,68 @@
-<h2>clock_set_attributes</h2><hr><p><strong>Function</strong> - Set a particular clock's attributes.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   clock_set_attributes</strong>                <strong>(clock_ctrl_t</strong>                     <var>clock_control</var>,                 <strong>clock_flavor_t</strong>                          <var>flavor</var>,                 <strong>clock_attr_t</strong>                         <var>attribute</var>,                 <strong>clock_control</strong>                  <var>attribute_count</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>clock_control</var> <dd>[in clock-control send right]The control port for the clock.<p><dt> <var>flavor</var> <dd>[in scalar]Type of information to be set.  Defined values are:<dl><p><dt> <strong>CLOCK_ALARM_CURRES</strong><dd>The resolution, in nanoseconds, at which clock alarm and sleep timers are currently serviced.  Increasing the currentresolution will have no impact on any pending clock alarms (i.e. they will go off as originally scheduled).  Decreasing thecurrent resolution will truncate any pending alarms to thegranularity of the new current resolution.  This value must be a multiple of the minimum resolution and not greater than the maximum resolution of the clock.</dl><p><dt> <var>attribute</var> <dd>[pointer to in scalar]New attribute.<p><dt> <var>attribute_count</var> <dd>[in scalar]The size of the buffer (in natural-sized units).</dl><h3>DESCRIPTION</h3><p>The <strong>clock_set_attributes</strong> function sets attributes ofa clock's operation.<h3>NOTES</h3><p>The main reason a clock's current resolution would not always equal itsminimum resolution is because the overhead of sustaining theminimum resolution, when it is not needed by any existing alarm service client, may be prohibitive for a given hardware platform and underlying clock device.<h3>RETURN VALUES</h3><p>Only generic errors apply.<h3>RELATED INFORMATION</h3><p>Functions:<a href="host_get_clock_control.html"><strong>host_get_clock_control</strong></a>,<a href="clock_set_time.html"><strong>clock_set_time</strong></a>,<a href="clock_get_attributes.html"><strong>clock_get_attributes</strong></a>.
+<h2>clock_set_attributes</h2>
+<hr>
+<p>
+<strong>Function</strong> - Set a particular clock's attributes.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   clock_set_attributes</strong>
+                <strong>(clock_ctrl_t</strong>                     <var>clock_control</var>,
+                 <strong>clock_flavor_t</strong>                          <var>flavor</var>,
+                 <strong>clock_attr_t</strong>                         <var>attribute</var>,
+                 <strong>clock_control</strong>                  <var>attribute_count</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>clock_control</var> 
+<dd>
+[in clock-control send right]
+The control port for the clock.
+<p>
+<dt> <var>flavor</var> 
+<dd>
+[in scalar]
+Type of information to be set.  Defined values are:
+<dl>
+<p>
+<dt> <strong>CLOCK_ALARM_CURRES</strong>
+<dd>
+The resolution, in nanoseconds, at which clock alarm and 
+sleep timers are currently serviced.  Increasing the current
+resolution will have no impact on any pending clock alarms (i.e. 
+they will go off as originally scheduled).  Decreasing the
+current resolution will truncate any pending alarms to the
+granularity of the new current resolution.  This value must be a 
+multiple of the minimum resolution and not greater than the 
+maximum resolution of the clock.
+</dl>
+<p>
+<dt> <var>attribute</var> 
+<dd>
+[pointer to in scalar]
+New attribute.
+<p>
+<dt> <var>attribute_count</var> 
+<dd>
+[in scalar]
+The size of the buffer (in natural-sized units).
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>clock_set_attributes</strong> function sets attributes of
+a clock's operation.
+<h3>NOTES</h3>
+<p>
+The main reason a clock's current resolution would not always equal its
+minimum resolution is because the overhead of sustaining the
+minimum resolution, 
+when it is not needed by any existing alarm service client, may be prohibitive 
+for a given hardware platform and underlying clock device.
+<h3>RETURN VALUES</h3>
+<p>
+Only generic errors apply.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="host_get_clock_control.html"><strong>host_get_clock_control</strong></a>,
+<a href="clock_set_time.html"><strong>clock_set_time</strong></a>,
+<a href="clock_get_attributes.html"><strong>clock_get_attributes</strong></a>.

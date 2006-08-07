@@ -1,1 +1,75 @@
-<h2>task_policy</h2><hr><p><strong>Function</strong> - Set target task's default scheduling policy state.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   task_policy</strong>                <strong>(task_t</strong>                                    <var>task</var>,                 <strong>policy_t</strong>                                <var>policy</var>,                 <strong>policy_base_t</strong>                             <var>base</var>,                 <strong>base</strong>                                <var>base_count</var>,                 <strong>boolean_t</strong>                            <var>set_limit</var>,                 <strong>boolean_t</strong>                       <var>change_threads</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><dt> <var>task</var> <dd>[in task send right]The port for the task whose scheduling attributes are to be set.<dt> <var>policy</var> <dd>[in scalar]Default policy.  The values currently defined are <strong>POLICY_TIMESHARE</strong>, <strong>POLICY_RR</strong> (round robin) and <strong>POLICY_FIFO</strong> (firstin, first-out).<dt> <var>base</var> <dd>[pointer to in structure]Base scheduling policy data, <strong>policy_fifo_base</strong>, <strong>policy_rr_base</strong> or <strong>policy_timeshare_base</strong>.<dt> <var>base_count</var> <dd>[in scalar]The size of the buffer (in natural-sized units).<dt> <var>set_limit</var> <dd>[in scalar]True if the scheduling limits for the task should be restricted to allow no more service than specified by <var>base</var>.<dt> <var>change_threads</var> <dd>[in scalar]True if the attributes (and limits, if <var>set_limit</var> is true) ofexisting threads within the task should also be changed.</dl><h3>DESCRIPTION</h3><p>The <strong>task_policy</strong> function sets the default schedulingattributes for <var>task</var>.  These attributes are used when creating new threads.  Changing the default attributes for a task does not affect the attributes of the contained threads unless <var>change_threads</var> is <strong>TRUE</strong>.  At no time will a thread ever have scheduling attributes that exceed the thread's limits.<h3>RETURN VALUES</h3><dl><dt> <strong>KERN_INVALID_POLICY</strong><dd>The processor set does not currently enable <var>policy</var>.<dt> <strong>KERN_POLICY_LIMIT</strong><dd>The specified scheduling attributes exceeds the thread's limits.</dl><h3>RELATED INFORMATION</h3><p>Functions:<a href="thread_policy.html"><strong>thread_policy</strong></a>,<a href="thread_set_policy.html"><strong>thread_set_policy</strong></a>,<a href="task_set_policy.html"><strong>task_set_policy</strong></a>,<a href="P_set_policy_control.html"><strong>processor_set_policy_control</strong></a>.<p>Data Structures:<a href="policy_fifo_info.html"><strong>policy_fifo_info</strong></a>,<a href="policy_rr_info.html"><strong>policy_rr_info</strong></a>,<a href="policy_timeshare_info.html"><strong>policy_timeshare_info</strong></a>.
+<h2>task_policy</h2>
+<hr>
+<p>
+<strong>Function</strong> - Set target task's default scheduling policy state.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   task_policy</strong>
+                <strong>(task_t</strong>                                    <var>task</var>,
+                 <strong>policy_t</strong>                                <var>policy</var>,
+                 <strong>policy_base_t</strong>                             <var>base</var>,
+                 <strong>base</strong>                                <var>base_count</var>,
+                 <strong>boolean_t</strong>                            <var>set_limit</var>,
+                 <strong>boolean_t</strong>                       <var>change_threads</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<dt> <var>task</var> 
+<dd>
+[in task send right]
+The port for the task whose scheduling attributes 
+are to be set.
+<dt> <var>policy</var> 
+<dd>
+[in scalar]
+Default policy.  The values currently defined are <strong>POLICY_TIMESHARE</strong>, 
+<strong>POLICY_RR</strong> (round robin) and <strong>POLICY_FIFO</strong> (firstin, first-out).
+<dt> <var>base</var> 
+<dd>
+[pointer to in structure]
+Base scheduling policy data, <strong>policy_fifo_base</strong>, 
+<strong>policy_rr_base</strong> or <strong>policy_timeshare_base</strong>.
+<dt> <var>base_count</var> 
+<dd>
+[in scalar]
+The size of the buffer (in natural-sized units).
+<dt> <var>set_limit</var> 
+<dd>
+[in scalar]
+True if the scheduling limits for the task should be restricted 
+to allow no more service than specified by <var>base</var>.
+<dt> <var>change_threads</var> 
+<dd>
+[in scalar]
+True if the attributes (and limits, if <var>set_limit</var> is true) of
+existing threads within the task should also be changed.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>task_policy</strong> function sets the default scheduling
+attributes for <var>task</var>.  These 
+attributes are used when creating new threads.  Changing the default attributes 
+for a task does not affect the attributes of the contained threads unless 
+<var>change_threads</var> is <strong>TRUE</strong>.  At no time will a thread ever have 
+scheduling attributes that exceed the thread's limits.
+<h3>RETURN VALUES</h3>
+<dl>
+<dt> <strong>KERN_INVALID_POLICY</strong>
+<dd>
+The processor set does not currently enable <var>policy</var>.
+<dt> <strong>KERN_POLICY_LIMIT</strong>
+<dd>
+The specified scheduling attributes exceeds the thread's limits.
+</dl>
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="thread_policy.html"><strong>thread_policy</strong></a>,
+<a href="thread_set_policy.html"><strong>thread_set_policy</strong></a>,
+<a href="task_set_policy.html"><strong>task_set_policy</strong></a>,
+<a href="P_set_policy_control.html"><strong>processor_set_policy_control</strong></a>.
+<p>
+Data Structures:
+<a href="policy_fifo_info.html"><strong>policy_fifo_info</strong></a>,
+<a href="policy_rr_info.html"><strong>policy_rr_info</strong></a>,
+<a href="policy_timeshare_info.html"><strong>policy_timeshare_info</strong></a>.

@@ -288,6 +288,12 @@ sonewconn_internal(head, connstatus)
 	so->so_uid = head->so_uid;
 	so->so_usecount = 1;
 
+#ifdef __APPLE__
+	so->so_rcv.sb_flags |= SB_RECV;	/* XXX */
+	so->so_rcv.sb_so = so->so_snd.sb_so = so;
+	TAILQ_INIT(&so->so_evlist);
+#endif
+
 	if (soreserve(so, head->so_snd.sb_hiwat, head->so_rcv.sb_hiwat)) {
 		sflt_termsock(so);
 		sodealloc(so);
@@ -321,11 +327,8 @@ sonewconn_internal(head, connstatus)
 		head->so_incqlen++;
 	}
 	head->so_qlen++;
-#ifdef __APPLE__
-	so->so_rcv.sb_flags |= SB_RECV;	/* XXX */
-	so->so_rcv.sb_so = so->so_snd.sb_so = so;
-	TAILQ_INIT(&so->so_evlist);
 
+#ifdef __APPLE__
         /* Attach socket filters for this protocol */
         sflt_initsock(so);
 #endif

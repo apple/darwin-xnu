@@ -1,1 +1,48 @@
-<h2>host_processor_set_priv</h2><hr><p><strong>Function</strong> - Translate a processor set name port  into a processor set control port.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   host_processor_set_priv</strong>                <strong>(host_priv_t</strong>                          <var>host_priv</var>,                 <strong>processor_set_name_t</strong>                  <var>set_name</var>,                 <strong>processor_set_t</strong>                  <var>processor_set</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>host_priv</var> <dd>[in host-control send right]The control port for the host for which the processor set is desired.<p><dt> <var>set_name</var> <dd>[in processor-set-name send right]The name port for the processor set desired.<p><dt> <var>processor_set</var> <dd>[out processor-set-control send right]The returned processor setcontrol port.</dl><h3>DESCRIPTION</h3><p>The <strong>host_processor_set_priv</strong> function returns send rightsfor the control port for a specified processor set currently existing on <var>host_priv</var>.<h3>RETURN VALUES</h3><p>Only generic errors apply.<h3>RELATED INFORMATION</h3><p>Functions:<a href="host_processor_sets.html"><strong>host_processor_sets</strong></a>,<a href="processor_set_create.html"><strong>processor_set_create</strong></a>,<a href="processor_set_tasks.html"><strong>processor_set_tasks</strong></a>,<a href="processor_set_threads.html"><strong>processor_set_threads</strong></a>.
+<h2>host_processor_set_priv</h2>
+<hr>
+<p>
+<strong>Function</strong> - Translate a processor set name port
+  into a processor set control port.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   host_processor_set_priv</strong>
+                <strong>(host_priv_t</strong>                          <var>host_priv</var>,
+                 <strong>processor_set_name_t</strong>                  <var>set_name</var>,
+                 <strong>processor_set_t</strong>                  <var>processor_set</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>host_priv</var> 
+<dd>
+[in host-control send right]
+The control port for the host for which the 
+processor set is desired.
+<p>
+<dt> <var>set_name</var> 
+<dd>
+[in processor-set-name send right]
+The name port for the processor set 
+desired.
+<p>
+<dt> <var>processor_set</var> 
+<dd>
+[out processor-set-control send right]
+The returned processor set
+control port.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>host_processor_set_priv</strong> function returns send rights
+for the control port 
+for a specified processor set currently existing on <var>host_priv</var>.
+<h3>RETURN VALUES</h3>
+<p>
+Only generic errors apply.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="host_processor_sets.html"><strong>host_processor_sets</strong></a>,
+<a href="processor_set_create.html"><strong>processor_set_create</strong></a>,
+<a href="processor_set_tasks.html"><strong>processor_set_tasks</strong></a>,
+<a href="processor_set_threads.html"><strong>processor_set_threads</strong></a>.

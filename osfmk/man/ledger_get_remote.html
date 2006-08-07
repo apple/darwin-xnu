@@ -1,1 +1,80 @@
-<h2>ledger_get_remote</h2><hr><p><strong>Function</strong> - Return send right to specified host's remote ledger port.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   ledger_get_remote</strong>                <strong>(ledger_port_t</strong>                           <var>ledger</var>,                 <strong>host_t</strong>                               <var>host_name</var>,                 <strong>ledger</strong>                            <var>service_port</var><strong>);</strong><strong>kern_return_t   ledger_return_remote</strong>                <strong>(ledger_port_t</strong>                           <var>ledger</var>,                 <strong>host_t</strong>                               <var>host_name</var>,                 <strong>ledger</strong>                            <var>service_port</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>ledger</var> <dd>[in ledger send right]The ledger whose service port is desired.<p><dt> <var>host_name</var> <dd>[in host-name send right]The name for the host requesting the service port.<p><dt> <var>service_port</var> <dd>[out ledger-service send right]The ledger service port.</dl><h3>DESCRIPTION</h3><p>The <strong>ledger_get_remote</strong> function returns the remote ledgerservice port for the ledger<h3>NOTES</h3><p>This interface is not implemented in OSF/1 R1.3.<p>This mechanism supports distributed resource ledgers in the following way:<dl><dd>With <strong>ledger_set_remote</strong>, a ledger is assigned a remoteledger service port.<dd>This ledger is used as the ledger for a create operation.  If the ledger is local to the target kernel, all is fine.<dd>For a non-local creation, the target kernel sees that the suppliedledger is not a local ledger.  The kernel sends a <strong>ledger_get_remote</strong> message to it,including the host name.<dd>The (remote) ledger receives this message, ignores the host name and returns the remote ledger service port.<dd>Assuming that the remote ledger service port is not a local ledger, the kernel sends a <strong>ledger_get_remote</strong> message to this service port.<dd>A server receives this request (with the <strong>ledger_return_remote</strong>server interface) and uses the identity of the service port as well as the host name of the target kernel to locate or create a suitable ledger on that kernel.<dd>The port for a ledger on the target kernel is sent to that kernel and used.</dl><h3>RETURN VALUES</h3><p>Only generic errors apply.<h3>RELATED INFORMATION</h3><p>Functions:<a href="ledger_create.html"><strong>ledger_create</strong></a>,<a href="ledger_set_remote.html"><strong>ledger_set_remote</strong></a>.
+<h2>ledger_get_remote</h2>
+<hr>
+<p>
+<strong>Function</strong> - Return send right to specified host's remote ledger port.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   ledger_get_remote</strong>
+                <strong>(ledger_port_t</strong>                           <var>ledger</var>,
+                 <strong>host_t</strong>                               <var>host_name</var>,
+                 <strong>ledger</strong>                            <var>service_port</var><strong>);</strong>
+
+
+<strong>kern_return_t   ledger_return_remote</strong>
+                <strong>(ledger_port_t</strong>                           <var>ledger</var>,
+                 <strong>host_t</strong>                               <var>host_name</var>,
+                 <strong>ledger</strong>                            <var>service_port</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>ledger</var> 
+<dd>
+[in ledger send right]
+The ledger whose service port is desired.
+<p>
+<dt> <var>host_name</var> 
+<dd>
+[in host-name send right]
+The name for the host requesting the service 
+port.
+<p>
+<dt> <var>service_port</var> 
+<dd>
+[out ledger-service send right]
+The ledger service port.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>ledger_get_remote</strong> function returns the remote ledger
+service port for the 
+ledger
+<h3>NOTES</h3>
+<p>
+This interface is not implemented in OSF/1 R1.3.
+<p>
+This mechanism supports distributed resource ledgers in the following way:
+<dl>
+<dd>
+With <strong>ledger_set_remote</strong>, a ledger is assigned a remote
+ledger service port.
+<dd>
+This ledger is used as the ledger for a create operation.  
+If the ledger is local to the target kernel, all is fine.
+<dd>
+For a non-local creation, the target kernel sees that the supplied
+ledger is not 
+a local ledger.  The kernel sends a <strong>ledger_get_remote</strong> message to it,
+including the host name.
+<dd>
+The (remote) ledger receives this message, ignores the host name and returns 
+the remote ledger service port.
+<dd>
+Assuming that the remote ledger service port is not a local ledger, the kernel 
+sends a <strong>ledger_get_remote</strong> message to this service port.
+<dd>
+A server receives this request (with the <strong>ledger_return_remote</strong>
+server interface) 
+and uses the identity of the service port as well as the host name of the 
+target kernel to locate or create a suitable ledger on that kernel.
+<dd>
+The port for a ledger on the target kernel is sent to that kernel and used.
+</dl>
+<h3>RETURN VALUES</h3>
+<p>
+Only generic errors apply.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="ledger_create.html"><strong>ledger_create</strong></a>,
+<a href="ledger_set_remote.html"><strong>ledger_set_remote</strong></a>.

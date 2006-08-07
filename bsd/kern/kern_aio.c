@@ -2061,11 +2061,15 @@ do_aio_write( aio_workq_entry *entryp )
 		return(EBADF);
 	}
 	if ( fp != NULL ) {
-		error = dofilewrite( entryp->procp, fp, entryp->aiocb.aio_fildes, 
-							 entryp->aiocb.aio_buf, 
-							 entryp->aiocb.aio_nbytes,
-							 entryp->aiocb.aio_offset, FOF_OFFSET, 
-							 &entryp->returnval );
+		/* NB: tell dofilewrite the offset, and to use the proc cred */
+		error = dofilewrite( entryp->procp,
+				     fp,
+				     entryp->aiocb.aio_fildes,
+				     entryp->aiocb.aio_buf,
+				     entryp->aiocb.aio_nbytes,
+				     entryp->aiocb.aio_offset,
+				     FOF_OFFSET | FOF_PCRED,
+				     &entryp->returnval);
 		
 		fp_drop(entryp->procp, entryp->aiocb.aio_fildes, fp, 0);
 	}

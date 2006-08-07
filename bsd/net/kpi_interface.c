@@ -1073,8 +1073,14 @@ ifnet_find_by_name(
 	ifnet_head_lock_shared();
 	TAILQ_FOREACH(ifp, &ifnet, if_link)
 	{
-		struct sockaddr_dl *ll_addr =
-			(struct sockaddr_dl *)ifnet_addrs[ifp->if_index - 1]->ifa_addr;
+		struct ifaddr *ifa = ifnet_addrs[ifp->if_index - 1];
+		struct sockaddr_dl *ll_addr;
+		
+		if (!ifa || !ifa->ifa_addr)
+			continue;
+		
+		ll_addr = (struct sockaddr_dl *)ifa->ifa_addr;
+		
 		if ((ifp->if_eflags & IFEF_DETACHING) == 0 &&
 			namelen == ll_addr->sdl_nlen &&
 			(strncmp(ll_addr->sdl_data, ifname, ll_addr->sdl_nlen) == 0))

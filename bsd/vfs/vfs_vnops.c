@@ -600,7 +600,19 @@ vn_write(struct fileproc *fp, struct uio *uio, kauth_cred_t cred,
 	 * Set the credentials on successful writes
 	 */
 	if ((error == 0) && (vp->v_tag == VT_NFS) && (UBCINFOEXISTS(vp))) {
-		ubc_setcred(vp, p);
+		/* 
+		 * When called from aio subsystem, we only have the proc from
+		 * which to get the credential, at this point, so use that
+		 * instead.  This means aio functions are incompatible with
+		 * per-thread credentials (aio operations are proxied).  We
+		 * can't easily correct the aio vs. settid race in this case
+		 * anyway, so we disallow it.
+		 */
+		if ((flags & FOF_PCRED) == 0) {
+			ubc_setthreadcred(vp, p, current_thread());
+		} else {
+			ubc_setcred(vp, p);
+		}
 	}
 	(void)vnode_put(vp);
 	return (error);

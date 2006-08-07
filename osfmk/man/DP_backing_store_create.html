@@ -1,1 +1,62 @@
-<h2>default_pager_backing_store_create</h2><hr><p><strong>Server Interface</strong> - Create a backing storage object.<h3>SYNOPSIS</h3><pre><strong>#include&lt mach/default_pager_object.h&gt</strong><strong>kern_return_t   default_pager_backing_store_create</strong>                <strong>(mach_port_t</strong>                              <var>pager</var>,                 <strong>int</strong>                                   <var>priority</var>,                 <strong>int</strong>                                     <var>clsize</var>,                 <strong>mach_port_t</strong>                      <var>backing_store</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>pager</var><dd>[in default pager (receive) right] The default pager service port.<p><dt> <var>priority</var><dd>[in scalar] The scheduling priority for the backing store service thread(s).<p><dt> <var>clsize</var><dd>[in scalar] The preferred cluster size (in bytes) for the backingstore object.<p><dt> <var>backing_store</var><dd>[out backing store (receive) right] The port used to manipulate thecreated backing store.</dl><h3>DESCRIPTION</h3><p>The <strong>default_pager_backing_store_create</strong> function is called to create anew backing storage object. The kernel does not make this call itself(which is why it can be a synchronous call); this request is onlyissued by tasks (privileged) holding the default pager service port.<h3>RETURN VALUES</h3><dl><p><dt> <strong>KERN_FAILURE</strong><dd>The default pager does not support this operation.<p><dt> <strong>KERN_INVALID_ARGUMENT</strong><dd>The pager port does not represent a valid default pager.<p><dt> <strong>KERN_SUCCESS</strong><dd>The operation was successful.</dl><h3>RELATED INFORMATION</h3><p>Functions:<a href="DP_backing_store_delete.html"><strong>default_pager_backing_store_delete</strong></a>,<a href="DP_backing_store_info.html"><strong>default_pager_backing_store_info</strong></a>.
+<h2>default_pager_backing_store_create</h2>
+<hr>
+<p>
+<strong>Server Interface</strong> - Create a backing storage object.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>#include&lt mach/default_pager_object.h&gt</strong>
+
+<strong>kern_return_t   default_pager_backing_store_create</strong>
+                <strong>(mach_port_t</strong>                              <var>pager</var>,
+                 <strong>int</strong>                                   <var>priority</var>,
+                 <strong>int</strong>                                     <var>clsize</var>,
+                 <strong>mach_port_t</strong>                      <var>backing_store</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>pager</var>
+<dd>
+[in default pager (receive) right] The default pager service port.
+<p>
+<dt> <var>priority</var>
+<dd>
+[in scalar] The scheduling priority for the backing store service 
+thread(s).
+<p>
+<dt> <var>clsize</var>
+<dd>
+[in scalar] The preferred cluster size (in bytes) for the backing
+store object.
+<p>
+<dt> <var>backing_store</var>
+<dd>
+[out backing store (receive) right] The port used to manipulate the
+created backing store.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>default_pager_backing_store_create</strong> function is called to create a
+new backing storage object. The kernel does not make this call itself
+(which is why it can be a synchronous call); this request is only
+issued by tasks (privileged) holding the default pager service port.
+<h3>RETURN VALUES</h3>
+<dl>
+<p>
+<dt> <strong>KERN_FAILURE</strong>
+<dd>
+The default pager does not support this operation.
+<p>
+<dt> <strong>KERN_INVALID_ARGUMENT</strong>
+<dd>
+The pager port does not represent a valid default pager.
+<p>
+<dt> <strong>KERN_SUCCESS</strong>
+<dd>
+The operation was successful.
+</dl>
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="DP_backing_store_delete.html"><strong>default_pager_backing_store_delete</strong></a>,
+<a href="DP_backing_store_info.html"><strong>default_pager_backing_store_info</strong></a>.

@@ -1304,6 +1304,7 @@ send_reject(struct ip_fw_args *args, int code, int offset, int ip_len)
 			ip->ip_len = ntohs(ip->ip_len);
 			ip->ip_off = ntohs(ip->ip_off);
 		}
+                args->m->m_flags |= M_SKIP_FIREWALL;
 		icmp_error(args->m, ICMP_UNREACH, code, 0L, 0);
 	} else if (offset == 0 && args->f_id.proto == IPPROTO_TCP) {
 		struct tcphdr *const tcp =

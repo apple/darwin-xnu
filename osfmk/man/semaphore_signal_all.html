@@ -1,1 +1,42 @@
-<h2>semaphore_signal_all</h2><hr><p><strong>Function</strong> - Wake up all threads blocked on a semaphore.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   semaphore_signal_all</strong>                <strong>(semaphore_t</strong>                          <var>semaphore</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>semaphore</var><dd>[in send right] The port naming the semaphore to be signalled.</dl><h3>DESCRIPTION</h3><p>The <strong>semaphore_signal_all</strong> function wakes up all of thethreads blocked on the semaphore. The semaphore count is reset tozero.<h3>RETURN VALUES</h3><dl><p><dt> <strong>KERN_INVALID_ARGUMENT</strong><dd>The specified semaphore is invalid.<p><dt> <strong>KERN_TERMINATED</strong><dd>The specified semaphore has been destroyed.<p><dt> <strong>KERN_SUCCESS</strong><dd>The semaphore has been signalled.</dl><h3>RELATED INFORMATION</h3><p>Functions:<a href="semaphore_create.html"><strong>semaphore_create</strong></a>,<a href="semaphore_destroy.html"><strong>semaphore_destroy</strong></a>,<a href="semaphore_signal.html"><strong>semaphore_signal</strong></a>,
+<h2>semaphore_signal_all</h2>
+<hr>
+<p>
+<strong>Function</strong> - Wake up all threads blocked on a semaphore.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   semaphore_signal_all</strong>
+                <strong>(semaphore_t</strong>                          <var>semaphore</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>semaphore</var>
+<dd>
+[in send right] The port naming the semaphore to be signalled.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>semaphore_signal_all</strong> function wakes up all of the
+threads blocked on the semaphore. The semaphore count is reset to
+zero.
+<h3>RETURN VALUES</h3>
+<dl>
+<p>
+<dt> <strong>KERN_INVALID_ARGUMENT</strong>
+<dd>
+The specified semaphore is invalid.
+<p>
+<dt> <strong>KERN_TERMINATED</strong>
+<dd>
+The specified semaphore has been destroyed.
+<p>
+<dt> <strong>KERN_SUCCESS</strong>
+<dd>
+The semaphore has been signalled.
+</dl>
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="semaphore_create.html"><strong>semaphore_create</strong></a>,
+<a href="semaphore_destroy.html"><strong>semaphore_destroy</strong></a>,
+<a href="semaphore_signal.html"><strong>semaphore_signal</strong></a>,

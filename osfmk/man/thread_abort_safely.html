@@ -1,1 +1,134 @@
-<h2>thread_abort_safely</h2><hr><p><strong>Function</strong> - Abort a thread, restartably.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   thread_abort_safely</strong>                <strong>(thread_act_t</strong>                     <var>target_thread</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>target_thread</var> <dd>[in thread send right]The thread to be aborted.</dl><h3>DESCRIPTION</h3><p>The <strong>thread_abort_safely</strong> function aborts page faults and any messageprimitive calls in use by <var>target_thread</var>.  Scheduling depressionsand clock sleeps are also aborted.  The call returns a code indicating that it wasinterrupted.  The call is interrupted even if the thread (or the task containing it)is suspended.  If it is suspended, the thread receives the interrupt when it resumes.<p>If its state is not modified before it resumes, the thread willretry an aborted page fault.  The Mach message trap returns either<strong>MACH_SEND_INTERRUPTED</strong> or <strong>MACH_RCV_INTERRUPTED</strong>, dependingon whether the send or thereceive side was interrupted.  Note, though, that the Mach message trap is contained within the <strong>mach_msg</strong> library routine, which,by default, retriesinterrupted message calls.<p>The basic purpose of <strong>thread_abort_safely</strong> is to letone thread cleanly stopanother thread (<var>target_thread</var>).  The target thread is stoppedin such a manner that its future execution can be controlled in a predictable way.  When<strong>thread_abort_safely</strong> returns (if successful), the targetthread will appear to have justreturned from the kernel (if it had been in kernel mode).<h3>NOTES</h3><p>By way of comparison, the <strong>thread_suspend</strong> function keepsthe target thread from executing any further instructions at the user level, includingthe return from a system call.  The <strong>thread_get_state</strong> functionreturns the thread's user state, while <strong>thread_set_state</strong> allows modification of the user state.<p>A problem occurs if a suspended thread had been executing within a system call.  In this case, the thread has, not only a user state, butan associated kernel state. (The kernel state cannot be changed with <strong>thread_set_state</strong>.)As a result, when the thread resumes, the system call can return, producing a change in the user state and, possibly, user memory.<p>For a thread executing within a system call, <strong>thread_abort_safely</strong>aborts thekernel call from the thread's point of view.  Specifically, itresets the kernel state so that the thread will resume execution at the system call return,with the return code value set to one of the interrupted codes.  The system call itself maycompleted entirely, aborted entirely or be partially completed,depending on when the abort is received.  As a result, if the thread's user statehas been modified by <strong>thread_set_state</strong>, it will not be altered un-predictablyby any unexpectedsystem call side effects.<p>For example, to simulate a POSIX signal, use the following sequence of calls:<dl><dd><strong>thread_suspend</strong>\(emTo stop the thread.<dd><strong>thread_abort_safely</strong>\(emTo interrupt any system call inprogress and set the return value to "interrupted".  Because the thread is already stopped, it will not return to user code.<dd><strong>thread_set_state</strong>\(emTo modify the thread's user state to simulate aprocedure call to the signal handler.<dd><strong>thread_resume</strong>\(emTo resume execution at the signal handler.If the thread's stack is set up correctly, the thread can return to the interruptedsystem call. Note that the code to push an extra stack frame and change the registers is highly machine dependent.</dl><h3>CAUTIONS</h3><p>As a rule, do not use <strong>thread_abort_safely</strong> on a non-suspendedthread.  Thisoperation is very risky because it is difficult to know whichsystem trap, if any, is executing and whether an interrupt return will result in some useful action by the thread.<p><strong>thread_abort_safely</strong> will not abort any non-atomic operation(such as amulti-page <strong>memory_object_data_supply</strong> or exception processing)but will return an error instead.  The caller of this function must then allow thethread to resume and attempt to abort it later.  If the thread must be aborted,even if doing so would abort any non-atomic operations, <strong>thread_abort</strong> would be used.<h3>RETURN VALUES</h3><dl><p><dt> <strong>KERN_FAILURE</strong><dd>The thread is in the middle of a non-restartable operation.</dl><h3>RELATED INFORMATION</h3><p>Functions:<a href="mach_msg.html"><strong>mach_msg</strong></a>,<a href="thread_get_state.html"><strong>thread_get_state</strong></a>,<a href="thread_info.html"><strong>thread_info</strong></a>,<a href="thread_set_state.html"><strong>thread_set_state</strong></a>,<a href="thread_suspend.html"><strong>thread_suspend</strong></a>,<a href="thread_terminate.html"><strong>thread_terminate</strong></a>,<a href="thread_abort.html"><strong>thread_abort</strong></a>.
+<h2>thread_abort_safely</h2>
+<hr>
+<p>
+<strong>Function</strong> - Abort a thread, restartably.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   thread_abort_safely</strong>
+                <strong>(thread_act_t</strong>                     <var>target_thread</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>target_thread</var> 
+<dd>
+[in thread send right]
+The thread to be aborted.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>thread_abort_safely</strong> function aborts page faults and any message
+primitive calls in use by <var>target_thread</var>.  Scheduling depressions
+and clock sleeps are 
+also aborted.  The call returns a code indicating that it was
+interrupted.  The call 
+is interrupted even if the thread (or the task containing it)
+is suspended.  If it is 
+suspended, the thread receives the interrupt when it resumes.
+<p>
+If its state is not modified before it resumes, the thread will
+retry an aborted 
+page fault.  The Mach message trap returns either
+<strong>MACH_SEND_INTERRUPTED</strong> or <strong>MACH_RCV_INTERRUPTED</strong>, depending
+on whether the send or the
+receive side was interrupted.  Note, though, that the Mach message trap is 
+contained within the <strong>mach_msg</strong> library routine, which,
+by default, retries
+interrupted message calls.
+<p>
+The basic purpose of <strong>thread_abort_safely</strong> is to let
+one thread cleanly stop
+another thread (<var>target_thread</var>).  The target thread is stopped
+in such a manner that 
+its future execution can be controlled in a predictable way.  When
+<strong>thread_abort_safely</strong> returns (if successful), the target
+thread will appear to have just
+returned from the kernel (if it had been in kernel mode).
+<h3>NOTES</h3>
+<p>
+By way of comparison, the <strong>thread_suspend</strong> function keeps
+the target thread 
+from executing any further instructions at the user level, including
+the return 
+from a system call.  The <strong>thread_get_state</strong> function
+returns the thread's user 
+state, while <strong>thread_set_state</strong> allows modification of the user state.
+<p>
+A problem occurs if a suspended thread had been executing within a system 
+call.  In this case, the thread has, not only a user state, but
+an associated kernel 
+state. (The kernel state cannot be changed with <strong>thread_set_state</strong>.)
+As a result, 
+when the thread resumes, the system call can return, producing a change in the 
+user state and, possibly, user memory.
+<p>
+For a thread executing within a system call, <strong>thread_abort_safely</strong>
+aborts the
+kernel call from the thread's point of view.  Specifically, it
+resets the kernel state so 
+that the thread will resume execution at the system call return,
+with the return 
+code value set to one of the interrupted codes.  The system call itself may
+completed entirely, aborted entirely or be partially completed,
+depending on when 
+the abort is received.  As a result, if the thread's user state
+has been modified by 
+<strong>thread_set_state</strong>, it will not be altered un-predictably
+by any unexpected
+system call side effects.
+<p>
+For example, to simulate a POSIX signal, use the following sequence of calls:
+<dl>
+<dd>
+<strong>thread_suspend</strong>\(emTo stop the thread.
+<dd>
+<strong>thread_abort_safely</strong>\(emTo interrupt any system call in
+progress and set the 
+return value to "interrupted".  Because the thread is already stopped, it will 
+not return to user code.
+<dd>
+<strong>thread_set_state</strong>\(emTo modify the thread's user state to simulate a
+procedure call to the signal handler.
+<dd>
+<strong>thread_resume</strong>\(emTo resume execution at the signal handler.
+If the thread's 
+stack is set up correctly, the thread can return to the interrupted
+system call. 
+Note that the code to push an extra stack frame and change the registers is 
+highly machine dependent.
+</dl>
+<h3>CAUTIONS</h3>
+<p>
+As a rule, do not use <strong>thread_abort_safely</strong> on a non-suspended
+thread.  This
+operation is very risky because it is difficult to know which
+system trap, if any, is 
+executing and whether an interrupt return will result in some useful action by 
+the thread.
+<p>
+<strong>thread_abort_safely</strong> will not abort any non-atomic operation
+(such as a
+multi-page <strong>memory_object_data_supply</strong> or exception processing)
+but will return an 
+error instead.  The caller of this function must then allow the
+thread to resume 
+and attempt to abort it later.  If the thread must be aborted,
+even if doing so 
+would abort any non-atomic operations, <strong>thread_abort</strong> would be used.
+<h3>RETURN VALUES</h3>
+<dl>
+<p>
+<dt> <strong>KERN_FAILURE</strong>
+<dd>
+The thread is in the middle of a non-restartable operation.
+</dl>
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="mach_msg.html"><strong>mach_msg</strong></a>,
+<a href="thread_get_state.html"><strong>thread_get_state</strong></a>,
+<a href="thread_info.html"><strong>thread_info</strong></a>,
+<a href="thread_set_state.html"><strong>thread_set_state</strong></a>,
+<a href="thread_suspend.html"><strong>thread_suspend</strong></a>,
+<a href="thread_terminate.html"><strong>thread_terminate</strong></a>,
+<a href="thread_abort.html"><strong>thread_abort</strong></a>.

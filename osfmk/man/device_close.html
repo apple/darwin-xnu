@@ -1,1 +1,41 @@
-<h2>device_close</h2><hr><p><strong>Function</strong> - De-establish a connection to a device.<h3>SYNOPSIS</h3><pre><strong>#include&lt device/device.h&gt</strong><strong>kern_return_t	device_close</strong>		<strong>(mach_port_t</strong>	<var>device</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>device</var> <dd>[in device send right]A device port to the device to be closed.</dl><h3>DESCRIPTION</h3><p>The <strong>device_close</strong> function destroys the associated deviceport.  The open count for the named device is decremented.  If this count reaches zero, the closeoperation of the device driver is invoked, closing the device.<h3>NOTES</h3><p><strong>device_close</strong> will destroy any mapped device windowsobtained through thisdevice port.<h3>RETURN VALUES</h3><dl><p><dt> <strong>D_NO_SUCH_DEVICE</strong><dd>No device with that name, or the device is not operational.</dl><h3>RELATED INFORMATION</h3><p>Functions:<a href="device_open.html"><strong>device_open</strong></a>.
+<h2>device_close</h2>
+<hr>
+<p>
+<strong>Function</strong> - De-establish a connection to a device.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>#include&lt device/device.h&gt</strong>
+
+<strong>kern_return_t	device_close</strong>
+		<strong>(mach_port_t</strong>	<var>device</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>device</var> 
+<dd>
+[in device send right]
+A device port to the device to be closed.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>device_close</strong> function destroys the associated device
+port.  The open count 
+for the named device is decremented.  If this count reaches zero, the close
+operation of the device driver is invoked, closing the device.
+<h3>NOTES</h3>
+<p>
+<strong>device_close</strong> will destroy any mapped device windows
+obtained through this
+device port.
+<h3>RETURN VALUES</h3>
+<dl>
+<p>
+<dt> <strong>D_NO_SUCH_DEVICE</strong>
+<dd>
+No device with that name, or the device is not operational.
+</dl>
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="device_open.html"><strong>device_open</strong></a>.

@@ -1,1 +1,79 @@
-<h2>thread_activation_create</h2><hr><p><strong>Function</strong> - Create a thread activation.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   thread_activation_create</strong>                <strong>(task_t</strong>                                    <var>task</var>,                 <strong>mach_port_name_t</strong>                      <var>RPC_port</var>,                 <strong>vm_offset_t</strong>                         <var>user_stack</var>,                 <strong>vm_size_t</strong>                           <var>stack_size</var>,                 <strong>thread_act_t</strong>                      <var>thread_act_t</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>task</var><dd>[in task send right] The port for the task that is to contain the new thread activation.<p><dt> <var>RPC_port</var><dd>[in receive right] A receive right held by the task, or a port set in the task.<p><dt> <var>user_stack</var><dd>[in scalar] The virtual address in the task to be used as the starting ad-dress of the user-level stack.<p><dt> <var>new_act</var><dd>[out thread send right] The kernel-assigned name for the new thread ac-tivation.</dl><h3>DESCRIPTION</h3><p>The thread_activation_create function creates a thread activation, or"empty thread", into which a client thread shuttle can migrate duringRPC.  The RPC_port must name ei- ther a receive right held by thetask, or a port set in the task.  The new thread activation will beadded to a pool of activations attached to this port (or port set).Incoming RPC's targeted at the port (or one of the ports in the set)can use any of the activations in the pool.  That is, the clientthread shuttle will migrate into the specified server task, take oneof the thread activations out of the pool, and join up with it for theduration of the RPC.  The shuttle will migrate back to the originalclient activation at the end of the RPC.  If no thread activations arein the pool, RPC will be blocked until one is created in the pool, oran existing one finishes its RPC and returns to the pool.The new thread activation will begin each RPC using the stack pointerspecified by user_stack.  The kernel neither knows nor cares how bigthe specified stack is.When a short-circuited RPC (or mach_rpc) is invoked on a port createdwith mach_port_allocate_subsystem, the RPC will begin execution in thesubsystem server at the work function address specified by the portand routine number and looked up in the associated subsystem data.<h3>NOTES</h3><p>The following calls targeted at a thread_act port may _not_ be calledon an empty thread_act (and will return KERN_INVALID_ARGUMENT ifthey are called with one):thread_abortthread_abort_safelythread_depress_abortthread_infothread_wireIn addition, if thread_switch is called with an empty thread_act asits first argument, the argument will be ignored (i.e., the functionwill behave as if a zero-valued argument had been given).<h3>RETURN VALUES</h3><p>Only generic errors apply.<h3>RELATED INFORMATION</h3><p>Functions:<a href="task_create.html"><strong>task_create</strong></a>,<a href="MP_allocate_subsystem.html"><strong>mach_port_allocate_subsystem</strong></a>,
+<h2>thread_activation_create</h2>
+<hr>
+<p>
+<strong>Function</strong> - Create a thread activation.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   thread_activation_create</strong>
+                <strong>(task_t</strong>                                    <var>task</var>,
+                 <strong>mach_port_name_t</strong>                      <var>RPC_port</var>,
+                 <strong>vm_offset_t</strong>                         <var>user_stack</var>,
+                 <strong>vm_size_t</strong>                           <var>stack_size</var>,
+                 <strong>thread_act_t</strong>                      <var>thread_act_t</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>task</var>
+<dd>
+[in task send right] The port for the task that is to contain the new 
+thread activation.
+<p>
+<dt> <var>RPC_port</var>
+<dd>
+[in receive right] A receive right held by the task, or a port set in the 
+task.
+<p>
+<dt> <var>user_stack</var>
+<dd>
+[in scalar] The virtual address in the task to be used as the starting ad-
+dress of the user-level stack.
+<p>
+<dt> <var>new_act</var>
+<dd>
+[out thread send right] The kernel-assigned name for the new thread ac-
+tivation.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The thread_activation_create function creates a thread activation, or
+"empty thread", into which a client thread shuttle can migrate during
+RPC.  The RPC_port must name ei- ther a receive right held by the
+task, or a port set in the task.  The new thread activation will be
+added to a pool of activations attached to this port (or port set).
+Incoming RPC's targeted at the port (or one of the ports in the set)
+can use any of the activations in the pool.  That is, the client
+thread shuttle will migrate into the specified server task, take one
+of the thread activations out of the pool, and join up with it for the
+duration of the RPC.  The shuttle will migrate back to the original
+client activation at the end of the RPC.  If no thread activations are
+in the pool, RPC will be blocked until one is created in the pool, or
+an existing one finishes its RPC and returns to the pool.
+The new thread activation will begin each RPC using the stack pointer
+specified by user_stack.  The kernel neither knows nor cares how big
+the specified stack is.
+When a short-circuited RPC (or mach_rpc) is invoked on a port created
+with mach_port_allocate_subsystem, the RPC will begin execution in the
+subsystem server at the work function address specified by the port
+and routine number and looked up in the associated subsystem data.
+<h3>NOTES</h3>
+<p>
+The following calls targeted at a thread_act port may _not_ be called
+on an empty thread_act (and will return KERN_INVALID_ARGUMENT if
+they are called with one):
+thread_abort
+thread_abort_safely
+thread_depress_abort
+thread_info
+thread_wire
+In addition, if thread_switch is called with an empty thread_act as
+its first argument, the argument will be ignored (i.e., the function
+will behave as if a zero-valued argument had been given).
+<h3>RETURN VALUES</h3>
+<p>
+Only generic errors apply.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="task_create.html"><strong>task_create</strong></a>,
+<a href="MP_allocate_subsystem.html"><strong>mach_port_allocate_subsystem</strong></a>,

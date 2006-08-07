@@ -1,1 +1,116 @@
-<h2>mach_msg_descriptor</h2><hr><p><strong>Structure</strong> - Specifies operations that must be performed on a given IPC message element.<h3>SYNOPSIS</h3><pre><strong>typedef struct</strong><strong>{</strong>       <strong>void*</strong>                             <var>pad1</var><strong>;</strong>       <strong>mach_msg_size_t</strong>                   <var>pad2</var><strong>;</strong>       <strong>unsigned int</strong>                      <var>pad3</var><strong> : 24;</strong>       <strong>mach_msg_descriptor_type_t</strong>        <var>type</var><strong> : 8;</strong><strong>} mach_msg_type_descriptor_t;</strong><strong>typedef struct</strong><strong>{</strong>       <strong>mach_port_t</strong>                       <var>name</var><strong>;</strong>       <strong>mach_msg_size_t</strong>                   <var>pad1</var><strong>;</strong>       <strong>unsigned int</strong>                      <var>pad2</var><strong> : 16;</strong>       <strong>mach_msg_type_name_t</strong>       <var>disposition</var><strong> : 8;</strong>       <strong>mach_msg_descriptor_type_t</strong>        <var>type</var><strong> : 8;</strong><strong>} mach_msg_port_descriptor_t;</strong><strong>typedef struct</strong><strong>{</strong>       <strong>void*</strong>                          <var>address</var><strong>;</strong>       <strong>mach_msg_size_t</strong>                   <var>size</var><strong>;</strong>       <strong>boolean_t</strong>                   <var>deallocate</var><strong> : 8;</strong>       <strong>mach_msg_copy_options_t</strong>           <var>copy</var><strong> : 8;</strong>       <strong>unsigned int</strong>                      <var>pad1</var><strong> : 8;</strong>       <strong>mach_msg_descriptor_type_t</strong>        <var>type</var><strong> : 8;</strong><strong>} mach_msg_ool_descriptor_t;</strong><strong>typedef struct</strong><strong>{</strong>       <strong>void*</strong>                           <var>address</var><strong>;</strong>       <strong>mach_msg_size_t</strong>                   <var>count</var><strong>;</strong>       <strong>boolean_t</strong>                    <var>deallocate</var><strong> : 8;</strong>       <strong>mach_msg_copy_options_t</strong>            <var>copy</var><strong> : 8;</strong>       <strong>mach_msg_type_name_t</strong>        <var>disposition</var><strong> : 8;</strong>       <strong>mach_msg_descriptor_type_t</strong>         <var>type</var><strong> : 8;</strong><strong>} mach_msg_ool_ports_descriptor_t;</strong><strong>typedef union</strong><strong>{</strong>       <strong>mach_msg_port_descriptor_t</strong>             <var>port</var><strong>;</strong>       <strong>mach_msg_ool_descriptor_t</strong>       <var>out_of_line</var><strong>;</strong>       <strong>mach_msg_ool_ports_descriptor_t</strong>   <var>ool_ports</var><strong>;</strong>       <strong>mach_msg_type_descriptor_t</strong>             <var>type</var><strong>;</strong><strong>} mach_msg_descriptor_t;</strong></pre><h3>FIELDS</h3><dl><dt> <var>name</var><dd>For single port descriptors, the name of the port whose right is being sent.     <p><dt> <var>disposition</var><dd>For single port or out-of-line port array descriptors, the IPC processing to be done for the rights for the named ports.     <p><dt> <var>address</var><dd>For out-of-line data or port array descriptors, the address of the out-of-line data or port (name) array.     <p><dt> <var>size</var><dd>For out-of-line data descriptors, the size of the out-of-line region, in bytes.     <p><dt> <var>deallocate</var><dd>For out-of-line data descriptors, true if the set of pages containing the array should be de-allocated when the message is sent.     <p><dt> <var>copy</var><dd>For out-of-line descriptors, a description of the method by which the data should be copied.     <p><dt> <var>count</var><dd>For out-of-line port array descriptors, the number of port names in the array.     <p><dt> <var>type</var><dd>For any type of descriptor, the type of descriptor.     <p><dt> <var>port</var><dd>A descriptor that describes a single port right.     <p><dt> <var>out_of_line</var><dd>A descriptor that describes an out-of-line data array.     <p><dt> <var>ool_ports</var><dd>A descriptor that describes an out-of-line port array.</dl><h3>DESCRIPTION</h3><p>A <strong>mach_msg_descriptor</strong> structure describes the processingto be performed for an element of kernel-processed data in a Mach message.<h3>RELATED INFORMATION</h3><p>Functions:<a href="mach_msg.html"><strong>mach_msg</strong></a>.<p>Data Structures:<a href="mach_msg_header.html"><strong>mach_msg_header</strong></a>.
+<h2>mach_msg_descriptor</h2>
+<hr>
+<p>
+<strong>Structure</strong> - Specifies operations that must be performed on a given IPC message element.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>typedef struct</strong>
+<strong>{</strong>
+       <strong>void*</strong>                             <var>pad1</var><strong>;</strong>
+       <strong>mach_msg_size_t</strong>                   <var>pad2</var><strong>;</strong>
+       <strong>unsigned int</strong>                      <var>pad3</var><strong> : 24;</strong>
+       <strong>mach_msg_descriptor_type_t</strong>        <var>type</var><strong> : 8;</strong>
+<strong>} mach_msg_type_descriptor_t;</strong>
+
+<strong>typedef struct</strong>
+<strong>{</strong>
+       <strong>mach_port_t</strong>                       <var>name</var><strong>;</strong>
+       <strong>mach_msg_size_t</strong>                   <var>pad1</var><strong>;</strong>
+       <strong>unsigned int</strong>                      <var>pad2</var><strong> : 16;</strong>
+       <strong>mach_msg_type_name_t</strong>       <var>disposition</var><strong> : 8;</strong>
+       <strong>mach_msg_descriptor_type_t</strong>        <var>type</var><strong> : 8;</strong>
+<strong>} mach_msg_port_descriptor_t;</strong>
+
+<strong>typedef struct</strong>
+<strong>{</strong>
+       <strong>void*</strong>                          <var>address</var><strong>;</strong>
+       <strong>mach_msg_size_t</strong>                   <var>size</var><strong>;</strong>
+       <strong>boolean_t</strong>                   <var>deallocate</var><strong> : 8;</strong>
+       <strong>mach_msg_copy_options_t</strong>           <var>copy</var><strong> : 8;</strong>
+       <strong>unsigned int</strong>                      <var>pad1</var><strong> : 8;</strong>
+       <strong>mach_msg_descriptor_type_t</strong>        <var>type</var><strong> : 8;</strong>
+<strong>} mach_msg_ool_descriptor_t;</strong>
+
+<strong>typedef struct</strong>
+<strong>{</strong>
+       <strong>void*</strong>                           <var>address</var><strong>;</strong>
+       <strong>mach_msg_size_t</strong>                   <var>count</var><strong>;</strong>
+       <strong>boolean_t</strong>                    <var>deallocate</var><strong> : 8;</strong>
+       <strong>mach_msg_copy_options_t</strong>            <var>copy</var><strong> : 8;</strong>
+       <strong>mach_msg_type_name_t</strong>        <var>disposition</var><strong> : 8;</strong>
+       <strong>mach_msg_descriptor_type_t</strong>         <var>type</var><strong> : 8;</strong>
+<strong>} mach_msg_ool_ports_descriptor_t;</strong>
+
+<strong>typedef union</strong>
+<strong>{</strong>
+       <strong>mach_msg_port_descriptor_t</strong>             <var>port</var><strong>;</strong>
+       <strong>mach_msg_ool_descriptor_t</strong>       <var>out_of_line</var><strong>;</strong>
+       <strong>mach_msg_ool_ports_descriptor_t</strong>   <var>ool_ports</var><strong>;</strong>
+       <strong>mach_msg_type_descriptor_t</strong>             <var>type</var><strong>;</strong>
+<strong>} mach_msg_descriptor_t;</strong>
+</pre>
+<h3>FIELDS</h3>
+<dl>
+<dt> <var>name</var>
+<dd>
+For single port descriptors, the name of the port whose right is being 
+sent.
+     <p>
+<dt> <var>disposition</var>
+<dd>
+For single port or out-of-line port array descriptors, the IPC processing 
+to be done for the rights for the named ports.
+     <p>
+<dt> <var>address</var>
+<dd>
+For out-of-line data or port array descriptors, the address of the 
+out-of-line data or port (name) array.
+     <p>
+<dt> <var>size</var>
+<dd>
+For out-of-line data descriptors, the size of the out-of-line region, in 
+bytes.
+     <p>
+<dt> <var>deallocate</var>
+<dd>
+For out-of-line data descriptors, true if the set of pages containing the 
+array should be de-allocated when the message is sent.
+     <p>
+<dt> <var>copy</var>
+<dd>
+For out-of-line descriptors, a description of the method by which the 
+data should be copied.
+     <p>
+<dt> <var>count</var>
+<dd>
+For out-of-line port array descriptors, the number of port names in the 
+array.
+     <p>
+<dt> <var>type</var>
+<dd>
+For any type of descriptor, the type of descriptor.
+     <p>
+<dt> <var>port</var>
+<dd>
+A descriptor that describes a single port right.
+     <p>
+<dt> <var>out_of_line</var>
+<dd>
+A descriptor that describes an out-of-line data array.
+     <p>
+<dt> <var>ool_ports</var>
+<dd>
+A descriptor that describes an out-of-line port array.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+A <strong>mach_msg_descriptor</strong> structure describes the processing
+to be performed 
+for an element of kernel-processed data in a Mach message.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="mach_msg.html"><strong>mach_msg</strong></a>.
+<p>
+Data Structures:
+<a href="mach_msg_header.html"><strong>mach_msg_header</strong></a>.

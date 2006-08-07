@@ -1,1 +1,72 @@
-<h2>default_pager_object_create</h2><hr><p><strong>Server Interface</strong> - Initialize a non-persistent memory object suitable for sharing between tasks.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   default_pager_object_create</strong>                <strong>(mach_port_t</strong>                              <var>pager</var>,                 <strong>memory_object_t</strong>                 <var>*memory_object</var>,                 <strong>vm_size_t</strong>                          <var>object_size</var><strong>);</strong><strong>kern_return_t   seqnos_default_pager_object_create</strong>                <strong>(mach_port_t</strong>                              <var>pager</var>,                 <strong>mach_port_seqno_t</strong>                        <var>seqno</var>,                 <strong>memory_object_t</strong>                 <var>*memory_object</var>,                 <strong>vm_size_t</strong>                          <var>object_size</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>pager</var> <dd>[in default-pager (receive) right]The default memory manager service port.<p><dt> <var>seqno</var> <dd>[in scalar]The sequence number of this message relative to the <var>pager</var> port.<p><dt> <var>memory_object</var> <dd>[out memory-object send right]A memory object port (with full access) for the memory object.<p><dt> <var>object_size</var> <dd>[in scalar]The maximum size for the memory object.</dl><h3>DESCRIPTION</h3><p>A <strong>default_pager_object_create</strong> function is called asthe result of a messagerequesting that the default memory manager create and return a (shared) memory object which is suitable for use with <strong>vm_map</strong>.  This memory object has the same properties as does a memory object provided by <strong>vm_allocate</strong>: its initial contents are zero and the backing contents are temporary in that they do notpersist after the memory object is destroyed.  The memory objectis suitable for use as non-permanent shared memory.  The kernel does not make this call itself (which is why it can be a synchronous call); this request is only issued by(privileged) tasks holding the default memory manager port. This call should be contrasted with the kernel's <strong>memory_object_create</strong> message, in which the memory cache object is already created and the identity of the abstract memory object is made known to the default manager.<h3>RETURN VALUES</h3><p>Only generic errors apply.<h3>RELATED INFORMATION</h3><p>Functions:<a href="vm_map.html"><strong>vm_map</strong></a>,<a href="HD_memory_manager.html"><strong>host_default_memory_manager</strong></a>,<a href="memory_object_create.html"><strong>memory_object_create</strong></a>,<a href="MO_default_server.html"><strong>memory_object_default_server</strong></a>,<a href="SMO_default_server.html"><strong>seqnos_memory_object_default_server</strong></a>.
+<h2>default_pager_object_create</h2>
+<hr>
+<p>
+<strong>Server Interface</strong> - Initialize a non-persistent memory object suitable for sharing between tasks.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   default_pager_object_create</strong>
+                <strong>(mach_port_t</strong>                              <var>pager</var>,
+                 <strong>memory_object_t</strong>                 <var>*memory_object</var>,
+                 <strong>vm_size_t</strong>                          <var>object_size</var><strong>);</strong>
+
+
+<strong>kern_return_t   seqnos_default_pager_object_create</strong>
+                <strong>(mach_port_t</strong>                              <var>pager</var>,
+                 <strong>mach_port_seqno_t</strong>                        <var>seqno</var>,
+                 <strong>memory_object_t</strong>                 <var>*memory_object</var>,
+                 <strong>vm_size_t</strong>                          <var>object_size</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>pager</var> 
+<dd>
+[in default-pager (receive) right]
+The default memory manager service 
+port.
+<p>
+<dt> <var>seqno</var> 
+<dd>
+[in scalar]
+The sequence number of this message relative to the <var>pager</var> 
+port.
+<p>
+<dt> <var>memory_object</var> 
+<dd>
+[out memory-object send right]
+A memory object port (with full access) for the memory object.
+<p>
+<dt> <var>object_size</var> 
+<dd>
+[in scalar]
+The maximum size for the memory object.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+A <strong>default_pager_object_create</strong> function is called as
+the result of a message
+requesting that the default memory manager create and return a (shared) memory 
+object which is suitable for use with <strong>vm_map</strong>.  This memory object has 
+the same properties as does a memory object provided by 
+<strong>vm_allocate</strong>: its initial 
+contents are zero and the backing contents are temporary in that they do not
+persist after the memory object is destroyed.  The memory object
+is suitable for use 
+as non-permanent shared memory.  The kernel does not make this call itself 
+(which is why it can be a synchronous call); this request is only issued by
+(privileged) tasks holding the default memory manager port. 
+This call should be 
+contrasted with the kernel's <strong>memory_object_create</strong> message, in which 
+the memory cache object is already created and the identity of the abstract 
+memory object is made known to the default manager.
+<h3>RETURN VALUES</h3>
+<p>
+Only generic errors apply.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="vm_map.html"><strong>vm_map</strong></a>,
+<a href="HD_memory_manager.html"><strong>host_default_memory_manager</strong></a>,
+<a href="memory_object_create.html"><strong>memory_object_create</strong></a>,
+<a href="MO_default_server.html"><strong>memory_object_default_server</strong></a>,
+<a href="SMO_default_server.html"><strong>seqnos_memory_object_default_server</strong></a>.

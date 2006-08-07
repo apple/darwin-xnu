@@ -1,1 +1,61 @@
-<h2>lock_acquire</h2><hr><p><strong>Function</strong> - Acquire access rights to a lock.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   lock_acquire</strong>                <strong>(lock_set_t</strong>                            <var>lock_set</var>,                 <strong>int</strong>                                    <var>lock_id</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>lock_set</var><dd>[in send right] The port naming the lock set which represents thelock.<p><dt> <var>lock_id</var><dd>[in scalar] The lock, represented by the lock set, to be acquired.</dl><h3>DESCRIPTION</h3><p>The <strong>lock_acquire</strong> function acquires access rights to a specific lockbeing represented by a given lock set. If the lock is alreadycontrolled by another thread then the calling thread will block.<h3>RETURN VALUES</h3><dl><p><dt> <strong>KERN_SUCCESS</strong><dd>The lock was acquired.<p><dt> <strong>KERN_INVALID_ARGUMENT</strong><dd>The specified lock set is invalid, or the lock id is out of range.<p><dt> <strong>KERN_LOCK_UNSTABLE</strong><dd>The acquired lock has an unstable state.     <p><dt> <strong>KERN_LOCK_SET_DESTROYED</strong><dd>The specified lock has been destroyed.<p><dt> <strong>KERN_ABORTED</strong><dd>While blocked to wait for the specified lock to become available, the calling     thread was awoken by an unrelated event, such as thread termination.</dl><h3>RELATED INFORMATION</h3><p>Functions:<a href="lock_release.html"><strong>lock_release</strong></a>,<a href="lock_try.html"><strong>lock_try</strong></a>,<a href="lock_handoff.html"><strong>lock_handoff</strong></a>,<a href="lock_handoff_accept.html"><strong>lock_handoff_accept</strong></a>,<a href="lock_make_stable.html"><strong>lock_make_stable</strong></a>,<a href="lock_set_create.html"><strong>lock_set_create</strong></a>,<a href="lock_set_destroy.html"><strong>lock_set_destroy</strong></a>.
+<h2>lock_acquire</h2>
+<hr>
+<p>
+<strong>Function</strong> - Acquire access rights to a lock.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   lock_acquire</strong>
+                <strong>(lock_set_t</strong>                            <var>lock_set</var>,
+                 <strong>int</strong>                                    <var>lock_id</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>lock_set</var>
+<dd>
+[in send right] The port naming the lock set which represents the
+lock.
+<p>
+<dt> <var>lock_id</var>
+<dd>
+[in scalar] The lock, represented by the lock set, to be acquired.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>lock_acquire</strong> function acquires access rights to a specific lock
+being represented by a given lock set. If the lock is already
+controlled by another thread then the calling thread will block.
+<h3>RETURN VALUES</h3>
+<dl>
+<p>
+<dt> <strong>KERN_SUCCESS</strong>
+<dd>
+The lock was acquired.
+<p>
+<dt> <strong>KERN_INVALID_ARGUMENT</strong>
+<dd>
+The specified lock set is invalid, or the lock id is out of range.
+<p>
+<dt> <strong>KERN_LOCK_UNSTABLE</strong>
+<dd>
+The acquired lock has an unstable state.
+     <p>
+<dt> <strong>KERN_LOCK_SET_DESTROYED</strong>
+<dd>
+The specified lock has been destroyed.
+<p>
+<dt> <strong>KERN_ABORTED</strong>
+<dd>
+While blocked to wait for the specified lock to become available, the calling
+     thread was awoken by an unrelated event, such as thread termination.
+</dl>
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="lock_release.html"><strong>lock_release</strong></a>,
+<a href="lock_try.html"><strong>lock_try</strong></a>,
+<a href="lock_handoff.html"><strong>lock_handoff</strong></a>,
+<a href="lock_handoff_accept.html"><strong>lock_handoff_accept</strong></a>,
+<a href="lock_make_stable.html"><strong>lock_make_stable</strong></a>,
+<a href="lock_set_create.html"><strong>lock_set_create</strong></a>,
+<a href="lock_set_destroy.html"><strong>lock_set_destroy</strong></a>.

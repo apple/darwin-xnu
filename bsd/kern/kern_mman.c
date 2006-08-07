@@ -455,7 +455,7 @@ mmap(struct proc *p, struct mmap_args *uap, user_addr_t *retval)
 		 * 	with ones that only work for read.
 		 */
 
-		ubc_setcred(vp, p);
+		ubc_setthreadcred(vp, p, current_thread());
 		docow = FALSE;
 		if ((flags & (MAP_ANON|MAP_SHARED)) == 0) {
 			docow = TRUE;
@@ -1128,7 +1128,7 @@ map_fd_funneled(
 		}
 	}
 
-	ubc_setcred(vp, current_proc());
+	ubc_setthreadcred(vp, current_proc(), current_thread());
 	(void)ubc_map(vp, (PROT_READ | PROT_WRITE | PROT_EXEC));
 	(void)vnode_put(vp);
 	err = 0;

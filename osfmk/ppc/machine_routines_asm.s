@@ -2302,7 +2302,7 @@ spOver:		mftbu	r8									; Get upper time
 			andc	r7,r7,r0							; Pin time at 0 if under minimum
 			subfe	r2,r2,r2							; 0 if diff > 2**32, -1 otherwise		
 			sub		r7,r7,r10							; Negative if duration is less than (max - min)
-			or		r2,r2,r0							; If the duration is negative, it isn't too big
+			or		r2,r2,r0							; If the duration is negative, it is not too big
 			srawi	r0,r7,31							; -1 if duration is too small
 			and		r7,r7,r2							; Clear duration if high part too big
 			and		r7,r7,r0							; Clear duration if low part too big

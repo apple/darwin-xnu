@@ -1,1 +1,36 @@
-<h2>processor_set_basic_info</h2><hr><p><strong>Structure</strong> - Defines the basic information about a processor set.<h3>SYNOPSIS</h3><pre><strong>struct processor_set_basic_info</strong><strong>{</strong>       <strong>int</strong>        <var>processor_count</var><strong>;</strong>       <strong>int</strong>         <var>default_policy</var><strong>;</strong><strong>};</strong><strong>typedef struct processor_set_basic_info* processor_set_basic_info_t;</strong></pre><h3>FIELDS</h3><dl><dt> <var>processor_count</var><dd>Number of processors in this set.<p><dt> <var>default_policy</var><dd>Default policy to assign to threads whose otherwise assigned policy is not enabled.</dl><h3>DESCRIPTION</h3><p>The <strong>processor_set_basic_info</strong> structure defines thebasic information available about a processor set.<h3>RELATED INFORMATION</h3><p>Functions:<a href="processor_set_info.html"><strong>processor_set_info</strong></a>.<p>Data Structures:<a href="processor_set_load_info.html"></strong>processor_set_load_info<strong></a>.
+<h2>processor_set_basic_info</h2>
+<hr>
+<p>
+<strong>Structure</strong> - Defines the basic information about a processor set.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>struct processor_set_basic_info</strong>
+<strong>{</strong>
+       <strong>int</strong>        <var>processor_count</var><strong>;</strong>
+       <strong>int</strong>         <var>default_policy</var><strong>;</strong>
+<strong>};</strong>
+
+<strong>typedef struct processor_set_basic_info* processor_set_basic_info_t;</strong>
+</pre>
+<h3>FIELDS</h3>
+<dl>
+<dt> <var>processor_count</var>
+<dd>
+Number of processors in this set.
+<p>
+<dt> <var>default_policy</var>
+<dd>
+Default policy to assign to threads whose otherwise assigned policy is 
+not enabled.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>processor_set_basic_info</strong> structure defines the
+basic information available about a processor set.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="processor_set_info.html"><strong>processor_set_info</strong></a>.
+<p>
+Data Structures:
+<a href="processor_set_load_info.html"></strong>processor_set_load_info<strong></a>.

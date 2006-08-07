@@ -1,1 +1,38 @@
-<h2>i386_io_port_remove</h2><hr><p><strong>Function</strong> - Disable target thread's ability to invoke operations on thespecified device.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   i386_io_port_remove</strong>                <strong>(thread_act_t</strong>                        <var>target_act</var>,                 <strong>device_t</strong>                                <var>device</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>target_act</var> <dd>[in thread send right]Thread whose permission bitmap is to be cleared<p><dt> <var>device</var> <dd>[in device send right]Device whose permission is to be revoked</dl><h3>DESCRIPTION</h3><p>The <strong>i386_io_port_remove</strong> function removes the specifieddevice from the thread's I/O permission bitmap, thereby prohibiting I/O instructions beingexecuted against the device.<h3>RETURN VALUES</h3><p>Only generic errors apply.<h3>RELATED INFORMATION</h3><p>Functions:<a href="i386_io_port_add.html"><strong>i386_io_port_add<strong></a>,<a href="i386_io_port_list.html"><strong>i386_io_port_list<strong></a>.
+<h2>i386_io_port_remove</h2>
+<hr>
+<p>
+<strong>Function</strong> - Disable target thread's ability to invoke operations on the
+specified device.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   i386_io_port_remove</strong>
+                <strong>(thread_act_t</strong>                        <var>target_act</var>,
+                 <strong>device_t</strong>                                <var>device</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>target_act</var> 
+<dd>
+[in thread send right]
+Thread whose permission bitmap is to be cleared
+<p>
+<dt> <var>device</var> 
+<dd>
+[in device send right]
+Device whose permission is to be revoked
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>i386_io_port_remove</strong> function removes the specified
+device from the 
+thread's I/O permission bitmap, thereby prohibiting I/O instructions being
+executed against the device.
+<h3>RETURN VALUES</h3>
+<p>
+Only generic errors apply.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="i386_io_port_add.html"><strong>i386_io_port_add<strong></a>,
+<a href="i386_io_port_list.html"><strong>i386_io_port_list<strong></a>.

@@ -273,7 +273,14 @@ ip6_forward(m, srcrt, locked)
 	state.ro = NULL;	/* update at ipsec6_output_tunnel() */
 	state.dst = NULL;	/* update at ipsec6_output_tunnel() */
 
+	if (locked)
+			lck_mtx_unlock(ip6_mutex);
 	error = ipsec6_output_tunnel(&state, sp, 0);
+	if (locked) {
+			lck_mtx_unlock(sadb_mutex);
+			lck_mtx_lock(ip6_mutex);
+			lck_mtx_lock(sadb_mutex);
+	}
 
 	m = state.m;
 	key_freesp(sp);

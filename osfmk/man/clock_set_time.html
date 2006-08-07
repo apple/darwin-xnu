@@ -1,1 +1,48 @@
-<h2>clock_set_time</h2><hr><p><strong>Function</strong> - Set the current time.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   clock_set_time</strong>                <strong>(clock_ctrl_t</strong>                     <var>clock_control</var>,                 <strong>tvalspec_t</strong>                            <var>new_time</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>clock_control</var> <dd>[in clock-control send right]The control port for the clock.<p><dt> <var>new_time</var> <dd>[in structure]New time</dl><h3>DESCRIPTION</h3><p>The <strong>clock_set_time</strong> function sets the time kept by aclock.  Setting the clock time will cause all pending clock alarms and sleeps to be terminated withtimestamps set to the current clock time just prior to the newtime being set with areturn code of <strong>KERN_ABORTED</strong>.<h3>CAUTIONS</h3><p>The use of this function is \*Vstrongly discouraged\*O since it could affect themonotonically increasing nature of the clock.<h3>RETURN VALUES</h3><p>Only generic errors apply.<h3>RELATED INFORMATION</h3><p>Functions:<a href="host_get_clock_control.html"><strong>host_get_clock_control</strong></a>,<a href="clock_set_attributes.html"><strong>clock_set_attributes</strong></a>,<a href="clock_get_time.html"><strong>clock_get_time</strong></a>,<a href="clock_alarm.html"><strong>clock_alarm</strong></a>,<a href="clock_sleep.html"><strong>clock_sleep</strong></a>.<p>Data Structures:<a href="tvalspec.html"><strong>tvalspec</strong></a>.
+<h2>clock_set_time</h2>
+<hr>
+<p><strong>Function</strong> - Set the current time.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   clock_set_time</strong>
+                <strong>(clock_ctrl_t</strong>                     <var>clock_control</var>,
+                 <strong>tvalspec_t</strong>                            <var>new_time</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>clock_control</var> 
+<dd>
+[in clock-control send right]
+The control port for the clock.
+<p>
+<dt> <var>new_time</var> 
+<dd>
+[in structure]
+New time
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>clock_set_time</strong> function sets the time kept by a
+clock.  Setting the clock 
+time will cause all pending clock alarms and sleeps to be terminated with
+timestamps set to the current clock time just prior to the new
+time being set with a
+return code of <strong>KERN_ABORTED</strong>.
+<h3>CAUTIONS</h3>
+<p>
+The use of this function is \*Vstrongly discouraged\*O since it could affect the
+monotonically increasing nature of the clock.
+<h3>RETURN VALUES</h3>
+<p>
+Only generic errors apply.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="host_get_clock_control.html"><strong>host_get_clock_control</strong></a>,
+<a href="clock_set_attributes.html"><strong>clock_set_attributes</strong></a>,
+<a href="clock_get_time.html"><strong>clock_get_time</strong></a>,
+<a href="clock_alarm.html"><strong>clock_alarm</strong></a>,
+<a href="clock_sleep.html"><strong>clock_sleep</strong></a>.
+<p>
+Data Structures:
+<a href="tvalspec.html"><strong>tvalspec</strong></a>.

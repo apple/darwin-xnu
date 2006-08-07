@@ -1,1 +1,46 @@
-<h2>i386_io_port_add</h2><hr><p><strong>Function</strong> - Permit target thread to invoke operations on the specified device.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   i386_io_port_add</strong>                <strong>(thread_act_t</strong>                        <var>target_act</var>,                 <strong>device_t</strong>                                <var>device</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>target_act</var> <dd>[in thread send right]Thread whose permission bitmap is to be set.<p><dt> <var>device</var> <dd>[in device send right]The device to which I/O instructions are to bepermitted.</dl><h3>DESCRIPTION</h3><p>The <strong>i386_io_port_add</strong> function adds a device to theI/O permission bitmap for a thread, thereby permitting the thread to execute I/O instructions against thedevice.<h3>NOTES</h3><p>Normally, the thread must have called <strong>i386_io_port_add</strong> for all devices to which it will execute I/O instructions.  However, possessingsend rights to the <var>iopl</var> device port will cause the <var>iopl</var> device to be automatically added to the thread's I/O map upon first attempted access.  This is a backwardcompatibility feature for the DOS emulator.<h3>RETURN VALUES</h3><p>Only generic errors apply.<h3>RELATED INFORMATION</h3><p>Functions:<a href="i386_io_port_list.html"><strong>i386_io_port_list<strong></a>,<a href="i386_io_port_remove.html"><strong>i386_io_port_remove<strong></a>.
+<h2>i386_io_port_add</h2>
+<hr>
+<p>
+<strong>Function</strong> - Permit target thread to invoke operations on the specified device.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   i386_io_port_add</strong>
+                <strong>(thread_act_t</strong>                        <var>target_act</var>,
+                 <strong>device_t</strong>                                <var>device</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>target_act</var> 
+<dd>
+[in thread send right]
+Thread whose permission bitmap is to be set.
+<p>
+<dt> <var>device</var> 
+<dd>
+[in device send right]
+The device to which I/O instructions are to be
+permitted.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>i386_io_port_add</strong> function adds a device to the
+I/O permission bitmap for a 
+thread, thereby permitting the thread to execute I/O instructions against the
+device.
+<h3>NOTES</h3>
+<p>
+Normally, the thread must have called <strong>i386_io_port_add</strong> 
+for all devices to which it will execute I/O instructions.  However, possessing
+send rights to the <var>iopl</var> device port will cause the 
+<var>iopl</var> device to be automatically added to the 
+thread's I/O map upon first attempted access.  This is a backward
+compatibility feature for the DOS emulator.
+<h3>RETURN VALUES</h3>
+<p>
+Only generic errors apply.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="i386_io_port_list.html"><strong>i386_io_port_list<strong></a>,
+<a href="i386_io_port_remove.html"><strong>i386_io_port_remove<strong></a>.

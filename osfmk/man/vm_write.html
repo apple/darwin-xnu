@@ -1,1 +1,68 @@
-<h2>vm_write</h2><hr><p><strong>Function</strong> - Write data to the specified address in the target task's address space.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   vm_write</strong>                <strong>(vm_task_t</strong>                          <var>target_task</var>,                 <strong>vm_address_t</strong>                           <var>address</var>,                 <strong>pointer_t</strong>                                 <var>data</var>,                 <strong>mach_msg_type_number_t</strong>              <var>data_count</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>target_task</var> <dd>[in task send right]The port for the task whose memory is to bewritten.<p><dt> <var>address</var> <dd>[in scalar]The address at which to start the write.<p><dt> <var>data</var> <dd>[pointer to page aligned in array of bytes]An array of data to bewritten.<p><dt> <var>data_count</var> <dd>[in scalar]The number of bytes in the array.</dl><h3>DESCRIPTION</h3><p>The <strong>vm_write</strong> function writes an array of data to atask's virtual memory.  Itallows one task to write to another task's memory.<p>The result of <strong>vm_write</strong> is as if <var>target_task</var> had directlywritten into the set of pages.  Hence, <var>target_task</var> must have write permission to the pages.<h3>NOTES</h3><p>This interface is machine word length specific because of the virtual addressparameter.<h3>RETURN VALUES</h3><dl><p><dt> <strong>KERN_PROTECTION_FAILURE</strong><dd>Specified memory is valid, but does not permit writing.<p><dt> <strong>KERN_INVALID_ADDRESS</strong><dd>The address is illegal or specifies a non-allocated region.</dl><h3>RELATED INFORMATION</h3><p>Functions:<a href="vm_copy.html"><strong>vm_copy</strong></a>,<a href="vm_protect.html"><strong>vm_protect</strong></a>,<a href="vm_read.html"><strong>vm_read</strong></a>,<a href="host_page_size.html"><strong>host_page_size</strong></a>.
+<h2>vm_write</h2>
+<hr>
+<p>
+<strong>Function</strong> - Write data to the specified address in the target task's address space.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   vm_write</strong>
+                <strong>(vm_task_t</strong>                          <var>target_task</var>,
+                 <strong>vm_address_t</strong>                           <var>address</var>,
+                 <strong>pointer_t</strong>                                 <var>data</var>,
+                 <strong>mach_msg_type_number_t</strong>              <var>data_count</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>target_task</var> 
+<dd>
+[in task send right]
+The port for the task whose memory is to be
+written.
+<p>
+<dt> <var>address</var> 
+<dd>
+[in scalar]
+The address at which to start the write.
+<p>
+<dt> <var>data</var> 
+<dd>
+[pointer to page aligned in array of bytes]
+An array of data to be
+written.
+<p>
+<dt> <var>data_count</var> 
+<dd>
+[in scalar]
+The number of bytes in the array.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>vm_write</strong> function writes an array of data to a
+task's virtual memory.  It
+allows one task to write to another task's memory.
+<p>
+The result of <strong>vm_write</strong> is as if <var>target_task</var> had directly
+written into the set of 
+pages.  Hence, <var>target_task</var> must have write permission to the pages.
+<h3>NOTES</h3>
+<p>
+This interface is machine word length specific because of the virtual address
+parameter.
+<h3>RETURN VALUES</h3>
+<dl>
+<p>
+<dt> <strong>KERN_PROTECTION_FAILURE</strong>
+<dd>
+Specified memory is valid, but does not permit writing.
+<p>
+<dt> <strong>KERN_INVALID_ADDRESS</strong>
+<dd>
+The address is illegal or specifies a non-allocated region.
+</dl>
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="vm_copy.html"><strong>vm_copy</strong></a>,
+<a href="vm_protect.html"><strong>vm_protect</strong></a>,
+<a href="vm_read.html"><strong>vm_read</strong></a>,
+<a href="host_page_size.html"><strong>host_page_size</strong></a>.

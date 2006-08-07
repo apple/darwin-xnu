@@ -1,1 +1,53 @@
-<h2>memory_object_destroy</h2><hr><p><strong>Function</strong> - Shut down a memory object.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   memory_object_destroy</strong>                <strong>(memory_object_control_t</strong>         <var>memory_control</var>,                 <strong>kern_return_t</strong>                           <var>reason</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>memory_control</var> <dd>[in memory-cache-control send right]The memory cache control port to be used by the memory manager for cache management requests. This port is provided by the kernel in a <strong>memory_object_init</strong> call.<p><dt> <var>reason</var> <dd>[in scalar]An error code indicating when the object must be destroyed.</dl><h3>DESCRIPTION</h3><p>The <strong>memory_object_destroy</strong> function tells the kernel to shut down thespecified memory object.  As a result of this call, the kernelno longer supportspaging activity or any memory object calls on the memory object.The kernel issues a <strong>memory_object_terminate</strong> call to pass to the memorymanager all rights to the memory object port and the memory control port.<p>To ensure that any modified cached data is returned before the object isterminated, the memory manager should call <strong>memory_object_lock_request</strong>with<var>should_flush</var> set and a lock value of <strong>VM_PROT_WRITE</strong> before it makes the <strong>memory_object_destroy</strong> call.<h3>NOTES</h3><p>The <var>reason</var> code is currently ignored by the kernel.<h3>RETURN VALUES</h3><p>Only generic errors apply.<h3>RELATED INFORMATION</h3><p>Functions:<a href="memory_object_lock_request.html"><strong>memory_object_lock_request</strong></a>,<a href="memory_object_terminate.html"><strong>memory_object_terminate</strong></a>.
+<h2>memory_object_destroy</h2>
+<hr>
+<p>
+<strong>Function</strong> - Shut down a memory object.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   memory_object_destroy</strong>
+                <strong>(memory_object_control_t</strong>         <var>memory_control</var>,
+                 <strong>kern_return_t</strong>                           <var>reason</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>memory_control</var> 
+<dd>
+[in memory-cache-control send right]
+The memory cache control port 
+to be used by the memory manager for cache management requests. 
+This port is provided by the kernel in a <strong>memory_object_init</strong> call.
+<p>
+<dt> <var>reason</var> 
+<dd>
+[in scalar]
+An error code indicating when the object must be destroyed.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>memory_object_destroy</strong> function tells the kernel to shut down the
+specified memory object.  As a result of this call, the kernel
+no longer supports
+paging activity or any memory object calls on the memory object.
+The kernel issues 
+a <strong>memory_object_terminate</strong> call to pass to the memory
+manager all rights to 
+the memory object port and the memory control port.
+<p>
+To ensure that any modified cached data is returned before the object is
+terminated, the memory manager should call <strong>memory_object_lock_request</strong>
+with
+<var>should_flush</var> set and a 
+lock value of <strong>VM_PROT_WRITE</strong> before it makes the 
+<strong>memory_object_destroy</strong> call.
+<h3>NOTES</h3>
+<p>
+The <var>reason</var> code is currently ignored by the kernel.
+<h3>RETURN VALUES</h3>
+<p>
+Only generic errors apply.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="memory_object_lock_request.html"><strong>memory_object_lock_request</strong></a>,
+<a href="memory_object_terminate.html"><strong>memory_object_terminate</strong></a>.

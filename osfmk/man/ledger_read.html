@@ -1,1 +1,47 @@
-<h2>ledger_read</h2><hr><p><strong>Function</strong> - Return the ledger limit and balance.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   ledger_read</strong>                <strong>(ledger_port_t</strong>                           <var>ledger</var>,                 <strong>ledger_item_t</strong>                          <var>balance</var>,                 <strong>ledger_item_t</strong>                          <var>maximum</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>ledger</var> <dd>[in ledger send right]The ledger to read<p><dt> <var>balance</var> <dd>[out scalar]The current usage<p><dt> <var>maximum</var> <dd>[out scalar]The resource limit</dl><h3>DESCRIPTION</h3><p>The <strong>ledger_read</strong> function returns the current balanceand limit in a ledger.<h3>NOTES</h3><p>This interface is not implemented in OSF/1 R1.3.<h3>RETURN VALUES</h3><p>Only generic errors apply.<h3>RELATED INFORMATION</h3><p>Functions:<a href="ledger_create.html"><strong>ledger_create</strong></a>,<a href="ledger_terminate.html"><strong>ledger_terminate</strong></a>,<a href="ledger_transfer.html"><strong>ledger_transfer</strong></a>.
+<h2>ledger_read</h2>
+<hr>
+<p>
+<strong>Function</strong> - Return the ledger limit and balance.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   ledger_read</strong>
+                <strong>(ledger_port_t</strong>                           <var>ledger</var>,
+                 <strong>ledger_item_t</strong>                          <var>balance</var>,
+                 <strong>ledger_item_t</strong>                          <var>maximum</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>ledger</var> 
+<dd>
+[in ledger send right]
+The ledger to read
+<p>
+<dt> <var>balance</var> 
+<dd>
+[out scalar]
+The current usage
+<p>
+<dt> <var>maximum</var> 
+<dd>
+[out scalar]
+The resource limit
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>ledger_read</strong> function returns the current balance
+and limit in a ledger.
+<h3>NOTES</h3>
+<p>
+This interface is not implemented in OSF/1 R1.3.
+<h3>RETURN VALUES</h3>
+<p>
+Only generic errors apply.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="ledger_create.html"><strong>ledger_create</strong></a>,
+<a href="ledger_terminate.html"><strong>ledger_terminate</strong></a>,
+<a href="ledger_transfer.html"><strong>ledger_transfer</strong></a>.
+
+

@@ -1,1 +1,58 @@
-<h2>semaphore_destroy</h2><hr><p><strong>Function</strong> - Destroy a semaphore.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   semaphore_destroy</strong>                <strong>(task_t</strong>                                    <var>task</var>,                 <strong>semaphore_t</strong>                          <var>semaphore</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>task</var><dd>[in task port] The task associated with the target semaphore.<p><dt> <var>semaphore</var><dd>[in send right] The port naming the semaphore to be destroyed.</dl><h3>DESCRIPTION</h3><p>The <strong>semaphore_destroy</strong> function destroys a semaphore.All send rightsnaming the semaphore become dead names. Threads waiting on thesemaphore become unblocked with the return from the<strong>semaphore_wait</strong>call indicating that the semaphore was destroyed. A call to<strong>semaphore_destroy</strong> succeeds only if the semaphore is associatedwith the specified task.<h3>RETURN VALUES</h3><dl><p><dt> <strong>KERN_INVALID_ARGUMENT</strong><dd>Either, or both, the task or semaphore arguments were invalid.<p><dt> <strong>KERN_INVALID_RIGHT</strong><dd>The specified task does not own the specified semaphore.<p><dt> <strong>KERN_TERMINATED</strong><dd>The specified semaphore was previously destroyed.<p><dt> <strong>KERN_SUCCESS</strong><dd>The semaphore was destroyed.</dl><h3>RELATED INFORMATION</h3><p>Functions:<a href="semaphore_create.html"><strong>semaphore_create</strong></a>,<a href="semaphore_signal.html"><strong>semaphore_signal</strong></a>,<a href="semaphore_signal_all.html"><strong>semaphore_signal_all</strong></a>,<a href="semaphore_wait.html"><strong>semaphore_wait</strong></a>,<a href="device_get_status.html"><strong>device_get_status</strong></a>.
+<h2>semaphore_destroy</h2>
+<hr>
+<p>
+<strong>Function</strong> - Destroy a semaphore.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   semaphore_destroy</strong>
+                <strong>(task_t</strong>                                    <var>task</var>,
+                 <strong>semaphore_t</strong>                          <var>semaphore</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>task</var>
+<dd>
+[in task port] The task associated with the target semaphore.
+<p>
+<dt> <var>semaphore</var>
+<dd>
+[in send right] The port naming the semaphore to be destroyed.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>semaphore_destroy</strong> function destroys a semaphore.
+All send rights
+naming the semaphore become dead names. Threads waiting on the
+semaphore become unblocked with the return from the
+<strong>semaphore_wait</strong>
+call indicating that the semaphore was destroyed. A call to
+<strong>semaphore_destroy</strong> succeeds only if the semaphore is associated
+with the specified task.
+<h3>RETURN VALUES</h3>
+<dl>
+<p>
+<dt> <strong>KERN_INVALID_ARGUMENT</strong>
+<dd>
+Either, or both, the task or semaphore arguments were invalid.
+<p>
+<dt> <strong>KERN_INVALID_RIGHT</strong>
+<dd>
+The specified task does not own the specified semaphore.
+<p>
+<dt> <strong>KERN_TERMINATED</strong>
+<dd>
+The specified semaphore was previously destroyed.
+<p>
+<dt> <strong>KERN_SUCCESS</strong>
+<dd>
+The semaphore was destroyed.
+</dl>
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="semaphore_create.html"><strong>semaphore_create</strong></a>,
+<a href="semaphore_signal.html"><strong>semaphore_signal</strong></a>,
+<a href="semaphore_signal_all.html"><strong>semaphore_signal_all</strong></a>,
+<a href="semaphore_wait.html"><strong>semaphore_wait</strong></a>,
+<a href="device_get_status.html"><strong>device_get_status</strong></a>.

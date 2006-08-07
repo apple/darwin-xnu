@@ -1193,7 +1193,7 @@ int ddp_shutdown(count_only)
 		atalk_notify(gref, ESHUTDOWN);
 	    }
 	}
-	if (count_only || active_skts) {
+	if (count_only) {
 		splx(s);
 		return(active_skts);
 

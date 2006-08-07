@@ -722,6 +722,7 @@ setgroups1(struct proc *p, u_int gidsetsize, user_addr_t gidset, uid_t gmuid, __
 	gid_t	newgroups[NGROUPS] = { 0 };
 	int 	error;
 	kauth_cred_t my_cred, my_new_cred;
+	struct uthread *uthread = get_bsdthread_info(current_thread());
 
 	if ((error = suser(p->p_ucred, &p->p_acflag)))
 		return (error);
@@ -740,39 +741,64 @@ setgroups1(struct proc *p, u_int gidsetsize, user_addr_t gidset, uid_t gmuid, __
 		}
 	}
 
-	/* get current credential and take a reference while we muck with it */
-	for (;;) {
-		my_cred = kauth_cred_proc_ref(p);
-
-		/* 
-		 * set the credential with new info.  If there is no change we get back 
-		 * the same credential we passed in.
+	if ((uthread->uu_flag & UT_SETUID) != 0) {
+		/*
+		 * If this thread is under an assumed identity, set the
+		 * supplementary grouplist on the thread credential instead
+		 * of the process one.  If we were the only reference holder,
+		 * the credential is updated in place, otherwise, our reference
+		 * is dropped and we get back a different cred with a reference
+		 * already held on it.  Because this is per-thread, we don't
+		 * need the referencing/locking/retry required for per-process.
+		 *
+		 * Hack: this opts into memberd to avoid needing to use a per
+		 * thread credential initgroups() instead of setgroups() in
+		 * AFP server to address <rdar://4561060>
 		 */
-		my_new_cred = kauth_cred_setgroups(p->p_ucred, &newgroups[0], ngrp, gmuid);
-		if (my_cred != my_new_cred) {
-			proc_lock(p);
-			/* need to protect for a race where another thread also changed
-			 * the credential after we took our reference.  If p_ucred has 
-			 * changed then we should restart this again with the new cred.
-			 */
-			if (p->p_ucred != my_cred) {
-				proc_unlock(p);
-				kauth_cred_rele(my_cred);
-				kauth_cred_rele(my_new_cred);
-				/* try again */
-				continue;
-			}
-			p->p_ucred = my_new_cred;
-			p->p_flag |= P_SUGID;
-			proc_unlock(p);
-		}
-		/* drop our extra reference */
-		kauth_cred_rele(my_cred);
-		break;
-	}
+		my_cred = uthread->uu_ucred;
+		uthread->uu_ucred = kauth_cred_setgroups(my_cred, &newgroups[0], ngrp, my_cred->cr_gmuid);
+	} else {
 
-	AUDIT_ARG(groupset, p->p_ucred->cr_groups, ngrp);
-	set_security_token(p);
+		/*
+		 * get current credential and take a reference while we muck
+		 * with it
+		 */
+		for (;;) {
+			my_cred = kauth_cred_proc_ref(p);
+
+			/* 
+			 * set the credential with new info.  If there is no
+			 * change we get back the same credential we passed in.
+			 */
+			my_new_cred = kauth_cred_setgroups(my_cred, &newgroups[0], ngrp, gmuid);
+			if (my_cred != my_new_cred) {
+				proc_lock(p);
+				/*
+				 * need to protect for a race where another
+				 * thread also changed the credential after we
+				 * took our reference.  If p_ucred has 
+				 * changed then we should restart this again
+				 * with the new cred.
+				 */
+				if (p->p_ucred != my_cred) {
+					proc_unlock(p);
+					kauth_cred_rele(my_cred);
+					kauth_cred_rele(my_new_cred);
+					/* try again */
+					continue;
+				}
+				p->p_ucred = my_new_cred;
+				p->p_flag |= P_SUGID;
+				proc_unlock(p);
+			}
+			/* drop our extra reference */
+			kauth_cred_rele(my_cred);
+			break;
+		}
+
+		AUDIT_ARG(groupset, p->p_ucred->cr_groups, ngrp);
+		set_security_token(p);
+	}
 
 	return (0);
 }

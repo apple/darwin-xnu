@@ -1,1 +1,62 @@
-<h2>device_get_status</h2><hr><p><strong>Function</strong> - Return the current device status.<h3>SYNOPSIS</h3><pre><strong>#include&lt device/device.h&gt</strong><strong>kern_return_t   device_get_status</strong>                <strong>(mach_port_t</strong>                             <var>device</var>,                 <strong>dev_flavor_t</strong>                            <var>flavor</var>,                 <strong>dev_status_t</strong>                            <var>status</var>,                 <strong>mach_msg_type_number_t</strong>           <var>*status_count</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>device</var> <dd>[in device send right]A device port to the device to be interrogated.<p><dt> <var>flavor</var> <dd>[in scalar]The type of status information requested.<p><dt> <var>status</var> <dd>[out array of natural-sized units]The returned device status.<p><dt> <var>status_count</var> <dd>[pointer to in/out scalar]On input, the reserved size of <var>status</var>; onoutput, the size of the returned device status (in natural-sized units).</dl><h3>DESCRIPTION</h3><p>The <strong>device_get_status</strong> function returns status informationpertaining to an open device.  The possible values for <var>flavor</var> as well as the meaning of the returned status information is device dependent.<h3>RETURN VALUES</h3><dl><p><dt> <strong>D_DEVICE_DOWN</strong><dd>Device has been shut down<p><dt> <strong>D_NO_SUCH_DEVICE</strong><dd>No device with that name, or the device is not operational.<p><dt> <strong>D_OUT_OF_BAND</strong><dd>Out-of-band condition occurred on device (such as typing \*L<Ctrl>-C\*O)</dl><h3>RELATED INFORMATION</h3><p>Functions:<a href="device_set_status.html"><strong>device_set_status</strong></a>.
+<h2>device_get_status</h2>
+<hr>
+<p>
+<strong>Function</strong> - Return the current device status.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>#include&lt device/device.h&gt</strong>
+
+<strong>kern_return_t   device_get_status</strong>
+                <strong>(mach_port_t</strong>                             <var>device</var>,
+                 <strong>dev_flavor_t</strong>                            <var>flavor</var>,
+                 <strong>dev_status_t</strong>                            <var>status</var>,
+                 <strong>mach_msg_type_number_t</strong>           <var>*status_count</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>device</var> 
+<dd>
+[in device send right]
+A device port to the device to be interrogated.
+<p>
+<dt> <var>flavor</var> 
+<dd>
+[in scalar]
+The type of status information requested.
+<p>
+<dt> <var>status</var> 
+<dd>
+[out array of natural-sized units]
+The returned device status.
+<p>
+<dt> <var>status_count</var> 
+<dd>
+[pointer to in/out scalar]
+On input, the reserved size of <var>status</var>; on
+output, the size of the returned device status (in natural-sized units).
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>device_get_status</strong> function returns status information
+pertaining to an open device.  The possible values for <var>flavor</var> as well 
+as the meaning of the returned status information is device dependent.
+<h3>RETURN VALUES</h3>
+<dl>
+<p>
+<dt> <strong>D_DEVICE_DOWN</strong>
+<dd>
+Device has been shut down
+<p>
+<dt> <strong>D_NO_SUCH_DEVICE</strong>
+<dd>
+No device with that name, or the device is not operational.
+<p>
+<dt> <strong>D_OUT_OF_BAND</strong>
+<dd>
+Out-of-band condition occurred on device (such as typing \*L<Ctrl>-C\*O)
+</dl>
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="device_set_status.html"><strong>device_set_status</strong></a>.

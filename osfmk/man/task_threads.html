@@ -1,1 +1,46 @@
-<h2>task_threads</h2><hr><p><strong>Function</strong> - Return the target task's list of threads.<h3>SYNOPSIS</h3><pre><strong>kern_return_t   task_threads</strong>                <strong>(task_t</strong>                                    <var>task</var>,                 <strong>thread_act_port_array_t</strong>            <var>thread_list</var>,                 <strong>mach_msg_type_number_t*</strong>           <var>thread_count</var><strong>);</strong></pre><h3>PARAMETERS</h3><dl><p><dt> <var>task</var> <dd>[in task send right]The port for the task for which the thread list is to be returned.<p><dt> <var>thread_list</var> <dd>[out pointer to dynamic array of thread send rights]The returned list of threads within <var>task</var>, in no particular order.<p><dt> <var>thread_count</var> <dd>[out scalar]The returned count of threads in <var>thread_list</var>.</dl><h3>DESCRIPTION</h3><p>The <strong>task_threads</strong> function returns a list of the threadswithin <var>task</var>.  The calling task or thread also receives a send right to the kernel portfor each listed thread.<h3>RETURN VALUES</h3><p>Only generic errors apply.<h3>RELATED INFORMATION</h3><p>Functions:<a href="thread_create.html"><strong>thread_create</strong></a>,<a href="thread_terminate.html"><strong>thread_terminate</strong></a>,<a href="thread_suspend.html"><strong>thread_suspend</strong></a>.
+<h2>task_threads</h2>
+<hr>
+<p>
+<strong>Function</strong> - Return the target task's list of threads.
+<h3>SYNOPSIS</h3>
+<pre>
+<strong>kern_return_t   task_threads</strong>
+                <strong>(task_t</strong>                                    <var>task</var>,
+                 <strong>thread_act_port_array_t</strong>            <var>thread_list</var>,
+                 <strong>mach_msg_type_number_t*</strong>           <var>thread_count</var><strong>);</strong>
+</pre>
+<h3>PARAMETERS</h3>
+<dl>
+<p>
+<dt> <var>task</var> 
+<dd>
+[in task send right]
+The port for the task for which the thread list is to 
+be returned.
+<p>
+<dt> <var>thread_list</var> 
+<dd>
+[out pointer to dynamic array of thread send rights]
+The returned list of 
+threads within <var>task</var>, in no particular order.
+<p>
+<dt> <var>thread_count</var> 
+<dd>
+[out scalar]
+The returned count of threads in <var>thread_list</var>.
+</dl>
+<h3>DESCRIPTION</h3>
+<p>
+The <strong>task_threads</strong> function returns a list of the threads
+within <var>task</var>.  The calling 
+task or thread also receives a send right to the kernel port
+for each listed thread.
+<h3>RETURN VALUES</h3>
+<p>
+Only generic errors apply.
+<h3>RELATED INFORMATION</h3>
+<p>
+Functions:
+<a href="thread_create.html"><strong>thread_create</strong></a>,
+<a href="thread_terminate.html"><strong>thread_terminate</strong></a>,
+<a href="thread_suspend.html"><strong>thread_suspend</strong></a>.
