@@ -1,23 +1,31 @@
 /*
  * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
+ * This file contains Original Code and/or Modifications of Original Code 
+ * as defined in and that are subject to the Apple Public Source License 
+ * Version 2.0 (the 'License'). You may not use this file except in 
+ * compliance with the License.  The rights granted to you under the 
+ * License may not be used to create, or enable the creation or 
+ * redistribution of, unlawful or unlicensed copies of an Apple operating 
+ * system, or to circumvent, violate, or enable the circumvention or 
+ * violation of, any terms of an Apple operating system software license 
+ * agreement.
+ *
+ * Please obtain a copy of the License at 
+ * http://www.opensource.apple.com/apsl/ and read it before using this 
+ * file.
+ *
+ * The Original Code and all software distributed under the License are 
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
+ * Please see the License for the specific language governing rights and 
+ * limitations under the License.
+ *
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
  */
 /*-----------------------------------------------------------------------
 ** vmachmon.c
@@ -616,7 +624,7 @@ int vmm_init_context(struct savearea *save)
 	hw_atomic_add((int *)&saveanchor.savetarget, 2);	/* Account for the number of extra saveareas we think we might "need" */
 
 	pmap_t hpmap = act->map->pmap;						/* Get host pmap */
-	pmap_t gpmap = pmap_create(0, FALSE);					/* Make a fresh guest pmap */
+	pmap_t gpmap = pmap_create(0);						/* Make a fresh guest pmap */
 	if (gpmap) {										/* Did we succeed ? */
 		CTable->vmmAdsp[cvi] = gpmap;					/* Remember guest pmap for new context */
 		if (lowGlo.lgVMMforcedFeats & vmmGSA) {			/* Forcing on guest shadow assist ? */
@@ -975,7 +983,7 @@ kern_return_t vmm_map_page(
 	map = current_thread()->map;				/* Get the host's map */
 
 	if (pmap->pmapFlags & pmapVMgsaa) {			/* Guest shadow assist active ? */
-		ret = hw_res_map_gv(map->pmap, pmap, cva, ava, getProtPPC(prot, TRUE));
+		ret = hw_res_map_gv(map->pmap, pmap, cva, ava, getProtPPC(prot));
 												/* Attempt to resume an existing gv->phys mapping */
 		if (mapRtOK != ret) {					/* Nothing to resume, construct a new mapping */
 			
@@ -1017,7 +1025,7 @@ kern_return_t vmm_map_page(
 			if (pattr & mmFlgCInhib)  wimg |= 0x4;
 			if (pattr & mmFlgGuarded) wimg |= 0x1;
 			unsigned int mflags = (pindex << 16) | mpGuest;
-			addr64_t	 gva = ((ava & ~mpHWFlags) | (wimg << 3) | getProtPPC(prot, TRUE));
+			addr64_t	 gva = ((ava & ~mpHWFlags) | (wimg << 3) | getProtPPC(prot));
 			
 			hw_add_map_gv(map->pmap, pmap, gva, mflags, mp->mpPAddr);
 												/* Construct new guest->phys mapping */

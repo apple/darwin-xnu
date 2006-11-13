@@ -1,23 +1,31 @@
 /*
  * Copyright (c) 1998-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
+ * This file contains Original Code and/or Modifications of Original Code 
+ * as defined in and that are subject to the Apple Public Source License 
+ * Version 2.0 (the 'License'). You may not use this file except in 
+ * compliance with the License.  The rights granted to you under the 
+ * License may not be used to create, or enable the creation or 
+ * redistribution of, unlawful or unlicensed copies of an Apple operating 
+ * system, or to circumvent, violate, or enable the circumvention or 
+ * violation of, any terms of an Apple operating system software license 
+ * agreement.
+ *
+ * Please obtain a copy of the License at 
+ * http://www.opensource.apple.com/apsl/ and read it before using this 
+ * file.
+ *
+ * The Original Code and all software distributed under the License are 
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
+ * Please see the License for the specific language governing rights and 
+ * limitations under the License.
+ *
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
  */
 #include <IOKit/IOWorkLoop.h>
 #include <IOKit/IOCommandGate.h>
@@ -29,7 +37,6 @@
 #include <IOKit/pwr_mgt/IOPMPrivate.h>
 #include <IOKit/IODeviceTreeSupport.h>
 #include <IOKit/IOMessage.h>
-#include <IOKit/IOReturn.h>
 #include "RootDomainUserClient.h"
 #include "IOKit/pwr_mgt/IOPowerConnection.h"
 #include "IOPMPowerStateQueue.h"
@@ -40,9 +47,7 @@
 #include <ppc/pms.h>
 #endif
 
-extern "C" {
-IOReturn OSMetaClassSystemSleepOrWake( UInt32 );
-}
+extern "C" void kprintf(const char *, ...);
 
 extern const IORegistryPlane * gIOPowerPlane;
 
@@ -50,14 +55,6 @@ IOReturn broadcast_aggressiveness ( OSObject *, void *, void *, void *, void * )
 static void sleepTimerExpired(thread_call_param_t);
 static void wakeupClamshellTimerExpired ( thread_call_param_t us);
 
-// "IOPMSetSleepSupported"  callPlatformFunction name
-static const OSSymbol *sleepSupportedPEFunction = NULL;
-
-#define kIOSleepSupportedKey  "IOSleepSupported"
-
-#define kRD_AllPowerSources (kIOPMSupportedOnAC \
-                           | kIOPMSupportedOnBatt \
-                           | kIOPMSupportedOnUPS)
 
 #define number_of_power_states 5
 #define OFF_STATE 0
@@ -71,50 +68,23 @@ static const OSSymbol *sleepSupportedPEFunction = NULL;
 #define SLEEP_POWER kIOPMAuxPowerOn
 #define DOZE_POWER kIOPMDoze
 
-#define kLocalEvalClamshellCommand        (1 << 15)
-
 static IOPMPowerState ourPowerStates[number_of_power_states] = {
-    // state 0, off
-    {1,0,			0,		0,0,0,0,0,0,0,0,0},
-    // state 1, restart
-    {1,kIOPMRestartCapability,	kIOPMRestart,	RESTART_POWER,0,0,0,0,0,0,0,0},	
-    // state 2, sleep
-    {1,kIOPMSleepCapability,	kIOPMSleep,	SLEEP_POWER,0,0,0,0,0,0,0,0},	
-    // state 3, doze
-    {1,kIOPMDoze,		kIOPMDoze,	DOZE_POWER,0,0,0,0,0,0,0,0},	
-    // state 4, on
-    {1,kIOPMPowerOn,		kIOPMPowerOn,	ON_POWER,0,0,0,0,0,0,0,0},	
+    {1,0,			0,		0,0,0,0,0,0,0,0,0},		// state 0, off
+    {1,kIOPMRestartCapability,	kIOPMRestart,	RESTART_POWER,0,0,0,0,0,0,0,0},	// state 1, restart
+    {1,kIOPMSleepCapability,	kIOPMSleep,	SLEEP_POWER,0,0,0,0,0,0,0,0},	// state 2, sleep
+    {1,kIOPMDoze,		kIOPMDoze,	DOZE_POWER,0,0,0,0,0,0,0,0},	// state 3, doze
+    {1,kIOPMPowerOn,		kIOPMPowerOn,	ON_POWER,0,0,0,0,0,0,0,0},	// state 4, on
 };
+
+// RESERVED IOPMrootDomain class variables
+#define diskSyncCalloutEntry                _reserved->diskSyncCalloutEntry
+#define _settingController                  _reserved->_settingController
+#define _batteryLocationNotifier            _reserved->_batteryLocationNotifier
+#define _displayWranglerNotifier            _reserved->_displayWranglerNotifier
+
 
 static IOPMrootDomain * gRootDomain;
 static UInt32           gSleepOrShutdownPending = 0;
-
-
-class PMSettingObject : public OSObject
-{
-    OSDeclareDefaultStructors(PMSettingObject)
-private:
-    IOPMrootDomain                  *parent;
-    IOPMSettingControllerCallback   func;
-    OSObject                        *target;
-    uintptr_t                       refcon;
-    uint32_t                        *publishedFeatureID;
-    int                             releaseAtCount;
-public:
-    static PMSettingObject *pmSettingObject(
-                IOPMrootDomain      *parent_arg,
-                IOPMSettingControllerCallback   handler_arg,
-                OSObject    *target_arg,
-                uintptr_t   refcon_arg,
-                uint32_t    supportedPowerSources,
-                const OSSymbol *settings[]);
-
-    void setPMSetting(const OSSymbol *type, OSObject *obj);
-
-    void taggedRelease(const void *tag, const int when) const;
-    void free(void);
-};
-
 
 
 #define super IOService
@@ -238,28 +208,10 @@ static void disk_sync_callout(thread_call_param_t p0, thread_call_param_t p1)
 // expert informs us we are the root.
 // **********************************************************************************
 
-#define kRootDomainSettingsCount        12
 
 bool IOPMrootDomain::start ( IOService * nub )
 {
-    OSIterator      *psIterator;
-    OSDictionary    *tmpDict;
-    const OSSymbol  *settingsArr[kRootDomainSettingsCount] = 
-        {
-            OSSymbol::withCString(kIOPMSettingSleepOnPowerButtonKey),
-            OSSymbol::withCString(kIOPMSettingAutoWakeSecondsKey),
-            OSSymbol::withCString(kIOPMSettingAutoPowerSecondsKey),
-            OSSymbol::withCString(kIOPMSettingAutoWakeCalendarKey),
-            OSSymbol::withCString(kIOPMSettingAutoPowerCalendarKey),
-            OSSymbol::withCString(kIOPMSettingDebugWakeRelativeKey),
-            OSSymbol::withCString(kIOPMSettingDebugPowerRelativeKey),
-            OSSymbol::withCString(kIOPMSettingWakeOnRingKey),
-            OSSymbol::withCString(kIOPMSettingRestartOnPowerLossKey),
-            OSSymbol::withCString(kIOPMSettingWakeOnClamshellKey),
-            OSSymbol::withCString(kIOPMSettingWakeOnACChangeKey),
-            OSSymbol::withCString(kIOPMSettingTimeZoneOffsetKey)
-        };
-    
+    OSDictionary                            *tmpDict;
 
     pmPowerStateQueue = 0;
 
@@ -271,55 +223,33 @@ bool IOPMrootDomain::start ( IOService * nub )
     gRootDomain = this;
 
     PMinit();
-    
-    sleepSupportedPEFunction = OSSymbol::withCString("IOPMSetSleepSupported");
-    canSleep = true;
-    setProperty(kIOSleepSupportedKey,true);
+    setProperty("IOSleepSupported","");
 
     allowSleep = true;
     sleepIsSupported = true;
     systemBooting = true;
+    ignoringClamshell = true;
     sleepSlider = 0;
     idleSleepPending = false;
+    canSleep = true;
     wrangler = NULL;
     sleepASAP = false;
-    clamshellIsClosed = false;
-    clamshellExists = false;
-    ignoringClamshell = true;
+    _settingController = NULL;
     ignoringClamshellDuringWakeup = false;
-    acAdaptorConnect = true;
     
     tmpDict = OSDictionary::withCapacity(1);
     setProperty(kRootDomainSupportedFeatures, tmpDict);
     tmpDict->release();
     
-    settingsCallbacks = OSDictionary::withCapacity(1);
-
-    // Create a list of the valid PM settings that we'll relay to
-    // interested clients in setProperties() => setPMSetting()
-    allowedPMSettings = OSArray::withObjects(
-                    (const OSObject **)settingsArr,
-                    kRootDomainSettingsCount,
-                    0);
-                    
-    fPMSettingsDict = OSDictionary::withCapacity(5);
-            
     pm_vars->PMworkloop = IOWorkLoop::workLoop();				
     pmPowerStateQueue = IOPMPowerStateQueue::PMPowerStateQueue(this);
     pm_vars->PMworkloop->addEventSource(pmPowerStateQueue);
     
     featuresDictLock = IOLockAlloc();
-    settingsCtrlLock = IORecursiveLockAlloc();
     
-    extraSleepTimer = thread_call_allocate(
-                        (thread_call_func_t)sleepTimerExpired, 
-                        (thread_call_param_t) this);
-    clamshellWakeupIgnore = thread_call_allocate(
-                        (thread_call_func_t)wakeupClamshellTimerExpired, 
-                        (thread_call_param_t) this);
-    diskSyncCalloutEntry = thread_call_allocate(
-                        &disk_sync_callout, 
-                        (thread_call_param_t) this);
+    extraSleepTimer = thread_call_allocate((thread_call_func_t)sleepTimerExpired, (thread_call_param_t) this);
+    clamshellWakeupIgnore = thread_call_allocate((thread_call_func_t)wakeupClamshellTimerExpired, (thread_call_param_t) this);
+    diskSyncCalloutEntry = thread_call_allocate(&disk_sync_callout, (thread_call_param_t) this);
 
     // create our parent
     patriarch = new IORootParent;
@@ -340,32 +270,28 @@ bool IOPMrootDomain::start ( IOService * nub )
     registerPrioritySleepWakeInterest( &sysPowerDownHandler, this, 0);
 
     // Register for a notification when IODisplayWrangler is published
-    _displayWranglerNotifier = addNotification( 
-                gIOPublishNotification, serviceMatching("IODisplayWrangler"), 
-                &displayWranglerPublished, this, 0);
+    _displayWranglerNotifier = addNotification( gIOPublishNotification, 
+                                                serviceMatching("IODisplayWrangler"), 
+                                                &displayWranglerPublished, this, 0);
 
-    // Battery location published - ApplePMU support only
-    _batteryPublishNotifier = addNotification( 
-                gIOPublishNotification, serviceMatching("IOPMPowerSource"), 
-                &batteryPublished, this, this);
-     
+    _batteryLocationNotifier = addNotification( gIOPublishNotification, 
+                                                resourceMatching("battery"), 
+                                                &batteryLocationPublished, this, this);
 
     const OSSymbol *ucClassName = OSSymbol::withCStringNoCopy("RootDomainUserClient");
     setProperty(gIOUserClientClassKey, (OSObject *) ucClassName);
     ucClassName->release();
 
-    // IOBacklightDisplay can take a long time to load at boot, or it may
-    // not load at all if you're booting with clamshell closed. We publish
-    // 'DisplayDims' here redundantly to get it published early and at all.
-    psIterator = getMatchingServices( serviceMatching("IOPMPowerSource") );
-    if( psIterator && psIterator->getNextObject() )
+    IORegistryEntry     *temp_entry = NULL;
+    if( (temp_entry = IORegistryEntry::fromPath("mac-io/battery", gIODTPlane)) ||
+        (temp_entry = IORegistryEntry::fromPath("mac-io/via-pmu/battery", gIODTPlane)))
     {
-        // There's at least one battery on the system, so we publish
-        // 'DisplayDims' support for the LCD.
+        // If this machine has a battery, publish the fact that the backlight
+        //    supports dimming.
+        // Notice similar call in IOPMrootDomain::batteryLocationPublished() to 
+        //    detect batteries on SMU machines.
         publishFeature("DisplayDims");
-    }
-    if(psIterator) {
-        psIterator->release();
+        temp_entry->release();
     }
 
     IOHibernateSystemInit(this);
@@ -373,6 +299,17 @@ bool IOPMrootDomain::start ( IOService * nub )
     registerService();						// let clients find us
 
     return true;
+}
+
+IOReturn     IOPMrootDomain::setPMSetting(int type, OSNumber *n)
+{
+    if(_settingController && _settingController->func) {
+        int         seconds;
+        seconds = n->unsigned32BitValue();
+        return (*(_settingController->func))(type, seconds, _settingController->refcon);
+    } else {
+        return kIOReturnNoDevice;
+    }   
 }
 
 // **********************************************************************************
@@ -383,27 +320,25 @@ bool IOPMrootDomain::start ( IOService * nub )
 // **********************************************************************************
 IOReturn IOPMrootDomain::setProperties ( OSObject *props_obj)
 {
-    IOReturn                        return_value = kIOReturnSuccess;
-    OSDictionary                    *dict = OSDynamicCast(OSDictionary, props_obj);
-    OSBoolean                       *b;
-    OSNumber                        *n;
-    OSString                        *str;
-    OSSymbol                        *type;
-    OSObject                        *obj;
-    unsigned int                    i;
-
-    const OSSymbol *boot_complete_string = 
-                OSSymbol::withCString("System Boot Complete");
-    const OSSymbol *stall_halt_string = 
-                OSSymbol::withCString("StallSystemAtHalt");
-    const OSSymbol *hibernatemode_string = 
-                OSSymbol::withCString(kIOHibernateModeKey);
-    const OSSymbol *hibernatefile_string = 
-                OSSymbol::withCString(kIOHibernateFileKey);
-    const OSSymbol *hibernatefreeratio_string = 
-                OSSymbol::withCString(kIOHibernateFreeRatioKey);
-    const OSSymbol *hibernatefreetime_string = 
-                OSSymbol::withCString(kIOHibernateFreeTimeKey);
+    IOReturn                            return_value = kIOReturnSuccess;
+    OSDictionary                        *dict = OSDynamicCast(OSDictionary, props_obj);
+    OSBoolean                           *b;
+    OSNumber                            *n;
+    OSString                            *str;
+    const OSSymbol                      *boot_complete_string = OSSymbol::withCString("System Boot Complete");
+    const OSSymbol                            *power_button_string = OSSymbol::withCString("DisablePowerButtonSleep");
+    const OSSymbol                            *stall_halt_string = OSSymbol::withCString("StallSystemAtHalt");
+    const OSSymbol                            *auto_wake_string = OSSymbol::withCString("wake");
+    const OSSymbol                            *auto_power_string = OSSymbol::withCString("poweron");
+    const OSSymbol                            *wakeonring_string = OSSymbol::withCString("WakeOnRing");
+    const OSSymbol                            *fileserver_string = OSSymbol::withCString("AutoRestartOnPowerLoss");
+    const OSSymbol                            *wakeonlid_string = OSSymbol::withCString("WakeOnLid");
+    const OSSymbol                            *wakeonac_string = OSSymbol::withCString("WakeOnACChange");
+    const OSSymbol                            *hibernatemode_string = OSSymbol::withCString(kIOHibernateModeKey);
+    const OSSymbol                            *hibernatefile_string = OSSymbol::withCString(kIOHibernateFileKey);
+    const OSSymbol                            *hibernatefreeratio_string = OSSymbol::withCString(kIOHibernateFreeRatioKey);
+    const OSSymbol                            *hibernatefreetime_string = OSSymbol::withCString(kIOHibernateFreeTimeKey);
+    const OSSymbol                            *timezone_string = OSSymbol::withCString("TimeZoneOffsetSeconds");
     
     if(!dict) 
     {
@@ -417,15 +352,14 @@ IOReturn IOPMrootDomain::setProperties ( OSObject *props_obj)
     {
         systemBooting = false;
         adjustPowerState();
-
-        // If lid is closed, re-send lid closed notification
-        // now that booting is complete.
-        if( clamshellIsClosed )
-        {
-            this->receivePowerNotification(kLocalEvalClamshellCommand);
-        }
     }
     
+    if( power_button_string
+        && (b = OSDynamicCast(OSBoolean, dict->getObject(power_button_string))) ) 
+    {
+        setProperty(power_button_string, b);
+    }
+
     if( stall_halt_string
         && (b = OSDynamicCast(OSBoolean, dict->getObject(stall_halt_string))) ) 
     {
@@ -433,43 +367,94 @@ IOReturn IOPMrootDomain::setProperties ( OSObject *props_obj)
     }
 
     if ( hibernatemode_string
-    && (n = OSDynamicCast(OSNumber, dict->getObject(hibernatemode_string))))
+	&& (n = OSDynamicCast(OSNumber, dict->getObject(hibernatemode_string))))
     {
-    	setProperty(hibernatemode_string, n);
+	setProperty(hibernatemode_string, n);
     }
     if ( hibernatefreeratio_string
-    && (n = OSDynamicCast(OSNumber, dict->getObject(hibernatefreeratio_string))))
+	&& (n = OSDynamicCast(OSNumber, dict->getObject(hibernatefreeratio_string))))
     {
-        setProperty(hibernatefreeratio_string, n);
+	setProperty(hibernatefreeratio_string, n);
     }
     if ( hibernatefreetime_string
-    && (n = OSDynamicCast(OSNumber, dict->getObject(hibernatefreetime_string))))
+	&& (n = OSDynamicCast(OSNumber, dict->getObject(hibernatefreetime_string))))
     {
-        setProperty(hibernatefreetime_string, n);
+	setProperty(hibernatefreetime_string, n);
     }
     if ( hibernatefile_string
-    && (str = OSDynamicCast(OSString, dict->getObject(hibernatefile_string))))
+	&& (str = OSDynamicCast(OSString, dict->getObject(hibernatefile_string))))
     {
-        setProperty(hibernatefile_string, str);
+	setProperty(hibernatefile_string, str);
     }
 
-    // Relay our allowed PM settings onto our registered PM clients
-    for(i = 0; i < allowedPMSettings->getCount(); i++) {
-
-        type = (OSSymbol *)allowedPMSettings->getObject(i);
-        if(!type) continue;
-
-        obj = dict->getObject(type);
-        if(!obj) continue;
-        
-        return_value = setPMSetting(type, obj);
-        
+    // Relay AutoWake setting to its controller
+    if( auto_wake_string
+        && (n = OSDynamicCast(OSNumber, dict->getObject(auto_wake_string))) )
+    {
+        return_value = setPMSetting(kIOPMAutoWakeSetting, n);
         if(kIOReturnSuccess != return_value) goto exit;
     }
 
+    // Relay AutoPower setting to its controller
+    if( auto_power_string
+        && (n = OSDynamicCast(OSNumber, dict->getObject(auto_power_string))) )
+    {
+        return_value = setPMSetting(kIOPMAutoPowerOnSetting, n);
+        if(kIOReturnSuccess != return_value) goto exit;
+    }
+
+    // Relay WakeOnRing setting to its controller
+    if( wakeonring_string
+        && (n = OSDynamicCast(OSNumber, dict->getObject(wakeonring_string))) )
+    {
+        return_value = setPMSetting(kIOPMWakeOnRingSetting, n);
+        if(kIOReturnSuccess != return_value) goto exit;
+    }
+
+    // Relay FileServer setting to its controller
+    if( fileserver_string
+        && (n = OSDynamicCast(OSNumber, dict->getObject(fileserver_string))) )
+    {
+        return_value = setPMSetting(kIOPMAutoRestartOnPowerLossSetting, n);
+        if(kIOReturnSuccess != return_value) goto exit;
+    }
+
+    // Relay WakeOnLid setting to its controller
+    if( wakeonlid_string 
+        && (n = OSDynamicCast(OSNumber, dict->getObject(wakeonlid_string))) )
+    {
+        return_value = setPMSetting(kIOPMWakeOnLidSetting, n);
+        if(kIOReturnSuccess != return_value) goto exit;
+    }
+    
+    // Relay WakeOnACChange setting to its controller
+    if( wakeonac_string
+        && (n = OSDynamicCast(OSNumber, dict->getObject(wakeonac_string))) )
+    {
+        return_value = setPMSetting(kIOPMWakeOnACChangeSetting, n);
+        if(kIOReturnSuccess != return_value) goto exit;
+    }
+
+    // Relay timezone offset in seconds to SMU
+    if( timezone_string
+        && (n = OSDynamicCast(OSNumber, dict->getObject(timezone_string))) )
+    {
+        return_value = setPMSetting(kIOPMTimeZoneSetting, n);
+        if(kIOReturnSuccess != return_value) goto exit;
+    }
+
+
     exit:
     if(boot_complete_string) boot_complete_string->release();
+    if(power_button_string) power_button_string->release();
     if(stall_halt_string) stall_halt_string->release();
+    if(auto_wake_string) auto_wake_string->release();
+    if(auto_power_string) auto_power_string->release();
+    if(wakeonring_string) wakeonring_string->release();
+    if(fileserver_string) fileserver_string->release();
+    if(wakeonlid_string) wakeonlid_string->release();
+    if(wakeonac_string) wakeonac_string->release();
+    if(timezone_string) timezone_string->release();
     return return_value;
 }
 
@@ -584,12 +569,13 @@ void IOPMrootDomain::handleSleepTimerExpiration ( void )
 
 void IOPMrootDomain::stopIgnoringClamshellEventsDuringWakeup(void)
 {
+    OSObject *  state;
+
     // Allow clamshell-induced sleep now
     ignoringClamshellDuringWakeup = false;
 
-    // Re-send clamshell event, in case it causes a sleep
-    if(clamshellIsClosed) 
-        this->receivePowerNotification( kLocalEvalClamshellCommand );
+    if ((state = getProperty(kAppleClamshellStateKey)))
+        publishResource(kAppleClamshellStateKey, state);
 }
 
 //*********************************************************************************
@@ -633,6 +619,7 @@ IOReturn IOPMrootDomain::setAggressiveness ( unsigned long type, unsigned long n
 // **********************************************************************************
 IOReturn IOPMrootDomain::sleepSystem ( void )
 {
+    //kprintf("sleep demand received\n");
     if ( !systemBooting && allowSleep && sleepIsSupported ) {
         patriarch->sleepSystem();
 
@@ -703,7 +690,7 @@ void IOPMrootDomain::powerChangeDone ( unsigned long previousState )
                 // code will resume execution here.
 
                 // Now we're waking...
-                IOHibernateSystemWake();
+		IOHibernateSystemWake();
 
                 // stay awake for at least 30 seconds
                 clock_interval_to_deadline(30, kSecondScale, &deadline);	
@@ -737,9 +724,7 @@ void IOPMrootDomain::powerChangeDone ( unsigned long previousState )
                 if(getProperty(kIOREMSleepEnabledKey)) {
                     // clamshellWakeupIgnore callout clears ignoreClamshellDuringWakeup bit   
                     clock_interval_to_deadline(5, kSecondScale, &deadline);
-                    if(clamshellWakeupIgnore)  {
-                        thread_call_enter_delayed(clamshellWakeupIgnore, deadline);
-                    }
+                    if(clamshellWakeupIgnore) thread_call_enter_delayed(clamshellWakeupIgnore, deadline);
                 } else ignoringClamshellDuringWakeup = false;
                 
                 // Find out what woke us
@@ -804,11 +789,8 @@ void IOPMrootDomain::wakeFromDoze( void )
 {
     if ( pm_vars->myCurrentState == DOZE_STATE ) 
     {
-        // Reset sleep support till next sleep attempt.
-        // A machine's support of sleep vs. doze can change over the course of
-        // a running system, so we recalculate it before every sleep.
-        setSleepSupported(0);
-
+        // reset this till next attempt
+        canSleep = true;
         powerOverrideOffPriv();
 
         // early wake notification
@@ -820,263 +802,43 @@ void IOPMrootDomain::wakeFromDoze( void )
 }
 
 
-// *****************************************************************************
+// **********************************************************************************
 // publishFeature
 //
 // Adds a new feature to the supported features dictionary
 // 
 // 
-// *****************************************************************************
+// **********************************************************************************
 void IOPMrootDomain::publishFeature( const char * feature )
 {
-    publishFeature(feature, kIOPMSupportedOnAC 
-                                  | kIOPMSupportedOnBatt 
-                                  | kIOPMSupportedOnUPS,
-                            NULL);
-    return;
-}
-
-
-// *****************************************************************************
-// publishFeature (with supported power source specified)
-//
-// Adds a new feature to the supported features dictionary
-// 
-// 
-// *****************************************************************************
-void IOPMrootDomain::publishFeature( 
-    const char *feature, 
-    uint32_t supportedWhere,
-    uint32_t *uniqueFeatureID)
-{
-    static uint16_t     next_feature_id = 500;
-
-    OSNumber            *new_feature_data = NULL;
-    OSNumber            *existing_feature = NULL;
-    OSArray             *existing_feature_arr = NULL;
-    OSObject            *osObj = NULL;
-    uint32_t            feature_value = 0;
-
-    supportedWhere &= kRD_AllPowerSources; // mask off any craziness!
-
-    if(!supportedWhere) {
-        // Feature isn't supported anywhere!
-        return;
-    }
-    
-    if(next_feature_id > 5000) {
-        // Far, far too many features!
-        return;
-    }
-
     if(featuresDictLock) IOLockLock(featuresDictLock);
-
     OSDictionary *features =
         (OSDictionary *) getProperty(kRootDomainSupportedFeatures);
     
-    // Create new features dict if necessary
-    if ( features && OSDynamicCast(OSDictionary, features)) {
+    if ( features && OSDynamicCast(OSDictionary, features))
         features = OSDictionary::withDictionary(features);
-    } else {
+    else
         features = OSDictionary::withCapacity(1);
-    }
-    
-    // Create OSNumber to track new feature
-    
-    next_feature_id += 1;
-    if( uniqueFeatureID ) {
-        // We don't really mind if the calling kext didn't give us a place
-        // to stash their unique id. Many kexts don't plan to unload, and thus
-        // have no need to remove themselves later.
-        *uniqueFeatureID = next_feature_id;
-    }
-    
-    feature_value = supportedWhere + (next_feature_id << 16);
-    new_feature_data = OSNumber::withNumber(
-                                (unsigned long long)feature_value, 32);
 
-    // Does features object already exist?
-    if( (osObj = features->getObject(feature)) )
-    {
-        if(( existing_feature = OSDynamicCast(OSNumber, osObj) ))
-        {
-            // We need to create an OSArray to hold the now 2 elements.
-            existing_feature_arr = OSArray::withObjects(
-                            (const OSObject **)&existing_feature, 1, 2);
-            existing_feature_arr->setObject(new_feature_data);
-            features->setObject(feature, existing_feature_arr);
-        } else if(( existing_feature_arr = OSDynamicCast(OSArray, osObj) ))
-        {
-            // Add object to existing array
-            existing_feature_arr->setObject(new_feature_data);        
-        }
-    } else {
-        // The easy case: no previously existing features listed. We simply
-        // set the OSNumber at key 'feature' and we're on our way.
-        features->setObject(feature, new_feature_data);        
-    }
-    
-    new_feature_data->release();
-
+    features->setObject(feature, kOSBooleanTrue);
     setProperty(kRootDomainSupportedFeatures, features);
-
     features->release();
-
-    // Notify EnergySaver and all those in user space so they might
-    // re-populate their feature specific UI
-    messageClients(kIOPMMessageFeatureChange, this);
-
-    if(featuresDictLock) IOLockUnlock(featuresDictLock);    
-}
-
-// *****************************************************************************
-// removePublishedFeature
-//
-// Removes previously published feature
-// 
-// 
-// *****************************************************************************
-IOReturn IOPMrootDomain::removePublishedFeature( uint32_t removeFeatureID )
-{
-    IOReturn                ret = kIOReturnError;
-    uint32_t                feature_value = 0;
-    uint16_t                feature_id = 0;
-    bool                    madeAChange = false;
-    
-    OSSymbol                *dictKey = NULL;
-    OSCollectionIterator    *dictIterator = NULL;
-    OSArray                 *arrayMember  = NULL;
-    OSNumber                *numberMember = NULL;
-    OSObject                *osObj        = NULL;
-    OSNumber                *osNum        = NULL;
-
-    if(featuresDictLock) IOLockLock(featuresDictLock);
-
-    OSDictionary *features =
-        (OSDictionary *) getProperty(kRootDomainSupportedFeatures);
-    
-    if ( features && OSDynamicCast(OSDictionary, features) )
-    {
-        // Any modifications to the dictionary are made to the copy to prevent
-        // races & crashes with userland clients. Dictionary updated
-        // automically later.
-        features = OSDictionary::withDictionary(features);
-    } else {
-        features = NULL;
-        ret = kIOReturnNotFound;
-        goto exit;
-    }
-    
-    // We iterate 'features' dictionary looking for an entry tagged
-    // with 'removeFeatureID'. If found, we remove it from our tracking
-    // structures and notify the OS via a general interest message.
-    
-    dictIterator = OSCollectionIterator::withCollection(features);
-    if(!dictIterator) {
-        goto exit;
-    }
-    
-    while( (dictKey = OSDynamicCast(OSSymbol, dictIterator->getNextObject())) )
-    {
-        osObj = features->getObject(dictKey);
-        
-        // Each Feature is either tracked by an OSNumber
-        if( osObj && (numberMember = OSDynamicCast(OSNumber, osObj)) )
-        {
-            feature_value = numberMember->unsigned32BitValue();
-            feature_id = (uint16_t)(feature_value >> 16);
-
-            if( feature_id == (uint16_t)removeFeatureID )
-            {
-                // Remove this node
-                features->removeObject(dictKey);
-                madeAChange = true;
-                break;
-            }
-        
-        // Or tracked by an OSArray of OSNumbers
-        } else if( osObj && (arrayMember = OSDynamicCast(OSArray, osObj)) )
-        {
-            unsigned int arrayCount = arrayMember->getCount();
-            
-            for(unsigned int i=0; i<arrayCount; i++)
-            {
-                osNum = OSDynamicCast(OSNumber, arrayMember->getObject(i));
-                if(!osNum) {
-                    continue;
-                }
-                
-                feature_value = osNum->unsigned32BitValue();
-                feature_id = (uint16_t)(feature_value >> 16);
-
-                if( feature_id == (uint16_t)removeFeatureID )
-                {
-                    // Remove this node
-                    if( 1 == arrayCount ) {
-                        // If the array only contains one element, remove
-                        // the whole thing.
-                        features->removeObject(dictKey);
-                    } else {
-                        // Otherwise just remove the element in question.
-                        arrayMember->removeObject(i);                    
-                    }
-
-                    madeAChange = true;
-                    break;
-                }
-            }
-        }    
-    }
-    
-    
-    dictIterator->release();
-    
-    if( madeAChange )
-    {
-        ret = kIOReturnSuccess;    
-
-        setProperty(kRootDomainSupportedFeatures, features);
-    
-        // Notify EnergySaver and all those in user space so they might
-        // re-populate their feature specific UI
-        messageClients(kIOPMMessageFeatureChange, this);
-    } else {
-        ret = kIOReturnNotFound;
-    }
-    
-exit:
-    if(features)    features->release();
-    if(featuresDictLock) IOLockUnlock(featuresDictLock);    
-    return ret;
+    if(featuresDictLock) IOLockUnlock(featuresDictLock);
 }
 
 
-// **********************************************************************************
-// unIdleDevice
-//
-// Enqueues unidle event to be performed later in a serialized context.
-// 
-// **********************************************************************************
 void IOPMrootDomain::unIdleDevice( IOService *theDevice, unsigned long theState )
 {
     if(pmPowerStateQueue)
         pmPowerStateQueue->unIdleOccurred(theDevice, theState);
 }
 
-// **********************************************************************************
-// announcePowerSourceChange
-//
-// Notifies "interested parties" that the batteries have changed state
-// 
-// **********************************************************************************
 void IOPMrootDomain::announcePowerSourceChange( void )
 {
-    IORegistryEntry *_batteryRegEntry = (IORegistryEntry *) getProperty("BatteryEntry");
+    IORegistryEntry                 *_batteryRegEntry = (IORegistryEntry *) getProperty("BatteryEntry");
 
-    // (if possible) re-publish power source state under IOPMrootDomain;
-    // only do so if the battery controller publishes an IOResource 
-    // defining battery location. Called from ApplePMU battery driver.
-
+    // (if possible) re-publish power source state under IOPMrootDomain
+    // (only done if the battery controller publishes an IOResource defining battery location)
     if(_batteryRegEntry)
     {
         OSArray             *batt_info;
@@ -1085,234 +847,57 @@ void IOPMrootDomain::announcePowerSourceChange( void )
             setProperty(kIOBatteryInfoKey, batt_info);
     }
 
+    messageClients(kIOPMMessageBatteryStatusHasChanged);
 }
 
-
-// *****************************************************************************
-// setPMSetting (private)
-//
-// Internal helper to relay PM settings changes from user space to individual
-// drivers. Should be called only by IOPMrootDomain::setProperties.
-// 
-// *****************************************************************************
-IOReturn     IOPMrootDomain::setPMSetting(
-    const OSSymbol *type, 
-    OSObject *obj)
+IOReturn IOPMrootDomain::registerPMSettingController
+        (IOPMSettingControllerCallback func, void *info)
 {
-    OSArray             *arr = NULL;
-    PMSettingObject     *p_obj = NULL;
-    int                 count;
-    int                 i;
-
-    if(NULL == type) return kIOReturnBadArgument;
-
-    IORecursiveLockLock(settingsCtrlLock);
+    if(_settingController) return kIOReturnExclusiveAccess;
     
-    fPMSettingsDict->setObject(type, obj);
-
-    arr = (OSArray *)settingsCallbacks->getObject(type);
-    if(NULL == arr) goto exit;
-    count = arr->getCount();
-    for(i=0; i<count; i++) {
-        p_obj = (PMSettingObject *)OSDynamicCast(PMSettingObject, arr->getObject(i));
-        if(p_obj) p_obj->setPMSetting(type, obj);
-    }
-
-exit:
-    IORecursiveLockUnlock(settingsCtrlLock);
+    _settingController = (PMSettingCtrl *)IOMalloc(sizeof(PMSettingCtrl));
+    if(!_settingController) return kIOReturnNoMemory;
+    
+    _settingController->func = func;
+    _settingController->refcon = info;
     return kIOReturnSuccess;
 }
 
-// *****************************************************************************
-// copyPMSetting (public)
-//
-// Allows kexts to safely read setting values, without being subscribed to
-// notifications.
-// 
-// *****************************************************************************
-OSObject * IOPMrootDomain::copyPMSetting(
-    OSSymbol *whichSetting)
-{
-    OSObject *obj = NULL;
 
-    if(!whichSetting) return NULL;
-
-    IORecursiveLockLock(settingsCtrlLock);
-    obj = fPMSettingsDict->getObject(whichSetting);
-    if(obj) {
-        obj->retain();
-    }
-    IORecursiveLockUnlock(settingsCtrlLock);
-    
-    return obj;
-}
-
-// *****************************************************************************
-// registerPMSettingController (public)
-//
-// direct wrapper to registerPMSettingController with uint32_t power source arg
-// *****************************************************************************
-IOReturn IOPMrootDomain::registerPMSettingController(
-    const OSSymbol *                settings[],
-    IOPMSettingControllerCallback   func,
-    OSObject                        *target,
-    uintptr_t                       refcon,
-    OSObject                        **handle)
-{
-    return registerPMSettingController( 
-            settings,
-            (kIOPMSupportedOnAC | kIOPMSupportedOnBatt | kIOPMSupportedOnUPS),
-            func, target, refcon, handle);
-}
-
-// *****************************************************************************
-// registerPMSettingController (public)
-//
-// Kexts may register for notifications when a particular setting is changed.
-// A list of settings is available in IOPM.h.
-// Arguments:
-//  * settings - An OSArray containing OSSymbols. Caller should populate this
-//          array with a list of settings caller wants notifications from.
-//  * func - A C function callback of the type IOPMSettingControllerCallback
-//  * target - caller may provide an OSObject *, which PM will pass as an 
-//          target to calls to "func"
-//  * refcon - caller may provide an void *, which PM will pass as an 
-//          argument to calls to "func"
-//  * handle - This is a return argument. We will populate this pointer upon
-//          call success. Hold onto this and pass this argument to
-//          IOPMrootDomain::deRegisterPMSettingCallback when unloading your kext
-// Returns:
-//      kIOReturnSuccess on success
-// *****************************************************************************
-IOReturn IOPMrootDomain::registerPMSettingController(
-    const OSSymbol *                settings[],
-    uint32_t                        supportedPowerSources,
-    IOPMSettingControllerCallback   func,
-    OSObject                        *target,
-    uintptr_t                       refcon,
-    OSObject                        **handle)
-{
-    PMSettingObject     *pmso = NULL;
-    OSArray             *list = NULL;
-    IOReturn            ret = kIOReturnSuccess;
-    int                 i;
-
-    if( NULL == settings ||
-        NULL == func ||
-        NULL == handle)
-    {
-        return kIOReturnBadArgument;
-    }
-
-
-    pmso = PMSettingObject::pmSettingObject(
-                (IOPMrootDomain *)this, func, target, 
-                refcon, supportedPowerSources, settings);
-
-    if(!pmso) {
-        ret = kIOReturnInternalError;
-        goto bail_no_unlock;
-    }
-
-    IORecursiveLockLock(settingsCtrlLock);
-    for(i=0; settings[i]; i++) 
-    {
-        list = (OSArray *)settingsCallbacks->getObject(settings[i]);
-        if(!list) {
-            // New array of callbacks for this setting
-            list = OSArray::withCapacity(1);
-            settingsCallbacks->setObject(settings[i], list);
-            list->release();
-        }
-
-        // Add caller to the callback list
-        list->setObject(pmso);
-    }
-
-    ret = kIOReturnSuccess;
-
-    // Track this instance by its OSData ptr from now on  
-    *handle = pmso;
-    
-    IORecursiveLockUnlock(settingsCtrlLock);
-
-bail_no_unlock:
-    if(kIOReturnSuccess != ret) 
-    {
-        // Error return case
-        if(pmso) pmso->release();
-        if(handle) *handle = NULL;
-    }
-    return ret;
-}
-
-//******************************************************************************
-// sleepOnClamshellClosed
-//
-// contains the logic to determine if the system should sleep when the clamshell
-// is closed.
-//******************************************************************************
-
-bool IOPMrootDomain::shouldSleepOnClamshellClosed ( void )
-{
-    return ( !ignoringClamshell 
-          && !ignoringClamshellDuringWakeup 
-          && !(desktopMode && acAdaptorConnect) );
-}
-
-void IOPMrootDomain::sendClientClamshellNotification ( void )
-{
-    /* Only broadcast clamshell alert if clamshell exists. */
-    if(!clamshellExists)
-        return;
-        
-    setProperty(kAppleClamshellStateKey, 
-                    clamshellIsClosed ? kOSBooleanTrue : kOSBooleanFalse);
-
-    setProperty(kAppleClamshellCausesSleepKey, 
-       shouldSleepOnClamshellClosed() ? kOSBooleanTrue : kOSBooleanFalse);
-
-
-    /* Argument to message is a bitfiel of 
-     *      ( kClamshellStateBit | kClamshellSleepBit )
-     */
-    messageClients(kIOPMMessageClamshellStateChange,
-        (void *) ( (clamshellIsClosed ? kClamshellStateBit : 0)
-             | ( shouldSleepOnClamshellClosed() ? kClamshellSleepBit : 0)) );
-}
-
-//******************************************************************************
+//*********************************************************************************
 // receivePowerNotification
 //
 // The power controller is notifying us of a hardware-related power management
 // event that we must handle. This is a result of an 'environment' interrupt from
 // the power mgt micro.
-//******************************************************************************
+//*********************************************************************************
 
 IOReturn IOPMrootDomain::receivePowerNotification (UInt32 msg)
 {
-    bool        eval_clamshell = false;
-
-    /*
-     * Local (IOPMrootDomain only) eval clamshell command
-     */
-    if (msg & kLocalEvalClamshellCommand)
-    {
-        eval_clamshell = true;
-    }
-
-    /*
-     * Overtemp
-     */
     if (msg & kIOPMOverTemp) 
     {
-        IOLog("PowerManagement emergency overtemp signal. Going to sleep!");
+        IOLog("Power Management received emergency overtemp signal. Going to sleep.");
         (void) sleepSystem ();
     }
+    if (msg & kIOPMSetDesktopMode) 
+    {
+        desktopMode = (0 != (msg & kIOPMSetValue));
+        msg &= ~(kIOPMSetDesktopMode | kIOPMSetValue);
+    }
+    if (msg & kIOPMSetACAdaptorConnected) 
+    {
+        acAdaptorConnect = (0 != (msg & kIOPMSetValue));
+        msg &= ~(kIOPMSetACAdaptorConnected | kIOPMSetValue);
+    }
+    if (msg & kIOPMEnableClamshell) 
+    {
+        ignoringClamshell = false;
+    }
+    if (msg & kIOPMDisableClamshell) 
+    {
+        ignoringClamshell = true;
+    }
 
-    /*
-     * PMU Processor Speed Change
-     */
     if (msg & kIOPMProcessorSpeedChange) 
     {
         IOService *pmu = waitForService(serviceMatching("ApplePMU"));
@@ -1321,138 +906,26 @@ IOReturn IOPMrootDomain::receivePowerNotification (UInt32 msg)
         pmu->callPlatformFunction("recoverFromSleep", false, 0, 0, 0, 0);
     }
 
-    /*
-     * Sleep Now!
-     */
     if (msg & kIOPMSleepNow) 
     {
       (void) sleepSystem ();
     }
     
-    /*
-     * Power Emergency
-     */
     if (msg & kIOPMPowerEmergency) 
     {
       (void) sleepSystem ();
     }
 
-    
-    /*
-     * Clamshell OPEN
-     */
-    if (msg & kIOPMClamshellOpened) 
+    if (msg & kIOPMClamshellClosed) 
     {
-        // Received clamshel open message from clamshell controlling driver
-        // Update our internal state and tell general interest clients
-        clamshellIsClosed = false;
-        clamshellExists = true;
-                
-        sendClientClamshellNotification();
-    } 
-
-    /* 
-     * Clamshell CLOSED
-     * Send the clamshell interest notification since the lid is closing. 
-     */
-    if (msg & kIOPMClamshellClosed)
-    {
-        // Received clamshel open message from clamshell controlling driver
-        // Update our internal state and tell general interest clients
-        clamshellIsClosed = true;
-        clamshellExists = true;
-
-        sendClientClamshellNotification();
-        
-        // And set eval_clamshell = so we can attempt 
-        eval_clamshell = true;
-    }
-
-    /*
-     * Set Desktop mode (sent from graphics)
-     *
-     *  -> reevaluate lid state
-     */
-    if (msg & kIOPMSetDesktopMode) 
-    {
-        desktopMode = (0 != (msg & kIOPMSetValue));
-        msg &= ~(kIOPMSetDesktopMode | kIOPMSetValue);
-
-        sendClientClamshellNotification();
-
-        // Re-evaluate the lid state
-        if( clamshellIsClosed )
+        if ( !ignoringClamshell && !ignoringClamshellDuringWakeup 
+                    && (!desktopMode || !acAdaptorConnect) ) 
         {
-            eval_clamshell = true;
+
+             (void) sleepSystem ();
         }
     }
-    
-    /*
-     * AC Adaptor connected
-     *
-     *  -> reevaluate lid state
-     */
-    if (msg & kIOPMSetACAdaptorConnected) 
-    {
-        acAdaptorConnect = (0 != (msg & kIOPMSetValue));
-        msg &= ~(kIOPMSetACAdaptorConnected | kIOPMSetValue);
 
-        sendClientClamshellNotification();
-
-        // Re-evaluate the lid state
-        if( clamshellIsClosed )
-        {
-            eval_clamshell = true;
-        }
-
-    }
-    
-    /*
-     * Enable Clamshell (external display disappear)
-     *
-     *  -> reevaluate lid state
-     */
-    if (msg & kIOPMEnableClamshell) 
-    {
-        // Re-evaluate the lid state
-        // System should sleep on external display disappearance
-        // in lid closed operation.
-        if( clamshellIsClosed && (true == ignoringClamshell) )        
-        {
-            eval_clamshell = true;
-        }
-
-        ignoringClamshell = false;
-
-        sendClientClamshellNotification();
-    }
-    
-    /*
-     * Disable Clamshell (external display appeared)
-     * We don't bother re-evaluating clamshell state. If the system is awake,
-     * the lid is probably open. 
-     */
-    if (msg & kIOPMDisableClamshell) 
-    {
-        ignoringClamshell = true;
-
-        sendClientClamshellNotification();
-    }
-
-    /*
-     * Evaluate clamshell and SLEEP if appropiate
-     */
-    if ( eval_clamshell && shouldSleepOnClamshellClosed() ) 
-    {
-
-
-        // SLEEP!
-        sleepSystem();
-    }
-
-    /*
-     * Power Button
-     */
     if (msg & kIOPMPowerButton) 
     {				
         // toggle state of sleep/wake
@@ -1465,29 +938,23 @@ IOReturn IOPMrootDomain::receivePowerNotification (UInt32 msg)
             reportUserInput();					
         }
         else {
-            OSString *pbs = OSString::withCString("DisablePowerButtonSleep");
             // Check that power button sleep is enabled
-            if( pbs ) {
-                if( kOSBooleanTrue != getProperty(pbs))
+            if(kOSBooleanTrue != getProperty(OSString::withCString("DisablePowerButtonSleep")))
                 sleepSystem();
-            }
         }
     }
 
-    /*
-     * Allow Sleep
-     *
-     */
+    // if the case has been closed, we allow
+    // the machine to be put to sleep or to idle sleep
+
     if ( (msg & kIOPMAllowSleep) && !allowSleep ) 
     {
         allowSleep = true;
         adjustPowerState();
     }
 
-    /*
-     * Prevent Sleep
-     *
-     */
+    // if the case has been opened, we disallow sleep/doze
+
     if (msg & kIOPMPreventSleep) {
         allowSleep = false;
 	    // are we dozing?
@@ -1519,11 +986,8 @@ void IOPMrootDomain::setSleepSupported( IOOptionBits flags )
     {
         canSleep = false;
     } else {
-        canSleep = true;
         platformSleepSupport = flags;
     }
-
-    setProperty(kIOSleepSupportedKey, canSleep);
 
 }
 
@@ -1622,23 +1086,10 @@ bool IOPMrootDomain::tellChangeDown ( unsigned long stateNum )
     switch ( stateNum ) {
         case DOZE_STATE:
         case SLEEP_STATE:
-	
-            // Direct callout into OSMetaClass so it can disable kmod unloads
-            // during sleep/wake to prevent deadlocks.
-            OSMetaClassSystemSleepOrWake( kIOMessageSystemWillSleep );
-
             return super::tellClientsWithResponse(kIOMessageSystemWillSleep);
         case RESTART_STATE:
-            // Unsupported shutdown ordering hack on RESTART only
-            // For Bluetooth and USB (4368327)
-            super::tellClients(iokit_common_msg(0x759));
-
             return super::tellClientsWithResponse(kIOMessageSystemWillRestart);
         case OFF_STATE:
-            // Unsupported shutdown ordering hack on SHUTDOWN only
-            // For Bluetooth and USB (4554440)
-            super::tellClients(iokit_common_msg(0x749));
-
             return super::tellClientsWithResponse(kIOMessageSystemWillPowerOff);
     }
     // this shouldn't execute
@@ -1692,10 +1143,6 @@ void IOPMrootDomain::tellChangeUp ( unsigned long stateNum)
 {
     if ( stateNum == ON_STATE ) 
     {
-        // Direct callout into OSMetaClass so it can disable kmod unloads
-        // during sleep/wake to prevent deadlocks.
-        OSMetaClassSystemSleepOrWake( kIOMessageSystemHasPoweredOn );
-
 	IOHibernateSystemPostWake();
         return tellClients(kIOMessageSystemHasPoweredOn);
     }
@@ -1757,21 +1204,6 @@ IOReturn IOPMrootDomain::changePowerStateTo ( unsigned long ordinal )
 
 IOReturn IOPMrootDomain::changePowerStateToPriv ( unsigned long ordinal )
 {
-    IOReturn    ret;
-
-    if( SLEEP_STATE == ordinal && sleepSupportedPEFunction )
-    {
-
-        // Determine if the machine supports sleep, or must doze.
-        ret = getPlatform()->callPlatformFunction(
-                            sleepSupportedPEFunction, false,
-                            NULL, NULL, NULL, NULL);
-    
-        // If the machine only supports doze, the callPlatformFunction call
-        // boils down toIOPMrootDomain::setSleepSupported(kPCICantSleep), 
-        // otherwise nothing.
-    }
-
     return super::changePowerStateToPriv(ordinal);
 }
 
@@ -1931,13 +1363,10 @@ IOReturn IOPMrootDomain::displayWranglerNotification( void * target, void * refC
 //
 //*********************************************************************************
 
-bool IOPMrootDomain::displayWranglerPublished( 
-    void * target, 
-    void * refCon,
-    IOService * newService)
+bool IOPMrootDomain::displayWranglerPublished( void * target, void * refCon,
+                                    IOService * newService)
 {
-    IOPMrootDomain *rootDomain = 
-            OSDynamicCast(IOPMrootDomain, (IOService *)target);
+    IOPMrootDomain *                rootDomain = OSDynamicCast(IOPMrootDomain, (IOService *)target);
 
     if(!rootDomain)
         return false;
@@ -1945,35 +1374,40 @@ bool IOPMrootDomain::displayWranglerPublished(
     rootDomain->wrangler = newService;
     
     // we found the display wrangler, now install a handler
-    if( !rootDomain->wrangler->registerInterest( gIOGeneralInterest, 
-                            &displayWranglerNotification, target, 0) ) 
-    {
+    if( !rootDomain->wrangler->registerInterest( gIOGeneralInterest, &displayWranglerNotification, target, 0) ) {
+        IOLog("IOPMrootDomain::displayWranglerPublished registerInterest failed\n");
         return false;
     }
     
     return true;
 }
 
-
 //*********************************************************************************
-// batteryPublished
+// batteryLocationPublished
 //
-// Notification on battery class IOPowerSource appearance
+// Notification on AppleSMU publishing location of battery data
 //
-//******************************************************************************
+//*********************************************************************************
 
-bool IOPMrootDomain::batteryPublished( 
-    void * target, 
-    void * root_domain,
-    IOService * resourceService )
-{    
-    // rdar://2936060&4435589    
+bool IOPMrootDomain::batteryLocationPublished( void * target, void * root_domain,
+        IOService * resourceService )
+{
+    IORegistryEntry                     *battery_location;
+
+    battery_location = (IORegistryEntry *) resourceService->getProperty("battery");
+    if (!battery_location || !OSDynamicCast(IORegistryEntry, battery_location))
+        return (true);
+        
+    ((IOPMrootDomain *)root_domain)->setProperty("BatteryEntry", battery_location);
+    
+    // rdar://2936060
     // All laptops have dimmable LCD displays
     // All laptops have batteries
     // So if this machine has a battery, publish the fact that the backlight
     // supports dimming.
     ((IOPMrootDomain *)root_domain)->publishFeature("DisplayDims");
-
+    
+    ((IOPMrootDomain *)root_domain)->announcePowerSourceChange();
     return (true);
 }
 
@@ -2020,117 +1454,6 @@ void IOPMrootDomain::adjustPowerState( void )
         }
     }
 }
-
-/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
-
-
-
-#undef super
-#define super OSObject
-OSDefineMetaClassAndStructors(PMSettingObject, OSObject)
-
-void PMSettingObject::setPMSetting(const OSSymbol *type, OSObject *obj)
-{
-        (*func)(target, type, obj, refcon);
-}
-
-/* 
- * Static constructor/initializer for PMSettingObject
- */
-PMSettingObject *PMSettingObject::pmSettingObject(
-    IOPMrootDomain                      *parent_arg,
-    IOPMSettingControllerCallback       handler_arg,
-    OSObject                            *target_arg,
-    uintptr_t                           refcon_arg,
-    uint32_t                            supportedPowerSources,
-    const OSSymbol *                    settings[])
-{
-    uint32_t                            objCount = 0;
-    PMSettingObject                     *pmso;
-
-    if( !parent_arg || !handler_arg || !settings ) return NULL;
-
-     // count OSSymbol entries in NULL terminated settings array
-    while( settings[objCount] ) {
-        objCount++;
-    }
-    if(0 == objCount) return NULL;
-
-    pmso = new PMSettingObject;
-    if(!pmso || !pmso->init()) return NULL;
-
-    pmso->parent = parent_arg;
-    pmso->func = handler_arg;
-    pmso->target = target_arg;
-    pmso->refcon = refcon_arg;
-    pmso->releaseAtCount = objCount + 1; // release when it has count+1 retains
- 
-    pmso->publishedFeatureID = (uint32_t *)IOMalloc(sizeof(uint32_t)*objCount);
-    if(pmso->publishedFeatureID) {
-        for(unsigned int i=0; i<objCount; i++) {
-            // Since there is now at least one listener to this setting, publish
-            // PM root domain support for it.
-            parent_arg->publishFeature( settings[i]->getCStringNoCopy(), 
-                    supportedPowerSources, &pmso->publishedFeatureID[i] );
-        }
-    }
-    
-    return pmso;
-}
-
-void PMSettingObject::free(void)
-{
-    OSCollectionIterator    *settings_iter;
-    OSSymbol                *sym;
-    OSArray                 *arr;
-    int                     arr_idx;
-    int                     i;
-    int                     objCount = releaseAtCount - 1;
-    
-    if(publishedFeatureID) {
-        for(i=0; i<objCount; i++) {
-            if(0 != publishedFeatureID[i]) {
-                parent->removePublishedFeature( publishedFeatureID[i] );
-            }
-        }
-    
-        IOFree(publishedFeatureID, sizeof(uint32_t) * objCount);
-    }
-            
-    IORecursiveLockLock(parent->settingsCtrlLock);        
-    
-    // Search each PM settings array in the kernel.
-    settings_iter = OSCollectionIterator::withCollection(parent->settingsCallbacks);
-    if(settings_iter) 
-    {
-        while(( sym = OSDynamicCast(OSSymbol, settings_iter->getNextObject()) ))
-        {
-            arr = (OSArray *)parent->settingsCallbacks->getObject(sym);
-            arr_idx = arr->getNextIndexOfObject(this, 0);
-            if(-1 != arr_idx) {
-                // 'this' was found in the array; remove it                
-                arr->removeObject(arr_idx);
-            }
-        }
-    
-        settings_iter->release();
-    }
-    
-    IORecursiveLockUnlock(parent->settingsCtrlLock);
-    
-    super::free();
-}
-
-void PMSettingObject::taggedRelease(const void *tag, const int when) const
-{     
-    // We have n+1 retains - 1 per array that this PMSettingObject is a member
-    // of, and 1 retain to ourself. When we get a release with n+1 retains
-    // remaining, we go ahead and free ourselves, cleaning up array pointers
-    // in free();
-
-    super::taggedRelease(tag, releaseAtCount);    
-}
-
 
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -2209,25 +1532,5 @@ void IORootParent::wakeSystem ( void )
 {
     mostRecentChange = ON_STATE;
     changePowerStateToPriv(ON_STATE);
-}
-
-IOReturn IORootParent::changePowerStateToPriv ( unsigned long ordinal )
-{
-    IOReturn        ret;
-
-    if( SLEEP_STATE == ordinal && sleepSupportedPEFunction )
-    {
-
-        // Determine if the machine supports sleep, or must doze.
-        ret = getPlatform()->callPlatformFunction(
-                            sleepSupportedPEFunction, false,
-                            NULL, NULL, NULL, NULL);
-    
-        // If the machine only supports doze, the callPlatformFunction call
-        // boils down toIOPMrootDomain::setSleepSupported(kPCICantSleep), 
-        // otherwise nothing.
-    }
-
-    return super::changePowerStateToPriv(ordinal);
 }
 

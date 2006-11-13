@@ -2,25 +2,33 @@
 #	@(#)makesyscalls.sh	8.1 (Berkeley) 6/10/93
 # $FreeBSD: src/sys/kern/makesyscalls.sh,v 1.60 2003/04/01 01:12:24 jeff Exp $
 #
-# Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
+# Copyright (c) 2006 Apple Computer, Inc. All rights reserved.
 #
-# @APPLE_LICENSE_HEADER_START@
+# @APPLE_LICENSE_OSREFERENCE_HEADER_START@
 # 
-# The contents of this file constitute Original Code as defined in and
-# are subject to the Apple Public Source License Version 1.1 (the
-# "License").  You may not use this file except in compliance with the
-# License.  Please obtain a copy of the License at
-# http://www.apple.com/publicsource and read it before using this file.
-# 
-# This Original Code and all software distributed under the License are
-# distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
-# EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
-# INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
-# License for the specific language governing rights and limitations
-# under the License.
-# 
-# @APPLE_LICENSE_HEADER_END@
+# This file contains Original Code and/or Modifications of Original Code 
+# as defined in and that are subject to the Apple Public Source License 
+# Version 2.0 (the 'License'). You may not use this file except in 
+# compliance with the License.  The rights granted to you under the 
+# License may not be used to create, or enable the creation or 
+# redistribution of, unlawful or unlicensed copies of an Apple operating 
+# system, or to circumvent, violate, or enable the circumvention or 
+# violation of, any terms of an Apple operating system software license 
+# agreement.
+#
+# Please obtain a copy of the License at 
+# http://www.opensource.apple.com/apsl/ and read it before using this 
+# file.
+#
+# The Original Code and all software distributed under the License are 
+# distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+# EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+# INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+# FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
+# Please see the License for the specific language governing rights and 
+# limitations under the License.
+#
+# @APPLE_LICENSE_OSREFERENCE_HEADER_END@
 #
 
 set -e
@@ -93,25 +101,33 @@ s/\$//g
 		"'
 
 		printf "/*\n" > syslegal
-		printf " * Copyright (c) 2004 Apple Computer, Inc. All rights reserved.\n" > syslegal
+		printf " * Copyright (c) 2006 Apple Computer, Inc. All rights reserved.\n" > syslegal
 		printf " * \n" > syslegal
-		printf " * @APPLE_LICENSE_HEADER_START@ \n" > syslegal
+		printf " * @APPLE_LICENSE_OSREFERENCE_HEADER_START@ \n" > syslegal
 		printf " * \n" > syslegal
-		printf " * The contents of this file constitute Original Code as defined in and \n" > syslegal
-		printf " * are subject to the Apple Public Source License Version 1.1 (the \n" > syslegal
-		printf " * \"License\").  You may not use this file except in compliance with the \n" > syslegal
-		printf " * License.  Please obtain a copy of the License at \n" > syslegal
-		printf " * http://www.apple.com/publicsource and read it before using this file. \n" > syslegal
+		printf " * This file contains Original Code and/or Modifications of Original Code \n" > syslegal
+		printf " * as defined in and that are subject to the Apple Public Source License \n" > syslegal
+		printf " * Version 2.0 (the \"License\"). You may not use this file except in \n" > syslegal
+		printf " * compliance with the License.  The rights granted to you under the \n" > syslegal
+		printf " * License may not be used to create, or enable the creation or \n" > syslegal
+		printf " * redistribution of, unlawful or unlicensed copies of an Apple operating \n" > syslegal
+		printf " * system, or to circumvent, violate, or enable the circumvention or \n" > syslegal
+		printf " * violation of, any terms of an Apple operating system software license \n" > syslegal
+		printf " * agreement. \n" > syslegal
 		printf " * \n" > syslegal
-		printf " * This Original Code and all software distributed under the License are \n" > syslegal
+		printf " * Please obtain a copy of the License at \n" > syslegal
+		printf " * http://www.opensource.apple.com/apsl/ and read it before using this \n" > syslegal
+		printf " * file. \n" > syslegal
+		printf " * \n" > syslegal
+		printf " * The Original Code and all software distributed under the License are \n" > syslegal
 		printf " * distributed on an \"AS IS\" basis, WITHOUT WARRANTY OF ANY KIND, EITHER \n" > syslegal
 		printf " * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, \n" > syslegal
 		printf " * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, \n" > syslegal
-		printf " * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the \n" > syslegal
-		printf " * License for the specific language governing rights and limitations \n" > syslegal
-		printf " * under the License. \n" > syslegal
+		printf " * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. \n" > syslegal
+		printf " * Please see the License for the specific language governing rights and \n" > syslegal
+		printf " * limitations under the License. \n" > syslegal
 		printf " * \n" > syslegal
-		printf " * @APPLE_LICENSE_HEADER_END@ \n" > syslegal
+		printf " * @APPLE_LICENSE_OSREFERENCE_HEADER_END@ \n" > syslegal
 		printf " * \n" > syslegal
 		printf " * \n" > syslegal
 		printf " * System call switch table.\n *\n" > syslegal
@@ -138,8 +154,13 @@ s/\$//g
 		printf "#include <mach/shared_memory_server.h>\n" > sysarg
 		printf "\n#ifdef KERNEL\n" > sysarg
 		printf "#ifdef __APPLE_API_PRIVATE\n" > sysarg
+		printf "#ifdef __ppc__\n" > sysarg
 		printf "#define\tPAD_(t)\t(sizeof(uint64_t) <= sizeof(t) \\\n " > sysarg
 		printf "\t\t? 0 : sizeof(uint64_t) - sizeof(t))\n" > sysarg
+		printf "#else\n" > sysarg
+		printf "#define\tPAD_(t)\t(sizeof(register_t) <= sizeof(t) \\\n " > sysarg
+		printf "\t\t? 0 : sizeof(register_t) - sizeof(t))\n" > sysarg
+		printf "#endif\n" > sysarg
 		printf "#if BYTE_ORDER == LITTLE_ENDIAN\n"> sysarg
 		printf "#define\tPADL_(t)\t0\n" > sysarg
 		printf "#define\tPADR_(t)\tPAD_(t)\n" > sysarg
@@ -150,6 +171,7 @@ s/\$//g
 		printf "\n__BEGIN_DECLS\n" > sysarg
 		printf "#ifndef __MUNGE_ONCE\n" > sysarg
 		printf "#define __MUNGE_ONCE\n" > sysarg
+		printf "#ifdef __ppc__\n" > sysarg
 		printf "void munge_w(const void *, void *);  \n" > sysarg
 		printf "void munge_ww(const void *, void *);  \n" > sysarg
 		printf "void munge_www(const void *, void *);  \n" > sysarg
@@ -158,16 +180,6 @@ s/\$//g
 		printf "void munge_wwwwww(const void *, void *);  \n" > sysarg
 		printf "void munge_wwwwwww(const void *, void *);  \n" > sysarg
 		printf "void munge_wwwwwwww(const void *, void *);  \n" > sysarg
-		printf "void munge_wl(const void *, void *);  \n" > sysarg
-		printf "void munge_wlw(const void *, void *);  \n" > sysarg
-		printf "void munge_wwwl(const void *, void *);  \n" > sysarg
-		printf "void munge_wwwlww(const void *, void *); \n" > sysarg
-		printf "void munge_wwwwl(const void *, void *);  \n" > sysarg
-		printf "void munge_wwwwwl(const void *, void *);  \n" > sysarg
-		printf "void munge_wsw(const void *, void *);  \n" > sysarg
-		printf "void munge_wws(const void *, void *);  \n" > sysarg
-		printf "void munge_wwwsw(const void *, void *);  \n" > sysarg
-		printf "#ifdef __ppc__\n" > sysarg
 		printf "void munge_d(const void *, void *);  \n" > sysarg
 		printf "void munge_dd(const void *, void *);  \n" > sysarg
 		printf "void munge_ddd(const void *, void *);  \n" > sysarg
@@ -176,7 +188,23 @@ s/\$//g
 		printf "void munge_dddddd(const void *, void *);  \n" > sysarg
 		printf "void munge_ddddddd(const void *, void *);  \n" > sysarg
 		printf "void munge_dddddddd(const void *, void *);  \n" > sysarg
+		printf "void munge_wl(const void *, void *);  \n" > sysarg
+		printf "void munge_wlw(const void *, void *);  \n" > sysarg
+		printf "void munge_wwwl(const void *, void *);  \n" > sysarg
+		printf "void munge_wwwwl(const void *, void *);  \n" > sysarg
+		printf "void munge_wwwwwl(const void *, void *);  \n" > sysarg
+		printf "void munge_wsw(const void *, void *);  \n" > sysarg
+		printf "void munge_wws(const void *, void *);  \n" > sysarg
+		printf "void munge_wwwsw(const void *, void *);  \n" > sysarg
 		printf "#else \n" > sysarg
+		printf "#define munge_w  NULL \n" > sysarg
+		printf "#define munge_ww  NULL \n" > sysarg
+		printf "#define munge_www  NULL \n" > sysarg
+		printf "#define munge_wwww  NULL \n" > sysarg
+		printf "#define munge_wwwww  NULL \n" > sysarg
+		printf "#define munge_wwwwww  NULL \n" > sysarg
+		printf "#define munge_wwwwwww  NULL \n" > sysarg
+		printf "#define munge_wwwwwwww  NULL \n" > sysarg
 		printf "#define munge_d  NULL \n" > sysarg
 		printf "#define munge_dd  NULL \n" > sysarg
 		printf "#define munge_ddd  NULL \n" > sysarg
@@ -185,6 +213,14 @@ s/\$//g
 		printf "#define munge_dddddd  NULL \n" > sysarg
 		printf "#define munge_ddddddd  NULL \n" > sysarg
 		printf "#define munge_dddddddd  NULL \n" > sysarg
+		printf "#define munge_wl  NULL \n" > sysarg
+		printf "#define munge_wlw  NULL \n" > sysarg
+		printf "#define munge_wwwl  NULL \n" > sysarg
+		printf "#define munge_wwwwl  NULL \n" > sysarg
+		printf "#define munge_wwwwwl  NULL \n" > sysarg
+		printf "#define munge_wsw  NULL \n" > sysarg
+		printf "#define munge_wws  NULL \n" > sysarg
+		printf "#define munge_wwwsw  NULL \n" > sysarg
 		printf "#endif // __ppc__\n" > sysarg
 		printf "#endif /* !__MUNGE_ONCE */\n" > sysarg
 		
@@ -643,7 +679,11 @@ s/\$//g
 	}
 
 	END {
+		printf "#ifdef __ppc__\n" > sysinc
 		printf "#define AC(name) (sizeof(struct name) / sizeof(uint64_t))\n" > sysinc
+		printf "#else\n" > sysinc
+		printf "#define AC(name) (sizeof(struct name) / sizeof(register_t))\n" > sysinc
+		printf "#endif\n" > sysinc
 		printf "\n" > sysinc
 
 		printf("\n__END_DECLS\n") > sysprotoend

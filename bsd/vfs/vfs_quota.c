@@ -1,23 +1,31 @@
 /*
- * Copyright (c) 2002-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2002-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
+ * This file contains Original Code and/or Modifications of Original Code 
+ * as defined in and that are subject to the Apple Public Source License 
+ * Version 2.0 (the 'License'). You may not use this file except in 
+ * compliance with the License.  The rights granted to you under the 
+ * License may not be used to create, or enable the creation or 
+ * redistribution of, unlawful or unlicensed copies of an Apple operating 
+ * system, or to circumvent, violate, or enable the circumvention or 
+ * violation of, any terms of an Apple operating system software license 
+ * agreement.
+ *
+ * Please obtain a copy of the License at 
+ * http://www.opensource.apple.com/apsl/ and read it before using this 
+ * file.
+ *
+ * The Original Code and all software distributed under the License are 
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
+ * Please see the License for the specific language governing rights and 
+ * limitations under the License.
+ *
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
  */
 /*
  * Copyright (c) 1982, 1986, 1990, 1993, 1995
@@ -69,8 +77,6 @@
 #include <sys/quota.h>
 #include <sys/uio_internal.h>
 
-#include <libkern/OSByteOrder.h>
-
 
 /* vars for quota file lock */
 lck_grp_t	* qf_lck_grp;
@@ -84,7 +90,7 @@ lck_attr_t	* quota_list_lck_attr;
 lck_mtx_t	* quota_list_mtx_lock;
 
 /* Routines to lock and unlock the quota global data */
-static int dq_list_lock(void);
+static void dq_list_lock(void);
 static void dq_list_unlock(void);
 
 static void dq_lock_internal(struct dquot *dq);
@@ -138,12 +144,14 @@ dqinit()
 	 * Allocate quota list lock group attribute and group
 	 */
 	quota_list_lck_grp_attr= lck_grp_attr_alloc_init();
+	lck_grp_attr_setstat(quota_list_lck_grp_attr);
 	quota_list_lck_grp = lck_grp_alloc_init("quota list",  quota_list_lck_grp_attr);
 	
 	/*
 	 * Allocate qouta list lock attribute
 	 */
 	quota_list_lck_attr = lck_attr_alloc_init();
+	//lck_attr_setdebug(quota_list_lck_attr);
 
 	/*
 	 * Allocate quota list lock
@@ -155,32 +163,22 @@ dqinit()
 	 * allocate quota file lock group attribute and group
 	 */
 	qf_lck_grp_attr= lck_grp_attr_alloc_init();
+	lck_grp_attr_setstat(qf_lck_grp_attr);
 	qf_lck_grp = lck_grp_alloc_init("quota file", qf_lck_grp_attr);
 
 	/*
 	 * Allocate quota file lock attribute
 	 */
 	qf_lck_attr = lck_attr_alloc_init();
+	//lck_attr_setdebug(qf_lck_attr);
 }
 
 
-static volatile int dq_list_lock_cnt = 0;
 
-static int
+void
 dq_list_lock(void)
 {
 	lck_mtx_lock(quota_list_mtx_lock);
-	return ++dq_list_lock_cnt;
-}
-
-static int
-dq_list_lock_changed(int oldval) {
-	return (dq_list_lock_cnt != oldval);
-}
-
-static int
-dq_list_lock_val(void) {
-	return dq_list_lock_cnt;
 }
 
 void
@@ -412,27 +410,27 @@ dqfileopen(qfp, type)
 		goto out;
 	}
 	/* Sanity check the quota file header. */
-	if ((OSSwapBigToHostInt32(header.dqh_magic) != quotamagic[type]) ||
-	    (OSSwapBigToHostInt32(header.dqh_version) > QF_VERSION) ||
-	    (!powerof2(OSSwapBigToHostInt32(header.dqh_maxentries))) ||
-	    (OSSwapBigToHostInt32(header.dqh_maxentries) > (file_size / sizeof(struct dqblk)))) {
+	if ((header.dqh_magic != quotamagic[type]) ||
+	    (header.dqh_version > QF_VERSION) ||
+	    (!powerof2(header.dqh_maxentries)) ||
+	    (header.dqh_maxentries > (file_size / sizeof(struct dqblk)))) {
 		error = EINVAL;
 		goto out;
 	}
 	/* Set up the time limits for this quota. */
-	if (header.dqh_btime != 0)
-		qfp->qf_btime = OSSwapBigToHostInt32(header.dqh_btime);
+	if (header.dqh_btime > 0)
+		qfp->qf_btime = header.dqh_btime;
 	else
 		qfp->qf_btime = MAX_DQ_TIME;
-	if (header.dqh_itime != 0)
-		qfp->qf_itime = OSSwapBigToHostInt32(header.dqh_itime);
+	if (header.dqh_itime > 0)
+		qfp->qf_itime = header.dqh_itime;
 	else
 		qfp->qf_itime = MAX_IQ_TIME;
 
 	/* Calculate the hash table constants. */
-	qfp->qf_maxentries = OSSwapBigToHostInt32(header.dqh_maxentries);
-	qfp->qf_entrycnt = OSSwapBigToHostInt32(header.dqh_entrycnt);
-	qfp->qf_shift = dqhashshift(qfp->qf_maxentries);
+	qfp->qf_maxentries = header.dqh_maxentries;
+	qfp->qf_entrycnt = header.dqh_entrycnt;
+	qfp->qf_shift = dqhashshift(header.dqh_maxentries);
 out:
 	return (error);
 }
@@ -456,7 +454,7 @@ dqfileclose(struct quotafile *qfp, __unused int type)
 	context.vc_ucred = qfp->qf_cred;
 	
 	if (VNOP_READ(qfp->qf_vp, auio, 0, &context) == 0) {
-		header.dqh_entrycnt = OSSwapHostToBigInt32(qfp->qf_entrycnt);
+		header.dqh_entrycnt = qfp->qf_entrycnt;
 		uio_reset(auio, 0, UIO_SYSSPACE, UIO_WRITE);
 		uio_addiov(auio, CAST_USER_ADDR_T(&header), sizeof (header));
 		(void) VNOP_WRITE(qfp->qf_vp, auio, 0, &context);
@@ -481,7 +479,6 @@ dqget(id, qfp, type, dqp)
 	struct dqhash *dqh;
 	struct vnode *dqvp;
 	int error = 0;
-	int listlockval = 0;
 
 	if ( id == 0 || qfp->qf_vp == NULLVP ) {
 		*dqp = NODQUOT;
@@ -505,8 +502,6 @@ dqget(id, qfp, type, dqp)
 	dqh = DQHASH(dqvp, id);
 
 relookup:
-	listlockval = dq_list_lock_val();
-
 	/*
 	 * Check the cache first.
 	 */
@@ -516,11 +511,6 @@ relookup:
 			continue;
 
 		dq_lock_internal(dq);
-		if (dq_list_lock_changed(listlockval)) {
-			dq_unlock_internal(dq);
-			goto relookup;
-		}
-
 		/*
 		 * dq_lock_internal may drop the quota_list_lock to msleep, so
 		 * we need to re-evaluate the identity of this dq
@@ -539,13 +529,6 @@ relookup:
 				TAILQ_REMOVE(&dqdirtylist, dq, dq_freelist);
 			else
 				TAILQ_REMOVE(&dqfreelist, dq, dq_freelist);
-		} else if (dq->dq_cnt == 0) {
-			/* We've overflowed */
-			--dq->dq_cnt;
-			dq_unlock_internal(dq);
-			dq_list_unlock();
-			*dqp = NODQUOT;
-			return (EINVAL);
 		}
 		dq_unlock_internal(dq);
 
@@ -598,7 +581,7 @@ relookup:
 			ndq = (struct dquot *)_MALLOC(sizeof *dq, M_DQUOT, M_WAITOK);
 			bzero((char *)ndq, sizeof *dq);
 
-		        listlockval = dq_list_lock();
+		        dq_list_lock();
 			/*
 			 * need to look for the entry again in the cache
 			 * since we dropped the quota list lock and
@@ -636,7 +619,7 @@ relookup:
 
 		dq_lock_internal(dq);
 
-		if (dq_list_lock_changed(listlockval) || dq->dq_cnt || (dq->dq_flags & DQ_MOD)) {
+		if (dq->dq_cnt || (dq->dq_flags & DQ_MOD)) {
 		        /*
 			 * we lost the race while we weren't holding
 			 * the quota list lock... dq_lock_internal
@@ -679,10 +662,6 @@ relookup:
 	 * one else can be trying to use this dq
 	 */
 	dq_lock_internal(dq);
-	if (dq_list_lock_changed(listlockval)) {
-		dq_unlock_internal(dq);
-		goto relookup;
-	}
 
 	/*
 	 * Initialize the contents of the dquot structure.
@@ -813,7 +792,7 @@ dqlookup(qfp, id, dqb, index)
 		 */
 		if (dqb->dqb_id == 0) {
 			bzero(dqb, sizeof(struct dqblk));
-			dqb->dqb_id = OSSwapHostToBigInt32(id);
+			dqb->dqb_id = id;
 			/*
 			 * Write back to reserve entry for this id
 			 */
@@ -824,22 +803,11 @@ dqlookup(qfp, id, dqb, index)
 				error = EIO;
 			if (error == 0)
 				++qfp->qf_entrycnt;
-			dqb->dqb_id = id;
 			break;
 		}
 		/* An id match means an entry was found. */
-		if (OSSwapBigToHostInt32(dqb->dqb_id) == id) {
-			dqb->dqb_bhardlimit = OSSwapBigToHostInt64(dqb->dqb_bhardlimit);
-			dqb->dqb_bsoftlimit = OSSwapBigToHostInt64(dqb->dqb_bsoftlimit);
-			dqb->dqb_curbytes   = OSSwapBigToHostInt64(dqb->dqb_curbytes);
-			dqb->dqb_ihardlimit = OSSwapBigToHostInt32(dqb->dqb_ihardlimit);
-			dqb->dqb_isoftlimit = OSSwapBigToHostInt32(dqb->dqb_isoftlimit);
-			dqb->dqb_curinodes  = OSSwapBigToHostInt32(dqb->dqb_curinodes);
-			dqb->dqb_btime      = OSSwapBigToHostInt32(dqb->dqb_btime);
-			dqb->dqb_itime      = OSSwapBigToHostInt32(dqb->dqb_itime);
-			dqb->dqb_id         = OSSwapBigToHostInt32(dqb->dqb_id);
+		if (dqb->dqb_id == id)
 			break;
-		}
 	}
 	qf_unlock(qfp);
 
@@ -911,21 +879,14 @@ dqsync_orphans(qfp)
 	struct quotafile *qfp;
 {
 	struct dquot *dq;
-	int listlockval = 0;
-
+	
 	dq_list_lock();
   loop:
-	listlockval = dq_list_lock_val();
-
 	TAILQ_FOREACH(dq, &dqdirtylist, dq_freelist) {
 		if (dq->dq_qfile != qfp)
 		        continue;
 
 		dq_lock_internal(dq);
-		if (dq_list_lock_changed(listlockval)) {
-			dq_unlock_internal(dq);
-			goto loop;
-		}
 
 		if (dq->dq_qfile != qfp) {
 		        /*
@@ -995,7 +956,6 @@ dqsync_locked(struct dquot *dq)
 	struct proc *p = current_proc();		/* XXX */
 	struct vfs_context context;
 	struct vnode *dqvp;
-	struct dqblk dqb, *dqblkp;
 	uio_t auio;
 	int error;
 	char uio_buf[ UIO_SIZEOF(1) ];
@@ -1011,25 +971,10 @@ dqsync_locked(struct dquot *dq)
 
 	auio = uio_createwithbuffer(1, dqoffset(dq->dq_index), UIO_SYSSPACE, 
 								  UIO_WRITE, &uio_buf[0], sizeof(uio_buf));
-	uio_addiov(auio, CAST_USER_ADDR_T(&dqb), sizeof (struct dqblk));
+	uio_addiov(auio, CAST_USER_ADDR_T(&dq->dq_dqb), sizeof (struct dqblk));
 
 	context.vc_proc = p;
 	context.vc_ucred = dq->dq_qfile->qf_cred;
-
-	dqblkp = &dq->dq_dqb;
-	dqb.dqb_bhardlimit = OSSwapHostToBigInt64(dqblkp->dqb_bhardlimit);
-	dqb.dqb_bsoftlimit = OSSwapHostToBigInt64(dqblkp->dqb_bsoftlimit);
-	dqb.dqb_curbytes   = OSSwapHostToBigInt64(dqblkp->dqb_curbytes);
-	dqb.dqb_ihardlimit = OSSwapHostToBigInt32(dqblkp->dqb_ihardlimit);
-	dqb.dqb_isoftlimit = OSSwapHostToBigInt32(dqblkp->dqb_isoftlimit);
-	dqb.dqb_curinodes  = OSSwapHostToBigInt32(dqblkp->dqb_curinodes);
-	dqb.dqb_btime      = OSSwapHostToBigInt32(dqblkp->dqb_btime);
-	dqb.dqb_itime      = OSSwapHostToBigInt32(dqblkp->dqb_itime);
-	dqb.dqb_id         = OSSwapHostToBigInt32(dqblkp->dqb_id);
-	dqb.dqb_spare[0]   = 0;
-	dqb.dqb_spare[1]   = 0;
-	dqb.dqb_spare[2]   = 0;
-	dqb.dqb_spare[3]   = 0;
 
 	error = VNOP_WRITE(dqvp, auio, 0, &context);
 	if (uio_resid(auio) && error == 0)

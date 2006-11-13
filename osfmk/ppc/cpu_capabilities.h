@@ -1,23 +1,31 @@
 /*
- * Copyright (c) 2003-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
+ * This file contains Original Code and/or Modifications of Original Code 
+ * as defined in and that are subject to the Apple Public Source License 
+ * Version 2.0 (the 'License'). You may not use this file except in 
+ * compliance with the License.  The rights granted to you under the 
+ * License may not be used to create, or enable the creation or 
+ * redistribution of, unlawful or unlicensed copies of an Apple operating 
+ * system, or to circumvent, violate, or enable the circumvention or 
+ * violation of, any terms of an Apple operating system software license 
+ * agreement.
+ *
+ * Please obtain a copy of the License at 
+ * http://www.opensource.apple.com/apsl/ and read it before using this 
+ * file.
+ *
+ * The Original Code and all software distributed under the License are 
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
+ * Please see the License for the specific language governing rights and 
+ * limitations under the License.
+ *
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
  */
 #ifdef	PRIVATE
 
@@ -90,17 +98,6 @@ static __inline__ int _NumCPUs( void ) { return (_cpu_capabilities & kNumCPUs) >
 #define _COMM_PAGE_BASE_ADDRESS			(-8*4096)						// start at page -8, ie 0xFFFF8000
 #define	_COMM_PAGE_AREA_LENGTH			( 7*4096)						// reserved length of entire comm area
 #define	_COMM_PAGE_AREA_USED			( 2*4096)						// we use two pages so far
-
-/* The following set of definitions are used in the kernel, which needs to distinguish between
- * the 32 and 64-bit commpage addresses and lengths.  On PPC they are the same, but on Imtel
- * they are not.
- */
-#define _COMM_PAGE32_BASE_ADDRESS		( _COMM_PAGE_BASE_ADDRESS )
-#define _COMM_PAGE64_BASE_ADDRESS		( _COMM_PAGE_BASE_ADDRESS )
-#define	_COMM_PAGE32_AREA_LENGTH		( _COMM_PAGE_AREA_LENGTH )
-#define	_COMM_PAGE64_AREA_LENGTH		( _COMM_PAGE_AREA_LENGTH )
-#define	_COMM_PAGE32_AREA_USED			( _COMM_PAGE_AREA_USED )
-#define	_COMM_PAGE64_AREA_USED			( _COMM_PAGE_AREA_USED )
 
 /* The Objective-C runtime fixed address page to optimize message dispatch */
 #define _OBJC_PAGE_BASE_ADDRESS			(-20*4096)						// start at page -20, ie 0xFFFEC000

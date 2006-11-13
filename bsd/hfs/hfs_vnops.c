@@ -1,23 +1,31 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
+ * 
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code 
+ * as defined in and that are subject to the Apple Public Source License 
+ * Version 2.0 (the 'License'). You may not use this file except in 
+ * compliance with the License.  The rights granted to you under the 
+ * License may not be used to create, or enable the creation or 
+ * redistribution of, unlawful or unlicensed copies of an Apple operating 
+ * system, or to circumvent, violate, or enable the circumvention or 
+ * violation of, any terms of an Apple operating system software license 
+ * agreement.
  *
- * @APPLE_LICENSE_HEADER_START@
- * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
+ * Please obtain a copy of the License at 
+ * http://www.opensource.apple.com/apsl/ and read it before using this 
+ * file.
+ *
+ * The Original Code and all software distributed under the License are 
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
+ * Please see the License for the specific language governing rights and 
+ * limitations under the License.
+ *
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
  */
 
 #include <sys/systm.h>
@@ -1565,17 +1573,18 @@ hfs_removefile(struct vnode *dvp, struct vnode *vp, struct componentname *cnp,
 	if ((cp->c_flag & C_HARDLINK) == 0 &&
 	    (!dataforkbusy || !rsrcforkbusy)) {
 		/*
-		 * A ubc_setsize can cause a pagein so defer it
-		 * until after the cnode lock is dropped.  The
-		 * cnode lock cannot be dropped/reacquired here
-		 * since we might already hold the journal lock.
+		 * A ubc_setsize can cause a pagein here 
+		 * so we need to the drop cnode lock. Note
+		 * that we still hold the truncate lock.
 		 */
+		hfs_unlock(cp);
 		if (!dataforkbusy && cp->c_datafork->ff_blocks && !isbigfile) {
-			cp->c_flag |= C_NEED_DATA_SETSIZE;
+			ubc_setsize(vp, 0);
 		}
 		if (!rsrcforkbusy && rvp) {
-			cp->c_flag |= C_NEED_RSRC_SETSIZE;
+			ubc_setsize(rvp, 0);
 		}
+		hfs_lock(cp, HFS_FORCE_LOCK);
 	} else {
 	    struct cat_desc cndesc;
 
@@ -1889,10 +1898,10 @@ out:
 __private_extern__ void
 replace_desc(struct cnode *cp, struct cat_desc *cdp)
 {
-	if (&cp->c_desc == cdp) {
-		return;
-	}
-
+    if (&cp->c_desc == cdp) {
+        return;
+    }
+         
 	/* First release allocated name buffer */
 	if (cp->c_desc.cd_flags & CD_HASBUF && cp->c_desc.cd_nameptr != 0) {
 		char *name = cp->c_desc.cd_nameptr;
@@ -2828,7 +2837,7 @@ hfs_update(struct vnode *vp, __unused int waitfor)
 	 * we have to do the update.
 	 */
 	if (ISSET(cp->c_flag, C_FORCEUPDATE) == 0 &&
-	    (ISSET(cp->c_flag, C_DELETED) ||
+	    (ISSET(cp->c_flag, C_DELETED) || 
 	    (dataforkp && cp->c_datafork->ff_unallocblocks) ||
 	    (rsrcforkp && cp->c_rsrcfork->ff_unallocblocks))) {
 	//	cp->c_flag &= ~(C_ACCESS | C_CHANGE | C_UPDATE);
@@ -3712,6 +3721,7 @@ struct vnodeopv_entry_desc hfs_specop_entries[] = {
 	{ &vnop_pathconf_desc, (VOPFUNC)spec_pathconf },		/* pathconf */
 	{ &vnop_advlock_desc, (VOPFUNC)err_advlock },		/* advlock */
 	{ &vnop_bwrite_desc, (VOPFUNC)hfs_vnop_bwrite },
+	{ &vnop_devblocksize_desc, (VOPFUNC)spec_devblocksize }, /* devblocksize */
 	{ &vnop_pagein_desc, (VOPFUNC)hfs_vnop_pagein },		/* Pagein */
 	{ &vnop_pageout_desc, (VOPFUNC)hfs_vnop_pageout },	/* Pageout */
         { &vnop_copyfile_desc, (VOPFUNC)err_copyfile },		/* copyfile */

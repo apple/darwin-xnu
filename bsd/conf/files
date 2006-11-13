@@ -258,6 +258,7 @@ bsd/netinet/raw_ip.c			standard
 bsd/netinet/tcp_debug.c			optional tcpdebug
 bsd/netinet/tcp_input.c			standard
 bsd/netinet/tcp_output.c		standard
+bsd/netinet/tcp_sack.c			standard
 bsd/netinet/tcp_subr.c			standard
 bsd/netinet/tcp_timer.c			standard
 bsd/netinet/tcp_usrreq.c		standard
@@ -547,8 +548,6 @@ bsd/kern/posix_shm.c			standard
 bsd/kern/qsort.c			standard
 bsd/kern/kpi_socket.c		standard
 bsd/kern/kpi_socketfilter.c	standard
-bsd/kern/proc_info.c			standard
-bsd/kern/socket_info.c			standard
 
 bsd/vm/vnode_pager.c			standard
 bsd/vm/vm_unix.c			standard
@@ -558,6 +557,3 @@ bsd/uxkern/ux_exception.c		standard
 
 bsd/conf/param.c			standard
 ./ioconf.c				standard
-
-bsd/dev/chud/chud_bsd_callback.c	standard
-bsd/dev/chud/chud_process.c		standard

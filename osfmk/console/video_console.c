@@ -1,23 +1,31 @@
 /*
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
+ * This file contains Original Code and/or Modifications of Original Code 
+ * as defined in and that are subject to the Apple Public Source License 
+ * Version 2.0 (the 'License'). You may not use this file except in 
+ * compliance with the License.  The rights granted to you under the 
+ * License may not be used to create, or enable the creation or 
+ * redistribution of, unlawful or unlicensed copies of an Apple operating 
+ * system, or to circumvent, violate, or enable the circumvention or 
+ * violation of, any terms of an Apple operating system software license 
+ * agreement.
+ *
+ * Please obtain a copy of the License at 
+ * http://www.opensource.apple.com/apsl/ and read it before using this 
+ * file.
+ *
+ * The Original Code and all software distributed under the License are 
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
+ * Please see the License for the specific language governing rights and 
+ * limitations under the License.
+ *
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
  */
 /*
  * @OSF_FREE_COPYRIGHT@
@@ -95,7 +103,6 @@
 
 #include <vm/pmap.h>
 #include <vm/vm_kern.h>
-#include <machine/io_map_entries.h>
 
 #include <pexpert/pexpert.h>
 
@@ -252,8 +259,6 @@ static void
 gc_clear_screen(int xx, int yy, int top, int bottom, int which)
 {
 	spl_t    s;
-
-        if (!gc_buffer_size) return;
 
 	s = splhigh();
 	simple_lock(&gc_buffer_lock);
@@ -989,8 +994,6 @@ gc_scroll_down(int num, int top, int bottom)
 {
 	spl_t s;
 
-        if (!gc_buffer_size) return;
-
 	s = splhigh();
 	simple_lock(&gc_buffer_lock);
 
@@ -1070,8 +1073,6 @@ static void
 gc_scroll_up(int num, int top, int bottom)
 {
 	spl_t s;
-
-        if (!gc_buffer_size) return;
 
 	s = splhigh();
 	simple_lock(&gc_buffer_lock);
@@ -2113,16 +2114,14 @@ static void vc_progress_task( void * arg0, void * arg )
 
 #ifdef __i386__
 #include <console/i386/text_console.h>
-#include <pexpert/i386/boot.h>
 #endif /* __i386__ */
 
 static boolean_t gc_acquired      = FALSE;
 static boolean_t gc_graphics_boot = FALSE;
 
-static unsigned int lastVideoPhys   = 0;
-static unsigned int lastVideoVirt   = 0;
-static unsigned int lastVideoSize   = 0;
-static boolean_t    lastVideoMapped = FALSE;
+static unsigned int lastVideoPhys = 0;
+static unsigned int lastVideoVirt = 0;
+static unsigned int lastVideoSize = 0;
 
 void
 initialize_screen(Boot_Video * boot_vinfo, unsigned int op)
@@ -2138,34 +2137,16 @@ initialize_screen(Boot_Video * boot_vinfo, unsigned int op)
 		/* 
 		 *	First, check if we are changing the size and/or location of the framebuffer
 		 */
+
 		vinfo.v_name[0]  = 0;
 		vinfo.v_width    = boot_vinfo->v_width;
 		vinfo.v_height   = boot_vinfo->v_height;
 		vinfo.v_depth    = boot_vinfo->v_depth;
 		vinfo.v_rowbytes = boot_vinfo->v_rowBytes;
 		vinfo.v_physaddr = boot_vinfo->v_baseAddr;		/* Get the physical address */
-#ifdef __i386__
-                vinfo.v_type     = boot_vinfo->v_display;
-#else
-                vinfo.v_type = 0;
-#endif
-    
  
-                kprintf("initialize_screen: b=%08X, w=%08X, h=%08X, r=%08X, d=%08X\n",                  /* (BRINGUP) */
-                        vinfo.v_physaddr, vinfo.v_width,  vinfo.v_height,  vinfo.v_rowbytes, vinfo.v_type);     /* (BRINGUP) */
-
-#ifdef __i386__
-                if ( (vinfo.v_type == VGA_TEXT_MODE) )
-                {
-                    if (vinfo.v_physaddr == 0) {
-                        vinfo.v_physaddr = 0xb8000;
-                        vinfo.v_width = 80;
-                        vinfo.v_height = 25;
-                        vinfo.v_depth = 8;
-                        vinfo.v_rowbytes = 0x8000;
-                    }
-                }
-#endif /* __i386__ */
+		kprintf("initialize_screen: b=%08X, w=%08X, h=%08X, r=%08X\n",			/* (BRINGUP) */
+			vinfo.v_physaddr, vinfo.v_width,  vinfo.v_height,  vinfo.v_rowbytes);	/* (BRINGUP) */
 
 		if (!vinfo.v_physaddr)							/* Check to see if we have a framebuffer */
 		{
@@ -2192,43 +2173,39 @@ initialize_screen(Boot_Video * boot_vinfo, unsigned int op)
 			    vinfo.v_physaddr = (fbppage << 12) | (boot_vinfo->v_baseAddr & PAGE_MASK);			/* Get the physical address */
 		    }
     
+#ifdef __i386__
+		    vinfo.v_type     = boot_vinfo->v_display;
+#else
+		    vinfo.v_type = 0;
+#endif
+    
 		    fbsize = round_page_32(vinfo.v_height * vinfo.v_rowbytes);			/* Remember size */
     
 		    if ((lastVideoPhys != vinfo.v_physaddr) || (fbsize > lastVideoSize))		/* Did framebuffer change location or get bigger? */
 		    {
-			    unsigned int
-#if FALSE
-			    flags = (vinfo.v_type == VGA_TEXT_MODE) ? VM_WIMG_IO : VM_WIMG_WCOMB;
-#else
-			    flags = VM_WIMG_IO;
-#endif
-			    newVideoVirt = io_map_spec((vm_offset_t)vinfo.v_physaddr, fbsize, flags);	/* Allocate address space for framebuffer */
+			    newVideoVirt = io_map_spec((vm_offset_t)vinfo.v_physaddr, fbsize);	/* Allocate address space for framebuffer */
     
 			    if (lastVideoVirt)							/* Was the framebuffer mapped before? */
 			    {
-#if FALSE
-                                    if(lastVideoMapped)                            /* Was this not a special pre-VM mapping? */
-#endif
-				    {
-					    pmap_remove(kernel_pmap, trunc_page_64(lastVideoVirt),
-						    round_page_64(lastVideoVirt + lastVideoSize));	/* Toss mappings */
-				    }
-                                    if(lastVideoMapped)                            /* Was this not a special pre-VM mapping? */
+				    pmap_remove(kernel_pmap, trunc_page_64(lastVideoVirt),
+						round_page_64(lastVideoVirt + lastVideoSize));	/* Toss mappings */
+
+                                    if(lastVideoVirt <= vm_last_addr)                            /* Was this not a special pre-VM mapping? */
 				    {
 					    kmem_free(kernel_map, lastVideoVirt, lastVideoSize);	/* Toss kernel addresses */
 				    }
 			    }
+    
 			    lastVideoPhys = vinfo.v_physaddr;					/* Remember the framebuffer address */
 			    lastVideoSize = fbsize;							/* Remember the size */
 			    lastVideoVirt = newVideoVirt;						/* Remember the virtual framebuffer address */
-			    lastVideoMapped  = (NULL != kernel_map);
 		    }
 		}
 
 		vinfo.v_baseaddr = lastVideoVirt;				/* Set the new framebuffer address */
 
 #ifdef __i386__
-		if ( (vinfo.v_type == VGA_TEXT_MODE) )
+		if ( (vinfo.v_type == TEXT_MODE) )
 		{
 			// Text mode setup by the booter.
 

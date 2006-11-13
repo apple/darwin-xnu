@@ -1,28 +1,37 @@
 /*
  * Copyright (c) 1998-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
+ * This file contains Original Code and/or Modifications of Original Code 
+ * as defined in and that are subject to the Apple Public Source License 
+ * Version 2.0 (the 'License'). You may not use this file except in 
+ * compliance with the License.  The rights granted to you under the 
+ * License may not be used to create, or enable the creation or 
+ * redistribution of, unlawful or unlicensed copies of an Apple operating 
+ * system, or to circumvent, violate, or enable the circumvention or 
+ * violation of, any terms of an Apple operating system software license 
+ * agreement.
+ *
+ * Please obtain a copy of the License at 
+ * http://www.opensource.apple.com/apsl/ and read it before using this 
+ * file.
+ *
+ * The Original Code and all software distributed under the License are 
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
+ * Please see the License for the specific language governing rights and 
+ * limitations under the License.
+ *
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
  */
 
 
 #include <IOKit/IOKitServer.h>
 #include <IOKit/IOUserClient.h>
+#include <IOKit/IOService.h>
 #include <IOKit/IOService.h>
 #include <IOKit/IORegistryEntry.h>
 #include <IOKit/IOCatalogue.h>
@@ -800,22 +809,6 @@ IOReturn IOUserClient::clientHasPrivilege( void * securityToken,
 	kr = kIOReturnUnsupported;
 
     return (kr);
-}
-
-bool IOUserClient::init()
-{
-    if( getPropertyTable())
-        return true;
-    else
-        return super::init();
-}
-
-bool IOUserClient::init(OSDictionary * dictionary)
-{
-    if( getPropertyTable())
-        return true;
-    else
-        return super::init(dictionary);
 }
 
 bool IOUserClient::initWithTask(task_t owningTask,
@@ -1741,7 +1734,6 @@ kern_return_t is_io_registry_entry_get_property_bytes(
     return( ret );
 }
 
-
 /* Routine io_registry_entry_get_property */
 kern_return_t is_io_registry_entry_get_property(
 	io_object_t registry_entry,
@@ -1975,7 +1967,7 @@ kern_return_t is_io_service_open(
     CHECK( IOService, _service, service );
 
     err = service->newUserClient( owningTask, (void *) owningTask,
-		connect_type, 0, &client );
+		connect_type, &client );
 
     if( err == kIOReturnSuccess) {
 	assert( OSDynamicCast(IOUserClient, client) );
@@ -1983,101 +1975,6 @@ kern_return_t is_io_service_open(
     }
 
     return( err);
-}
-
-/* Routine io_service_open_ndr */
-kern_return_t is_io_service_open_extended(
-	io_object_t _service,
-	task_t owningTask,
-	int connect_type,
-	NDR_record_t ndr,
-	io_buf_ptr_t properties,
-	mach_msg_type_number_t propertiesCnt,
-        natural_t * result,
-	io_object_t *connection )
-{
-    IOUserClient * client = 0;
-    kern_return_t  err = KERN_SUCCESS;
-    IOReturn	   res = kIOReturnSuccess;
-    OSDictionary * propertiesDict = 0;
-    bool	   crossEndian;
-    bool	   disallowAccess;
-
-    CHECK( IOService, _service, service );
-
-    do
-    {
-	if (properties)
-	{
-	    OSObject *	    obj;
-	    vm_offset_t     data;
-	    vm_map_offset_t map_data;
-
-	    err = vm_map_copyout( kernel_map, &map_data, (vm_map_copy_t) properties );
-	    res = err;
-	    data = CAST_DOWN(vm_offset_t, map_data);
-	    if (KERN_SUCCESS == err)
-	    {
-		// must return success after vm_map_copyout() succeeds
-		obj = OSUnserializeXML( (const char *) data );
-		vm_deallocate( kernel_map, data, propertiesCnt );
-		propertiesDict = OSDynamicCast(OSDictionary, obj);
-		if (!propertiesDict)
-		{
-		    res = kIOReturnBadArgument;
-		    if (obj)
-			obj->release();
-		}
-	    }
-	    if (kIOReturnSuccess != res)
-		break;
-	}
-
-	crossEndian = (ndr.int_rep != NDR_record.int_rep);
-	if (crossEndian)
-	{
-	    if (!propertiesDict)
-		propertiesDict = OSDictionary::withCapacity(4);
-	    OSData * data = OSData::withBytes(&ndr, sizeof(ndr));
-	    if (data)
-	    {
-		if (propertiesDict)
-		    propertiesDict->setObject(kIOUserClientCrossEndianKey, data);
-		data->release();
-	    }
-	}
-
-	res = service->newUserClient( owningTask, (void *) owningTask,
-		    connect_type, propertiesDict, &client );
-
-	if (propertiesDict)
-	    propertiesDict->release();
-
-	if (res == kIOReturnSuccess)
-	{
-	    assert( OSDynamicCast(IOUserClient, client) );
-
-	    disallowAccess = (crossEndian
-		&& (kOSBooleanTrue != service->getProperty(kIOUserClientCrossEndianCompatibleKey))
-		&& (kOSBooleanTrue != client->getProperty(kIOUserClientCrossEndianCompatibleKey)));
-
-	    if (disallowAccess)
-	    {
-		client->clientClose();
-		client->release();
-		client = 0;
-		res = kIOReturnUnsupported;
-		break;
-	    }
-	    client->sharedInstance = (0 != client->getProperty(kIOUserClientSharedInstanceKey));
-	}
-    }
-    while (false);
-
-    *connection = client;
-    *result = res;
-
-    return (err);
 }
 
 /* Routine io_service_close */
@@ -2146,8 +2043,7 @@ kern_return_t is_io_connect_map_memory(
         if( mapSize)
             *mapSize = map->getLength();
 
-        if( client->sharedInstance
-	    || (task != current_task())) {
+        if( task != current_task()) {
             // push a name out to the task owning the map,
             // so we can clean up maps
 #if IOASSERT

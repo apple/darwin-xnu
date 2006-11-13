@@ -1,23 +1,31 @@
 /*
  * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
+ * This file contains Original Code and/or Modifications of Original Code 
+ * as defined in and that are subject to the Apple Public Source License 
+ * Version 2.0 (the 'License'). You may not use this file except in 
+ * compliance with the License.  The rights granted to you under the 
+ * License may not be used to create, or enable the creation or 
+ * redistribution of, unlawful or unlicensed copies of an Apple operating 
+ * system, or to circumvent, violate, or enable the circumvention or 
+ * violation of, any terms of an Apple operating system software license 
+ * agreement.
+ *
+ * Please obtain a copy of the License at 
+ * http://www.opensource.apple.com/apsl/ and read it before using this 
+ * file.
+ *
+ * The Original Code and all software distributed under the License are 
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
+ * Please see the License for the specific language governing rights and 
+ * limitations under the License.
+ *
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -200,8 +208,6 @@ ipc_kmsg_alloc(
 	ipc_kmsg_t kmsg;
 
 #if !defined(__LP64__)
-	mach_msg_size_t size = msg_and_trailer_size - MAX_TRAILER_SIZE;
-
 	/*
 	 * LP64support -
 	 * Pad the allocation in case we need to expand the
@@ -215,20 +221,23 @@ ipc_kmsg_alloc(
 	 * forward as we process them than it is to push all the
 	 * data backwards.
 	 */
-	max_expanded_size = 
-		(size > sizeof(mach_msg_base_t)) ?
-		(msg_and_trailer_size + DESC_SIZE_ADJUSTMENT * 
-		 ((size - sizeof(mach_msg_base_t)) /
-		  (sizeof(mach_msg_ool_descriptor_t))))
-		:
-		(msg_and_trailer_size);
-#else
-	max_expanded_size = msg_and_trailer_size;
-#endif
 
-	/* round up for ikm_cache */
-	if (max_expanded_size < IKM_SAVED_MSG_SIZE)
-		max_expanded_size = IKM_SAVED_MSG_SIZE;
+	mach_msg_size_t size = msg_and_trailer_size - MAX_TRAILER_SIZE;
+	if (size > sizeof(mach_msg_base_t)) {
+		mach_msg_size_t max_desc = ((size - sizeof(mach_msg_base_t)) /
+				           sizeof(mach_msg_ool_descriptor_t)) *
+				           DESC_SIZE_ADJUSTMENT;
+		if (msg_and_trailer_size >= MACH_MSG_SIZE_MAX - max_desc)
+			return IKM_NULL;
+		max_expanded_size = msg_and_trailer_size + max_desc;
+	} else
+#endif
+		max_expanded_size = msg_and_trailer_size;
+
+	if (max_expanded_size > ikm_less_overhead(MACH_MSG_SIZE_MAX))
+		return IKM_NULL;
+	else if (max_expanded_size < IKM_SAVED_MSG_SIZE)
+		max_expanded_size = IKM_SAVED_MSG_SIZE; 	/* round up for ikm_cache */
 
 	if (max_expanded_size == IKM_SAVED_MSG_SIZE) {
 		struct ikm_cache	*cache;
@@ -711,6 +720,9 @@ ipc_kmsg_get(
 
 	if ((size < sizeof(mach_msg_header_t)) || (size & 3))
 		return MACH_SEND_MSG_TOO_SMALL;
+
+	if (size > MACH_MSG_SIZE_MAX - MAX_TRAILER_SIZE)
+		return MACH_SEND_TOO_LARGE;
 
 	msg_and_trailer_size = size + MAX_TRAILER_SIZE;
 

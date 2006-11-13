@@ -1,23 +1,31 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
+ * This file contains Original Code and/or Modifications of Original Code 
+ * as defined in and that are subject to the Apple Public Source License 
+ * Version 2.0 (the 'License'). You may not use this file except in 
+ * compliance with the License.  The rights granted to you under the 
+ * License may not be used to create, or enable the creation or 
+ * redistribution of, unlawful or unlicensed copies of an Apple operating 
+ * system, or to circumvent, violate, or enable the circumvention or 
+ * violation of, any terms of an Apple operating system software license 
+ * agreement.
+ *
+ * Please obtain a copy of the License at 
+ * http://www.opensource.apple.com/apsl/ and read it before using this 
+ * file.
+ *
+ * The Original Code and all software distributed under the License are 
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
+ * Please see the License for the specific language governing rights and 
+ * limitations under the License.
+ *
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
  */
 #include <libkern/c++/OSContainers.h>
 #include <IOKit/IOCatalogue.h>
@@ -166,6 +174,7 @@ bool getKext(
                     if (!uncompressModule(compressedCode, &driverCode)) {
                         IOLog("extension \"%s\": couldn't uncompress code\n",
                             bundleid);
+                        LOG_DELAY(1);
                         result = false;
                         goto finish;
                     }
@@ -316,7 +325,7 @@ bool kextIsDependency(const char * kext_name, char * is_kernel) {
         extDict->getObject("compressedCode"));
 
     if ((driverCode || compressedCode) && is_kernel && *is_kernel) {
-        *is_kernel = 2;
+	*is_kernel = 2;
     }
 
     if (!driverCode && !compressedCode && !isKernelResourceObj) {
@@ -332,8 +341,8 @@ finish:
 /*********************************************************************
 *********************************************************************/
 static bool
-addDependenciesForKext(OSDictionary * kextPlist,
-    OSArray   * dependencyList,
+figureDependenciesForKext(OSDictionary * kextPlist,
+    OSDictionary * dependencies,
     OSString * trueParent,
     Boolean    skipKernelDependencies)
 {
@@ -343,7 +352,6 @@ addDependenciesForKext(OSDictionary * kextPlist,
     OSDictionary * libraries = 0;  // don't release
     OSCollectionIterator * keyIterator = 0; // must release
     OSString * libraryName = 0; // don't release
-    OSString * dependentName = 0; // don't release
 
     kextName = OSDynamicCast(OSString,
         kextPlist->getObject("CFBundleIdentifier"));
@@ -367,8 +375,6 @@ addDependenciesForKext(OSDictionary * kextPlist,
         goto finish;
     }
 
-    dependentName = trueParent ? trueParent : kextName;
-
     while ( (libraryName = OSDynamicCast(OSString,
         keyIterator->getNextObject())) ) {
 
@@ -385,15 +391,12 @@ addDependenciesForKext(OSDictionary * kextPlist,
         } else {
             char is_kernel_component;
 
-            if (!kextIsDependency(libraryName->getCStringNoCopy(),
-                &is_kernel_component)) {
-
+            if (!kextIsDependency(libraryName->getCStringNoCopy(), &is_kernel_component))
                 is_kernel_component = false;
-            }
 
             if (!skipKernelDependencies || !is_kernel_component) {
-                dependencyList->setObject(dependentName);
-                dependencyList->setObject(libraryName);
+                dependencies->setObject(libraryName,
+                    trueParent ? trueParent : kextName);
             }
             if (!hasDirectKernelDependency && is_kernel_component) {
                 hasDirectKernelDependency = true;
@@ -401,22 +404,11 @@ addDependenciesForKext(OSDictionary * kextPlist,
         }
     }
     if (!hasDirectKernelDependency) {
-        const OSSymbol * kernelName = 0;
-
         /* a kext without any kernel dependency is assumed dependent on 6.0 */
-        dependencyList->setObject(dependentName);
-
-        kernelName = OSSymbol::withCString("com.apple.kernel.libkern");
-        if (!kernelName) {
-            // XXX: Add log message
-            result = false;
-            goto finish;
-        }
-        dependencyList->setObject(kernelName);
-        kernelName->release();
-
+        dependencies->setObject("com.apple.kernel.libkern",
+                trueParent ? trueParent : kextName);
         IOLog("Extension \"%s\" has no kernel dependency.\n",
-            kextName->getCStringNoCopy());
+        	kextName->getCStringNoCopy());
     }
 
 finish:
@@ -462,8 +454,14 @@ bool add_dependencies_for_kmod(const char * kmod_name, dgraph_t * dgraph)
 {
     bool result = true;
     OSDictionary * kextPlist = 0; // don't release
-    unsigned int index = 0;
-    OSArray * dependencyList = 0;  // must release
+    OSDictionary * workingDependencies = 0; // must release
+    OSDictionary * pendingDependencies = 0; // must release
+    OSDictionary * swapDict = 0; // don't release
+    OSString * dependentName = 0; // don't release
+    const char * dependent_name = 0;  // don't free
+    OSString * libraryName = 0; // don't release
+    const char * library_name = 0;  // don't free
+    OSCollectionIterator * dependencyIterator = 0; // must release
     unsigned char * code = 0;
     unsigned long code_length = 0;
     bool code_is_kmem = false;
@@ -471,11 +469,9 @@ bool add_dependencies_for_kmod(const char * kmod_name, dgraph_t * dgraph)
     char is_kernel_component = false;
     dgraph_entry_t * dgraph_entry = 0; // don't free
     dgraph_entry_t * dgraph_dependency = 0; // don't free
+    unsigned int graph_depth = 0;
     bool kext_is_dependency = true;
 
-   /*****
-    * Set up the root kmod.
-    */
     if (!getKext(kmod_name, &kextPlist, &code, &code_length,
         &code_is_kmem)) {
         IOLog("can't find extension %s\n", kmod_name);
@@ -507,7 +503,8 @@ bool add_dependencies_for_kmod(const char * kmod_name, dgraph_t * dgraph)
     }
 
     // pass ownership of code to kld patcher
-    if (code) {
+    if (code)
+    {
         if (kload_map_entry(dgraph_entry) != kload_error_none) {
             IOLog("can't map %s in preparation for loading\n", kmod_name);
             result = false;
@@ -520,78 +517,95 @@ bool add_dependencies_for_kmod(const char * kmod_name, dgraph_t * dgraph)
     code_length = 0;
     code_is_kmem = false;
 
-   /*****
-    * Now handle all the dependencies.
-    */
-    dependencyList = OSArray::withCapacity(5);
-    if (!dependencyList) {
+    workingDependencies = OSDictionary::withCapacity(5);
+    if (!workingDependencies) {
         IOLog("memory allocation failure\n");
         result = false;
         goto finish;
     }
 
-    index = 0;
-    if (!addDependenciesForKext(kextPlist, dependencyList, NULL, false)) {
+    pendingDependencies = OSDictionary::withCapacity(5);
+    if (!pendingDependencies) {
+        IOLog("memory allocation failure\n");
+        result = false;
+        goto finish;
+    }
+
+    if (!figureDependenciesForKext(kextPlist, workingDependencies, NULL, false)) {
         IOLog("can't determine immediate dependencies for extension %s\n",
             kmod_name);
         result = false;
         goto finish;
     }
 
-   /* IMPORTANT: loop condition gets list count every time through, as the
-    * array CAN change each iteration.
-    */
-    for (index = 0; index < dependencyList->getCount(); index += 2) {
-        OSString * dependentName = 0;
-        OSString * libraryName = 0;
-        const char * dependent_name = 0;
-        const char * library_name = 0;
-
-       /* 255 is an arbitrary limit. Multiplied  by 2 because the dependency
-        * list is stocked with pairs (dependent -> dependency).
-        */
-        if (index > (2 * 255)) {
+    graph_depth = 0;
+    while (workingDependencies->getCount()) {
+        if (graph_depth > 255) {
             IOLog("extension dependency graph ridiculously long, indicating a loop\n");
             result = false;
             goto finish;
         }
 
-        dependentName = OSDynamicCast(OSString,
-            dependencyList->getObject(index));
-        libraryName = OSDynamicCast(OSString,
-            dependencyList->getObject(index + 1));
+        if (dependencyIterator) {
+            dependencyIterator->release();
+            dependencyIterator = 0;
+        }
 
-        if (!dependentName || !libraryName) {
-            IOLog("malformed dependency list\n");
+        dependencyIterator = OSCollectionIterator::withCollection(
+            workingDependencies);
+        if (!dependencyIterator) {
+            IOLog("memory allocation failure\n");
             result = false;
             goto finish;
         }
 
-        dependent_name = dependentName->getCStringNoCopy();
-        library_name = libraryName->getCStringNoCopy();
+        while ( (libraryName =
+                 OSDynamicCast(OSString, dependencyIterator->getNextObject())) ) {
 
-        if (!getKext(library_name, &kextPlist, NULL, NULL, NULL)) {
+            library_name = libraryName->getCStringNoCopy();
 
-            IOLog("can't find extension %s\n", library_name);
-            result = false;
-            goto finish;
-        }
+            dependentName = OSDynamicCast(OSString,
+                workingDependencies->getObject(libraryName));
 
-        OSString * string = OSDynamicCast(OSString,
-            kextPlist->getObject("OSBundleSharedExecutableIdentifier"));
-        if (string) {
-            library_name = string->getCStringNoCopy();
+            dependent_name = dependentName->getCStringNoCopy();
+
             if (!getKext(library_name, &kextPlist, NULL, NULL, NULL)) {
                 IOLog("can't find extension %s\n", library_name);
                 result = false;
                 goto finish;
             }
-        }
 
-        kext_is_dependency = kextIsDependency(library_name,
-            &is_kernel_component);
+	    OSString * string;
+	    if ((string = OSDynamicCast(OSString,
+			    kextPlist->getObject("OSBundleSharedExecutableIdentifier"))))
+	    {
+		library_name = string->getCStringNoCopy();
+		if (!getKext(library_name, &kextPlist, NULL, NULL, NULL)) {
+		    IOLog("can't find extension %s\n", library_name);
+		    result = false;
+		    goto finish;
+		}
+	    }
 
-        if (kext_is_dependency) {
+            kext_is_dependency = kextIsDependency(library_name,
+                &is_kernel_component);
+
+            if (!kext_is_dependency) {
+
+               /* For binaryless kexts, add a new pending dependency from the
+                * original dependent onto the dependencies of the current,
+                * binaryless, dependency.
+                */
+                if (!figureDependenciesForKext(kextPlist, pendingDependencies,
+                    dependentName, true)) {
+
+                    IOLog("can't determine immediate dependencies for extension %s\n",
+                        library_name);
+                    result = false;
+                    goto finish;
+                }
+                continue;
+            } else {
                 dgraph_entry = dgraph_find_dependent(dgraph, dependent_name);
                 if (!dgraph_entry) {
                     IOLog("internal error with dependency graph\n");
@@ -646,8 +660,8 @@ bool add_dependencies_for_kmod(const char * kmod_name, dgraph_t * dgraph)
 
            /* Now put the library's dependencies onto the pending set.
             */
-            if (!addDependenciesForKext(kextPlist, dependencyList,
-                kext_is_dependency ? NULL : dependentName, !kext_is_dependency)) {
+            if (!figureDependenciesForKext(kextPlist, pendingDependencies,
+                NULL, false)) {
 
                 IOLog("can't determine immediate dependencies for extension %s\n",
                     library_name);
@@ -656,12 +670,23 @@ bool add_dependencies_for_kmod(const char * kmod_name, dgraph_t * dgraph)
             }
         }
 
+        dependencyIterator->release();
+        dependencyIterator = 0;
+
+        workingDependencies->flushCollection();
+        swapDict = workingDependencies;
+        workingDependencies = pendingDependencies;
+        pendingDependencies = swapDict;
+        graph_depth++;
+    }
+
 finish:
     if (code && code_is_kmem) {
         kmem_free(kernel_map, (unsigned int)code, code_length);
     }
-    if (dependencyList)  dependencyList->release();
-
+    if (workingDependencies)  workingDependencies->release();
+    if (pendingDependencies)  pendingDependencies->release();
+    if (dependencyIterator)   dependencyIterator->release();
     return result;
 }
 
@@ -689,7 +714,7 @@ kern_return_t load_kernel_extension(char * kmod_name)
    /* See if the kmod is already loaded.
     */
     if ((kmod_info = kmod_lookupbyname_locked(kmod_name))) {
-        kfree(kmod_info, sizeof(kmod_info_t));
+	kfree((vm_offset_t) kmod_info, sizeof(kmod_info_t));
         return KERN_SUCCESS;
     }
 

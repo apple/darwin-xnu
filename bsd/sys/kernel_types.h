@@ -33,7 +33,7 @@ typedef struct mount * mount_t;
 
 #ifdef TBDDDD
 typedef struct fsid { int32_t val[2]; } fsid_t;	/* file system id type */
-#endif /* TBDDDD */
+#endif TBDDDD
 
 struct vnode;
 typedef struct vnode * vnode_t;

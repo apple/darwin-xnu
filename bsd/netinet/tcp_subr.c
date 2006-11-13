@@ -1,23 +1,31 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
+ * 
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code 
+ * as defined in and that are subject to the Apple Public Source License 
+ * Version 2.0 (the 'License'). You may not use this file except in 
+ * compliance with the License.  The rights granted to you under the 
+ * License may not be used to create, or enable the creation or 
+ * redistribution of, unlawful or unlicensed copies of an Apple operating 
+ * system, or to circumvent, violate, or enable the circumvention or 
+ * violation of, any terms of an Apple operating system software license 
+ * agreement.
  *
- * @APPLE_LICENSE_HEADER_START@
- * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
+ * Please obtain a copy of the License at 
+ * http://www.opensource.apple.com/apsl/ and read it before using this 
+ * file.
+ *
+ * The Original Code and all software distributed under the License are 
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
+ * Please see the License for the specific language governing rights and 
+ * limitations under the License.
+ *
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
  */
 /*
  * Copyright (c) 1982, 1986, 1988, 1990, 1993, 1995
@@ -203,6 +211,7 @@ SYSCTL_INT(_net_inet_tcp, OID_AUTO, isn_reseed_interval, CTLFLAG_RW,
 
 static void	tcp_cleartaocache(void);
 static void	tcp_notify(struct inpcb *, int);
+struct zone	*sack_hole_zone;
 
 /*
  * Target size of TCP PCB hash tables. Must be a power of two.
@@ -230,10 +239,6 @@ struct	inp_tp {
 		char	align[(sizeof(struct inpcb) + ALIGNM1) & ~ALIGNM1];
 	} inp_tp_u;
 	struct	tcpcb tcb;
-#ifndef __APPLE__
-	struct	callout inp_tp_rexmt, inp_tp_persist, inp_tp_keep, inp_tp_2msl;
-	struct	callout inp_tp_delack;
-#endif
 };
 #undef ALIGNMENT
 #undef ALIGNM1
@@ -288,9 +293,6 @@ tcp_init()
 	LIST_INIT(&tcb);
 	tcbinfo.listhead = &tcb;
 	pcbinfo = &tcbinfo;
-#ifndef __APPLE__
-	TUNABLE_INT_FETCH("net.inet.tcp.tcbhashsize", &hashsize);
-#endif
 	if (!powerof2(hashsize)) {
 		printf("WARNING: TCB hash size not a power of 2\n");
 		hashsize = 512; /* safe default */
@@ -300,19 +302,10 @@ tcp_init()
 	tcbinfo.hashbase = hashinit(hashsize, M_PCB, &tcbinfo.hashmask);
 	tcbinfo.porthashbase = hashinit(hashsize, M_PCB,
 					&tcbinfo.porthashmask);
-#ifdef __APPLE__
 	str_size = (vm_size_t) sizeof(struct inp_tp);
 	tcbinfo.ipi_zone = (void *) zinit(str_size, 120000*str_size, 8192, "tcpcb");
-#else
-	tcbinfo.ipi_zone = zinit("tcpcb", sizeof(struct inp_tp), maxsockets,
-				 ZONE_INTERRUPT, 0);
-#endif
-
+	sack_hole_zone = zinit(str_size, 120000*str_size, 8192, "sack_hole zone");
 	tcp_reass_maxseg = nmbclusters / 16;
-#ifndef __APPLE__
-	TUNABLE_INT_FETCH("net.inet.tcp.reass.maxsegments",
-	    &tcp_reass_maxseg);
-#endif
 
 #if INET6
 #define TCP_MINPROTOHDR (sizeof(struct ip6_hdr) + sizeof(struct tcphdr))
@@ -332,12 +325,14 @@ tcp_init()
 	 * allocate lock group attribute and group for tcp pcb mutexes
 	 */
      pcbinfo->mtx_grp_attr = lck_grp_attr_alloc_init();
+	lck_grp_attr_setdefault(pcbinfo->mtx_grp_attr);
 	pcbinfo->mtx_grp = lck_grp_alloc_init("tcppcb", pcbinfo->mtx_grp_attr);
 		
 	/*
 	 * allocate the lock attribute for tcp pcb mutexes
 	 */
 	pcbinfo->mtx_attr = lck_attr_alloc_init();
+	lck_attr_setdefault(pcbinfo->mtx_attr);
 
 	if ((pcbinfo->mtx = lck_rw_alloc_init(pcbinfo->mtx_grp, pcbinfo->mtx_attr)) == NULL) {
 		printf("tcp_init: mutex not alloced!\n");
@@ -659,19 +654,10 @@ tcp_newtcpcb(inp)
 #endif /* INET6 */
 		tcp_mssdflt;
 
-#ifndef __APPLE__
-	/* Set up our timeouts. */
-	callout_init(tp->tt_rexmt = &it->inp_tp_rexmt);
-	callout_init(tp->tt_persist = &it->inp_tp_persist);
-	callout_init(tp->tt_keep = &it->inp_tp_keep);
-	callout_init(tp->tt_2msl = &it->inp_tp_2msl);
-	callout_init(tp->tt_delack = &it->inp_tp_delack);
-#endif
-
 	if (tcp_do_rfc1323)
 		tp->t_flags = (TF_REQ_SCALE|TF_REQ_TSTMP);
-	if (tcp_do_rfc1644)
-		tp->t_flags |= TF_REQ_CC;
+	tp->sack_enable = tcp_do_sack;
+	TAILQ_INIT(&tp->snd_holes);
 	tp->t_inpcb = inp;	/* XXX */
 	/*
 	 * Init srtt to TCPTV_SRTTBASE (0), so we can tell that we have no
@@ -684,7 +670,8 @@ tcp_newtcpcb(inp)
 	tp->t_rxtcur = TCPTV_RTOBASE;
 	tp->snd_cwnd = TCP_MAXWIN << TCP_MAX_WINSHIFT;
 	tp->snd_ssthresh = TCP_MAXWIN << TCP_MAX_WINSHIFT;
-        /*
+	tp->t_rcvtime = 0;
+	/*
 	 * IPv4 TTL initialization is necessary for an IPv6 socket as well,
 	 * because the socket may be bound to an IPv6 wildcard address,
 	 * which may match an IPv4-mapped IPv6 address.
@@ -705,18 +692,6 @@ tcp_drop(tp, errno)
 	int errno;
 {
 	struct socket *so = tp->t_inpcb->inp_socket;
-
-#ifdef __APPLE__
-	switch (tp->t_state) 
-	{
-	case TCPS_ESTABLISHED:
-	case TCPS_FIN_WAIT_1:
-	case TCPS_CLOSING:
-	case TCPS_CLOSE_WAIT:
-	case TCPS_LAST_ACK:
-	     break;
-	}
-#endif
      
 	if (TCPS_HAVERCVDSYN(tp->t_state)) {
 		tp->t_state = TCPS_CLOSED;
@@ -740,7 +715,6 @@ struct tcpcb *
 tcp_close(tp)
 	register struct tcpcb *tp;
 {
-	register struct tseg_qent *q;
 	struct inpcb *inp = tp->t_inpcb;
 	struct socket *so = inp->inp_socket;
 #if INET6
@@ -750,19 +724,8 @@ tcp_close(tp)
 	int dosavessthresh;
 
 	if ( inp->inp_ppcb == NULL) /* tcp_close was called previously, bail */
-		return;
+		return NULL;
 
-#ifndef __APPLE__
-	/*
-	 * Make sure that all of our timers are stopped before we
-	 * delete the PCB.
-	 */
-	callout_stop(tp->tt_rexmt);
-	callout_stop(tp->tt_persist);
-	callout_stop(tp->tt_keep);
-	callout_stop(tp->tt_2msl);
-	callout_stop(tp->tt_delack);
-#else
 	/* Clear the timers before we delete the PCB. */
 	{
 		int i;
@@ -770,7 +733,6 @@ tcp_close(tp)
 			tp->t_timer[i] = 0;
 		}
 	}
-#endif
 
 	KERNEL_DEBUG(DBG_FNC_TCP_CLOSE | DBG_FUNC_START, tp,0,0,0,0);
 	switch (tp->t_state) 
@@ -908,6 +870,8 @@ tcp_close(tp)
 	/* free the reassembly queue, if any */
 	(void) tcp_freeq(tp);
 
+	tcp_free_sackholes(tp);
+
 #ifdef __APPLE__
 	if (so->cached_in_sock_layer)
 	    inp->inp_saved_ppcb = (caddr_t) tp;
@@ -1027,7 +991,7 @@ tcp_notify(inp, error)
 static int
 tcp_pcblist SYSCTL_HANDLER_ARGS
 {
-	int error, i, n, s;
+	int error, i, n;
 	struct inpcb *inp, **inp_list;
 	inp_gen_t gencnt;
 	struct xinpgen xig;
@@ -1229,7 +1193,6 @@ tcp_ctlinput(cmd, sa, vip)
 	struct tcpcb *tp;
 	void (*notify)(struct inpcb *, int) = tcp_notify;
 	tcp_seq icmp_seq;
-	int s;
 
 	faddr = ((struct sockaddr_in *)sa)->sin_addr;
 	if (sa->sa_family != AF_INET || faddr.s_addr == INADDR_ANY)
@@ -1394,7 +1357,7 @@ tcp_new_isn(tp)
 {
 	u_int32_t md5_buffer[4];
 	tcp_seq new_isn;
-	struct timeval time;
+	struct timeval timenow;
 
 	/* Use arc4random for SYN-ACKs when not in exact RFC1948 mode. */
 	if (((tp->t_state == TCPS_LISTEN) || (tp->t_state == TCPS_TIME_WAIT))
@@ -1404,18 +1367,19 @@ tcp_new_isn(tp)
 #else
 		return arc4random();
 #endif
+	getmicrotime(&timenow);
 
 	/* Seed if this is the first use, reseed if requested. */
 	if ((isn_last_reseed == 0) ||
 	    ((tcp_strict_rfc1948 == 0) && (tcp_isn_reseed_interval > 0) &&
 	     (((u_int)isn_last_reseed + (u_int)tcp_isn_reseed_interval*hz)
-		< (u_int)time.tv_sec))) {
+		< (u_int)timenow.tv_sec))) {
 #ifdef __APPLE__
 		read_random(&isn_secret, sizeof(isn_secret));
 #else
 		read_random_unlimited(&isn_secret, sizeof(isn_secret));
 #endif
-		isn_last_reseed = time.tv_sec;
+		isn_last_reseed = timenow.tv_sec;
 	}
 		
 	/* Compute the md5 hash and return the ISN. */
@@ -1439,7 +1403,7 @@ tcp_new_isn(tp)
 	MD5Update(&isn_ctx, (u_char *) &isn_secret, sizeof(isn_secret));
 	MD5Final((u_char *) &md5_buffer, &isn_ctx);
 	new_isn = (tcp_seq) md5_buffer[0];
-	new_isn += time.tv_sec * (ISN_BYTES_PER_SECOND / hz);
+	new_isn += timenow.tv_sec * (ISN_BYTES_PER_SECOND / hz);
 	return new_isn;
 }
 
@@ -1448,9 +1412,10 @@ tcp_new_isn(tp)
  * to one segment.  We will gradually open it again as we proceed.
  */
 void
-tcp_quench(inp, errno)
-	struct inpcb *inp;
-	int errno;
+tcp_quench(
+	struct inpcb *inp,
+	__unused int errno
+)
 {
 	struct tcpcb *tp = intotcpcb(inp);
 
@@ -1481,9 +1446,10 @@ tcp_drop_syn_sent(inp, errno)
  * This duplicates some code in the tcp_mss() function in tcp_input.c.
  */
 void
-tcp_mtudisc(inp, errno)
-	struct inpcb *inp;
-	int errno;
+tcp_mtudisc(
+	struct inpcb *inp,
+	__unused int errno
+)
 {
 	struct tcpcb *tp = intotcpcb(inp);
 	struct rtentry *rt;
@@ -1549,9 +1515,6 @@ tcp_mtudisc(inp, errno)
 		if ((tp->t_flags & (TF_REQ_TSTMP|TF_NOOPT)) == TF_REQ_TSTMP &&
 		    (tp->t_flags & TF_RCVD_TSTMP) == TF_RCVD_TSTMP)
 			mss -= TCPOLEN_TSTAMP_APPA;
-		if ((tp->t_flags & (TF_REQ_CC|TF_NOOPT)) == TF_REQ_CC &&
-		    (tp->t_flags & TF_RCVD_CC) == TF_RCVD_CC)
-			mss -= TCPOLEN_CC_APPA;
 
 		if (so->so_snd.sb_hiwat < mss)
 			mss = so->so_snd.sb_hiwat;
@@ -1714,9 +1677,12 @@ tcp_lock(so, refcount, lr)
 	int lr;
 {
 	int lr_saved;
-	if (lr == 0) 
-		lr_saved = (unsigned int) __builtin_return_address(0);
+#ifdef __ppc__
+	if (lr == 0) {
+		__asm__ volatile("mflr %0" : "=r" (lr_saved));
+	}
 	else lr_saved = lr;
+#endif
 
 	if (so->so_pcb) {
 		lck_mtx_lock(((struct inpcb *)so->so_pcb)->inpcb_mtx);
@@ -1732,8 +1698,7 @@ tcp_lock(so, refcount, lr)
 
 	if (refcount)
 		so->so_usecount++;
-	so->lock_lr[so->next_lock_lr] = (u_int32_t *)lr_saved;
-	so->next_lock_lr = (so->next_lock_lr+1) % SO_LCKDBG_MAX;
+	so->reserved3 = (void *)lr_saved;
 	return (0);
 }
 
@@ -1744,9 +1709,12 @@ tcp_unlock(so, refcount, lr)
 	int lr;
 {
 	int lr_saved;
-	if (lr == 0) 
-		lr_saved = (unsigned int) __builtin_return_address(0);
+#ifdef __ppc__
+	if (lr == 0) {
+		__asm__ volatile("mflr %0" : "=r" (lr_saved));
+	}
 	else lr_saved = lr;
+#endif
 
 #ifdef MORE_TCPLOCK_DEBUG
 	printf("tcp_unlock: so=%x sopcb=%x lock=%x ref=%x lr=%x\n", 
@@ -1757,14 +1725,15 @@ tcp_unlock(so, refcount, lr)
 
 	if (so->so_usecount < 0)
 		panic("tcp_unlock: so=%x usecount=%x\n", so, so->so_usecount);	
-	if (so->so_pcb == NULL) 
+	if (so->so_pcb == NULL) {
 		panic("tcp_unlock: so=%x NO PCB usecount=%x lr=%x\n", so, so->so_usecount, lr_saved);
+		lck_mtx_unlock(so->so_proto->pr_domain->dom_mtx);
+	}
 	else {
 		lck_mtx_assert(((struct inpcb *)so->so_pcb)->inpcb_mtx, LCK_MTX_ASSERT_OWNED);
-		so->unlock_lr[so->next_unlock_lr] = (u_int *)lr_saved;
-		so->next_unlock_lr = (so->next_unlock_lr+1) % SO_LCKDBG_MAX;
 		lck_mtx_unlock(((struct inpcb *)so->so_pcb)->inpcb_mtx);
 	}
+	so->reserved4 = (void *)lr_saved;
 	return (0);
 }
 

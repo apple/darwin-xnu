@@ -1,23 +1,31 @@
 /*
  * Copyright (c) 2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
+ * This file contains Original Code and/or Modifications of Original Code 
+ * as defined in and that are subject to the Apple Public Source License 
+ * Version 2.0 (the 'License'). You may not use this file except in 
+ * compliance with the License.  The rights granted to you under the 
+ * License may not be used to create, or enable the creation or 
+ * redistribution of, unlawful or unlicensed copies of an Apple operating 
+ * system, or to circumvent, violate, or enable the circumvention or 
+ * violation of, any terms of an Apple operating system software license 
+ * agreement.
+ *
+ * Please obtain a copy of the License at 
+ * http://www.opensource.apple.com/apsl/ and read it before using this 
+ * file.
+ *
+ * The Original Code and all software distributed under the License are 
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
+ * Please see the License for the specific language governing rights and 
+ * limitations under the License.
+ *
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
  */
 
 // NOTE:  This file is only c++ so I can get static initialisers going
@@ -31,7 +39,6 @@
 #include <kern/lock.h>
 
 #include <libkern/libkern.h>	// From bsd's libkern directory
-#include <mach/vm_param.h>
 
 __BEGIN_DECLS
 // From osmfk/kern/thread.h but considered to be private
@@ -40,8 +47,6 @@ extern vm_offset_t max_valid_stack_address(void);
 
 // From osfmk/kmod.c
 extern void kmod_dump_log(vm_offset_t *addr, unsigned int cnt);
-
-extern addr64_t kvtophys(vm_offset_t va);
 __END_DECLS
 
 static mutex_t *sOSReportLock = mutex_alloc(0);
@@ -73,39 +78,6 @@ OSReportWithBacktrace(const char *str, ...)
 
 static vm_offset_t minstackaddr = min_valid_stack_address();
 static vm_offset_t maxstackaddr = max_valid_stack_address();
-
-#if __i386__
-#define i386_RETURN_OFFSET 4
-
-static unsigned int
-i386_validate_stackptr(vm_offset_t stackptr)
-{
-	/* Existence and alignment check
-	 */
-	if (!stackptr || (stackptr & 0x3))
-		return 0;
-  
-	/* Is a virtual->physical translation present?
-	 */
-	if (!kvtophys(stackptr))
-		return 0;
-  
-	/* Check if the return address lies on the same page;
-	 * If not, verify that a translation exists.
-	 */
-	if (((PAGE_SIZE - (stackptr & PAGE_MASK)) < i386_RETURN_OFFSET) &&
-	    !kvtophys(stackptr + i386_RETURN_OFFSET))
-		return 0;
-	return 1;
-}
-
-static unsigned int
-i386_validate_raddr(vm_offset_t raddr)
-{
-	return ((raddr > VM_MIN_KERNEL_ADDRESS) &&
-	    (raddr < VM_MAX_KERNEL_ADDRESS));
-}
-#endif
 
 unsigned OSBacktrace(void **bt, unsigned maxAddrs)
 {
@@ -140,50 +112,67 @@ unsigned OSBacktrace(void **bt, unsigned maxAddrs)
 
     for ( ; i < maxAddrs; i++)
 	    bt[i] = (void *) 0;
-#elif __i386__
-#define SANE_i386_FRAME_SIZE 8*1024
-    vm_offset_t stackptr, stackptr_prev, raddr;
-    unsigned frame_index = 0;
-/* Obtain current frame pointer */
-    __asm__ volatile("movl %%ebp, %0" : "=m" (stackptr)); 
-
-    if (!i386_validate_stackptr(stackptr))
-	    goto pad;
-
-    raddr = *((vm_offset_t *) (stackptr + i386_RETURN_OFFSET));
-
-    if (!i386_validate_raddr(raddr))
-	    goto pad;
-
-    bt[frame_index++] = (void *) raddr;
-
-    for ( ; frame_index < maxAddrs; frame_index++) {
-	    stackptr_prev = stackptr;
-	    stackptr = *((vm_offset_t *) stackptr_prev);
-
-	    if (!i386_validate_stackptr(stackptr))
-		    break;
-	/* Stack grows downwards */
-	    if (stackptr < stackptr_prev)
-		    break;
-
-	    if ((stackptr_prev ^ stackptr) > SANE_i386_FRAME_SIZE)
-		    break;
-
-	    raddr = *((vm_offset_t *) (stackptr + i386_RETURN_OFFSET));
-
-	    if (!i386_validate_raddr(raddr))
-		    break;
-
-	    bt[frame_index] = (void *) raddr;
+#elif 0 && __i386__	// Note that this should be ported for i386
+    // This function is not safe, we should get this code ported appropriately
+    if (maxAddrs > 16) {
+	for (frame = 16; frame < maxAddrs; frame++)
+	    bt[frame] = __builtin_return_address(frame);
+	maxAddrs = 16;
     }
-pad:
-    frame = frame_index;
 
-    for ( ; frame_index < maxAddrs; frame_index++)
-	    bt[frame_index] = (void *) 0;
+    switch(maxAddrs) {
+    case 15+1: bt[15] = __builtin_return_address(15);
+    case 14+1: bt[14] = __builtin_return_address(14);
+    case 13+1: bt[13] = __builtin_return_address(13);
+    case 12+1: bt[12] = __builtin_return_address(12);
+    case 11+1: bt[11] = __builtin_return_address(11);
+    case 10+1: bt[10] = __builtin_return_address(10);
+    case  9+1: bt[ 9] = __builtin_return_address( 9);
+    case  8+1: bt[ 8] = __builtin_return_address( 8);
+    case  7+1: bt[ 7] = __builtin_return_address( 7);
+    case  6+1: bt[ 6] = __builtin_return_address( 6);
+    case  5+1: bt[ 5] = __builtin_return_address( 5);
+    case  4+1: bt[ 4] = __builtin_return_address( 4);
+    case  3+1: bt[ 3] = __builtin_return_address( 3);
+    case  2+1: bt[ 2] = __builtin_return_address( 2);
+    case  1+1: bt[ 1] = __builtin_return_address( 1);
+    case  0+1: bt[ 0] = __builtin_return_address( 0);
+    case 0: default: break;
+    }
+
+    frame = maxAddrs;
 #else
-#error arch
+    // This function is not safe, we should get this code ported appropriately
+    if (maxAddrs > 16) {
+	for (frame = 16; frame < maxAddrs; frame++)
+	    bt[frame] = 0;
+	maxAddrs = 16;
+    }
+
+    switch (maxAddrs) {
+    case 15+1: bt[15] = __builtin_return_address(15);
+    case 14+1: bt[14] = __builtin_return_address(14);
+    case 13+1: bt[13] = __builtin_return_address(13);
+    case 12+1: bt[12] = __builtin_return_address(12);
+    case 11+1: bt[11] = __builtin_return_address(11);
+    case 10+1: bt[10] = __builtin_return_address(10);
+    case  9+1: bt[ 9] = __builtin_return_address( 9);
+    case  8+1: bt[ 8] = __builtin_return_address( 8);
+    case  7+1: bt[ 7] = __builtin_return_address( 7);
+    case  6+1: bt[ 6] = __builtin_return_address( 6);
+    case  5+1: bt[ 5] = __builtin_return_address( 5);
+    case  4+1: bt[ 4] = __builtin_return_address( 4);
+    case  3+1: bt[ 3] = __builtin_return_address( 3);
+    case  2+1: bt[ 2] = __builtin_return_address( 2);
+    case  1+1: bt[ 1] = __builtin_return_address( 1);
+    case  0+1: bt[ 0] = __builtin_return_address( 0);
+    case    0:
+    default  :
+	break;
+    }
+
+    frame = maxAddrs;
 #endif
+
     return frame;
 }

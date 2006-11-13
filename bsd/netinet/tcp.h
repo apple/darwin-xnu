@@ -1,23 +1,31 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
+ * 
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code 
+ * as defined in and that are subject to the Apple Public Source License 
+ * Version 2.0 (the 'License'). You may not use this file except in 
+ * compliance with the License.  The rights granted to you under the 
+ * License may not be used to create, or enable the creation or 
+ * redistribution of, unlawful or unlicensed copies of an Apple operating 
+ * system, or to circumvent, violate, or enable the circumvention or 
+ * violation of, any terms of an Apple operating system software license 
+ * agreement.
  *
- * @APPLE_LICENSE_HEADER_START@
- * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
+ * Please obtain a copy of the License at 
+ * http://www.opensource.apple.com/apsl/ and read it before using this 
+ * file.
+ *
+ * The Original Code and all software distributed under the License are 
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
+ * Please see the License for the specific language governing rights and 
+ * limitations under the License.
+ *
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
  */
 /*
  * Copyright (c) 1982, 1986, 1993
@@ -104,17 +112,20 @@ struct tcphdr {
 #define	TCPOPT_EOL		0
 #define	TCPOPT_NOP		1
 #define	TCPOPT_MAXSEG		2
-#define    TCPOLEN_MAXSEG		4
+#define TCPOLEN_MAXSEG		4
 #define TCPOPT_WINDOW		3
-#define    TCPOLEN_WINDOW		3
+#define TCPOLEN_WINDOW		3
 #define TCPOPT_SACK_PERMITTED	4		/* Experimental */
-#define    TCPOLEN_SACK_PERMITTED	2
+#define TCPOLEN_SACK_PERMITTED	2
 #define TCPOPT_SACK		5		/* Experimental */
+#define TCPOLEN_SACK		8		/* len of sack block */
 #define TCPOPT_TIMESTAMP	8
-#define    TCPOLEN_TIMESTAMP		10
-#define    TCPOLEN_TSTAMP_APPA		(TCPOLEN_TIMESTAMP+2) /* appendix A */
-#define    TCPOPT_TSTAMP_HDR		\
+#define TCPOLEN_TIMESTAMP	10
+#define TCPOLEN_TSTAMP_APPA		(TCPOLEN_TIMESTAMP+2) /* appendix A */
+#define TCPOPT_TSTAMP_HDR		\
     (TCPOPT_NOP<<24|TCPOPT_NOP<<16|TCPOPT_TIMESTAMP<<8|TCPOLEN_TIMESTAMP)
+
+#define	MAX_TCPOPTLEN		40	/* Absolute maximum TCP options len */
 
 #define	TCPOPT_CC		11		/* CC options: RFC-1644 */
 #define TCPOPT_CCNEW		12
@@ -123,6 +134,17 @@ struct tcphdr {
 #define	   TCPOLEN_CC_APPA		(TCPOLEN_CC+2)
 #define	   TCPOPT_CC_HDR(ccopt)		\
     (TCPOPT_NOP<<24|TCPOPT_NOP<<16|(ccopt)<<8|TCPOLEN_CC)
+#define	TCPOPT_SIGNATURE		19	/* Keyed MD5: RFC 2385 */
+#define	   TCPOLEN_SIGNATURE		18
+
+/* Option definitions */
+#define TCPOPT_SACK_PERMIT_HDR	\
+(TCPOPT_NOP<<24|TCPOPT_NOP<<16|TCPOPT_SACK_PERMITTED<<8|TCPOLEN_SACK_PERMITTED)
+#define	TCPOPT_SACK_HDR		(TCPOPT_NOP<<24|TCPOPT_NOP<<16|TCPOPT_SACK<<8)
+/* Miscellaneous constants */
+#define	MAX_SACK_BLKS	6	/* Max # SACK blocks stored at sender side */
+#define	TCP_MAX_SACK	3	/* MAX # SACKs sent in any segment */
+
 
 /*
  * Default maximum segment size for TCP.
@@ -177,10 +199,11 @@ struct tcphdr {
  */
 #define	TCP_NODELAY	0x01	/* don't delay send to coalesce packets */
 #ifndef _POSIX_C_SOURCE
-#define	TCP_MAXSEG	0x02	/* set maximum segment size */
-#define TCP_NOPUSH	0x04	/* don't push last block of write */
-#define TCP_NOOPT	0x08	/* don't use TCP options */
+#define TCP_MAXSEG		0x02	/* set maximum segment size */
+#define TCP_NOPUSH		0x04	/* don't push last block of write */
+#define TCP_NOOPT		0x08	/* don't use TCP options */
 #define TCP_KEEPALIVE	0x10	/* idle time used when SO_KEEPALIVE is enabled */
+
 #endif /* _POSIX_C_SOURCE */
 
 #endif

@@ -1,23 +1,31 @@
 /*
  * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
+ * This file contains Original Code and/or Modifications of Original Code 
+ * as defined in and that are subject to the Apple Public Source License 
+ * Version 2.0 (the 'License'). You may not use this file except in 
+ * compliance with the License.  The rights granted to you under the 
+ * License may not be used to create, or enable the creation or 
+ * redistribution of, unlawful or unlicensed copies of an Apple operating 
+ * system, or to circumvent, violate, or enable the circumvention or 
+ * violation of, any terms of an Apple operating system software license 
+ * agreement.
+ *
+ * Please obtain a copy of the License at 
+ * http://www.opensource.apple.com/apsl/ and read it before using this 
+ * file.
+ *
+ * The Original Code and all software distributed under the License are 
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
+ * Please see the License for the specific language governing rights and 
+ * limitations under the License.
+ *
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -160,7 +168,6 @@ struct pmap {
 #define pmapKeyDef	0x00000006			/* Default keys - Sup = 1, user = 1, no ex = 0 */
 #define pmapVMhost	0x00000010			/* pmap with Virtual Machines attached to it */
 #define pmapVMgsaa	0x00000020			/* Guest shadow assist active */
-#define pmapNXdisabled	0x00000040			/* no-execute disabled for this pmap */
 	unsigned int	spaceNum;			/* Space number */
 	unsigned int	pmapCCtl;			/* Cache control */
 #define pmapCCtlVal	0xFFFF0000			/* Valid entries */
@@ -277,12 +284,13 @@ extern pmapTransTab *pmapTrans;			/* Space to pmap translate table */
 /* 
  * prototypes.
  */
-extern addr64_t	   	kvtophys(vm_offset_t va);					/* Get physical address from kernel virtual */
+extern vm_offset_t phystokv(vm_offset_t pa);					/* Get kernel virtual address from physical */
+extern vm_offset_t kvtophys(vm_offset_t va);					/* Get physical address from kernel virtual */
+extern vm_map_offset_t kvtophys64(vm_map_offset_t va);				/* Get 64-bit physical address from kernel virtual */
 extern vm_offset_t	pmap_map(vm_offset_t va,
 				 vm_offset_t spa,
 				 vm_offset_t epa,
-				 vm_prot_t prot,
-				 unsigned int flags);
+				 vm_prot_t prot);
 extern kern_return_t    pmap_add_physical_memory(vm_offset_t spa,
 						 vm_offset_t epa,
 						 boolean_t available,
@@ -320,10 +328,6 @@ extern int pmap_list_resident_pages(
 extern void pmap_init_sharedpage(vm_offset_t cpg);
 extern void pmap_map_sharedpage(task_t task, pmap_t pmap);
 extern void pmap_unmap_sharedpage(pmap_t pmap);
-extern void pmap_disable_NX(pmap_t pmap);
-/* Not required for ppc: */
-static inline void pmap_set_4GB_pagezero(__unused pmap_t pmap) {}
-static inline void pmap_clear_4GB_pagezero(__unused pmap_t pmap) {}
 
 
 

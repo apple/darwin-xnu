@@ -1,23 +1,31 @@
 /*
- * Copyright (c) 1999-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
+ * 
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code 
+ * as defined in and that are subject to the Apple Public Source License 
+ * Version 2.0 (the 'License'). You may not use this file except in 
+ * compliance with the License.  The rights granted to you under the 
+ * License may not be used to create, or enable the creation or 
+ * redistribution of, unlawful or unlicensed copies of an Apple operating 
+ * system, or to circumvent, violate, or enable the circumvention or 
+ * violation of, any terms of an Apple operating system software license 
+ * agreement.
  *
- * @APPLE_LICENSE_HEADER_START@
- * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
+ * Please obtain a copy of the License at 
+ * http://www.opensource.apple.com/apsl/ and read it before using this 
+ * file.
+ *
+ * The Original Code and all software distributed under the License are 
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
+ * Please see the License for the specific language governing rights and 
+ * limitations under the License.
+ *
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
  */
 
 #include <sys/param.h>
@@ -27,6 +35,7 @@
 #include <sys/ioctl.h>
 #include <sys/conf.h>
 #include <sys/fcntl.h>
+#include <string.h>
 #include <miscfs/devfs/devfs.h>
 #include <kern/lock.h>
 #include <sys/time.h>
@@ -35,6 +44,7 @@
 
 #include <dev/random/randomdev.h>
 #include <dev/random/YarrowCoreLib/include/yarrow.h>
+#include <crypto/sha1.h>
 
 #define RANDOM_MAJOR  -1 /* let the kernel pick the device number */
 
@@ -71,10 +81,83 @@ static mutex_t *gYarrowMutex = 0;
 #define RESEED_TICKS 50 /* how long a reseed operation can take */
 
 
+enum {kBSizeInBits = 160}; // MUST be a multiple of 32!!!
+enum {kBSizeInBytes = kBSizeInBits / 8};
+typedef u_int32_t BlockWord;
+enum {kWordSizeInBits = 32};
+enum {kBSize = 5};
+typedef BlockWord Block[kBSize];
+
+/* define prototypes to keep the compiler happy... */
+
+void add_blocks(Block a, Block b, BlockWord carry);
+void fips_initialize(void);
+void random_block(Block b);
+
+/*
+ * Get 120 bits from yarrow
+ */
+
+/*
+ * add block b to block a
+ */
+void
+add_blocks(Block a, Block b, BlockWord carry)
+{
+	int i = kBSize;
+	while (--i >= 0)
+	{
+		u_int64_t c = (u_int64_t)carry +
+					  (u_int64_t)a[i] +
+					  (u_int64_t)b[i];
+		a[i] = c & ((1LL << kWordSizeInBits) - 1);
+		carry = c >> kWordSizeInBits;
+	}
+}
+
+
+
+struct sha1_ctxt g_sha1_ctx;
+char zeros[(512 - kBSizeInBits) / 8];
+Block g_xkey;
+Block g_random_data;
+int g_bytes_used;
+
+/*
+ * Setup for fips compliance
+ */
+
+/*
+ * get a random block of data per fips 186-2
+ */
+void
+random_block(Block b)
+{
+	// do one iteration
+	Block xSeed;
+	prngOutput (gPrngRef, (BYTE*) &xSeed, sizeof (xSeed));
+	
+	// add the seed to the previous value of g_xkey
+	add_blocks (g_xkey, xSeed, 0);
+
+	// compute "G"
+	SHA1Update (&g_sha1_ctx, (const u_int8_t *) &g_xkey, sizeof (g_xkey));
+	
+	// add zeros to fill the internal SHA-1 buffer
+	SHA1Update (&g_sha1_ctx, (const u_int8_t *)zeros, sizeof (zeros));
+	
+	// write the resulting block
+	memmove(b, g_sha1_ctx.h.b8, sizeof (Block));
+	
+	// fix up the next value of g_xkey
+	add_blocks (g_xkey, b, 1);
+}
+
 /*
  *Initialize ONLY the Yarrow generator.
  */
-void PreliminarySetup( void )
+void
+PreliminarySetup(void)
 {
     prng_error_status perr;
     struct timeval tt;
@@ -108,13 +191,30 @@ void PreliminarySetup( void )
     }
     
     /* turn the data around */
-    perr = prngOutput(gPrngRef, (BYTE*) buffer, sizeof (buffer));
+    perr = prngOutput(gPrngRef, (BYTE*)buffer, sizeof (buffer));
     
     /* and scramble it some more */
     perr = prngForceReseed(gPrngRef, RESEED_TICKS);
     
     /* make a mutex to control access */
     gYarrowMutex = mutex_alloc(0);
+	
+	fips_initialize ();
+}
+
+void
+fips_initialize(void)
+{
+	/* Read the initial value of g_xkey from yarrow */
+	prngOutput (gPrngRef, (BYTE*) &g_xkey, sizeof (g_xkey));
+	
+	/* initialize our SHA1 generator */
+	SHA1Init (&g_sha1_ctx);
+	
+	/* other initializations */
+	memset (zeros, 0, sizeof (zeros));
+	g_bytes_used = 0;
+	random_block(g_random_data);
 }
 
 /*
@@ -122,7 +222,7 @@ void PreliminarySetup( void )
  * and to register ourselves with devfs
  */
 void
-random_init( void )
+random_init(void)
 {
 	int ret;
 
@@ -237,7 +337,7 @@ random_write (__unused dev_t dev, struct uio *uio, __unused int ioflag)
             goto /*ugh*/ error_exit;
         
         /* put it in Yarrow */
-        if (prngInput(gPrngRef, (BYTE*) rdBuffer,
+        if (prngInput(gPrngRef, (BYTE*)rdBuffer,
 			bytesToInput, SYSTEM_SOURCE,
         	bytesToInput * 8) != 0) {
             retCode = EIO;
@@ -261,36 +361,38 @@ error_exit: /* do this to make sure the mutex unlocks. */
 /*
  * return data to the caller.  Results unpredictable.
  */ 
-int
-random_read(__unused dev_t dev, struct uio *uio, __unused int ioflag)
+int random_read(__unused dev_t dev, struct uio *uio, __unused int ioflag)
 {
     int retCode = 0;
-    char wrBuffer[512];
-
+	
     if (gRandomError != 0)
         return (ENOTSUP);
 
    /* lock down the mutex */
     mutex_lock(gYarrowMutex);
 
-    while (uio_resid(uio) > 0 && retCode == 0) {
+	int bytes_remaining = uio_resid(uio);
+    while (bytes_remaining > 0 && retCode == 0) {
         /* get the user's data */
-        // LP64todo - fix this!  uio_resid may be 64-bit value
-        int bytesToRead = min(uio_resid(uio), sizeof (wrBuffer));
-        
-        /* get the data from Yarrow */
-        if (prngOutput(gPrngRef, (BYTE *) wrBuffer, bytesToRead) != 0) {
-            printf ("Couldn't read data from Yarrow.\n");
-            
-            /* something's really weird */
-            retCode = EIO;
-            goto error_exit;
-        }
-        
-        retCode = uiomove(wrBuffer, bytesToRead, uio);
-        
+		int bytes_to_read = 0;
+		
+		int bytes_available = kBSizeInBytes - g_bytes_used;
+        if (bytes_available == 0)
+		{
+			random_block(g_random_data);
+			g_bytes_used = 0;
+			bytes_available = kBSizeInBytes;
+		}
+		
+		bytes_to_read = min (bytes_remaining, bytes_available);
+		
+        retCode = uiomove(((u_int8_t*)g_random_data)+ g_bytes_used, bytes_to_read, uio);
+        g_bytes_used += bytes_to_read;
+
         if (retCode != 0)
             goto error_exit;
+		
+		bytes_remaining = uio_resid(uio);
     }
     
     retCode = 0;
@@ -309,7 +411,23 @@ read_random(void* buffer, u_int numbytes)
     }
     
     mutex_lock(gYarrowMutex);
-    prngOutput(gPrngRef, (BYTE *) buffer, numbytes);
+
+	int bytes_remaining = numbytes;
+    while (bytes_remaining > 0) {
+        int bytes_to_read = min(bytes_remaining, kBSizeInBytes - g_bytes_used);
+        if (bytes_to_read == 0)
+		{
+			random_block(g_random_data);
+			g_bytes_used = 0;
+			bytes_to_read = min(bytes_remaining, kBSizeInBytes);
+		}
+		
+		memmove (buffer, ((u_int8_t*)g_random_data)+ g_bytes_used, bytes_to_read);
+		g_bytes_used += bytes_to_read;
+		
+		bytes_remaining -= bytes_to_read;
+    }
+
     mutex_unlock(gYarrowMutex);
 }
 
@@ -317,7 +435,7 @@ read_random(void* buffer, u_int numbytes)
  * Return an unsigned long pseudo-random number.
  */
 u_long
-RandomULong( void )
+RandomULong(void)
 {
 	u_long buf;
 	read_random(&buf, sizeof (buf));

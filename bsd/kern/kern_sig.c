@@ -1,23 +1,31 @@
 /*
  * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
+ * This file contains Original Code and/or Modifications of Original Code 
+ * as defined in and that are subject to the Apple Public Source License 
+ * Version 2.0 (the 'License'). You may not use this file except in 
+ * compliance with the License.  The rights granted to you under the 
+ * License may not be used to create, or enable the creation or 
+ * redistribution of, unlawful or unlicensed copies of an Apple operating 
+ * system, or to circumvent, violate, or enable the circumvention or 
+ * violation of, any terms of an Apple operating system software license 
+ * agreement.
+ *
+ * Please obtain a copy of the License at 
+ * http://www.opensource.apple.com/apsl/ and read it before using this 
+ * file.
+ *
+ * The Original Code and all software distributed under the License are 
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
+ * Please see the License for the specific language governing rights and 
+ * limitations under the License.
+ *
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
  */
 /* Copyright (c) 1995-1998 Apple Computer, Inc. All Rights Reserved */
 /*
@@ -606,11 +614,8 @@ execsigs(p, thr_act)
 {
 	register struct sigacts *ps = p->p_sigacts;
 	register int nc, mask;
-	struct uthread *ut = (struct uthread *)0;
+	struct uthread *ut;
 
-	if (thr_act){
-		ut = (struct uthread *)get_bsdthread_info(thr_act);
-	}
 	/*
 	 * Reset caught signals.  Held signals remain held
 	 * through p_sigmask (unless they were caught,
@@ -624,6 +629,7 @@ execsigs(p, thr_act)
 			if (nc != SIGCONT)
 				p->p_sigignore |= mask;
 			if (thr_act){
+			 	ut = (struct uthread *)get_bsdthread_info(thr_act);
 				ut->uu_siglist &= ~mask;
 				p->p_siglist &= ~mask;
 			} else
@@ -639,13 +645,6 @@ execsigs(p, thr_act)
 	ps->ps_sigstk.ss_size = 0;
 	ps->ps_sigstk.ss_sp = USER_ADDR_NULL;
 	ps->ps_flags = 0;
-	if (thr_act) {
-		ut->uu_sigstk.ss_flags = SA_DISABLE;
-		ut->uu_sigstk.ss_size = 0;
-		ut->uu_sigstk.ss_sp = USER_ADDR_NULL;
-		ut->uu_flag &= ~UT_ALTSTACK;
-	}
-	ps->ps_sigonstack = 0;
 }
 
 /*
@@ -1076,31 +1075,18 @@ int
 sigaltstack(struct proc *p, register struct sigaltstack_args *uap, __unused register_t *retval)
 {
 	struct sigacts *psp;
-	struct user_sigaltstack *pstk;
 	struct user_sigaltstack ss;
-	struct uthread *uth;
-	int uthsigaltstack = 0;
 	int error;
 
-	uth = (struct uthread *)get_bsdthread_info(current_thread());
-	uthsigaltstack = p->p_lflag & P_LTHSIGSTACK;
-
 	psp = p->p_sigacts;
-	if (uthsigaltstack != 0)  {
-		pstk = &uth->uu_sigstk;
-		if ((uth->uu_flag & UT_ALTSTACK) == 0)
-			uth->uu_sigstk.ss_flags |= SA_DISABLE;
-	} else {
-		pstk = &psp->ps_sigstk;
-		if ((psp->ps_flags & SAS_ALTSTACK) == 0)
-			psp->ps_sigstk.ss_flags |= SA_DISABLE;
-	}
+	if ((psp->ps_flags & SAS_ALTSTACK) == 0)
+		psp->ps_sigstk.ss_flags |= SA_DISABLE;
 	if (uap->oss) {
 		if (IS_64BIT_PROCESS(p)) {
-			error = copyout(pstk, uap->oss, sizeof(struct user_sigaltstack));
+			error = copyout(&psp->ps_sigstk, uap->oss, sizeof(struct user_sigaltstack));
 		} else {
 			struct sigaltstack ss32;
-			sigaltstack_64to32(pstk, &ss32);
+			sigaltstack_64to32(&psp->ps_sigstk, &ss32);
 			error = copyout(&ss32, uap->oss, sizeof(struct sigaltstack));
 		}
 		if (error)
@@ -1122,32 +1108,18 @@ sigaltstack(struct proc *p, register struct sigaltstack_args *uap, __unused regi
 	}
 
 	if (ss.ss_flags & SA_DISABLE) {
-		if (uthsigaltstack != 0)  {
-			/* if we are here we are not in the signal handler ;so no need to check */
-			if (uth->uu_sigstk.ss_flags & SA_ONSTACK)
-				return (EINVAL);
-			uth->uu_flag &= ~UT_ALTSTACK;
-			uth->uu_sigstk.ss_flags = ss.ss_flags;
-		} else {
-			if (psp->ps_sigstk.ss_flags & SA_ONSTACK)
-				return (EINVAL);
-			psp->ps_flags &= ~SAS_ALTSTACK;
-			psp->ps_sigstk.ss_flags = ss.ss_flags;
-		}
-		
+		if (psp->ps_sigstk.ss_flags & SA_ONSTACK)
+			return (EINVAL);
+		psp->ps_flags &= ~SAS_ALTSTACK;
+		psp->ps_sigstk.ss_flags = ss.ss_flags;
 		return (0);
 	}
 /* The older stacksize was 8K, enforce that one so no compat problems */
 #define OLDMINSIGSTKSZ 8*1024
 	if (ss.ss_size < OLDMINSIGSTKSZ)
 		return (ENOMEM);
-	if (uthsigaltstack != 0)  {
-		uth->uu_flag |= UT_ALTSTACK;
-		uth->uu_sigstk= ss;
-	} else {
-		psp->ps_flags |= SAS_ALTSTACK;
-		psp->ps_sigstk= ss;
-	}
+	psp->ps_flags |= SAS_ALTSTACK;
+	psp->ps_sigstk= ss;
 	return (0);
 }
 
@@ -1495,7 +1467,7 @@ psignal_lock(p, signum, withlock)
 	register int signum;
 	register int withlock;
 {
-	register int prop;
+	register int s, prop;
 	register sig_t action;
 	thread_t	sig_thread_act;
 	register task_t		sig_task;
@@ -1530,7 +1502,9 @@ psignal_lock(p, signum, withlock)
 		return;
 	}
 
+        s = splhigh();
         KNOTE(&p->p_klist, NOTE_SIGNAL | signum);
+        splx(s);
 
 	/*
 	 * do not send signals to the process that has the thread
@@ -2666,15 +2640,12 @@ static int
 filt_sigattach(struct knote *kn)
 {
 	struct proc *p = current_proc();
-	boolean_t funnel_state;
 
 	kn->kn_ptr.p_proc = p;
 	kn->kn_flags |= EV_CLEAR;		/* automatically set */
 
-	/* Take the funnel to protect the proc while adding to the list */
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
+	/* XXX lock the proc here while adding to the list? */
 	KNOTE_ATTACH(&p->p_klist, kn);
-	thread_funnel_set(kernel_flock, funnel_state);
 
 	return (0);
 }
@@ -2683,11 +2654,8 @@ static void
 filt_sigdetach(struct knote *kn)
 {
 	struct proc *p = kn->kn_ptr.p_proc;
-	boolean_t funnel_state;
 
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	KNOTE_DETACH(&p->p_klist, kn);
-	thread_funnel_set(kernel_flock, funnel_state);
 }
 
 /*

@@ -1,23 +1,31 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
+ * 
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code 
+ * as defined in and that are subject to the Apple Public Source License 
+ * Version 2.0 (the 'License'). You may not use this file except in 
+ * compliance with the License.  The rights granted to you under the 
+ * License may not be used to create, or enable the creation or 
+ * redistribution of, unlawful or unlicensed copies of an Apple operating 
+ * system, or to circumvent, violate, or enable the circumvention or 
+ * violation of, any terms of an Apple operating system software license 
+ * agreement.
  *
- * @APPLE_LICENSE_HEADER_START@
- * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
+ * Please obtain a copy of the License at 
+ * http://www.opensource.apple.com/apsl/ and read it before using this 
+ * file.
+ *
+ * The Original Code and all software distributed under the License are 
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
+ * Please see the License for the specific language governing rights and 
+ * limitations under the License.
+ *
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
  */
 /* adspOpen.c v01.20
  *
@@ -47,6 +55,7 @@
 #include <netat/adsp.h>
 #include <netat/adsp_internal.h>
 
+extern atlock_t adspgen_lock;
 
 /*
  * NextCID
@@ -60,10 +69,12 @@
  */
 unsigned short NextCID()
 {
+	int s;
 	unsigned short num;
 	register CCB *queue;
 
 	while (1) {
+	    ATDISABLE(s, adspgen_lock);		/* Disable interrupts */
 	    num = ++adspGlobal.lastCID;
 	    /* qfind_w below is in 68K assembly */
 	    /* point to the first element */
@@ -74,6 +85,7 @@ unsigned short NextCID()
 			break;
 		    queue = queue->ccbLink;
 	    }
+	    ATENABLE(s, adspgen_lock);
 	    if (queue == (CCBPtr)NULL)
 		break;	
 	}
@@ -237,7 +249,7 @@ int adspOpen(sp, pb)		/* (DSPPBPtr pb) */
     if (ocMode == ocEstablish) { /* Only set these if establish mode */
 	sp->recvSeq = pb->u.openParams.recvSeq;
 	sp->attnRecvSeq = pb->u.openParams.attnRecvSeq;
-	UAS_ASSIGN_HTON(sp->f.CID, sp->locCID); /* Preset the CID in the ADSP header */
+	UAS_ASSIGN(sp->f.CID, sp->locCID); /* Preset the CID in the ADSP header */
 	/* This is done elsewhere for all other modes */
 	InsertTimerElem(&adspGlobal.slowTimers, &sp->ProbeTimer, 
 			sp->probeInterval);

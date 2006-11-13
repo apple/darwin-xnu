@@ -1,23 +1,31 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
+ * 
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code 
+ * as defined in and that are subject to the Apple Public Source License 
+ * Version 2.0 (the 'License'). You may not use this file except in 
+ * compliance with the License.  The rights granted to you under the 
+ * License may not be used to create, or enable the creation or 
+ * redistribution of, unlawful or unlicensed copies of an Apple operating 
+ * system, or to circumvent, violate, or enable the circumvention or 
+ * violation of, any terms of an Apple operating system software license 
+ * agreement.
  *
- * @APPLE_LICENSE_HEADER_START@
- * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
+ * Please obtain a copy of the License at 
+ * http://www.opensource.apple.com/apsl/ and read it before using this 
+ * file.
+ *
+ * The Original Code and all software distributed under the License are 
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
+ * Please see the License for the specific language governing rights and 
+ * limitations under the License.
+ *
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
  */
 /*
  * Copyright (c) 1998-2002 Luigi Rizzo, Universita` di Pisa
@@ -104,10 +112,6 @@
  * probably use an existing one ("softticks" in sys/kern/kern_timer.c)
  */
 static dn_key curr_time = 0 ; /* current simulation time */
-
-/* this is for the timer that fires to call dummynet() - we only enable the timer when
-	there are packets to process, otherwise it's disabled */
-static int timer_enabled = 0;	
 
 static int dn_hash_size = 64 ;	/* default hash size */
 
@@ -473,6 +477,9 @@ transmit_event(struct dn_pipe *pipe)
 				break ;
 			}
 			case DN_TO_IP_IN :
+				ip = mtod(m, struct ip *);
+				ip->ip_len = htons(ip->ip_len);
+				ip->ip_off = htons(ip->ip_off);
 				proto_inject(PF_INET, m);
 				break ;
 		
@@ -520,15 +527,8 @@ transmit_event(struct dn_pipe *pipe)
  * before being able to transmit a packet. The credit is taken from
  * either a pipe (WF2Q) or a flow_queue (per-flow queueing)
  */
- 
-/* hz is 100, which gives a granularity of 10ms in the old timer. 
- * The timer has been changed to fire every 1ms, so the use of
- * hz has been modified here. All instances of hz have been left
- * in place but adjusted by a factor of 10 so that hz is functionally 
- * equal to 1000.
- */
 #define SET_TICKS(_m, q, p)	\
-    ((_m)->m_pkthdr.len*8*(hz*10) - (q)->numbytes + p->bandwidth - 1 ) / \
+    ((_m)->m_pkthdr.len*8*hz - (q)->numbytes + p->bandwidth - 1 ) / \
 	    p->bandwidth ;
 
 /*
@@ -588,7 +588,7 @@ ready_event(struct dn_flow_queue *q)
     q->numbytes += ( curr_time - q->sched_time ) * p->bandwidth;
     while ( (pkt = q->head) != NULL ) {
 	int len = pkt->m_pkthdr.len;
-	int len_scaled = p->bandwidth ? len*8*(hz*10) : 0 ;
+	int len_scaled = p->bandwidth ? len*8*hz : 0 ;
 	if (len_scaled > q->numbytes )
 	    break ;
 	q->numbytes -= len_scaled ;
@@ -658,7 +658,7 @@ ready_event_wfq(struct dn_pipe *p)
 	    struct mbuf *pkt = q->head;
 	    struct dn_flow_set *fs = q->fs;
 	    u_int64_t len = pkt->m_pkthdr.len;
-	    int len_scaled = p->bandwidth ? len*8*(hz*10) : 0 ;
+	    int len_scaled = p->bandwidth ? len*8*hz : 0 ;
 
 	    heap_extract(sch, NULL); /* remove queue from heap */
 	    p->numbytes -= len_scaled ;
@@ -745,7 +745,7 @@ ready_event_wfq(struct dn_pipe *p)
 }
 
 /*
- * This is called every 1ms. It is used to
+ * This is called once per tick, or HZ times per second. It is used to
  * increment the current tick counter and schedule expired events.
  */
 static void
@@ -756,8 +756,6 @@ dummynet(void * __unused unused)
     struct dn_heap *heaps[3];
     int i;
     struct dn_pipe *pe ;
-    struct timespec ts;
-    struct timeval	tv;
 
     heaps[0] = &ready_heap ;		/* fixed-rate queues */
     heaps[1] = &wfq_ready_heap ;	/* wfq queues */
@@ -765,31 +763,25 @@ dummynet(void * __unused unused)
     
 	lck_mtx_lock(dn_mutex);
 	
-        /* make all time measurements in milliseconds (ms) -  
-         * here we convert secs and usecs to msecs (just divide the 
-	 * usecs and take the closest whole number).
-         */
-        microuptime(&tv);
-        curr_time = (tv.tv_sec * 1000) + (tv.tv_usec / 1000);
-	
+    curr_time++ ;
     for (i=0; i < 3 ; i++) {
 	h = heaps[i];
 	while (h->elements > 0 && DN_KEY_LEQ(h->p[0].key, curr_time) ) {
-		if (h->p[0].key > curr_time)
+	    if (h->p[0].key > curr_time)
 		printf("dummynet: warning, heap %d is %d ticks late\n",
-			i, (int)(curr_time - h->p[0].key));
-		p = h->p[0].object ; /* store a copy before heap_extract */
-		heap_extract(h, NULL); /* need to extract before processing */
-		if (i == 0)
+		    i, (int)(curr_time - h->p[0].key));
+	    p = h->p[0].object ; /* store a copy before heap_extract */
+	    heap_extract(h, NULL); /* need to extract before processing */
+	    if (i == 0)
 		ready_event(p) ;
-		else if (i == 1) {
+	    else if (i == 1) {
 		struct dn_pipe *pipe = p;
 		if (pipe->if_name[0] != '\0')
-			printf("dummynet: bad ready_event_wfq for pipe %s\n",
+		    printf("dummynet: bad ready_event_wfq for pipe %s\n",
 			pipe->if_name);
 		else
-			ready_event_wfq(p) ;
-		} else
+		    ready_event_wfq(p) ;
+	    } else
 		transmit_event(p);
 	}
     }
@@ -804,22 +796,9 @@ dummynet(void * __unused unused)
 	    pe->sum -= q->fs->weight ;
 	}
 	
-	/* check the heaps to see if there's still stuff in there, and 
-	 * only set the timer if there are packets to process 
-	 */
-	timer_enabled = 0;
-	for (i=0; i < 3 ; i++) {
-		h = heaps[i];
-		if (h->elements > 0) { // set the timer
-			ts.tv_sec = 0;
-			ts.tv_nsec = 1 * 1000000;	// 1ms
-			timer_enabled = 1;
-			bsd_timeout(dummynet, NULL, &ts);
-			break;
-		}
-	}
+	lck_mtx_unlock(dn_mutex);
 	
-    lck_mtx_unlock(dn_mutex);
+    timeout(dummynet, NULL, 1);
 }
  
 /*
@@ -1150,8 +1129,6 @@ dummynet_io(struct mbuf *m, int pipe_nr, int dir, struct ip_fw_args *fwa)
     u_int64_t len = m->m_pkthdr.len ;
     struct dn_flow_queue *q = NULL ;
     int is_pipe;
-    struct timespec ts;
-    struct timeval	tv;
     
 #if IPFW2
     ipfw_insn *cmd = fwa->rule->cmd + fwa->rule->act_ofs;
@@ -1166,13 +1143,6 @@ dummynet_io(struct mbuf *m, int pipe_nr, int dir, struct ip_fw_args *fwa)
     pipe_nr &= 0xffff ;
 
  	lck_mtx_lock(dn_mutex);
-
-	/* make all time measurements in milliseconds (ms) - 
-         * here we convert secs and usecs to msecs (just divide the 
-         * usecs and take the closest whole number).
-	 */
-        microuptime(&tv);
-	curr_time = (tv.tv_sec * 1000) + (tv.tv_usec / 1000);
 	
    /*
      * This is a dummynet rule, so we expect an O_PIPE or O_QUEUE rule.
@@ -1325,14 +1295,6 @@ dummynet_io(struct mbuf *m, int pipe_nr, int dir, struct ip_fw_args *fwa)
 	}
     }
 done:
-	/* start the timer and set global if not already set */
-	if (!timer_enabled) {
-		ts.tv_sec = 0;
-		ts.tv_nsec = 1 * 1000000;	// 1ms
-		timer_enabled = 1;
-		bsd_timeout(dummynet, NULL, &ts);
-    }
-
 	lck_mtx_unlock(dn_mutex);
     return 0;
 
@@ -1632,7 +1594,7 @@ config_pipe(struct dn_pipe *p)
      * delay = ms, must be translated into ticks.
      * qsize = slots/bytes
      */
-    p->delay = ( p->delay * (hz*10) ) / 1000 ;
+    p->delay = ( p->delay * hz ) / 1000 ;
     /* We need either a pipe number or a flow_set number */
     if (p->pipe_nr == 0 && pfs->fs_nr == 0)
 	return EINVAL ;
@@ -1984,7 +1946,7 @@ dummynet_get(struct sockopt *sopt)
 	 * After each flow_set, copy the queue descriptor it owns.
 	 */
 	bcopy(p, bp, sizeof( *p ) );
-	pipe_bp->delay = (pipe_bp->delay * 1000) / (hz*10) ; 
+	pipe_bp->delay = (pipe_bp->delay * 1000) / hz ;
 	/*
 	 * XXX the following is a hack based on ->next being the
 	 * first field in dn_pipe and dn_flow_set. The correct
@@ -2071,6 +2033,7 @@ ip_dn_init(void)
 	dn_mutex_grp_attr = lck_grp_attr_alloc_init();
 	dn_mutex_grp = lck_grp_alloc_init("dn", dn_mutex_grp_attr);
 	dn_mutex_attr = lck_attr_alloc_init();
+	lck_attr_setdefault(dn_mutex_attr);
 
 	if ((dn_mutex = lck_mtx_alloc_init(dn_mutex_grp, dn_mutex_attr)) == NULL) {
 		printf("ip_dn_init: can't alloc dn_mutex\n");
@@ -2090,4 +2053,6 @@ ip_dn_init(void)
     ip_dn_ctl_ptr = ip_dn_ctl;
     ip_dn_io_ptr = dummynet_io;
     ip_dn_ruledel_ptr = dn_rule_delete;
+    
+    timeout(dummynet, NULL, 1);
 }

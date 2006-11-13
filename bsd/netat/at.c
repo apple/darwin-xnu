@@ -1,23 +1,31 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
+ * 
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code 
+ * as defined in and that are subject to the Apple Public Source License 
+ * Version 2.0 (the 'License'). You may not use this file except in 
+ * compliance with the License.  The rights granted to you under the 
+ * License may not be used to create, or enable the creation or 
+ * redistribution of, unlawful or unlicensed copies of an Apple operating 
+ * system, or to circumvent, violate, or enable the circumvention or 
+ * violation of, any terms of an Apple operating system software license 
+ * agreement.
  *
- * @APPLE_LICENSE_HEADER_START@
- * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
+ * Please obtain a copy of the License at 
+ * http://www.opensource.apple.com/apsl/ and read it before using this 
+ * file.
+ *
+ * The Original Code and all software distributed under the License are 
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
+ * Please see the License for the specific language governing rights and 
+ * limitations under the License.
+ *
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
  */
 /*
  *	Copyright (c) 1998 Apple Computer, Inc. 
@@ -71,7 +79,8 @@ struct  etalk_addr      ttalk_multicast_addr = {
   {0xC0, 0x00, 0x40, 0x00, 0x00, 0x00}};
 
 /* called only in router mode */
-static int set_zones(zone_usage_t *ifz)
+static int set_zones(ifz)
+	zone_usage_t *ifz;
 
 /* 1. adds zone to table
    2. looks up each route entry from zone list
@@ -140,6 +149,7 @@ at_control(so, cmd, data, ifp)
 
     if ((cmd & 0xffff) == 0xff99) {
 		u_long 	fixed_command;
+		char ioctl_buffer[32];
 		/* *** this is a temporary hack to get at_send_to_dev() to
 		   work with BSD-style sockets instead of the special purpose 
 		   system calls, ATsocket() and ATioctl().
@@ -384,11 +394,13 @@ at_control(so, cmd, data, ifp)
 		/* Normal case; no tuple found for this name, so insert
 		 * this tuple in the registry and return ok response.
 		 */
+		ATDISABLE(nve_lock, NVE_LOCK);
 		if ((error2 = nbp_new_nve_entry(&nve, ifID)) == 0) {
 			nbpP->addr.net = ifID->ifThisNode.s_net;
 			nbpP->addr.node = ifID->ifThisNode.s_node;
 			nbpP->unique_nbp_id = nve.unique_nbp_id;
 		}
+		ATENABLE(nve_lock, NVE_LOCK);
 
 		return(error2);
 		break;
@@ -404,13 +416,16 @@ at_control(so, cmd, data, ifp)
 
 		/* delete by id */
 		if (nbpP->unique_nbp_id) {
+			ATDISABLE(nve_lock, NVE_LOCK);
 			TAILQ_FOREACH(nve_entry, &name_registry, nve_link) {
 				if (nve_entry->unique_nbp_id == nbpP->unique_nbp_id) {
 					/* Found a match! */
 					nbp_delete_entry(nve_entry);
+					ATENABLE(nve_lock, NVE_LOCK);
 					return(0);
 				}
 			}
+			ATENABLE(nve_lock, NVE_LOCK);
 			return(EADDRNOTAVAIL);
 		}
 
@@ -430,7 +445,9 @@ at_control(so, cmd, data, ifp)
 				if ((nve_entry = nbp_find_nve(&nve)) == NULL) 
 					continue;
 
+				ATDISABLE(nve_lock, NVE_LOCK);
 				nbp_delete_entry(nve_entry);
+				ATENABLE(nve_lock, NVE_LOCK);
 				found = TRUE;
 			}
 			if (found) 
@@ -446,7 +463,9 @@ at_control(so, cmd, data, ifp)
 		/* Normal case; tuple found for this name, so delete
 		 * the entry from the registry and return ok response.
 		 */
+		ATDISABLE(nve_lock, NVE_LOCK);
 		nbp_delete_entry(nve_entry);
+		ATENABLE(nve_lock, NVE_LOCK);
 		return(0);
 
 		break;
@@ -654,17 +673,21 @@ at_control(so, cmd, data, ifp)
 #endif
 
     case SIOCSETOT: {
+        int				s;
         struct atpcb	*at_pcb, *clonedat_pcb;
         int				cloned_fd = *(int *)data;
 
+        s = splnet();		/* XXX */
         at_pcb = sotoatpcb(so);
         
         /* let's make sure it's either -1 or a valid file descriptor */
         if (cloned_fd != -1) {
             struct socket	*cloned_so;
 			error = file_socket(cloned_fd, &cloned_so);
-            if (error)
+            if (error){
+                splx(s);	/* XXX */
                 break;
+            }
             clonedat_pcb = sotoatpcb(cloned_so);
         } else {
             clonedat_pcb = NULL;
@@ -675,6 +698,7 @@ at_control(so, cmd, data, ifp)
         } else {
             at_pcb->ddp_flags = clonedat_pcb->ddp_flags;
         }
+        splx(s);		/* XXX */
 		file_drop(cloned_fd);
         break;
     }

@@ -1,23 +1,31 @@
 /*
  * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
+ * This file contains Original Code and/or Modifications of Original Code 
+ * as defined in and that are subject to the Apple Public Source License 
+ * Version 2.0 (the 'License'). You may not use this file except in 
+ * compliance with the License.  The rights granted to you under the 
+ * License may not be used to create, or enable the creation or 
+ * redistribution of, unlawful or unlicensed copies of an Apple operating 
+ * system, or to circumvent, violate, or enable the circumvention or 
+ * violation of, any terms of an Apple operating system software license 
+ * agreement.
+ *
+ * Please obtain a copy of the License at 
+ * http://www.opensource.apple.com/apsl/ and read it before using this 
+ * file.
+ *
+ * The Original Code and all software distributed under the License are 
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
+ * Please see the License for the specific language governing rights and 
+ * limitations under the License.
+ *
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -71,7 +79,6 @@
 #include <sys/cdefs.h>
 #include <mach/boolean.h>
 #include <mach/kern_return.h>
-#include <mach/i386/thread_status.h>
 
 __BEGIN_DECLS
 
@@ -86,13 +93,12 @@ extern void lapic_shutdown(void);
 extern void lapic_smm_restore(void);
 extern boolean_t lapic_probe(void);
 extern void lapic_dump(void);
-extern int  lapic_interrupt(int interrupt, x86_saved_state_t *state);
+extern int  lapic_interrupt(int interrupt, void *state);
 extern void lapic_end_of_interrupt(void);
 extern int  lapic_to_cpu[];
 extern int  cpu_to_lapic[];
 extern int  lapic_interrupt_base;
 extern void lapic_cpu_map(int lapic, int cpu_num);
-extern uint32_t ml_get_apicid(uint32_t cpu);
 
 extern void lapic_set_timer(
 		boolean_t		interrupt,
@@ -109,49 +115,8 @@ extern void lapic_get_timer(
 typedef	void (*i386_intr_func_t)(void *);
 extern void lapic_set_timer_func(i386_intr_func_t func);
 extern void lapic_set_pmi_func(i386_intr_func_t func);
-extern void lapic_set_thermal_func(i386_intr_func_t func);
 
 __END_DECLS
-
-/*
- * By default, use high vectors to leave vector space for systems
- * with multiple I/O APIC's. However some systems that boot with
- * local APIC disabled will hang in SMM when vectors greater than
- * 0x5F are used. Those systems are not expected to have I/O APIC
- * so 16 (0x50 - 0x40) vectors for legacy PIC support is perfect.
- */
-#define LAPIC_DEFAULT_INTERRUPT_BASE	0xD0
-#define LAPIC_REDUCED_INTERRUPT_BASE	0x50
-/*
- * Specific lapic interrupts are relative to this base
- * in priority order from high to low:
- */
-
-#define LAPIC_PERFCNT_INTERRUPT		0xF
-#define LAPIC_TIMER_INTERRUPT		0xE
-#define LAPIC_INTERPROCESSOR_INTERRUPT	0xD
-#define LAPIC_THERMAL_INTERRUPT		0xC
-#define LAPIC_ERROR_INTERRUPT		0xB
-#define LAPIC_SPURIOUS_INTERRUPT	0xA
-/* The vector field is ignored for NMI interrupts via the LAPIC
- * or otherwise, so this is not an offset from the interrupt
- * base.
- */
-#define LAPIC_NMI_INTERRUPT		0x2
-
-#define LAPIC_REG(reg) \
-	(*((volatile uint32_t *)(lapic_start + LAPIC_##reg)))
-#define LAPIC_REG_OFFSET(reg,off) \
-	(*((volatile uint32_t *)(lapic_start + LAPIC_##reg + (off))))
-
-#define LAPIC_VECTOR(src) \
-	(lapic_interrupt_base + LAPIC_##src##_INTERRUPT)
-
-#define LAPIC_ISR_IS_SET(base,src) \
-	(LAPIC_REG_OFFSET(ISR_BASE,((base+LAPIC_##src##_INTERRUPT)/32)*0x10) & \
-		(1 <<((base + LAPIC_##src##_INTERRUPT)%32)))
-
-extern vm_offset_t	lapic_start;
 
 #endif	/* ASSEMBLER */
 
@@ -183,28 +148,20 @@ extern	void	console_cpu_free(void *console_buf);
 
 extern	int	kdb_cpu;		/* current cpu running kdb	*/
 extern	int	kdb_debug;
+extern	int	kdb_is_slave[];
 extern	int	kdb_active[];
 
 extern	volatile boolean_t mp_kdp_trap;
 extern	void	mp_kdp_enter(void);
 extern	void	mp_kdp_exit(void);
 
-#if MACH_KDB
-extern void mp_kdb_exit(void);
-#endif
-
 /*
  * All cpu rendezvous:
  */
-extern void mp_rendezvous(
-		void (*setup_func)(void *),
-		void (*action_func)(void *),
-		void (*teardown_func)(void *),
-		void *arg);
-extern void mp_rendezvous_no_intrs(
-		void (*action_func)(void *),
-		void *arg);
-extern void mp_rendezvous_break_lock(void);
+extern void mp_rendezvous(void (*setup_func)(void *),
+			  void (*action_func)(void *),
+			  void (*teardown_func)(void *),
+			  void *arg);
 
 __END_DECLS
 

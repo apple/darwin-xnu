@@ -15,7 +15,6 @@ EXPORT_ONLY_FILES = \
 	cpu_number.h \
 	cpu_data.h \
 	debug.h \
-	etimer.h \
 	ipc_mig.h \
 	kalloc.h \
 	kern_types.h \
@@ -24,8 +23,6 @@ EXPORT_ONLY_FILES = \
 	host.h \
 	mach_param.h \
 	macro_help.h \
-	pms.h \
-	page_decrypt.h \
 	processor.h \
 	queue.h \
 	sched_prim.h \

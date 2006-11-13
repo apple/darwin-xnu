@@ -1,23 +1,31 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
+ * 
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code 
+ * as defined in and that are subject to the Apple Public Source License 
+ * Version 2.0 (the 'License'). You may not use this file except in 
+ * compliance with the License.  The rights granted to you under the 
+ * License may not be used to create, or enable the creation or 
+ * redistribution of, unlawful or unlicensed copies of an Apple operating 
+ * system, or to circumvent, violate, or enable the circumvention or 
+ * violation of, any terms of an Apple operating system software license 
+ * agreement.
  *
- * @APPLE_LICENSE_HEADER_START@
- * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
+ * Please obtain a copy of the License at 
+ * http://www.opensource.apple.com/apsl/ and read it before using this 
+ * file.
+ *
+ * The Original Code and all software distributed under the License are 
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
+ * Please see the License for the specific language governing rights and 
+ * limitations under the License.
+ *
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
  */
 /*-
  * Copyright (c) 1988 University of Utah.
@@ -87,7 +95,6 @@ static caddr_t devzerobuf;
 
 extern pmap_t kernel_pmap;
 extern boolean_t kernacc(off_t, size_t );
-extern int setup_kmem;
 
 int mmread(dev_t dev, struct uio *uio);
 int mmrw(dev_t dev, struct uio *uio, enum uio_rw rw);
@@ -113,14 +120,9 @@ mmwrite(dev, uio)
 }
 
 int
-mmioctl(dev_t dev, u_long cmd, __unused caddr_t data, 
+mmioctl(__unused dev_t dev, u_long cmd, __unused caddr_t data, 
 		__unused int flag, __unused struct proc *p)
 {
-	int minnum = minor(dev);
-
-	if ((setup_kmem == 0) && ((minnum == 0) || (minnum == 1)))
-		return(EINVAL);
-
 	switch (cmd) {
 	case FIONBIO:
 	case FIOASYNC:
@@ -149,7 +151,6 @@ mmrw(dev, uio, rw)
 	int error = 0;
 	vm_offset_t	where;
 
-
 	while (uio_resid(uio) > 0 && error == 0) {
 		if (uio_iov_len(uio) == 0) {
 			uio_next_iov(uio);
@@ -162,8 +163,6 @@ mmrw(dev, uio, rw)
 
 /* minor device 0 is physical memory */
 		case 0:
-			if (setup_kmem == 0)
-				return(ENODEV);
 			vll = trunc_page_64(uio->uio_offset);
 			if(((vll >> 31) == 1) || vll >= ((dgWork.dgFlags & enaDiagDM) ? mem_actual : max_mem))
 				goto fault;
@@ -199,8 +198,6 @@ mmrw(dev, uio, rw)
 
 		/* minor device 1 is kernel memory */
 		case 1:
-			if (setup_kmem == 0)
-				return(ENODEV);
 			/* Do some sanity checking */
 			if (((addr64_t)uio->uio_offset > vm_last_addr) ||
 				((addr64_t)uio->uio_offset < VM_MIN_KERNEL_ADDRESS))

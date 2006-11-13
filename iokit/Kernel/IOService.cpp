@@ -1,23 +1,31 @@
 /*
  * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
+ * This file contains Original Code and/or Modifications of Original Code 
+ * as defined in and that are subject to the Apple Public Source License 
+ * Version 2.0 (the 'License'). You may not use this file except in 
+ * compliance with the License.  The rights granted to you under the 
+ * License may not be used to create, or enable the creation or 
+ * redistribution of, unlawful or unlicensed copies of an Apple operating 
+ * system, or to circumvent, violate, or enable the circumvention or 
+ * violation of, any terms of an Apple operating system software license 
+ * agreement.
+ *
+ * Please obtain a copy of the License at 
+ * http://www.opensource.apple.com/apsl/ and read it before using this 
+ * file.
+ *
+ * The Original Code and all software distributed under the License are 
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
+ * Please see the License for the specific language governing rights and 
+ * limitations under the License.
+ *
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
  */
  
 #include <IOKit/system.h>
@@ -191,22 +199,6 @@ bool IOService::isInactive( void ) const
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-#if __i386__
-
-// Only used by the intel implementation of
-//     IOService::requireMaxBusStall(UInt32 __unused ns)
-struct BusStallEntry
-{
-    const IOService *fService;
-    UInt32 fMaxDelay;
-};
-
-static OSData *sBusStall     = OSData::withCapacity(8 * sizeof(BusStallEntry));
-static IOLock *sBusStallLock = IOLockAlloc();
-#endif /* __i386__ */
-
-/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
-
 void IOService::initialize( void )
 {
     kern_return_t	err;
@@ -346,7 +338,6 @@ void IOService::stop( IOService * provider )
 
 void IOService::free( void )
 {
-    requireMaxBusStall(0);
     if( getPropertyTable())
         unregisterAllInterest();
     PMfree();
@@ -501,8 +492,6 @@ void IOService::startMatching( IOOptionBits options )
 	|| ((provider = getProvider())
 		&& (provider->__state[1] & kIOServiceSynchronousState));
 
-	if ( options & kIOServiceAsynchronous )
-		sync = false;
 
     needConfig =  (0 == (__state[1] & (kIOServiceNeedConfigState | kIOServiceConfigState)))
 	       && (0 == (__state[0] & kIOServiceInactiveState));
@@ -4031,9 +4020,6 @@ IOReturn IOService::newUserClient( task_t owningTask, void * securityID,
     IOUserClient *client;
     OSObject *temp;
 
-    if (kIOReturnSuccess == newUserClient( owningTask, securityID, type, handler ))
-	return kIOReturnSuccess;
-
     // First try my own properties for a user client class name
     temp = getProperty(gIOUserClientClassKey);
     if (temp) {
@@ -4051,7 +4037,6 @@ IOReturn IOService::newUserClient( task_t owningTask, void * securityID,
     if (!userClientClass)
         return kIOReturnUnsupported;
 
-    // This reference is consumed by the IOServiceOpen call
     temp = OSMetaClass::allocClassWithName(userClientClass);
     if (!temp)
         return kIOReturnNoMemory;
@@ -4086,7 +4071,7 @@ IOReturn IOService::newUserClient( task_t owningTask, void * securityID,
 IOReturn IOService::newUserClient( task_t owningTask, void * securityID,
                                     UInt32 type, IOUserClient ** handler )
 {
-    return( kIOReturnUnsupported );
+    return( newUserClient( owningTask, securityID, type, 0, handler ));
 }
 
 IOReturn IOService::requestProbe( IOOptionBits options )
@@ -4322,92 +4307,6 @@ void IOService::setDeviceMemory( OSArray * array )
 }
 
 /*
- * For machines where the transfers on an I/O bus can stall because
- * the CPU is in an idle mode, These APIs allow a driver to specify
- * the maximum bus stall that they can handle.  0 indicates no limit.
- */
-void IOService::
-setCPUSnoopDelay(UInt32 __unused ns)
-{
-#if __i386__
-    ml_set_maxsnoop(ns); 
-#endif /* __i386__ */
-}
-
-UInt32 IOService::
-getCPUSnoopDelay()
-{
-#if __i386__
-    return ml_get_maxsnoop(); 
-#else
-    return 0;
-#endif /* __i386__ */
-}
-
-void IOService::
-requireMaxBusStall(UInt32 __unused ns)
-{
-#if __i386__
-    static const UInt kNoReplace = -1U;	// Must be an illegal index
-    UInt replace = kNoReplace;
-
-    IOLockLock(sBusStallLock);
-
-    UInt count = sBusStall->getLength() / sizeof(BusStallEntry);
-    BusStallEntry *entries = (BusStallEntry *) sBusStall->getBytesNoCopy();
-
-    if (ns) {
-	const BusStallEntry ne = {this, ns};
-
-	// Set Maximum bus delay.
-	for (UInt i = 0; i < count; i++) {
-	    const IOService *thisService = entries[i].fService;
-	    if (this == thisService)
-		replace = i;
-	    else if (!thisService) {
-		if (kNoReplace == replace)
-		    replace = i;
-	    }
-	    else {
-		const UInt32 thisMax = entries[i].fMaxDelay;
-		if (thisMax < ns)
-		    ns = thisMax;
-	    }
-	}
-
-	// Must be safe to call from locked context
-	ml_set_maxbusdelay(ns);
-
-	if (kNoReplace == replace)
-	    sBusStall->appendBytes(&ne, sizeof(ne));
-	else
-	    entries[replace] = ne;
-    }
-    else {
-	ns = -1U;	// Set to max unsigned, i.e. no restriction
-
-	for (UInt i = 0; i < count; i++) {
-	    // Clear a maximum bus delay.
-	    const IOService *thisService = entries[i].fService;
-	    UInt32 thisMax = entries[i].fMaxDelay;
-	    if (this == thisService)
-		replace = i;
-	    else if (thisService && thisMax < ns)
-		ns = thisMax;
-	}
-
-	// Check if entry found
-	if (kNoReplace != replace) {
-	    entries[replace].fService = 0;	// Null the entry
-	    ml_set_maxbusdelay(ns);
-	}
-    }
-
-    IOLockUnlock(sBusStallLock);
-#endif /* __i386__ */
-}
-
-/*
  * Device interrupts
  */
 
@@ -4612,8 +4511,6 @@ OSMetaClassDefineReservedUnused(IOService, 44);
 OSMetaClassDefineReservedUnused(IOService, 45);
 OSMetaClassDefineReservedUnused(IOService, 46);
 OSMetaClassDefineReservedUnused(IOService, 47);
-
-#ifdef __ppc__
 OSMetaClassDefineReservedUnused(IOService, 48);
 OSMetaClassDefineReservedUnused(IOService, 49);
 OSMetaClassDefineReservedUnused(IOService, 50);
@@ -4630,4 +4527,3 @@ OSMetaClassDefineReservedUnused(IOService, 60);
 OSMetaClassDefineReservedUnused(IOService, 61);
 OSMetaClassDefineReservedUnused(IOService, 62);
 OSMetaClassDefineReservedUnused(IOService, 63);
-#endif

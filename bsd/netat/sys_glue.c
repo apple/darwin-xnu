@@ -1,23 +1,31 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
+ * 
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code 
+ * as defined in and that are subject to the Apple Public Source License 
+ * Version 2.0 (the 'License'). You may not use this file except in 
+ * compliance with the License.  The rights granted to you under the 
+ * License may not be used to create, or enable the creation or 
+ * redistribution of, unlawful or unlicensed copies of an Apple operating 
+ * system, or to circumvent, violate, or enable the circumvention or 
+ * violation of, any terms of an Apple operating system software license 
+ * agreement.
  *
- * @APPLE_LICENSE_HEADER_START@
- * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
+ * Please obtain a copy of the License at 
+ * http://www.opensource.apple.com/apsl/ and read it before using this 
+ * file.
+ *
+ * The Original Code and all software distributed under the License are 
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
+ * Please see the License for the specific language governing rights and 
+ * limitations under the License.
+ *
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
  */
 /*
  *	Copyright (c) 1995 Apple Computer, Inc. 
@@ -91,6 +99,7 @@ SYSCTL_STRUCT(_net_appletalk, OID_AUTO, ddpstats, CTLFLAG_RD,
 static void ioccmd_t_32_to_64( ioccmd_t *from_p, user_ioccmd_t *to_p );
 static void ioccmd_t_64_to_32( user_ioccmd_t *from_p, ioccmd_t *to_p );
 
+atlock_t refall_lock;
 
 caddr_t	atp_free_cluster_list = 0;
 
@@ -285,7 +294,7 @@ int _ATrw(fp, rw, uio, p)
      struct uio *uio;
      struct proc *p;
 {
-    int err, len, clen = 0, res;
+    int s, err, len, clen = 0, res;
     gref_t *gref;
     gbuf_t *m, *mhead, *mprev;
 
@@ -297,6 +306,7 @@ int _ATrw(fp, rw, uio, p)
     if ((len = uio_resid(uio)) == 0)
     	return 0;
 
+    ATDISABLE(s, gref->lock);
 
     if (rw == UIO_READ) {
 	KERNEL_DEBUG(DBG_ADSP_ATRW, 0, gref, len, gref->rdhead, 0);
@@ -304,18 +314,23 @@ int _ATrw(fp, rw, uio, p)
 		gref->sevents |= POLLMSG;
 		err = msleep(&gref->event, atalk_mutex, PSOCK | PCATCH, "AT read", 0);
 		gref->sevents &= ~POLLMSG;
-		if (err != 0)
+		if (err != 0) {
+			ATENABLE(s, gref->lock);
 			return err;
+		}
 		KERNEL_DEBUG(DBG_ADSP_ATRW, 1, gref, gref->rdhead, mhead, gbuf_next(mhead));
 	}
 
-	if (gref->errno)
+	if (gref->errno) {
+		ATENABLE(s, gref->lock);
 		return EPIPE;
+	}
 	if ((gref->rdhead = gbuf_next(mhead)) == 0)
 		gref->rdtail = 0;
 
 	KERNEL_DEBUG(DBG_ADSP_ATRW, 2, gref, gref->rdhead, mhead, gbuf_next(mhead));
 
+	ATENABLE(s, gref->lock);
 
 //##### LD TEST 08/05
 //	simple_lock(&gref->lock);
@@ -347,10 +362,12 @@ int _ATrw(fp, rw, uio, p)
 			gbuf_cont(mprev) = 0;
 		else
 			mhead = 0;
+		ATDISABLE(s, gref->lock);
 		if (gref->rdhead == 0)
 			gref->rdtail = m;
 		gbuf_next(m) = gref->rdhead;
 		gref->rdhead = m;
+		ATENABLE(s, gref->lock);
 	}
 	if (mhead)
 		gbuf_freem(mhead);
@@ -363,11 +380,14 @@ int _ATrw(fp, rw, uio, p)
 			gref->sevents |= POLLSYNC;
 			err = msleep(&gref->event, atalk_mutex, PSOCK | PCATCH, "AT write", 0);
 			gref->sevents &= ~POLLSYNC;
-			if (err != 0)
+			if (err != 0) {
+				ATENABLE(s, gref->lock);
 				return err;
+			}
 		}
 	}
 
+	ATENABLE(s, gref->lock);
 
 	/* allocate a buffer to copy in the write data */
 	if ((m = gbuf_alloc(AT_WR_OFFSET+len, PRI_MED)) == 0)
@@ -428,7 +448,7 @@ int _ATwrite(fp, uio, cred, flags, p)
 /* bms:  update to be callable from kernel */
 int at_ioctl(gref_t *gref, u_long cmd, caddr_t arg, int fromKernel)
 {
-    int err = 0, len;
+    int s, err = 0, len;
     u_int size;
     gbuf_t *m, *mdata;
     ioc_t *ioc;
@@ -508,6 +528,7 @@ int at_ioctl(gref_t *gref, u_long cmd, caddr_t arg, int fromKernel)
 	gref_wput(gref, m);
 
     /* wait for the ioc ack */
+    ATDISABLE(s, gref->lock);
     while ((m = gref->ichead) == 0) {
         gref->sevents |= POLLPRI;
 #ifdef APPLETALK_DEBUG
@@ -516,6 +537,7 @@ int at_ioctl(gref_t *gref, u_long cmd, caddr_t arg, int fromKernel)
 		err = msleep(&gref->iocevent, atalk_mutex, PSOCK | PCATCH, "AT ioctl", 0);
 		gref->sevents &= ~POLLPRI;
 		if (err != 0) {
+			ATENABLE(s, gref->lock);
 #ifdef APPLETALK_DEBUG
 			kprintf("at_ioctl: EINTR\n");
 #endif
@@ -529,6 +551,7 @@ int at_ioctl(gref_t *gref, u_long cmd, caddr_t arg, int fromKernel)
 
 	gref->ichead = gbuf_next(m);
 
+	ATENABLE(s, gref->lock);
 
 #ifdef APPLETALK_DEBUG
 	kprintf("at_ioctl: woke up from ioc sleep gref = 0x%x\n", 
@@ -615,7 +638,7 @@ int _ATselect(fp, which, wql, proc)
 	void * wql;
 	struct proc *proc;
 {
-	int err, rc = 0;
+	int s, err, rc = 0;
 	gref_t *gref;
 
 	/* Radar 4128949: Drop the proc_fd lock here to avoid lock inversion issues with the other AT calls
@@ -633,6 +656,7 @@ int _ATselect(fp, which, wql, proc)
 	if (err != 0)
 		rc = 1;
 	else {
+	     ATDISABLE(s, gref->lock);
 	     if (which == FREAD) {
 		  if (gref->rdhead || (gref->readable && (*gref->readable)(gref)))
 		       rc = 1;
@@ -652,6 +676,7 @@ int _ATselect(fp, which, wql, proc)
 		  } else
 		       rc = 1;
 	     }
+	     ATENABLE(s, gref->lock);
 	}
 
 	return rc;
@@ -669,7 +694,9 @@ void atalk_putnext(gref, m)
 	gref_t *gref;
 	gbuf_t *m;
 {
+	int s;
 
+	ATDISABLE(s, gref->lock);
 
 	/* *** potential leak? *** */
 	gbuf_next(m) = 0;
@@ -714,6 +741,7 @@ void atalk_putnext(gref, m)
 		    }
 	} /* switch gbuf_type(m) */
 
+	ATENABLE(s, gref->lock);
 } /* atalk_putnext */
 
 void atalk_enablew(gref)
@@ -726,7 +754,9 @@ void atalk_enablew(gref)
 void atalk_flush(gref)
 	gref_t *gref;
 {
+	int s;
 
+	ATDISABLE(s, gref->lock);
 	if (gref->rdhead) {
 		gbuf_freel(gref->rdhead);
 		gref->rdhead = 0;
@@ -735,6 +765,7 @@ void atalk_flush(gref)
 		gbuf_freel(gref->ichead);
 		gref->ichead = 0;
 	}
+	ATENABLE(s, gref->lock);
 }
 
 /*
@@ -745,6 +776,8 @@ void atalk_notify(gref, errno)
 	register gref_t *gref;
 	int errno;
 {
+	int s;
+	ATDISABLE(s, gref->lock);
 
 	if (gref->atpcb_socket) {
 	    /* For DDP --
@@ -775,29 +808,35 @@ void atalk_notify(gref, errno)
 		}
 	    }
 	}
+	ATENABLE(s, gref->lock);
 } /* atalk_notify */
 
 void atalk_notify_sel(gref)
 	gref_t *gref;
 {
+	int s;
 
+	ATDISABLE(s, gref->lock);
 	if (gref->sevents & POLLIN) {
 		gref->sevents &= ~POLLIN;
 		selwakeup(&gref->si);
 	}
+	ATENABLE(s, gref->lock);
 }
 
 int atalk_peek(gref, event)
 	gref_t *gref;
 	unsigned char *event;
 {
-	int rc;
+	int s, rc;
 
+	ATDISABLE(s, gref->lock);
 	if (gref->rdhead) {
 		*event = *gbuf_rptr(gref->rdhead);
 		rc = 0;
 	} else
 		rc = -1;
+	ATENABLE(s, gref->lock);
 
 	return rc;
 }
@@ -843,13 +882,15 @@ int gref_alloc(grefp)
 	gref_t **grefp;
 {
 	extern gbuf_t *atp_resource_m;
-	int i;
+	int i, s;
 	gbuf_t *m;
 	gref_t *gref, *gref_array;
 
 	*grefp = (gref_t *)NULL;
 
+	ATDISABLE(s, refall_lock);
 	if (gref_free_list == 0) {
+		ATENABLE(s, refall_lock);
 #ifdef APPLETALK_DEBUG
 		kprintf("gref_alloc: gbufalloc size=%d\n", GREF_PER_BLK*sizeof(gref_t));
 #endif
@@ -859,6 +900,7 @@ int gref_alloc(grefp)
 		gref_array = (gref_t *)gbuf_rptr(m);
 		for (i=0; i < GREF_PER_BLK-1; i++)
 			gref_array[i].atpcb_next = (gref_t *)&gref_array[i+1];
+		ATDISABLE(s, refall_lock);
 		gbuf_cont(m) = atp_resource_m;
 		atp_resource_m = m;
 		gref_array[i].atpcb_next = gref_free_list;
@@ -867,6 +909,10 @@ int gref_alloc(grefp)
 
 	gref = gref_free_list;
 	gref_free_list = gref->atpcb_next;
+	ATENABLE(s, refall_lock);
+	ATLOCKINIT(gref->lock);
+//### LD Test 08/05/98
+//	simple_lock_init(&gref->lock);
 	ATEVENTINIT(gref->event);
 	ATEVENTINIT(gref->iocevent);
 
@@ -880,7 +926,7 @@ int gref_alloc(grefp)
 /* bms:  make gref_close callable from kernel */
 int gref_close(gref_t *gref)
 {
-	int rc;
+	int s, rc;
 
 	switch (gref->proto) {
 
@@ -908,9 +954,11 @@ int gref_close(gref_t *gref)
 		selthreadclear(&gref->si);
 
 		/* from original gref_free() */
+		ATDISABLE(s, refall_lock);
 		bzero((char *)gref, sizeof(gref_t));
 		gref->atpcb_next = gref_free_list;
 		gref_free_list = gref;
+		ATENABLE(s, refall_lock);
 	}
 
 	return rc;
@@ -947,7 +995,7 @@ struct mbuf *m_clattach(extbuf, extfree, extsize, extarg, wait)
         m->m_ext.ext_size = extsize;
         m->m_ext.ext_arg = extarg;
         m->m_ext.ext_refs.forward = 
-	  	m->m_ext.ext_refs.backward = &m->m_ext.ext_refs;
+	  m->m_ext.ext_refs.backward = &m->m_ext.ext_refs;
         m->m_data = extbuf;
         m->m_flags |= M_EXT;
 

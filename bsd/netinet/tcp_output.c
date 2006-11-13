@@ -1,23 +1,31 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
+ * 
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code 
+ * as defined in and that are subject to the Apple Public Source License 
+ * Version 2.0 (the 'License'). You may not use this file except in 
+ * compliance with the License.  The rights granted to you under the 
+ * License may not be used to create, or enable the creation or 
+ * redistribution of, unlawful or unlicensed copies of an Apple operating 
+ * system, or to circumvent, violate, or enable the circumvention or 
+ * violation of, any terms of an Apple operating system software license 
+ * agreement.
  *
- * @APPLE_LICENSE_HEADER_START@
- * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
+ * Please obtain a copy of the License at 
+ * http://www.opensource.apple.com/apsl/ and read it before using this 
+ * file.
+ *
+ * The Original Code and all software distributed under the License are 
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
+ * Please see the License for the specific language governing rights and 
+ * limitations under the License.
+ *
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
  */
 /*
  * Copyright (c) 1982, 1986, 1988, 1990, 1993, 1995
@@ -162,11 +170,10 @@ get_socket_id(struct socket * s)
  * Tcp output routine: figure out what should be sent and send it.
  */
 int
-tcp_output(tp)
-	register struct tcpcb *tp;
+tcp_output(struct tcpcb *tp)
 {
-	register struct socket *so = tp->t_inpcb->inp_socket;
-	register long len, win;
+	struct socket *so = tp->t_inpcb->inp_socket;
+	long len, recwin, sendwin;
 	int off, flags, error;
 	register struct mbuf *m;
 	struct ip *ip = NULL;
@@ -178,6 +185,10 @@ tcp_output(tp)
 	u_char opt[TCP_MAXOLEN];
 	unsigned ipoptlen, optlen, hdrlen;
 	int idle, sendalot, howmuchsent = 0;
+	int i, sack_rxmit;
+	int sack_bytes_rxmt;
+	struct sackhole *p;
+
 	int maxburst = TCP_MAXBURST;
 	struct rmxp_tao *taop;
 	struct rmxp_tao tao_noncached;
@@ -200,16 +211,16 @@ tcp_output(tp)
 	 * If there is some data or critical controls (SYN, RST)
 	 * to send, then transmit; otherwise, investigate further.
 	 */
-	idle = (tp->snd_max == tp->snd_una);
+	idle = (tp->t_flags & TF_LASTIDLE) || (tp->snd_max == tp->snd_una);
 	if (idle && tp->t_rcvtime >= tp->t_rxtcur) {
 		/*
 		 * We have been idle for "a while" and no acks are
 		 * expected to clock out any data we send --
 		 * slow start to get ack "clock" running again.
-		 *       
+		 *
 		 * Set the slow-start flight size depending on whether
 		 * this is a local network or not.
-		 */      
+		 */
 		if (
 #if INET6
 		    (isipv6 && in6_localaddr(&tp->t_inpcb->in6p_faddr)) ||
@@ -224,7 +235,13 @@ tcp_output(tp)
 		else     
 			tp->snd_cwnd = tp->t_maxseg * ss_fltsz;
 	}
-
+	tp->t_flags &= ~TF_LASTIDLE;
+	if (idle) {
+		if (tp->t_flags & TF_MORETOCOME) {
+			tp->t_flags |= TF_LASTIDLE;
+			idle = 0;
+		}
+	}
 again:
 	KERNEL_DEBUG(DBG_FNC_TCP_OUTPUT | DBG_FUNC_START, 0,0,0,0,0);
 
@@ -287,13 +304,75 @@ again:
 		}
         }
 	}
+
+	/*
+	 * If we've recently taken a timeout, snd_max will be greater than
+	 * snd_nxt.  There may be SACK information that allows us to avoid
+	 * resending already delivered data.  Adjust snd_nxt accordingly.
+	 */
+	if (tp->sack_enable && SEQ_LT(tp->snd_nxt, tp->snd_max))
+		tcp_sack_adjust(tp);
 	sendalot = 0;
 	off = tp->snd_nxt - tp->snd_una;
-	win = min(tp->snd_wnd, tp->snd_cwnd);
+	sendwin = min(tp->snd_wnd, tp->snd_cwnd);
+
 	if (tp->t_flags & TF_SLOWLINK && slowlink_wsize > 0)
-		win = min(win, slowlink_wsize);
+		sendwin = min(sendwin, slowlink_wsize);
 
 	flags = tcp_outflags[tp->t_state];
+	/*
+	 * Send any SACK-generated retransmissions.  If we're explicitly trying
+	 * to send out new data (when sendalot is 1), bypass this function.
+	 * If we retransmit in fast recovery mode, decrement snd_cwnd, since
+	 * we're replacing a (future) new transmission with a retransmission
+	 * now, and we previously incremented snd_cwnd in tcp_input().
+	 */
+	/*
+	 * Still in sack recovery , reset rxmit flag to zero.
+	 */
+	sack_rxmit = 0;
+	sack_bytes_rxmt = 0;
+	len = 0;
+	p = NULL;
+	if (tp->sack_enable && IN_FASTRECOVERY(tp) &&
+	    (p = tcp_sack_output(tp, &sack_bytes_rxmt))) {
+		long cwin;
+		
+		cwin = min(tp->snd_wnd, tp->snd_cwnd) - sack_bytes_rxmt;
+		if (cwin < 0)
+			cwin = 0;
+		/* Do not retransmit SACK segments beyond snd_recover */
+		if (SEQ_GT(p->end, tp->snd_recover)) {
+			/*
+			 * (At least) part of sack hole extends beyond
+			 * snd_recover. Check to see if we can rexmit data
+			 * for this hole.
+			 */
+			if (SEQ_GEQ(p->rxmit, tp->snd_recover)) {
+				/*
+				 * Can't rexmit any more data for this hole.
+				 * That data will be rexmitted in the next
+				 * sack recovery episode, when snd_recover
+				 * moves past p->rxmit.
+				 */
+				p = NULL;
+				goto after_sack_rexmit;
+			} else
+				/* Can rexmit part of the current hole */
+				len = ((long)ulmin(cwin,
+						   tp->snd_recover - p->rxmit));
+		} else
+			len = ((long)ulmin(cwin, p->end - p->rxmit));
+		off = p->rxmit - tp->snd_una;
+		if (len > 0) {
+			sack_rxmit = 1;
+			sendalot = 1;
+			tcpstat.tcps_sack_rexmits++;
+			tcpstat.tcps_sack_rexmit_bytes +=
+			    min(len, tp->t_maxseg);
+		}
+	}
+after_sack_rexmit:
 	/*
 	 * Get standard flags, and add SYN or FIN if requested by 'hidden'
 	 * state flags.
@@ -310,7 +389,7 @@ again:
 	 * and go to transmit state.
 	 */
 	if (tp->t_force) {
-		if (win == 0) {
+		if (sendwin == 0) {
 			/*
 			 * If we still have some data to send, then
 			 * clear the FIN bit.  Usually this would
@@ -329,18 +408,58 @@ again:
 			 */
 			if (off < so->so_snd.sb_cc)
 				flags &= ~TH_FIN;
-			win = 1;
+			sendwin = 1;
 		} else {
 			tp->t_timer[TCPT_PERSIST] = 0;
 			tp->t_rxtshift = 0;
 		}
 	}
 
-	len = (long)ulmin(so->so_snd.sb_cc, win) - off;
+	/*
+	 * If snd_nxt == snd_max and we have transmitted a FIN, the
+	 * offset will be > 0 even if so_snd.sb_cc is 0, resulting in
+	 * a negative length.  This can also occur when TCP opens up
+	 * its congestion window while receiving additional duplicate
+	 * acks after fast-retransmit because TCP will reset snd_nxt
+	 * to snd_max after the fast-retransmit.
+	 *
+	 * In the normal retransmit-FIN-only case, however, snd_nxt will
+	 * be set to snd_una, the offset will be 0, and the length may
+	 * wind up 0.
+	 *
+	 * If sack_rxmit is true we are retransmitting from the scoreboard
+	 * in which case len is already set.
+	 */
+	if (sack_rxmit == 0) {
+		if (sack_bytes_rxmt == 0)
+			len = ((long)ulmin(so->so_snd.sb_cc, sendwin) - off);
+		else {
+			long cwin;
 
-	if ((taop = tcp_gettaocache(tp->t_inpcb)) == NULL) {
-		taop = &tao_noncached;
-		bzero(taop, sizeof(*taop));
+                        /*
+			 * We are inside of a SACK recovery episode and are
+			 * sending new data, having retransmitted all the
+			 * data possible in the scoreboard.
+			 */
+			len = ((long)ulmin(so->so_snd.sb_cc, tp->snd_wnd) 
+			       - off);
+			/*
+			 * Don't remove this (len > 0) check !
+			 * We explicitly check for len > 0 here (although it 
+			 * isn't really necessary), to work around a gcc 
+			 * optimization issue - to force gcc to compute
+			 * len above. Without this check, the computation
+			 * of len is bungled by the optimizer.
+			 */
+			if (len > 0) {
+				cwin = tp->snd_cwnd - 
+					(tp->snd_nxt - tp->sack_newdata) -
+					sack_bytes_rxmt;
+				if (cwin < 0)
+					cwin = 0;
+				len = lmin(len, cwin);
+			}
+		}
 	}
 
 	/*
@@ -351,8 +470,7 @@ again:
 	if ((flags & TH_SYN) && SEQ_GT(tp->snd_nxt, tp->snd_una)) {
 		flags &= ~TH_SYN;
 		off--, len++;
-		if (len > 0 && tp->t_state == TCPS_SYN_SENT &&
-		    taop->tao_ccsent == 0) {
+		if (len > 0 && tp->t_state == TCPS_SYN_SENT) {
 			if (packetlist) {
 				error = ip_output_list(packetlist, packchain_listadd, tp->t_inpcb->inp_options, &tp->t_inpcb->inp_route,
     				(so->so_options & SO_DONTROUTE), 0);
@@ -364,14 +482,11 @@ again:
 	}
 
 	/*
-	 * Be careful not to send data and/or FIN on SYN segments
-	 * in cases when no CC option will be sent.
+	 * Be careful not to send data and/or FIN on SYN segments.
 	 * This measure is needed to prevent interoperability problems
 	 * with not fully conformant TCP implementations.
 	 */
-	if ((flags & TH_SYN) &&
-	    ((tp->t_flags & TF_NOOPT) || !(tp->t_flags & TF_REQ_CC) ||
-	     ((flags & TH_ACK) && !(tp->t_flags & TF_RCVD_CC)))) {
+	if ((flags & TH_SYN) && (tp->t_flags & TF_NOOPT)) {
 		len = 0;
 		flags &= ~TH_FIN;
 	}
@@ -380,7 +495,7 @@ again:
 		/*
 		 * If FIN has been sent but not acked,
 		 * but we haven't been called to retransmit,
-		 * len will be -1.  Otherwise, window shrank
+		 * len will be < 0.  Otherwise, window shrank
 		 * after we sent into it.  If window shrank to 0,
 		 * cancel pending retransmit, pull snd_nxt back
 		 * to (closed) window, and set the persist timer
@@ -388,7 +503,7 @@ again:
 		 * close completely, just wait for an ACK.
 		 */
 		len = 0;
-		if (win == 0) {
+		if (sendwin == 0) {
 			tp->t_timer[TCPT_REXMT] = 0;
 			tp->t_rxtshift = 0;
 			tp->snd_nxt = tp->snd_una;
@@ -396,28 +511,41 @@ again:
 				tcp_setpersist(tp);
 		}
 	}
+
+	/*
+	 * len will be >= 0 after this point.  Truncate to the maximum
+	 * segment length and ensure that FIN is removed if the length
+	 * no longer contains the last data byte.
+	 */
 	if (len > tp->t_maxseg) {
 		len = tp->t_maxseg;
 		howmuchsent += len;
 		sendalot = 1;
 	}
-	if (SEQ_LT(tp->snd_nxt + len, tp->snd_una + so->so_snd.sb_cc))
-		flags &= ~TH_FIN;
+	if (sack_rxmit) {
+		if (SEQ_LT(p->rxmit + len, tp->snd_una + so->so_snd.sb_cc))
+			flags &= ~TH_FIN;
+	} else {
+		if (SEQ_LT(tp->snd_nxt + len, tp->snd_una + so->so_snd.sb_cc))
+			flags &= ~TH_FIN;
+	}
 
 	if (tp->t_flags & TF_SLOWLINK && slowlink_wsize > 0 )	/* Clips window size for slow links */
-		win = min(sbspace(&so->so_rcv), slowlink_wsize);
+		recwin = min(sbspace(&so->so_rcv), slowlink_wsize);
 	else
-		win = sbspace(&so->so_rcv);
+		recwin = sbspace(&so->so_rcv);
 
 	/*
-	 * Sender silly window avoidance.  If connection is idle
-	 * and can send all data, a maximum segment,
-	 * at least a maximum default-size segment do it,
-	 * or are forced, do it; otherwise don't bother.
-	 * If peer's buffer is tiny, then send
-	 * when window is at least half open.
-	 * If retransmitting (possibly after persist timer forced us
-	 * to send into a small window), then must resend.
+	 * Sender silly window avoidance.   We transmit under the following
+	 * conditions when len is non-zero:
+	 *
+	 *	- We have a full segment
+	 *	- This is the last buffer in a write()/send() and we are
+	 *	  either idle or running NODELAY
+	 *	- we've timed out (e.g. persist timer)
+	 *	- we have more then 1/2 the maximum send window's worth of
+	 *	  data (receiver may be limited the window size)
+	 *	- we need to retransmit
 	 */
 	if (len) {
 		if (len == tp->t_maxseg)
@@ -431,7 +559,9 @@ again:
 			goto send;
 		if (len >= tp->max_sndwnd / 2 && tp->max_sndwnd > 0)
 			goto send;
-		if (SEQ_LT(tp->snd_nxt, tp->snd_max))
+		if (SEQ_LT(tp->snd_nxt, tp->snd_max))	/* retransmit case */
+			goto send;
+		if (sack_rxmit)
 			goto send;
 	}
 
@@ -441,14 +571,15 @@ again:
 	 * next expected input).  If the difference is at least two
 	 * max size segments, or at least 50% of the maximum possible
 	 * window, then want to send a window update to peer.
+	 * Skip this if the connection is in T/TCP half-open state.
 	 */
-	if (win > 0) {
+	if (recwin > 0 && !(tp->t_flags & TF_NEEDSYN)) {
 		/*
 		 * "adv" is the amount we can increase the window,
 		 * taking into account that we are limited by
 		 * TCP_MAXWIN << tp->rcv_scale.
 		 */
-		long adv = min(win, (long)TCP_MAXWIN << tp->rcv_scale) -
+		long adv = min(recwin, (long)TCP_MAXWIN << tp->rcv_scale) -
 			(tp->rcv_adv - tp->rcv_nxt);
 
 		if (adv >= (long) (2 * tp->t_maxseg))
@@ -458,7 +589,8 @@ again:
 	}
 
 	/*
-	 * Send if we owe peer an ACK.
+	 * Send if we owe the peer an ACK, RST, SYN, or urgent data.  ACKNOW
+	 * is also a catch-all for the retransmit timer timeout case.
 	 */
 	if (tp->t_flags & TF_ACKNOW)
 		goto send;
@@ -469,13 +601,22 @@ again:
 		goto send;
 	/*
 	 * If our state indicates that FIN should be sent
-	 * and we have not yet done so, or we're retransmitting the FIN,
-	 * then we need to send.
+	 * and we have not yet done so, then we need to send.
 	 */
 	if (flags & TH_FIN &&
 	    ((tp->t_flags & TF_SENTFIN) == 0 || tp->snd_nxt == tp->snd_una))
 		goto send;
-
+	/*
+	 * In SACK, it is possible for tcp_output to fail to send a segment
+	 * after the retransmission timer has been turned off.  Make sure
+	 * that the retransmission timer is set.
+	 */
+	if (tp->sack_enable && SEQ_GT(tp->snd_max, tp->snd_una) &&
+		tp->t_timer[TCPT_REXMT] == 0 &&
+	    tp->t_timer[TCPT_PERSIST] == 0) {
+			tp->t_timer[TCPT_REXMT] = tp->t_rxtcur;
+			goto just_return;
+	} 
 	/*
 	 * TCP window updates are not reliable, rather a polling protocol
 	 * using ``persist'' packets is used to insure receipt of window
@@ -503,7 +644,7 @@ again:
 		tp->t_rxtshift = 0;
 		tcp_setpersist(tp);
 	}
-
+just_return:
 	/*
 	 * If there is no reason to send a segment, just return.
 	 * but if there is some packets left in the packet list, send them now.
@@ -573,78 +714,92 @@ send:
  		optlen += TCPOLEN_TSTAMP_APPA;
  	}
 
- 	/*
-	 * Send `CC-family' options if our side wants to use them (TF_REQ_CC),
-	 * options are allowed (!TF_NOOPT) and it's not a RST.
- 	 */
- 	if ((tp->t_flags & (TF_REQ_CC|TF_NOOPT)) == TF_REQ_CC &&
- 	     (flags & TH_RST) == 0) {
-		switch (flags & (TH_SYN|TH_ACK)) {
-		/*
-		 * This is a normal ACK, send CC if we received CC before
-		 * from our peer.
+	if (tp->sack_enable && ((tp->t_flags & TF_NOOPT) == 0)) {
+		/* 
+		 * Tack on the SACK permitted option *last*.
+		 * And do padding of options after tacking this on.
+		 * This is because of MSS, TS, WinScale and Signatures are
+		 * all present, we have just 2 bytes left for the SACK
+		 * permitted option, which is just enough.
 		 */
-		case TH_ACK:
-			if (!(tp->t_flags & TF_RCVD_CC))
-				break;
-			/*FALLTHROUGH*/
-
 		/*
-		 * We can only get here in T/TCP's SYN_SENT* state, when
-		 * we're a sending a non-SYN segment without waiting for
-		 * the ACK of our SYN.  A check above assures that we only
-		 * do this if our peer understands T/TCP.
+		 * If this is the first SYN of connection (not a SYN
+		 * ACK), include SACK permitted option.  If this is a
+		 * SYN ACK, include SACK permitted option if peer has
+		 * already done so. This is only for active connect,
+		 * since the syncache takes care of the passive connect.
 		 */
-		case 0:
-			opt[optlen++] = TCPOPT_NOP;
-			opt[optlen++] = TCPOPT_NOP;
-			opt[optlen++] = TCPOPT_CC;
-			opt[optlen++] = TCPOLEN_CC;
-			*(u_int32_t *)&opt[optlen] = htonl(tp->cc_send);
+		if ((flags & TH_SYN) &&
+		    (!(flags & TH_ACK) || (tp->t_flags & TF_SACK_PERMIT))) {
+			u_char *bp;
+			bp = (u_char *)opt + optlen;
 
-			optlen += 4;
-			break;
-
-		/*
-		 * This is our initial SYN, check whether we have to use
-		 * CC or CC.new.
-		 */
-		case TH_SYN:
-			opt[optlen++] = TCPOPT_NOP;
-			opt[optlen++] = TCPOPT_NOP;
-			opt[optlen++] = tp->t_flags & TF_SENDCCNEW ?
-						TCPOPT_CCNEW : TCPOPT_CC;
-			opt[optlen++] = TCPOLEN_CC;
-			*(u_int32_t *)&opt[optlen] = htonl(tp->cc_send);
- 			optlen += 4;
-			break;
-
-		/*
-		 * This is a SYN,ACK; send CC and CC.echo if we received
-		 * CC from our peer.
-		 */
-		case (TH_SYN|TH_ACK):
-			if (tp->t_flags & TF_RCVD_CC) {
-				opt[optlen++] = TCPOPT_NOP;
-				opt[optlen++] = TCPOPT_NOP;
-				opt[optlen++] = TCPOPT_CC;
-				opt[optlen++] = TCPOLEN_CC;
-				*(u_int32_t *)&opt[optlen] =
-					htonl(tp->cc_send);
-				optlen += 4;
-				opt[optlen++] = TCPOPT_NOP;
-				opt[optlen++] = TCPOPT_NOP;
-				opt[optlen++] = TCPOPT_CCECHO;
-				opt[optlen++] = TCPOLEN_CC;
-				*(u_int32_t *)&opt[optlen] =
-					htonl(tp->cc_recv);
-				optlen += 4;
-			}
-			break;
+			*bp++ = TCPOPT_SACK_PERMITTED;
+			*bp++ = TCPOLEN_SACK_PERMITTED;
+			optlen += TCPOLEN_SACK_PERMITTED;
 		}
- 	}
 
- 	hdrlen += optlen;
+		/*
+		 * Send SACKs if necessary.  This should be the last
+		 * option processed.  Only as many SACKs are sent as
+		 * are permitted by the maximum options size.
+		 *
+		 * In general, SACK blocks consume 8*n+2 bytes.
+		 * So a full size SACK blocks option is 34 bytes
+		 * (to generate 4 SACK blocks).  At a minimum,
+		 * we need 10 bytes (to generate 1 SACK block).
+		 * If TCP Timestamps (12 bytes) and TCP Signatures
+		 * (18 bytes) are both present, we'll just have
+		 * 10 bytes for SACK options 40 - (12 + 18).
+		 */
+		if (TCPS_HAVEESTABLISHED(tp->t_state) &&
+		    (tp->t_flags & TF_SACK_PERMIT) && tp->rcv_numsacks > 0 &&
+		    MAX_TCPOPTLEN - optlen - 2 >= TCPOLEN_SACK) {
+			int nsack, sackoptlen, padlen;
+			u_char *bp = (u_char *)opt + optlen;
+			u_int32_t *lp;
+
+			nsack = (MAX_TCPOPTLEN - optlen - 2) / TCPOLEN_SACK;
+			nsack = min(nsack, tp->rcv_numsacks);
+			sackoptlen = (2 + nsack * TCPOLEN_SACK);
+
+			/*
+			 * First we need to pad options so that the
+			 * SACK blocks can start at a 4-byte boundary
+			 * (sack option and length are at a 2 byte offset).
+			 */
+			padlen = (MAX_TCPOPTLEN - optlen - sackoptlen) % 4;
+			optlen += padlen;
+			while (padlen-- > 0)
+				*bp++ = TCPOPT_NOP;
+
+			tcpstat.tcps_sack_send_blocks++;
+			*bp++ = TCPOPT_SACK;
+			*bp++ = sackoptlen;
+			lp = (u_int32_t *)bp;
+			for (i = 0; i < nsack; i++) {
+				struct sackblk sack = tp->sackblks[i];
+				*lp++ = htonl(sack.start);
+				*lp++ = htonl(sack.end);
+			}
+			optlen += sackoptlen;
+		}
+	}
+
+	/* Pad TCP options to a 4 byte boundary */
+	if (optlen < MAX_TCPOPTLEN && (optlen % sizeof(u_int32_t))) {
+		int pad = sizeof(u_int32_t) - (optlen % sizeof(u_int32_t));
+		u_char *bp = (u_char *)opt + optlen;
+
+		optlen += pad;
+		while (pad) {
+			*bp++ = TCPOPT_EOL;
+			pad--;
+		}
+	}
+
+	hdrlen += optlen;
+
 #if INET6
 	if (isipv6)
 		ipoptlen = ip6_optlen(tp->t_inpcb);
@@ -654,9 +809,8 @@ send:
 		if (tp->t_inpcb->inp_options) {
 			ipoptlen = tp->t_inpcb->inp_options->m_len -
 				offsetof(struct ipoption, ipopt_list);
-		} else {
+		} else
 			ipoptlen = 0;
-		}
 	}
 #if IPSEC
 	if (ipsec_bypass == 0)
@@ -877,10 +1031,16 @@ send:
 	 * case, since we know we aren't doing a retransmission.
 	 * (retransmit and persist are mutually exclusive...)
 	 */
-	if (len || (flags & (TH_SYN|TH_FIN)) || tp->t_timer[TCPT_PERSIST])
-		th->th_seq = htonl(tp->snd_nxt);
-	else
-		th->th_seq = htonl(tp->snd_max);
+	if (sack_rxmit == 0) {
+		if (len || (flags & (TH_SYN|TH_FIN)) || tp->t_timer[TCPT_PERSIST])
+			th->th_seq = htonl(tp->snd_nxt);
+		else
+			th->th_seq = htonl(tp->snd_max);
+	} else {
+		th->th_seq = htonl(p->rxmit);
+		p->rxmit += len;
+		tp->sackhint.sack_bytes_rexmit += len;
+	}
 	th->th_ack = htonl(tp->rcv_nxt);
 	if (optlen) {
 		bcopy(opt, th + 1, optlen);
@@ -891,35 +1051,33 @@ send:
 	 * Calculate receive window.  Don't shrink window,
 	 * but avoid silly window syndrome.
 	 */
-	if (win < (long)(so->so_rcv.sb_hiwat / 4) && win < (long)tp->t_maxseg)
-		win = 0;
-	if (win < (long)(tp->rcv_adv - tp->rcv_nxt))
-		win = (long)(tp->rcv_adv - tp->rcv_nxt);
+	if (recwin < (long)(so->so_rcv.sb_hiwat / 4) && recwin < (long)tp->t_maxseg)
+		recwin = 0;
+	if (recwin < (long)(tp->rcv_adv - tp->rcv_nxt))
+		recwin = (long)(tp->rcv_adv - tp->rcv_nxt);
 	if (tp->t_flags & TF_SLOWLINK && slowlink_wsize > 0) {
-		if (win > (long)slowlink_wsize) 
-			win = slowlink_wsize;
-		th->th_win = htons((u_short) (win>>tp->rcv_scale));
+		if (recwin > (long)slowlink_wsize) 
+			recwin = slowlink_wsize;
+			th->th_win = htons((u_short) (recwin>>tp->rcv_scale));
 	}
 	else {
-
-		if (win > (long)TCP_MAXWIN << tp->rcv_scale)
-		win = (long)TCP_MAXWIN << tp->rcv_scale;
-		th->th_win = htons((u_short) (win>>tp->rcv_scale));
+		if (recwin > (long)TCP_MAXWIN << tp->rcv_scale)
+			recwin = (long)TCP_MAXWIN << tp->rcv_scale;
+		th->th_win = htons((u_short) (recwin>>tp->rcv_scale));
 	}
 
-        /*
-         * Adjust the RXWIN0SENT flag - indicate that we have advertised   
-         * a 0 window.  This may cause the remote transmitter to stall.  This
-         * flag tells soreceive() to disable delayed acknowledgements when
-         * draining the buffer.  This can occur if the receiver is attempting
-         * to read more data then can be buffered prior to transmitting on   
-         * the connection.
-         */
-        if (win == 0)
-                tp->t_flags |= TF_RXWIN0SENT;
-        else
-                tp->t_flags &= ~TF_RXWIN0SENT;
-
+	/*
+	 * Adjust the RXWIN0SENT flag - indicate that we have advertised
+	 * a 0 window.  This may cause the remote transmitter to stall.  This
+	 * flag tells soreceive() to disable delayed acknowledgements when
+	 * draining the buffer.  This can occur if the receiver is attempting
+	 * to read more data then can be buffered prior to transmitting on
+	 * the connection.
+	 */
+	if (recwin == 0)
+		tp->t_flags |= TF_RXWIN0SENT;
+	else
+		tp->t_flags &= ~TF_RXWIN0SENT;
 	if (SEQ_GT(tp->snd_up, tp->snd_nxt)) {
 		th->th_urp = htons((u_short)(tp->snd_up - tp->snd_nxt));
 		th->th_flags |= TH_URG;
@@ -953,10 +1111,6 @@ send:
 		if (len + optlen)
 			th->th_sum = in_addword(th->th_sum, 
 				htons((u_short)(optlen + len)));
-
-		/* IP version must be set here for ipv4/ipv6 checking later */
-		KASSERT(ip->ip_v == IPVERSION,
-			("%s: IP version incorrect: %d", __FUNCTION__, ip->ip_v));
       }
 
 	/*
@@ -977,6 +1131,8 @@ send:
 				tp->t_flags |= TF_SENTFIN;
 			}
 		}
+		if (sack_rxmit)
+			goto timer;
 		tp->snd_nxt += len;
 		if (SEQ_GT(tp->snd_nxt, tp->snd_max)) {
 			tp->snd_max = tp->snd_nxt;
@@ -999,17 +1155,31 @@ send:
 		 * Initialize shift counter which is used for backoff
 		 * of retransmit time.
 		 */
+timer:
 		if (tp->t_timer[TCPT_REXMT] == 0 &&
-		    tp->snd_nxt != tp->snd_una) {
-			tp->t_timer[TCPT_REXMT] = tp->t_rxtcur;
+		    ((sack_rxmit && tp->snd_nxt != tp->snd_max) ||
+			tp->snd_nxt != tp->snd_una)) {
 			if (tp->t_timer[TCPT_PERSIST]) {
 				tp->t_timer[TCPT_PERSIST] = 0;
 				tp->t_rxtshift = 0;
 			}
+			tp->t_timer[TCPT_REXMT] = tp->t_rxtcur;
 		}
-	} else
-		if (SEQ_GT(tp->snd_nxt + len, tp->snd_max))
+	} else {
+		/*
+		 * Persist case, update snd_max but since we are in
+		 * persist mode (no window) we do not update snd_nxt.
+		 */
+		int xlen = len;
+		if (flags & TH_SYN)
+			++xlen;
+		if (flags & TH_FIN) {
+			++xlen;
+			tp->t_flags |= TF_SENTFIN;
+		}
+		if (SEQ_GT(tp->snd_nxt + xlen, tp->snd_max))
 			tp->snd_max = tp->snd_nxt + len;
+	}
 
 #if TCPDEBUG
 	/*
@@ -1143,8 +1313,8 @@ send:
 		error = 0;
 		packchain_looped++;
 		tcpstat.tcps_sndtotal++;
-		if (win > 0 && SEQ_GT(tp->rcv_nxt+win, tp->rcv_adv))
-			tp->rcv_adv = tp->rcv_nxt + win;
+		if (recwin > 0 && SEQ_GT(tp->rcv_nxt+recwin, tp->rcv_adv))
+			tp->rcv_adv = tp->rcv_nxt + recwin;
 		tp->last_ack_sent = tp->rcv_nxt;
 		tp->t_flags &= ~(TF_ACKNOW|TF_DELACK);
 		goto again;
@@ -1156,13 +1326,18 @@ send:
 		 * We know that the packet was lost, so back out the
 		 * sequence number advance, if any.
 		 */
-		if (tp->t_force == 0 || !tp->t_timer[TCPT_PERSIST]) {
+		if (tp->t_force == 0 || tp->t_timer[TCPT_PERSIST] == 0) {
 			/*
 			 * No need to check for TH_FIN here because
 			 * the TF_SENTFIN flag handles that case.
 			 */
-			if ((flags & TH_SYN) == 0) 
-				tp->snd_nxt -= howmuchsent;
+			if ((flags & TH_SYN) == 0) {
+				if (sack_rxmit) {
+					p->rxmit -= howmuchsent;
+					tp->sackhint.sack_bytes_rexmit -= howmuchsent;
+				} else
+					tp->snd_nxt -= howmuchsent;
+			}
 		}
 		howmuchsent = 0;
 out:
@@ -1215,8 +1390,8 @@ sentit:
 	 * then remember the size of the advertised window.
 	 * Any pending ACK has now been sent.
 	 */
-	if (win > 0 && SEQ_GT(tp->rcv_nxt+win, tp->rcv_adv))
-		tp->rcv_adv = tp->rcv_nxt + win;
+	if (recwin > 0 && SEQ_GT(tp->rcv_nxt+recwin, tp->rcv_adv))
+		tp->rcv_adv = tp->rcv_nxt + recwin;
 	tp->last_ack_sent = tp->rcv_nxt;
 	tp->t_flags &= ~(TF_ACKNOW|TF_DELACK);
 

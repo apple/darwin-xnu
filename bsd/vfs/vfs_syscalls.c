@@ -1,23 +1,31 @@
 /*
  * Copyright (c) 1995-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
+ * This file contains Original Code and/or Modifications of Original Code 
+ * as defined in and that are subject to the Apple Public Source License 
+ * Version 2.0 (the 'License'). You may not use this file except in 
+ * compliance with the License.  The rights granted to you under the 
+ * License may not be used to create, or enable the creation or 
+ * redistribution of, unlawful or unlicensed copies of an Apple operating 
+ * system, or to circumvent, violate, or enable the circumvention or 
+ * violation of, any terms of an Apple operating system software license 
+ * agreement.
+ *
+ * Please obtain a copy of the License at 
+ * http://www.opensource.apple.com/apsl/ and read it before using this 
+ * file.
+ *
+ * The Original Code and all software distributed under the License are 
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
+ * Please see the License for the specific language governing rights and 
+ * limitations under the License.
+ *
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
  */
 /*
  * Copyright (c) 1989, 1993
@@ -96,6 +104,7 @@
 
 #include <vm/vm_pageout.h>
 
+#include <architecture/byte_order.h>
 #include <libkern/OSAtomic.h>
 
 
@@ -1521,30 +1530,6 @@ bad:
 
 }
 
-/*
- * An open system call using an extended argument list compared to the regular
- * system call 'open'.
- *
- * Parameters:	p			Process requesting the open
- *		uap			User argument descriptor (see below)
- *		retval			Pointer to an area to receive the
- *					return calue from the system call
- *
- * Indirect:	uap->path		Path to open (same as 'open')
- *		uap->flags		Flags to open (same as 'open'
- *		uap->uid		UID to set, if creating
- *		uap->gid		GID to set, if creating
- *		uap->mode		File mode, if creating (same as 'open')
- *		uap->xsecurity		ACL to set, if creating
- *
- * Returns:	0			Success
- *		!0			errno value
- *
- * Notes:	The kauth_filesec_t in 'va', if any, is in host byte order.
- *
- * XXX:		We should enummerate the possible errno values here, and where
- *		in the code they originated.
- */
 int
 open_extended(struct proc *p, struct open_extended_args *uap, register_t *retval)
 {
@@ -1746,29 +1731,6 @@ out:
 	return error;
 }
 
-
-/*
- * A mkfifo system call using an extended argument list compared to the regular
- * system call 'mkfifo'.
- *
- * Parameters:	p			Process requesting the open
- *		uap			User argument descriptor (see below)
- *		retval			(Ignored)
- *
- * Indirect:	uap->path		Path to fifo (same as 'mkfifo')
- *		uap->uid		UID to set
- *		uap->gid		GID to set
- *		uap->mode		File mode to set (same as 'mkfifo')
- *		uap->xsecurity		ACL to set, if creating
- *
- * Returns:	0			Success
- *		!0			errno value
- *
- * Notes:	The kauth_filesec_t in 'va', if any, is in host byte order.
- *
- * XXX:		We should enummerate the possible errno values here, and where
- *		in the code they originated.
- */
 int
 mkfifo_extended(struct proc *p, struct mkfifo_extended_args *uap, __unused register_t *retval)
 {
@@ -2861,28 +2823,6 @@ chmod1(vfs_context_t ctx, user_addr_t path, struct vnode_attr *vap)
 	return(error);
 }
 
-/*
- * A chmod system call using an extended argument list compared to the regular
- * system call 'mkfifo'.
- *
- * Parameters:	p			Process requesting the open
- *		uap			User argument descriptor (see below)
- *		retval			(ignored)
- *
- * Indirect:	uap->path		Path to object (same as 'chmod')
- *		uap->uid		UID to set
- *		uap->gid		GID to set
- *		uap->mode		File mode to set (same as 'chmod')
- *		uap->xsecurity		ACL to set (or delete)
- *
- * Returns:	0			Success
- *		!0			errno value
- *
- * Notes:	The kauth_filesec_t in 'va', if any, is in host byte order.
- *
- * XXX:		We should enummerate the possible errno values here, and where
- *		in the code they originated.
- */
 int
 chmod_extended(struct proc *p, struct chmod_extended_args *uap, __unused register_t *retval)
 {
@@ -4769,8 +4709,7 @@ searchfs (struct proc *p, register struct searchfs_args *uap, __unused register_
         searchblock.returnbuffer = CAST_USER_ADDR_T(tmp_searchblock.returnbuffer);
         searchblock.returnbuffersize = tmp_searchblock.returnbuffersize;
         searchblock.maxmatches = tmp_searchblock.maxmatches;
-        searchblock.timelimit.tv_sec = tmp_searchblock.timelimit.tv_sec;
-        searchblock.timelimit.tv_usec = tmp_searchblock.timelimit.tv_usec;
+        searchblock.timelimit = tmp_searchblock.timelimit;
         searchblock.searchparams1 = CAST_USER_ADDR_T(tmp_searchblock.searchparams1);
         searchblock.sizeofsearchparams1 = tmp_searchblock.sizeofsearchparams1;
         searchblock.searchparams2 = CAST_USER_ADDR_T(tmp_searchblock.searchparams2);
@@ -5502,8 +5441,6 @@ munge_statfs(struct mount *mp, struct vfsstatfs *sfsp,
  */
 void munge_stat(struct stat *sbp, struct user_stat *usbp)
 {
-        bzero(usbp, sizeof(struct user_stat));
-
 	usbp->st_dev = sbp->st_dev;
 	usbp->st_ino = sbp->st_ino;
 	usbp->st_mode = sbp->st_mode;

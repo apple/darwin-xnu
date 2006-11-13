@@ -1,23 +1,31 @@
 /*
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
+ * This file contains Original Code and/or Modifications of Original Code 
+ * as defined in and that are subject to the Apple Public Source License 
+ * Version 2.0 (the 'License'). You may not use this file except in 
+ * compliance with the License.  The rights granted to you under the 
+ * License may not be used to create, or enable the creation or 
+ * redistribution of, unlawful or unlicensed copies of an Apple operating 
+ * system, or to circumvent, violate, or enable the circumvention or 
+ * violation of, any terms of an Apple operating system software license 
+ * agreement.
+ *
+ * Please obtain a copy of the License at 
+ * http://www.opensource.apple.com/apsl/ and read it before using this 
+ * file.
+ *
+ * The Original Code and all software distributed under the License are 
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
+ * Please see the License for the specific language governing rights and 
+ * limitations under the License.
+ *
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -67,13 +75,31 @@
 #include <i386/thread.h>
 #include <i386/fpu.h>
 #include <i386/trap.h>
-#include <architecture/i386/pio.h>
+#include <i386/pio.h>
 #include <i386/cpuid.h>
 #include <i386/misc_protos.h>
-#include <i386/proc_reg.h>
 
-int		fp_kind = FP_NO;	/* not inited */
+#if 0
+#include <i386/ipl.h>
+extern int curr_ipl;
+#define ASSERT_IPL(L) \
+{ \
+      if (curr_ipl != L) { \
+	      printf("IPL is %d, expected %d\n", curr_ipl, L); \
+	      panic("fpu: wrong ipl"); \
+      } \
+}
+#else
+#define ASSERT_IPL(L)
+#endif
+
+int		fp_kind = FP_387;	/* 80387 present */
 zone_t		ifps_zone;		/* zone for FPU save area */
+
+#define	clear_fpu() \
+    { \
+	set_ts(); \
+    }
 
 #define ALIGNED(addr,size)	(((unsigned)(addr)&((size)-1))==0)
 
@@ -84,63 +110,6 @@ extern void		fp_save(
 				thread_t	thr_act);
 extern void		fp_load(
 				thread_t	thr_act);
-
-static void configure_mxcsr_capability_mask(struct x86_fpsave_state *ifps);
-
-struct x86_fpsave_state starting_fp_state;
-
-
-/* Global MXCSR capability bitmask */
-static unsigned int mxcsr_capability_mask;
-
-/*
- * Determine the MXCSR capability mask, which allows us to mask off any
- * potentially unsafe "reserved" bits before restoring the FPU context.
- * *Not* per-cpu, assumes symmetry.
- */
-static void
-configure_mxcsr_capability_mask(struct x86_fpsave_state *ifps)
-{
-	/* FXSAVE requires a 16 byte aligned store */
-	assert(ALIGNED(ifps,16));
-	/* Clear, to prepare for the diagnostic FXSAVE */
-	bzero(ifps, sizeof(*ifps));
-	/* Disable FPU/SSE Device Not Available exceptions */
-	clear_ts();
-
-	__asm__ volatile("fxsave %0" : "=m" (ifps->fx_save_state));
-	mxcsr_capability_mask = ifps->fx_save_state.fx_MXCSR_MASK;
-
-	/* Set default mask value if necessary */
-	if (mxcsr_capability_mask == 0)
-		mxcsr_capability_mask = 0xffbf;
-	
-	/* Re-enable FPU/SSE DNA exceptions */
-	set_ts();
-}
-
-/*
- * Allocate and initialize FP state for current thread.
- * Don't load state.
- */
-static struct x86_fpsave_state *
-fp_state_alloc(void)
-{
-	struct x86_fpsave_state *ifps;
-
-	ifps = (struct x86_fpsave_state *)zalloc(ifps_zone);
-	assert(ALIGNED(ifps,16));
-	bzero((char *)ifps, sizeof *ifps);
-
-	return ifps;
-}
-
-static inline void
-fp_state_free(struct x86_fpsave_state *ifps)
-{
-	zfree(ifps_zone, ifps);
-}
-
 
 /*
  * Look for FPU and initialize it.
@@ -165,41 +134,32 @@ init_fpu(void)
 	if ((status & 0xff) == 0 &&
 	    (control & 0x103f) == 0x3f) 
         {
+            fp_kind = FP_387;	/* assume we have a 387 compatible instruction set */
 	    /* Use FPU save/restore instructions if available */
-		if (cpuid_features() & CPUID_FEATURE_FXSR) {
-		        fp_kind = FP_FXSR;
-			set_cr4(get_cr4() | CR4_FXS);
-			printf("Enabling XMM register save/restore");
-			/* And allow SIMD instructions if present */
-			if (cpuid_features() & CPUID_FEATURE_SSE) {
-		    	printf(" and SSE/SSE2");
-		    	set_cr4(get_cr4() | CR4_XMM);
-			}
-			printf(" opcodes\n");
-	    } else
-			panic("fpu is not FP_FXSR");
+            if (cpuid_features() & CPUID_FEATURE_FXSR) {
+	    	fp_kind = FP_FXSR;
+		set_cr4(get_cr4() | CR4_FXS);
+		printf("Enabling XMM register save/restore");
+		/* And allow SIMD instructions if present */
+		if (cpuid_features() & CPUID_FEATURE_SSE) {
+		    printf(" and SSE/SSE2");
+		    set_cr4(get_cr4() | CR4_XMM);
+		}
+		printf(" opcodes\n");
+	    }
 
 	    /*
-	     * initialze FPU to normal starting 
-	     * position so that we can take a snapshot
-	     * of that state and store it for future use
-	     * when we're asked for the FPU state of a 
-	     * thread, and it hasn't initiated any yet
+	     * Trap wait instructions.  Turn off FPU for now.
 	     */
-	     fpinit();
-	     fxsave(&starting_fp_state.fx_save_state);
-
-	     /*
-	      * Trap wait instructions.  Turn off FPU for now.
-	      */
-	     set_cr0(get_cr0() | CR0_TS | CR0_MP);
+	    set_cr0(get_cr0() | CR0_TS | CR0_MP);
 	}
 	else
 	{
 	    /*
 	     * NO FPU.
 	     */
-		panic("fpu is not FP_FXSR");
+	    fp_kind = FP_NO;
+	    set_cr0(get_cr0() | CR0_EM);
 	}
 }
 
@@ -209,16 +169,10 @@ init_fpu(void)
 void
 fpu_module_init(void)
 {
-	struct x86_fpsave_state *new_ifps;
-	
-	ifps_zone = zinit(sizeof(struct x86_fpsave_state),
-			  THREAD_MAX * sizeof(struct x86_fpsave_state),
-			  THREAD_CHUNK * sizeof(struct x86_fpsave_state),
-			  "x86 fpsave state");
-	new_ifps = fp_state_alloc();
-	/* Determine MXCSR reserved bits */
-	configure_mxcsr_capability_mask(new_ifps);
-	fp_state_free(new_ifps);
+	ifps_zone = zinit(sizeof(struct i386_fpsave_state),
+			  THREAD_MAX * sizeof(struct i386_fpsave_state),
+			  THREAD_CHUNK * sizeof(struct i386_fpsave_state),
+			  "i386 fpsave state");
 }
 
 /*
@@ -227,9 +181,10 @@ fpu_module_init(void)
  */
 void
 fpu_free(fps)
-	struct x86_fpsave_state *fps;
+	struct i386_fpsave_state *fps;
 {
-	fp_state_free(fps);
+ASSERT_IPL(SPL0);
+	zfree(ifps_zone, fps);
 }
 
 /*
@@ -243,78 +198,71 @@ fpu_free(fps)
  */
 kern_return_t
 fpu_set_fxstate(
-	thread_t	thr_act,
-	thread_state_t	tstate)
+	thread_t		thr_act,
+	struct i386_float_state	*state)
 {
-	struct x86_fpsave_state	*ifps;
-	struct x86_fpsave_state *new_ifps;
-	x86_float_state64_t	*state;
-	pcb_t	pcb;
+	register pcb_t	pcb;
+	register struct i386_fpsave_state *ifps;
+	register struct i386_fpsave_state *new_ifps;
 
+ASSERT_IPL(SPL0);
 	if (fp_kind == FP_NO)
-	        return KERN_FAILURE;
+	    return KERN_FAILURE;
 
-	state = (x86_float_state64_t *)tstate;
-
+        if (state->fpkind != FP_FXSR) {
+            /* strange if this happens, but in case someone builds one of these manually... */
+            return fpu_set_state(thr_act, state);
+        }
+        
 	assert(thr_act != THREAD_NULL);
 	pcb = thr_act->machine.pcb;
 
-	if (state == NULL) {
-	        /*
-		 * new FPU state is 'invalid'.
-		 * Deallocate the fp state if it exists.
-		 */
-	        simple_lock(&pcb->lock);
+	if (state->initialized == 0) {
+	    /*
+	     * new FPU state is 'invalid'.
+	     * Deallocate the fp state if it exists.
+	     */
+	    simple_lock(&pcb->lock);
+	    ifps = pcb->ims.ifps;
+	    pcb->ims.ifps = 0;
+	    simple_unlock(&pcb->lock);
 
-		ifps = pcb->ifps;
-		pcb->ifps = 0;
-
-		simple_unlock(&pcb->lock);
-
-		if (ifps != 0)
-		        fp_state_free(ifps);
-	} else {
-	        /*
-		 * Valid state.  Allocate the fp state if there is none.
-		 */
-	        new_ifps = 0;
-	Retry:
-		simple_lock(&pcb->lock);
-
-		ifps = pcb->ifps;
-		if (ifps == 0) {
-		        if (new_ifps == 0) {
-			        simple_unlock(&pcb->lock);
-				new_ifps = fp_state_alloc();
-				goto Retry;
-			}
-			ifps = new_ifps;
-			new_ifps = 0;
-			pcb->ifps = ifps;
-		}
-		/*
-		 * now copy over the new data.
-		 */
-		bcopy((char *)&state->fpu_fcw,
-		      (char *)&ifps->fx_save_state, sizeof(struct x86_fx_save));
-
-		/* XXX The layout of the state set from user-space may need to be
-		 * validated for consistency.
-		 */
-		ifps->fp_save_layout = thread_is_64bit(thr_act) ? FXSAVE64 : FXSAVE32;
-		/* Mark the thread's floating point status as non-live. */
-		ifps->fp_valid = TRUE;
-		/*
-		 * Clear any reserved bits in the MXCSR to prevent a GPF
-		 * when issuing an FXRSTOR.
-		 */
-		ifps->fx_save_state.fx_MXCSR &= mxcsr_capability_mask;
-
-		simple_unlock(&pcb->lock);
-
-		if (new_ifps != 0)
-		        fp_state_free(new_ifps);
+	    if (ifps != 0) {
+		zfree(ifps_zone, ifps);
+	    }
 	}
+	else {
+	    /*
+	     * Valid state.  Allocate the fp state if there is none.
+	     */
+
+	    new_ifps = 0;
+	Retry:
+	    simple_lock(&pcb->lock);
+	    ifps = pcb->ims.ifps;
+	    if (ifps == 0) {
+		if (new_ifps == 0) {
+		    simple_unlock(&pcb->lock);
+		    new_ifps = (struct i386_fpsave_state *) zalloc(ifps_zone);
+		    assert(ALIGNED(new_ifps,16));
+		    goto Retry;
+		}
+		ifps = new_ifps;
+		new_ifps = 0;
+                bzero((char *)ifps, sizeof *ifps);
+		pcb->ims.ifps = ifps;
+	    }
+
+	    /*
+	     * now copy over the new data.
+	     */
+            bcopy((char *)&state->hw_state[0], (char *)&ifps->fx_save_state, sizeof(struct i386_fx_save));
+            ifps->fp_save_flavor = FP_FXSR;
+	    simple_unlock(&pcb->lock);
+	    if (new_ifps != 0)
+		zfree(ifps_zone, ifps);
+	}
+
 	return KERN_SUCCESS;
 }
 
@@ -326,141 +274,234 @@ fpu_set_fxstate(
  */
 kern_return_t
 fpu_get_fxstate(
-	thread_t	thr_act,
-	thread_state_t	tstate)
+	thread_t				thr_act,
+	register struct i386_float_state	*state)
 {
-	struct x86_fpsave_state	*ifps;
-	x86_float_state64_t	*state;
-	kern_return_t	ret = KERN_FAILURE;
-	pcb_t	pcb;
+	register pcb_t	pcb;
+	register struct i386_fpsave_state *ifps;
 
-	if (fp_kind == FP_NO)
+ASSERT_IPL(SPL0);
+	if (fp_kind == FP_NO) {
 	    return KERN_FAILURE;
-
-	state = (x86_float_state64_t *)tstate;
+	} else if (fp_kind == FP_387) {
+	    return fpu_get_state(thr_act, state);
+	}
 
 	assert(thr_act != THREAD_NULL);
 	pcb = thr_act->machine.pcb;
 
 	simple_lock(&pcb->lock);
-
-	ifps = pcb->ifps;
+	ifps = pcb->ims.ifps;
 	if (ifps == 0) {
-	        /*
-		 * No valid floating-point state.
-		 */
-	        bcopy((char *)&starting_fp_state.fx_save_state,
-		      (char *)&state->fpu_fcw, sizeof(struct x86_fx_save));
-
-		simple_unlock(&pcb->lock);
-
-		return KERN_SUCCESS;
+	    /*
+	     * No valid floating-point state.
+	     */
+	    simple_unlock(&pcb->lock);
+	    bzero((char *)state, sizeof(struct i386_float_state));
+	    return KERN_SUCCESS;
 	}
-	/*
-	 * Make sure we`ve got the latest fp state info
-	 * If the live fpu state belongs to our target
-	 */
+
+	/* Make sure we`ve got the latest fp state info */
+	/* If the live fpu state belongs to our target */
 	if (thr_act == current_thread())
 	{
-	        boolean_t	intr;
-
-		intr = ml_set_interrupts_enabled(FALSE);
-
-		clear_ts();
-		fp_save(thr_act);
-		clear_fpu();
-
-		(void)ml_set_interrupts_enabled(intr);
+	    clear_ts();
+	    fp_save(thr_act);
+	    clear_fpu();
 	}
-	if (ifps->fp_valid) {
-        	bcopy((char *)&ifps->fx_save_state,
-	      	      (char *)&state->fpu_fcw, sizeof(struct x86_fx_save));
-		ret = KERN_SUCCESS;
+
+	state->fpkind = fp_kind;
+	state->exc_status = 0;
+        state->initialized = ifps->fp_valid;
+        bcopy( (char *)&ifps->fx_save_state, (char *)&state->hw_state[0], sizeof(struct i386_fx_save));
+
+	simple_unlock(&pcb->lock);
+
+	return KERN_SUCCESS;
+}
+
+/*
+ * Set the floating-point state for a thread.
+ * If the thread is not the current thread, it is
+ * not running (held).  Locking needed against
+ * concurrent fpu_set_state or fpu_get_state.
+ */
+kern_return_t
+fpu_set_state(
+	thread_t		thr_act,
+	struct i386_float_state	*state)
+{
+	register pcb_t	pcb;
+	register struct i386_fpsave_state *ifps;
+	register struct i386_fpsave_state *new_ifps;
+
+ASSERT_IPL(SPL0);
+	if (fp_kind == FP_NO)
+	    return KERN_FAILURE;
+
+	assert(thr_act != THREAD_NULL);
+	pcb = thr_act->machine.pcb;
+
+	if (state->initialized == 0) {
+	    /*
+	     * new FPU state is 'invalid'.
+	     * Deallocate the fp state if it exists.
+	     */
+	    simple_lock(&pcb->lock);
+	    ifps = pcb->ims.ifps;
+	    pcb->ims.ifps = 0;
+	    simple_unlock(&pcb->lock);
+
+	    if (ifps != 0) {
+		zfree(ifps_zone, ifps);
+	    }
+	}
+	else {
+	    /*
+	     * Valid state.  Allocate the fp state if there is none.
+	     */
+	    register struct i386_fp_save *user_fp_state;
+	    register struct i386_fp_regs *user_fp_regs;
+
+	    user_fp_state = (struct i386_fp_save *) &state->hw_state[0];
+	    user_fp_regs  = (struct i386_fp_regs *)
+			&state->hw_state[sizeof(struct i386_fp_save)];
+
+	    new_ifps = 0;
+	Retry:
+	    simple_lock(&pcb->lock);
+	    ifps = pcb->ims.ifps;
+	    if (ifps == 0) {
+		if (new_ifps == 0) {
+		    simple_unlock(&pcb->lock);
+		    new_ifps = (struct i386_fpsave_state *) zalloc(ifps_zone);
+		    assert(ALIGNED(new_ifps,16));
+		    goto Retry;
+		}
+		ifps = new_ifps;
+		new_ifps = 0;
+                bzero((char *)ifps, sizeof *ifps); // zero ALL fields first
+		pcb->ims.ifps = ifps;
+	    }
+
+	    /*
+	     * Ensure that reserved parts of the environment are 0.
+	     */
+	    bzero((char *)&ifps->fp_save_state, sizeof(struct i386_fp_save));
+
+	    ifps->fp_save_state.fp_control = user_fp_state->fp_control;
+	    ifps->fp_save_state.fp_status  = user_fp_state->fp_status;
+	    ifps->fp_save_state.fp_tag     = user_fp_state->fp_tag;
+	    ifps->fp_save_state.fp_eip     = user_fp_state->fp_eip;
+	    ifps->fp_save_state.fp_cs      = user_fp_state->fp_cs;
+	    ifps->fp_save_state.fp_opcode  = user_fp_state->fp_opcode;
+	    ifps->fp_save_state.fp_dp      = user_fp_state->fp_dp;
+	    ifps->fp_save_state.fp_ds      = user_fp_state->fp_ds;
+	    ifps->fp_regs = *user_fp_regs;
+            ifps->fp_save_flavor = FP_387;
+	    simple_unlock(&pcb->lock);
+	    if (new_ifps != 0)
+		zfree(ifps_zone, ifps);
+	}
+
+	return KERN_SUCCESS;
+}
+
+/*
+ * Get the floating-point state for a thread.
+ * If the thread is not the current thread, it is
+ * not running (held).  Locking needed against
+ * concurrent fpu_set_state or fpu_get_state.
+ */
+kern_return_t
+fpu_get_state(
+	thread_t				thr_act,
+	register struct i386_float_state	*state)
+{
+	register pcb_t	pcb;
+	register struct i386_fpsave_state *ifps;
+
+ASSERT_IPL(SPL0);
+	if (fp_kind == FP_NO)
+	    return KERN_FAILURE;
+
+	assert(thr_act != THREAD_NULL);
+	pcb = thr_act->machine.pcb;
+
+	simple_lock(&pcb->lock);
+	ifps = pcb->ims.ifps;
+	if (ifps == 0) {
+	    /*
+	     * No valid floating-point state.
+	     */
+	    simple_unlock(&pcb->lock);
+	    bzero((char *)state, sizeof(struct i386_float_state));
+	    return KERN_SUCCESS;
+	}
+
+	/* Make sure we`ve got the latest fp state info */
+	/* If the live fpu state belongs to our target */
+	if (thr_act == current_thread())
+	{
+	    clear_ts();
+	    fp_save(thr_act);
+	    clear_fpu();
+	}
+
+	state->fpkind = fp_kind;
+	state->exc_status = 0;
+
+	{
+	    register struct i386_fp_save *user_fp_state;
+	    register struct i386_fp_regs *user_fp_regs;
+
+	    state->initialized = ifps->fp_valid;
+
+	    user_fp_state = (struct i386_fp_save *) &state->hw_state[0];
+	    user_fp_regs  = (struct i386_fp_regs *)
+			&state->hw_state[sizeof(struct i386_fp_save)];
+
+	    /*
+	     * Ensure that reserved parts of the environment are 0.
+	     */
+	    bzero((char *)user_fp_state,  sizeof(struct i386_fp_save));
+
+	    user_fp_state->fp_control = ifps->fp_save_state.fp_control;
+	    user_fp_state->fp_status  = ifps->fp_save_state.fp_status;
+	    user_fp_state->fp_tag     = ifps->fp_save_state.fp_tag;
+	    user_fp_state->fp_eip     = ifps->fp_save_state.fp_eip;
+	    user_fp_state->fp_cs      = ifps->fp_save_state.fp_cs;
+	    user_fp_state->fp_opcode  = ifps->fp_save_state.fp_opcode;
+	    user_fp_state->fp_dp      = ifps->fp_save_state.fp_dp;
+	    user_fp_state->fp_ds      = ifps->fp_save_state.fp_ds;
+	    *user_fp_regs = ifps->fp_regs;
 	}
 	simple_unlock(&pcb->lock);
 
-	return ret;
+	return KERN_SUCCESS;
 }
-
-
-/*
- * the child thread is 'stopped' with the thread
- * mutex held and is currently not known by anyone
- * so no way for fpu state to get manipulated by an
- * outside agency -> no need for pcb lock
- */
-
-void
-fpu_dup_fxstate(
-	thread_t	parent,
-	thread_t	child)
-{
-	struct x86_fpsave_state *new_ifps = NULL;
-        boolean_t	intr;
-	pcb_t		ppcb;
-
-	ppcb = parent->machine.pcb;
-
-	if (ppcb->ifps == NULL)
-	        return;
-
-        if (child->machine.pcb->ifps)
-	        panic("fpu_dup_fxstate: child's ifps non-null");
-
-	new_ifps = fp_state_alloc();
-
-	simple_lock(&ppcb->lock);
-
-	if (ppcb->ifps != NULL) {
-	        /*
-		 * Make sure we`ve got the latest fp state info
-		 */
-	        intr = ml_set_interrupts_enabled(FALSE);
-
-		clear_ts();
-		fp_save(parent);
-		clear_fpu();
-
-		(void)ml_set_interrupts_enabled(intr);
-
-		if (ppcb->ifps->fp_valid) {
-		        child->machine.pcb->ifps = new_ifps;
-
-			bcopy((char *)&(ppcb->ifps->fx_save_state),
-			      (char *)&(child->machine.pcb->ifps->fx_save_state), sizeof(struct x86_fx_save));
-
-			new_ifps->fp_save_layout = ppcb->ifps->fp_save_layout;
-			/* Mark the new fp saved state as non-live. */
-			new_ifps->fp_valid = TRUE;
-			/*
-			 * Clear any reserved bits in the MXCSR to prevent a GPF
-			 * when issuing an FXRSTOR.
-			 */
-			new_ifps->fx_save_state.fx_MXCSR &= mxcsr_capability_mask;
-			new_ifps = NULL;
-		}
-	}
-	simple_unlock(&ppcb->lock);
-
-	if (new_ifps != NULL)
-	        fp_state_free(new_ifps);
-}
-
 
 /*
  * Initialize FPU.
  *
+ * Raise exceptions for:
+ *	invalid operation
+ *	divide by zero
+ *	overflow
+ *
+ * Use 53-bit precision.
  */
 void
 fpinit(void)
 {
 	unsigned short	control;
 
+ASSERT_IPL(SPL0);
 	clear_ts();
 	fninit();
 	fnstcw(&control);
 	control &= ~(FPC_PC|FPC_RC); /* Clear precision & rounding control */
-	control |= (FPC_PC_64 |		/* Set precision */ 
+	control |= (FPC_PC_53 |		/* Set precision */ 
 			FPC_RC_RN | 	/* round-to-nearest */
 			FPC_ZE |	/* Suppress zero-divide */
 			FPC_OE |	/*  and overflow */
@@ -469,9 +510,6 @@ fpinit(void)
 			FPC_DE |	/* Allow denorms as operands  */
 			FPC_PE);	/* No trap for precision loss */
 	fldcw(control);
-
-	/* Initialize SSE/SSE2 */
-	__builtin_ia32_ldmxcsr(0x1f80);
 }
 
 /*
@@ -481,27 +519,16 @@ fpinit(void)
 void
 fpnoextflt(void)
 {
-	boolean_t	intr;
+	/*
+	 * Enable FPU use.
+	 */
+ASSERT_IPL(SPL0);
+	clear_ts();
 
-	intr = ml_set_interrupts_enabled(FALSE);
-
-	clear_ts();			/*  Enable FPU use */
-
-	if (get_interrupt_level()) {
-		/*
-		 * Save current coprocessor context if valid
-		 * Initialize coprocessor live context
-		 */
-		fp_save(current_thread());
-		fpinit();
-	} else {
-		/*
-		 * Load this thread`s state into coprocessor live context.
-		 */
-		fp_load(current_thread());
-	}
-
-	(void)ml_set_interrupts_enabled(intr);
+	/*
+	 * Load this thread`s state into the FPU.
+	 */
+	fp_load(current_thread());
 }
 
 /*
@@ -512,17 +539,9 @@ fpnoextflt(void)
 void
 fpextovrflt(void)
 {
-	thread_t	thr_act = current_thread();
-	pcb_t		pcb;
-	struct x86_fpsave_state *ifps;
-	boolean_t	intr;
-
-	intr = ml_set_interrupts_enabled(FALSE);
-
-	if (get_interrupt_level())
-		panic("FPU segment overrun exception at interrupt context\n");
-	if (current_task() == kernel_task)
-		panic("FPU segment overrun exception in kernel thread context\n");
+	register thread_t	thr_act = current_thread();
+	register pcb_t		pcb;
+	register struct i386_fpsave_state *ifps;
 
 	/*
 	 * This is a non-recoverable error.
@@ -530,8 +549,8 @@ fpextovrflt(void)
 	 */
 	pcb = thr_act->machine.pcb;
 	simple_lock(&pcb->lock);
-	ifps = pcb->ifps;
-	pcb->ifps = 0;
+	ifps = pcb->ims.ifps;
+	pcb->ims.ifps = 0;
 	simple_unlock(&pcb->lock);
 
 	/*
@@ -544,8 +563,6 @@ fpextovrflt(void)
 	 * And disable access.
 	 */
 	clear_fpu();
-
-	(void)ml_set_interrupts_enabled(intr);
 
 	if (ifps)
 	    zfree(ifps_zone, ifps);
@@ -564,33 +581,22 @@ fpextovrflt(void)
 void
 fpexterrflt(void)
 {
-	thread_t	thr_act = current_thread();
-	struct x86_fpsave_state *ifps = thr_act->machine.pcb->ifps;
-	boolean_t	intr;
+	register thread_t	thr_act = current_thread();
 
-	intr = ml_set_interrupts_enabled(FALSE);
-
-	if (get_interrupt_level())
-		panic("FPU error exception at interrupt context\n");
-	if (current_task() == kernel_task)
-		panic("FPU error exception in kernel thread context\n");
-
+ASSERT_IPL(SPL0);
 	/*
 	 * Save the FPU state and turn off the FPU.
 	 */
 	fp_save(thr_act);
 
-	(void)ml_set_interrupts_enabled(intr);
-
 	/*
 	 * Raise FPU exception.
-	 * Locking not needed on pcb->ifps,
+	 * Locking not needed on pcb->ims.ifps,
 	 * since thread is running.
 	 */
 	i386_exception(EXC_ARITHMETIC,
 		       EXC_I386_EXTERR,
-		       ifps->fx_save_state.fx_status);
-
+		       thr_act->machine.pcb->ims.ifps->fp_save_state.fp_status);
 	/*NOTREACHED*/
 }
 
@@ -601,30 +607,22 @@ fpexterrflt(void)
  * .	if called from fpu_get_state, pcb already locked.
  * .	if called from fpnoextflt or fp_intr, we are single-cpu
  * .	otherwise, thread is running.
- * N.B.: Must be called with interrupts disabled
  */
-
 void
 fp_save(
 	thread_t	thr_act)
 {
-	pcb_t pcb = thr_act->machine.pcb;
-	struct x86_fpsave_state *ifps = pcb->ifps;
-
+	register pcb_t pcb = thr_act->machine.pcb;
+	register struct i386_fpsave_state *ifps = pcb->ims.ifps;
 	if (ifps != 0 && !ifps->fp_valid) {
-		assert((get_cr0() & CR0_TS) == 0);
-		/* registers are in FPU */
-		ifps->fp_valid = TRUE;
-
-		if (!thread_is_64bit(thr_act)) {
-			/* save the compatibility/legacy mode XMM+x87 state */
-			fxsave(&ifps->fx_save_state);
-			ifps->fp_save_layout = FXSAVE32;
-		}
-		else {
-			fxsave64(&ifps->fx_save_state);
-			ifps->fp_save_layout = FXSAVE64;
-		}
+	    /* registers are in FPU */
+	    ifps->fp_valid = TRUE;
+            ifps->fp_save_flavor = FP_387;
+            if (FXSAFE()) {
+                fxsave(&ifps->fx_save_state);	// save the SSE2/Fp state in addition is enabled
+                ifps->fp_save_flavor = FP_FXSR;
+            }
+	    fnsave(&ifps->fp_save_state);  // also update the old save area for now...
 	}
 }
 
@@ -638,32 +636,75 @@ void
 fp_load(
 	thread_t	thr_act)
 {
-	pcb_t pcb = thr_act->machine.pcb;
-	struct x86_fpsave_state *ifps;
+	register pcb_t pcb = thr_act->machine.pcb;
+	register struct i386_fpsave_state *ifps;
 
-	ifps = pcb->ifps;
-	if (ifps == 0 || ifps->fp_valid == FALSE) {
-		if (ifps == 0) {
-			/* FIXME: This allocation mechanism should be revised
-			 * for scenarios where interrupts are disabled.
-			 */
-			ifps = fp_state_alloc();
-			pcb->ifps = ifps;
-		}
-		fpinit();
+ASSERT_IPL(SPL0);
+	ifps = pcb->ims.ifps;
+	if (ifps == 0) {
+	    ifps = (struct i386_fpsave_state *) zalloc(ifps_zone);
+	    assert(ALIGNED(ifps,16));
+	    bzero((char *)ifps, sizeof *ifps);
+	    pcb->ims.ifps = ifps;
+	    fpinit();
+#if 1
+/* 
+ * I'm not sure this is needed. Does the fpu regenerate the interrupt in
+ * frstor or not? Without this code we may miss some exceptions, with it
+ * we might send too many exceptions.
+ */
+	} else if (ifps->fp_valid == 2) {
+		/* delayed exception pending */
+
+		ifps->fp_valid = TRUE;
+		clear_fpu();
+		/*
+		 * Raise FPU exception.
+		 * Locking not needed on pcb->ims.ifps,
+		 * since thread is running.
+		 */
+		i386_exception(EXC_ARITHMETIC,
+		       EXC_I386_EXTERR,
+		       thr_act->machine.pcb->ims.ifps->fp_save_state.fp_status);
+		/*NOTREACHED*/
+#endif
 	} else {
-		assert(ifps->fp_save_layout == FXSAVE32 || ifps->fp_save_layout == FXSAVE64);
-		if (ifps->fp_save_layout == FXSAVE32) {
-			/* Restore the compatibility/legacy mode XMM+x87 state */
-			fxrstor(&ifps->fx_save_state);
-		}
-		else if (ifps->fp_save_layout == FXSAVE64) {
-			fxrstor64(&ifps->fx_save_state);
-		}
+            if (ifps->fp_save_flavor == FP_FXSR) fxrstor(&ifps->fx_save_state);
+	    else frstor(ifps->fp_save_state);
 	}
 	ifps->fp_valid = FALSE;		/* in FPU */
 }
 
+
+/*
+ * Allocate and initialize FP state for current thread.
+ * Don't load state.
+ *
+ * Locking not needed; always called on the current thread.
+ */
+void
+fp_state_alloc(void)
+{
+	pcb_t	pcb = current_thread()->machine.pcb;
+	struct i386_fpsave_state *ifps;
+
+	ifps = (struct i386_fpsave_state *)zalloc(ifps_zone);
+	assert(ALIGNED(ifps,16));
+	bzero((char *)ifps, sizeof *ifps);
+	pcb->ims.ifps = ifps;
+
+	ifps->fp_valid = TRUE;
+	ifps->fp_save_state.fp_control = (0x037f
+			& ~(FPC_IM|FPC_ZM|FPC_OM|FPC_PC))
+			| (FPC_PC_53|FPC_IC_AFF);
+	ifps->fp_save_state.fp_status = 0;
+	ifps->fp_save_state.fp_tag = 0xffff;	/* all empty */
+        ifps->fx_save_state.fx_control = ifps->fp_save_state.fp_control;
+        ifps->fx_save_state.fx_status = ifps->fp_save_state.fp_status;
+        ifps->fx_save_state.fx_tag = 0x00;
+        ifps->fx_save_state.fx_MXCSR = 0x1f80;
+        
+}
 
 
 /*
@@ -679,53 +720,44 @@ fpflush(__unused thread_t thr_act)
 	/* not needed on MP x86s; fp not lazily evaluated */
 }
 
+
 /*
- * SSE arithmetic exception handling code.
- * Basically the same as the x87 exception handler with a different subtype
+ *	Handle a coprocessor error interrupt on the AT386.
+ *	This comes in on line 5 of the slave PIC at SPL1.
  */
 
 void
-fpSSEexterrflt(void)
+fpintr(void)
 {
-	thread_t	thr_act = current_thread();
-	struct x86_fpsave_state *ifps = thr_act->machine.pcb->ifps;
-	boolean_t	intr;
+	spl_t	s;
+	thread_t thr_act = current_thread();
 
-	intr = ml_set_interrupts_enabled(FALSE);
-
-	if (get_interrupt_level())
-		panic("SSE exception at interrupt context\n");
-	if (current_task() == kernel_task)
-		panic("SSE exception in kernel thread context\n");
+ASSERT_IPL(SPL1);
+	/*
+	 * Turn off the extended 'busy' line.
+	 */
+	outb(0xf0, 0);
 
 	/*
-	 * Save the FPU state and turn off the FPU.
+	 * Save the FPU context to the thread using it.
 	 */
+	clear_ts();
 	fp_save(thr_act);
+	fninit();
+	clear_fpu();
 
-	(void)ml_set_interrupts_enabled(intr);
 	/*
-	 * Raise FPU exception.
-	 * Locking not needed on pcb->ifps,
-	 * since thread is running.
+	 * Since we are running on the interrupt stack, we must
+	 * signal the thread to take the exception when we return
+	 * to user mode.  Use an AST to do this.
+	 *
+	 * Don`t set the thread`s AST field.  If the thread is
+	 * descheduled before it takes the AST, it will notice
+	 * the FPU error when it reloads its FPU state.
 	 */
-	assert(ifps->fp_save_layout == FXSAVE32 || ifps->fp_save_layout == FXSAVE64);
-	i386_exception(EXC_ARITHMETIC,
-		       EXC_I386_SSEEXTERR,
-		       ifps->fx_save_state.fx_status);
-	/*NOTREACHED*/
-}
-
-
-void
-fp_setvalid(boolean_t value) {
-        thread_t	thr_act = current_thread();
-	struct x86_fpsave_state *ifps = thr_act->machine.pcb->ifps;
-
-	if (ifps) {
-	        ifps->fp_valid = value;
-
-		if (value == TRUE)
-		        clear_fpu();
-	}
+	s = splsched();
+	mp_disable_preemption();
+	ast_on(AST_I386_FP);
+	mp_enable_preemption();
+	splx(s);
 }

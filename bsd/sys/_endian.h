@@ -1,46 +1,62 @@
 /*
- * Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
+ * 
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code 
+ * as defined in and that are subject to the Apple Public Source License 
+ * Version 2.0 (the 'License'). You may not use this file except in 
+ * compliance with the License.  The rights granted to you under the 
+ * License may not be used to create, or enable the creation or 
+ * redistribution of, unlawful or unlicensed copies of an Apple operating 
+ * system, or to circumvent, violate, or enable the circumvention or 
+ * violation of, any terms of an Apple operating system software license 
+ * agreement.
  *
- * @APPLE_LICENSE_HEADER_START@
- * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
+ * Please obtain a copy of the License at 
+ * http://www.opensource.apple.com/apsl/ and read it before using this 
+ * file.
+ *
+ * The Original Code and all software distributed under the License are 
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
+ * Please see the License for the specific language governing rights and 
+ * limitations under the License.
+ *
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
  */
 
 /*
  * Copyright (c) 1995 NeXT Computer, Inc. All rights reserved.
  * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
+ * This file contains Original Code and/or Modifications of Original Code 
+ * as defined in and that are subject to the Apple Public Source License 
+ * Version 2.0 (the 'License'). You may not use this file except in 
+ * compliance with the License.  The rights granted to you under the 
+ * License may not be used to create, or enable the creation or 
+ * redistribution of, unlawful or unlicensed copies of an Apple operating 
+ * system, or to circumvent, violate, or enable the circumvention or 
+ * violation of, any terms of an Apple operating system software license 
+ * agreement.
+ *
+ * Please obtain a copy of the License at 
+ * http://www.opensource.apple.com/apsl/ and read it before using this 
+ * file.
+ *
+ * The Original Code and all software distributed under the License are 
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
+ * Please see the License for the specific language governing rights and 
+ * limitations under the License.
+ *
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
  */
 /*
  * Copyright (c) 1987, 1991, 1993
@@ -83,10 +99,25 @@
 /*
  * Macros for network/external number representation conversion.
  */
+#if __DARWIN_BYTE_ORDER == __DARWIN_BIG_ENDIAN && !defined(lint)
+#define	ntohl(x)	(x)
+#define	ntohs(x)	(x)
+#define	htonl(x)	(x)
+#define	htons(x)	(x)
+
+#if	defined(KERNEL) || !defined(_POSIX_C_SOURCE)
+#define	NTOHL(x)	(x)
+#define	NTOHS(x)	(x)
+#define	HTONL(x)	(x)
+#define	HTONS(x)	(x)
+#endif /* defined(KERNEL) || !defined(_POSIX_C_SOURCE) */
+
+#else
+
 #if !defined(__ASSEMBLER__) 
 
 #include <stdint.h>
-#include <libkern/OSByteOrder.h>
+#include <machine/byte_order.h>
  
 __BEGIN_DECLS
 uint16_t	ntohs(uint16_t);
@@ -96,11 +127,16 @@ uint32_t	htonl(uint32_t);
 __END_DECLS
 #endif /* !defined(__ASSEMBLER__) */
 
-#define ntohs(x)	OSSwapBigToHostInt16(x)
-#define htons(x)	OSSwapHostToBigInt16(x)
+#define ntohs(x)	NXSwapBigShortToHost(x)
+#define htons(x)	NXSwapHostShortToBig(x)
 
-#define ntohl(x)	OSSwapBigToHostInt32(x)
-#define htonl(x)	OSSwapHostToBigInt32(x)
+#if defined(__LP64__)
+#define ntohl(x)	NXSwapBigIntToHost(x)
+#define htonl(x)	NXSwapHostIntToBig(x)
+#else 
+#define ntohl(x)	NXSwapBigLongToHost(x)
+#define htonl(x)	NXSwapHostLongToBig(x)
+#endif /* defined(__LP64__) */
 
 #if	defined(KERNEL) || !defined(_POSIX_C_SOURCE)
 #define	NTOHL(x)	(x) = ntohl((u_long)x)
@@ -108,4 +144,5 @@ __END_DECLS
 #define	HTONL(x)	(x) = htonl((u_long)x)
 #define	HTONS(x)	(x) = htons((u_short)x)
 #endif /* defined(KERNEL) || !defined(_POSIX_C_SOURCE) */
+#endif /* __DARWIN_BYTE_ORDER != __DARWIN_BIG_ENDIAN || defined(lint) */ 
 #endif /* !_SYS__ENDIAN_H_ */

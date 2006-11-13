@@ -1,23 +1,31 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
+ * 
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code 
+ * as defined in and that are subject to the Apple Public Source License 
+ * Version 2.0 (the 'License'). You may not use this file except in 
+ * compliance with the License.  The rights granted to you under the 
+ * License may not be used to create, or enable the creation or 
+ * redistribution of, unlawful or unlicensed copies of an Apple operating 
+ * system, or to circumvent, violate, or enable the circumvention or 
+ * violation of, any terms of an Apple operating system software license 
+ * agreement.
  *
- * @APPLE_LICENSE_HEADER_START@
- * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
+ * Please obtain a copy of the License at 
+ * http://www.opensource.apple.com/apsl/ and read it before using this 
+ * file.
+ *
+ * The Original Code and all software distributed under the License are 
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
+ * Please see the License for the specific language governing rights and 
+ * limitations under the License.
+ *
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
  */
 /*
  * Copyright (c) 1982, 1986, 1988, 1990, 1993, 1995
@@ -275,10 +283,14 @@ tcp_slowtimo()
 	for (inp = tcb.lh_first; inp != NULL; inp = inpnxt) {
 		inpnxt = inp->inp_list.le_next;
 
+		so = inp->inp_socket;
+
+		if (so == &tcbinfo.nat_dummy_socket)
+				continue;
+
 		if (in_pcb_checkstate(inp, WNT_ACQUIRE,0) == WNT_STOPUSING) 
 			continue;
 
-		so = inp->inp_socket;
 		tcp_lock(so, 1, 0);
 
 		if ((in_pcb_checkstate(inp, WNT_RELEASE,1) == WNT_STOPUSING)  && so->so_usecount == 1) {
@@ -290,15 +302,6 @@ tcp_slowtimo()
 			tcp_unlock(so, 1, 0);
 			continue; 
 		}
-		/*
- 		 * Bogus state when port owned by SharedIP with loopback as the
-		 * only configured interface: BlueBox does not filters loopback
-		 */
-		if (tp->t_state == TCP_NSTATES) {
-			tcp_unlock(so, 1, 0);
-			continue; 
-		}
-
 
 		for (i = 0; i < TCPT_NTIMERS; i++) {
 			if (tp->t_timer[i] && --tp->t_timer[i] == 0) {
@@ -490,6 +493,7 @@ tcp_timers(tp, timer)
 	 * control block.  Otherwise, check again in a bit.
 	 */
 	case TCPT_2MSL:
+		tcp_free_sackholes(tp);
 		if (tp->t_state != TCPS_TIME_WAIT &&
 		    tp->t_rcvtime <= tcp_maxidle) {
 			tp->t_timer[TCPT_2MSL] = (unsigned long)tcp_keepintvl;
@@ -507,6 +511,7 @@ tcp_timers(tp, timer)
 	 * to a longer retransmit interval and retransmit one segment.
 	 */
 	case TCPT_REXMT:
+		tcp_free_sackholes(tp);
 		if (++tp->t_rxtshift > TCP_MAXRXTSHIFT) {
 			tp->t_rxtshift = TCP_MAXRXTSHIFT;
 			tcpstat.tcps_timeoutdrop++;
@@ -528,6 +533,11 @@ tcp_timers(tp, timer)
 			 */
 			tp->snd_cwnd_prev = tp->snd_cwnd;
 			tp->snd_ssthresh_prev = tp->snd_ssthresh;
+			tp->snd_recover_prev = tp->snd_recover;
+			if (IN_FASTRECOVERY(tp))
+				  tp->t_flags |= TF_WASFRECOVERY;
+			else
+				  tp->t_flags &= ~TF_WASFRECOVERY;
 			tp->t_badrxtwin = tcp_now + (tp->t_srtt >> (TCP_RTT_SHIFT + 1));
 		}
 		tcpstat.tcps_rexmttimeo++;
@@ -612,6 +622,7 @@ tcp_timers(tp, timer)
 		tp->snd_ssthresh = win * tp->t_maxseg;
 		tp->t_dupacks = 0;
 		}
+		EXIT_FASTRECOVERY(tp);
 		(void) tcp_output(tp);
 		break;
 
@@ -653,7 +664,7 @@ tcp_timers(tp, timer)
 			goto dropit;
 		if ((always_keepalive ||
 		    tp->t_inpcb->inp_socket->so_options & SO_KEEPALIVE) &&
-		    tp->t_state <= TCPS_CLOSING) {
+		    tp->t_state <= TCPS_CLOSING || tp->t_state == TCPS_FIN_WAIT_2) {
 		    	if (tp->t_rcvtime >= TCP_KEEPIDLE(tp) + (unsigned long)tcp_maxidle)
 				goto dropit;
 			/*

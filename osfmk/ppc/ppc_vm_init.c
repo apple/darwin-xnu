@@ -1,23 +1,31 @@
 /*
  * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
+ * This file contains Original Code and/or Modifications of Original Code 
+ * as defined in and that are subject to the Apple Public Source License 
+ * Version 2.0 (the 'License'). You may not use this file except in 
+ * compliance with the License.  The rights granted to you under the 
+ * License may not be used to create, or enable the creation or 
+ * redistribution of, unlawful or unlicensed copies of an Apple operating 
+ * system, or to circumvent, violate, or enable the circumvention or 
+ * violation of, any terms of an Apple operating system software license 
+ * agreement.
+ *
+ * Please obtain a copy of the License at 
+ * http://www.opensource.apple.com/apsl/ and read it before using this 
+ * file.
+ *
+ * The Original Code and all software distributed under the License are 
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
+ * Please see the License for the specific language governing rights and 
+ * limitations under the License.
+ *
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -38,7 +46,6 @@
 #include <kern/assert.h>
 #include <kern/cpu_number.h>
 #include <kern/thread.h>
-#include <console/serial_protos.h>
 
 #include <ppc/proc_reg.h>
 #include <ppc/Firmware.h>
@@ -60,6 +67,7 @@ unsigned int hash_table_size;			/* Hash table size */
 int         hash_table_shift;           /* "ht_shift" boot arg, used to scale hash_table_size */
 vm_offset_t taproot_addr;				/* (BRINGUP) */
 unsigned int taproot_size;				/* (BRINGUP) */
+unsigned int serialmode;				/* Serial mode keyboard and console control */
 extern int disableConsoleOutput;
 
 struct shadowBAT shadow_BAT;
@@ -234,13 +242,13 @@ void ppc_vm_init(uint64_t mem_limit, boot_args *args)
 	pmap_bootstrap(max_mem, &first_avail, kmapsize);
 
 	pmap_map(trunc_page(exception_entry), trunc_page(exception_entry), 
-		round_page(exception_end), VM_PROT_READ|VM_PROT_EXECUTE, VM_WIMG_USE_DEFAULT);
+		round_page(exception_end), VM_PROT_READ|VM_PROT_EXECUTE);
 
 	pmap_map(trunc_page(sectTEXTB), trunc_page(sectTEXTB), 
-		round_page(sectTEXTB+sectSizeTEXT), VM_PROT_READ|VM_PROT_EXECUTE, VM_WIMG_USE_DEFAULT);
+		round_page(sectTEXTB+sectSizeTEXT), VM_PROT_READ|VM_PROT_EXECUTE);
 
 	pmap_map(trunc_page(sectDATAB), trunc_page(sectDATAB), 
-		round_page(sectDATAB+sectSizeDATA), VM_PROT_READ|VM_PROT_WRITE, VM_WIMG_USE_DEFAULT);
+		round_page(sectDATAB+sectSizeDATA), VM_PROT_READ|VM_PROT_WRITE);
 
 /* The KLD and LINKEDIT segments are unloaded in toto after boot completes,
 * but via ml_static_mfree(), through IODTFreeLoaderInfo(). Hence, we have
@@ -252,7 +260,7 @@ void ppc_vm_init(uint64_t mem_limit, boot_args *args)
              addr += PAGE_SIZE) {
 
             pmap_enter(kernel_pmap, (vm_map_offset_t)addr, (ppnum_t)(addr>>12), 
-			VM_PROT_READ|VM_PROT_WRITE|VM_PROT_EXECUTE, 
+			VM_PROT_READ|VM_PROT_WRITE, 
 			VM_WIMG_USE_DEFAULT, TRUE);
 
 	}
@@ -262,7 +270,7 @@ void ppc_vm_init(uint64_t mem_limit, boot_args *args)
              addr += PAGE_SIZE) {
 
             pmap_enter(kernel_pmap, (vm_map_offset_t)addr, (ppnum_t)(addr>>12), 
-			VM_PROT_READ|VM_PROT_WRITE|VM_PROT_EXECUTE, 
+			VM_PROT_READ|VM_PROT_WRITE, 
 			VM_WIMG_USE_DEFAULT, TRUE);
 
 	}
@@ -273,7 +281,7 @@ void ppc_vm_init(uint64_t mem_limit, boot_args *args)
 
            pmap_enter(kernel_pmap, (vm_map_offset_t)addr,
 			(ppnum_t)(addr>>12), 
-			VM_PROT_READ|VM_PROT_WRITE|VM_PROT_EXECUTE, 
+			VM_PROT_READ|VM_PROT_WRITE, 
 			VM_WIMG_USE_DEFAULT, TRUE);
 
 	}
@@ -283,7 +291,7 @@ void ppc_vm_init(uint64_t mem_limit, boot_args *args)
              addr += PAGE_SIZE) {
 
             pmap_enter(kernel_pmap, (vm_map_offset_t)addr, (ppnum_t)(addr>>12), 
-			VM_PROT_READ|VM_PROT_WRITE|VM_PROT_EXECUTE, 
+			VM_PROT_READ|VM_PROT_WRITE, 
 			VM_WIMG_USE_DEFAULT, TRUE);
 
 	}
@@ -306,7 +314,7 @@ void ppc_vm_init(uint64_t mem_limit, boot_args *args)
 	for(addr = trunc_page(end); addr < round_page(static_memory_end); addr += PAGE_SIZE) {
 
 		pmap_enter(kernel_pmap, (vm_map_address_t)addr, (ppnum_t)addr>>12, 
-			VM_PROT_READ|VM_PROT_WRITE|VM_PROT_EXECUTE, 
+			VM_PROT_READ|VM_PROT_WRITE, 
 			VM_WIMG_USE_DEFAULT, TRUE);
 
 	}

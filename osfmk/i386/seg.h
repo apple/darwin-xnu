@@ -1,23 +1,31 @@
 /*
  * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
+ * This file contains Original Code and/or Modifications of Original Code 
+ * as defined in and that are subject to the Apple Public Source License 
+ * Version 2.0 (the 'License'). You may not use this file except in 
+ * compliance with the License.  The rights granted to you under the 
+ * License may not be used to create, or enable the creation or 
+ * redistribution of, unlawful or unlicensed copies of an Apple operating 
+ * system, or to circumvent, violate, or enable the circumvention or 
+ * violation of, any terms of an Apple operating system software license 
+ * agreement.
+ *
+ * Please obtain a copy of the License at 
+ * http://www.opensource.apple.com/apsl/ and read it before using this 
+ * file.
+ *
+ * The Original Code and all software distributed under the License are 
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
+ * Please see the License for the specific language governing rights and 
+ * limitations under the License.
+ *
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -55,7 +63,6 @@
 
 #include <mach_kdb.h>
 #include <stdint.h>
-#include <mach/vm_types.h>
 #include <architecture/i386/sel.h>
 
 /*
@@ -88,14 +95,21 @@ selector_to_sel(uint16_t selector)
     return (tconv.sel);
 }
 
-#define LDTSZ		8192		/* size of the kernel ldt in entries */
-#define	LDTSZ_MIN	17		/* kernel ldt entries used by the system */
+#define	LDTSZ		15		/* size of the kernel ldt in entries*/
 
 #if	MACH_KDB
-#define	GDTSZ		19
+#ifdef MACH_BSD
+#define	GDTSZ		14
 #else
-#define	GDTSZ		18
+#define	GDTSZ		11
 #endif
+#else	/* MACH_KDB */
+#ifdef	MACH_BSD
+#define	GDTSZ		13
+#else
+#define	GDTSZ		10
+#endif
+#endif	/* MACH_KDB */
 
 /*
  * Interrupt table is always 256 entries long.
@@ -110,7 +124,7 @@ selector_to_sel(uint16_t selector)
  * Real segment descriptor.
  */
 struct real_descriptor {
-	uint32_t	limit_low:16,	/* limit 0..15 */
+	unsigned int	limit_low:16,	/* limit 0..15 */
 			base_low:16,	/* base  0..15 */
 			base_med:8,	/* base  16..23 */
 			access:8,	/* access byte */
@@ -118,33 +132,13 @@ struct real_descriptor {
 			granularity:4,	/* granularity */
 			base_high:8;	/* base 24..31 */
 };
-struct real_descriptor64 {
-	uint32_t	limit_low16:16,	/* limit 0..15 */
-			base_low16:16,	/* base  0..15 */
-			base_med8:8,	/* base  16..23 */
-			access8:8,	/* access byte */
-			limit_high4:4,	/* limit 16..19 */
-			granularity4:4,	/* granularity */
-			base_high8:8,	/* base 24..31 */
-			base_top32:32,	/* base 32..63 */
-			reserved32:32;	/* reserved/zero */
-};
+
 struct real_gate {
-	uint32_t	offset_low:16,	/* offset 0..15 */
+	unsigned int	offset_low:16,	/* offset 0..15 */
 			selector:16,
 			word_count:8,
 			access:8,
 			offset_high:16;	/* offset 16..31 */
-};
-struct real_gate64 {
-	uint32_t	offset_low16:16,	/* offset 0..15 */
-			selector16:16,
-			IST:3,
-			zeroes5:5,
-			access8:8,
-			offset_high16:16,	/* offset 16..31 */
-			offset_top32:32,	/* offset 32..63 */
-			reserved32:32;		/* reserved/zero */
 };
 
 /*
@@ -153,56 +147,28 @@ struct real_gate64 {
  * at runtime.
  */
 struct fake_descriptor {
-	uint32_t	offset:32;		/* offset */
-	uint32_t	lim_or_seg:20;		/* limit */
+	unsigned int	offset:32;		/* offset */
+	unsigned int	lim_or_seg:20;		/* limit */
 						/* or segment, for gate */
-	uint32_t	size_or_wdct:4;		/* size/granularity */
+	unsigned int	size_or_wdct:4;		/* size/granularity */
 						/* word count, for gate */
-	uint32_t	access:8;		/* access */
+	unsigned int	access:8;		/* access */
 };
-struct fake_descriptor64 {
-	uint32_t	offset[2];		/* offset [0..31,32..63] */
-	uint32_t	lim_or_seg:20;		/* limit */
-						/* or segment, for gate */
-	uint32_t	size_or_IST:4;		/* size/granularity */
-						/* IST for gates */
-	uint32_t	access:8;		/* access */
-	uint32_t	reserved:32;		/* reserved/zero */
-};
-#define	FAKE_UBER64(addr32)	{ (uint32_t) (addr32), KERNEL_UBER_BASE_HI32 }
-#define	FAKE_COMPAT(addr32)	{ (uint32_t) (addr32), 0x0 }
-#define	UBER64(addr32)		((addr64_t) addr32 + KERNEL_UBER_BASE)
 
 /*
  * Boot-time data for master (or only) CPU
  */
-extern struct fake_descriptor	master_idt[IDTSZ];
-extern struct fake_descriptor	master_gdt[GDTSZ];
-extern struct fake_descriptor	master_ldt[LDTSZ];
-extern struct i386_tss		master_ktss;
-extern struct sysenter_stack	master_sstk;
-
-extern struct fake_descriptor64	master_idt64[IDTSZ];
-extern struct fake_descriptor64	kernel_ldt_desc64;
-extern struct fake_descriptor64	kernel_tss_desc64;
-extern struct x86_64_tss	master_ktss64;
+extern struct fake_descriptor	idt[IDTSZ];
+extern struct fake_descriptor	gdt[GDTSZ];
+extern struct fake_descriptor	ldt[LDTSZ];
+extern struct i386_tss		ktss;
 
 __BEGIN_DECLS
-
-extern char			df_task_stack[];
-extern char			df_task_stack_end[];
-extern struct i386_tss		master_dftss;
-extern void			df_task_start(void);
-
-extern char			mc_task_stack[];
-extern char			mc_task_stack_end[];
-extern struct i386_tss		master_mctss;
-extern void			mc_task_start(void);
 
 #if	MACH_KDB
 extern char			db_stack_store[];
 extern char			db_task_stack_store[];
-extern struct i386_tss		master_dbtss;
+extern struct i386_tss		dbtss;
 extern void			db_task_start(void);
 #endif	/* MACH_KDB */
 
@@ -210,7 +176,6 @@ __END_DECLS
 
 #endif	/*__ASSEMBLER__*/
 
-#define	SZ_64		0x2			/* 64-bit segment */
 #define	SZ_32		0x4			/* 32-bit segment */
 #define	SZ_G		0x8			/* 4K limit field */
 
@@ -258,27 +223,18 @@ __END_DECLS
  * Convert selector to descriptor table index.
  */
 #define	sel_idx(sel)	(selector_to_sel(sel).index)
-#define SEL_TO_INDEX(s)	((s)>>3)
 
 #define NULL_SEG	0
 
 /*
  * User descriptors for MACH - 32-bit flat address space
  */
-#define	SYSENTER_CS	0x07		/* sysenter kernel code segment */
-#define	SYSENTER_DS	0x0f		/* sysenter kernel data segment */
-#define	USER_CS		0x17		/* user code segment
-					   Must be SYSENTER_CS+16 for sysexit */
-/* Special case: sysenter with EFL_TF (trace bit) set - use iret not sysexit */
-#define SYSENTER_TF_CS	(USER_CS|0x10000)
-#define	USER_DS		0x1f		/* user data segment 
-					   Must be SYSENTER_CS+24 for sysexit */
-#define	USER64_CS	0x27		/* 64-bit user code segment 
-					   Must be USER_CS+16 for sysret */
-#define	USER64_DS	USER_DS		/* 64-bit user data segment == 32-bit */
-#define	SYSCALL_CS	0x2f		/* 64-bit syscall pseudo-segment */
-#define	USER_CTHREAD	0x37		/* user cthread area */
-#define	USER_SETTABLE	0x3f		/* start of user settable ldt entries */
+#define	USER_SCALL	0x07		/* system call gate */
+#define	USER_RPC	0x0f		/* mach rpc call gate */
+#define	USER_CS		0x17		/* user code segment */
+#define	USER_DS		0x1f		/* user data segment */
+#define	USER_CTHREAD	0x27		/* user cthread area */
+#define	USER_SETTABLE	0x2f		/* start of user settable ldt entries */
 #define	USLDTSZ		10		/* number of user settable entries */
 
 /*
@@ -287,41 +243,29 @@ __END_DECLS
 #define	KERNEL_CS	0x08		/* kernel code */
 #define	KERNEL_DS	0x10		/* kernel data */
 #define	KERNEL_LDT	0x18		/* master LDT */
-#define	KERNEL_LDT_2	0x20		/* master LDT expanded for 64-bit */
-#define	KERNEL_TSS	0x28		/* master TSS */
-#define	KERNEL_TSS_2	0x30		/* master TSS expanded for 64-bit */
-
-#define	MC_TSS		0x38		/* machine-check handler TSS */
-
+#define	KERNEL_TSS	0x20		/* master TSS (uniprocessor) */
+#ifdef	MACH_BSD
+#define	BSD_SCALL_SEL	0x28		/* BSD System calls */
+#define	MK25_SCALL_SEL	0x30		/* MK25 System Calls */
+#define	MACHDEP_SCALL_SEL 0x38		/* Machdep SYstem calls */
+#else
+#define	USER_LDT	0x28		/* place for per-thread LDT */
+#define	USER_TSS	0x30		/* place for per-thread TSS
+					   that holds IO bitmap */
+#define	FPE_CS		0x38		/* floating-point emulator code */
+#endif
+#define	USER_FPREGS	0x40		/* user-mode access to saved
+					   floating-point registers */
 #define	CPU_DATA_GS	0x48		/* per-cpu data */
 
-#define	DF_TSS		0x50		/* double-fault handler TSS */
-
+#ifdef	MACH_BSD
 #define	USER_LDT	0x58
 #define	USER_TSS	0x60
 #define	FPE_CS		0x68
-
-#define USER_WINDOW_SEL	0x70		/* window for copyin/copyout */
-#define PHYS_WINDOW_SEL	0x78		/* window for copyin/copyout */
-
-#define	KERNEL64_CS	0x80		/* kernel 64-bit code */
-#define	KERNEL64_SS	0x88		/* kernel 64-bit (syscall) stack */
-
-#if	MACH_KDB
-#define	DEBUG_TSS	0x90		/* debug TSS (uniprocessor) */
 #endif
 
-struct __gdt_desc_struct {
-  unsigned short size;
-  unsigned long address __attribute__((packed));
-  unsigned short pad;
-} __attribute__ ((packed));
-
-struct __idt_desc_struct {
-  unsigned short size;
-  unsigned long address __attribute__((packed));
-  unsigned short pad;
-} __attribute__ ((packed));
-
+#if	MACH_KDB
+#define	DEBUG_TSS	0x50		/* debug TSS (uniprocessor) */
+#endif
 
 #endif	/* _I386_SEG_H_ */

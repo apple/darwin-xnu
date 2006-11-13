@@ -1,28 +1,35 @@
 /*
  * Copyright (c) 2002-2003 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
+ * This file contains Original Code and/or Modifications of Original Code 
+ * as defined in and that are subject to the Apple Public Source License 
+ * Version 2.0 (the 'License'). You may not use this file except in 
+ * compliance with the License.  The rights granted to you under the 
+ * License may not be used to create, or enable the creation or 
+ * redistribution of, unlawful or unlicensed copies of an Apple operating 
+ * system, or to circumvent, violate, or enable the circumvention or 
+ * violation of, any terms of an Apple operating system software license 
+ * agreement.
+ *
+ * Please obtain a copy of the License at 
+ * http://www.opensource.apple.com/apsl/ and read it before using this 
+ * file.
+ *
+ * The Original Code and all software distributed under the License are 
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
+ * Please see the License for the specific language governing rights and 
+ * limitations under the License.
+ *
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
  */
 
 #include <vc.h>
 #include <console/video_console.h>
-#include <libkern/OSByteOrder.h>
 #include <kdp/kdp_udp.h>
 #include <kern/debug.h>
 #include <mach/mach_time.h>
@@ -518,9 +525,9 @@ blit_digit( int digit )
 		for( j=FONT_WIDTH-1; j>=0; j--) {
 
 			if ( bits & 0x80 )
-				rendered_font[row][j] = OSSwapBigToHostInt16(0x0100 | panic_dialog->pd_info_color[0]);
+				rendered_font[row][j] = 0x0100 | panic_dialog->pd_info_color[0];
 			else
-				rendered_font[row][j] = OSSwapBigToHostInt16(0x0100 | panic_dialog->pd_info_color[1]);
+				rendered_font[row][j] = 0x0100 | panic_dialog->pd_info_color[1];
 			bits <<= 1;
 		}
 	}
@@ -879,16 +886,16 @@ findbestgray( unsigned int color24 )
 static unsigned char
 color24togray8( unsigned int color24 )
 {       
-    int R, G, B;
-    int Gray;
+    float R, G, B;
+    float Gray;
     unsigned char gray8;
     
     R = (color24 & 0xFF0000) >> 16 ;
     G = (color24 & 0xFF00) >> 8 ;
     B = (color24 & 0xFF);
     
-    Gray = (R*30) + (G*59) + (B*11);
-    gray8 = (unsigned char) ((Gray + 50) / 100);
+    Gray = (R*.30) + (G*.59) + (B*.11);
+    gray8 = (unsigned char) ( Gray + .5);
     return gray8;
 }       
 

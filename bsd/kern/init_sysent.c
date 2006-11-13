@@ -1,23 +1,31 @@
 /*
  * Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
  * 
- * @APPLE_LICENSE_HEADER_START@ 
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and 
- * are subject to the Apple Public Source License Version 1.1 (the 
- * "License").  You may not use this file except in compliance with the 
- * License.  Please obtain a copy of the License at 
- * http://www.apple.com/publicsource and read it before using this file. 
- * 
- * This Original Code and all software distributed under the License are 
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * This file contains Original Code and/or Modifications of Original Code 
+ * as defined in and that are subject to the Apple Public Source License 
+ * Version 2.0 (the 'License'). You may not use this file except in 
+ * compliance with the License.  The rights granted to you under the 
+ * License may not be used to create, or enable the creation or 
+ * redistribution of, unlawful or unlicensed copies of an Apple operating 
+ * system, or to circumvent, violate, or enable the circumvention or 
+ * violation of, any terms of an Apple operating system software license 
+ * agreement.
+ *
+ * Please obtain a copy of the License at 
+ * http://www.opensource.apple.com/apsl/ and read it before using this 
+ * file.
+ *
+ * The Original Code and all software distributed under the License are 
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the 
- * License for the specific language governing rights and limitations 
- * under the License. 
- * 
- * @APPLE_LICENSE_HEADER_END@ 
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
+ * Please see the License for the specific language governing rights and 
+ * limitations under the License.
+ *
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_END@ 
  * 
  * 
  * System call switch table.
@@ -32,7 +40,11 @@
 #include <sys/types.h>
 #include <sys/sysent.h>
 #include <sys/sysproto.h>
+#ifdef __ppc__
 #define AC(name) (sizeof(struct name) / sizeof(uint64_t))
+#else
+#define AC(name) (sizeof(struct name) / sizeof(register_t))
+#endif
 
 
 /* The casts are bogus but will do for now. */
@@ -144,7 +156,11 @@ __private_extern__ struct sysent sysent[] = {
 	{AC(getpriority_args), _SYSCALL_CANCEL_NONE, KERNEL_FUNNEL, (sy_call_t *)getpriority, munge_ww, munge_dd, _SYSCALL_RET_INT_T}, /* 100 = getpriority */
 	{0, _SYSCALL_CANCEL_NONE, NO_FUNNEL, (sy_call_t *)nosys, NULL, NULL, _SYSCALL_RET_INT_T}, /* 101 = nosys old send */
 	{0, _SYSCALL_CANCEL_NONE, NO_FUNNEL, (sy_call_t *)nosys, NULL, NULL, _SYSCALL_RET_INT_T}, /* 102 = nosys old recv */
+#ifdef __ppc__
 	{0, _SYSCALL_CANCEL_NONE, NO_FUNNEL, (sy_call_t *)nosys, NULL, NULL, _SYSCALL_RET_INT_T}, /* 103 = nosys old sigreturn */
+#else
+	{AC(sigreturn_args), _SYSCALL_CANCEL_NONE, KERNEL_FUNNEL|UNSAFE_64BIT, (sy_call_t *)sigreturn, munge_w, munge_d, _SYSCALL_RET_INT_T}, /* 103 = sigreturn */
+#endif
 	{AC(bind_args), _SYSCALL_CANCEL_NONE, NO_FUNNEL, (sy_call_t *)bind, munge_www, munge_ddd, _SYSCALL_RET_INT_T}, /* 104 = bind */
 	{AC(setsockopt_args), _SYSCALL_CANCEL_NONE, NO_FUNNEL, (sy_call_t *)setsockopt, munge_wwwww, munge_ddddd, _SYSCALL_RET_INT_T}, /* 105 = setsockopt */
 	{AC(listen_args), _SYSCALL_CANCEL_NONE, NO_FUNNEL, (sy_call_t *)listen, munge_ww, munge_dd, _SYSCALL_RET_INT_T}, /* 106 = listen */
@@ -157,7 +173,11 @@ __private_extern__ struct sysent sysent[] = {
 	{0, _SYSCALL_CANCEL_NONE, NO_FUNNEL, (sy_call_t *)nosys, NULL, NULL, _SYSCALL_RET_INT_T}, /* 113 = nosys old recvmsg */
 	{0, _SYSCALL_CANCEL_NONE, NO_FUNNEL, (sy_call_t *)nosys, NULL, NULL, _SYSCALL_RET_INT_T}, /* 114 = nosys old sendmsg */
 	{0, _SYSCALL_CANCEL_NONE, NO_FUNNEL, (sy_call_t *)nosys, NULL, NULL, _SYSCALL_RET_INT_T}, /* 115 = nosys old vtrace */
+#ifdef __ppc__
+	{AC(ppc_gettimeofday_args), _SYSCALL_CANCEL_NONE, NO_FUNNEL, (sy_call_t *)ppc_gettimeofday, munge_ww, munge_dd, _SYSCALL_RET_INT_T}, /* 116 = ppc_gettimeofday */
+#else
 	{AC(gettimeofday_args), _SYSCALL_CANCEL_NONE, NO_FUNNEL, (sy_call_t *)gettimeofday, munge_ww, munge_dd, _SYSCALL_RET_INT_T}, /* 116 = gettimeofday */
+#endif
 	{AC(getrusage_args), _SYSCALL_CANCEL_NONE, KERNEL_FUNNEL, (sy_call_t *)getrusage, munge_ww, munge_dd, _SYSCALL_RET_INT_T}, /* 117 = getrusage */
 	{AC(getsockopt_args), _SYSCALL_CANCEL_NONE, NO_FUNNEL, (sy_call_t *)getsockopt, munge_wwwww, munge_ddddd, _SYSCALL_RET_INT_T}, /* 118 = getsockopt */
 	{0, _SYSCALL_CANCEL_NONE, NO_FUNNEL, (sy_call_t *)nosys, NULL, NULL, _SYSCALL_RET_INT_T}, /* 119 = nosys old resuba */
@@ -233,8 +253,12 @@ __private_extern__ struct sysent sysent[] = {
 	{AC(setgid_args), _SYSCALL_CANCEL_NONE, KERNEL_FUNNEL, (sy_call_t *)setgid, munge_w, munge_d, _SYSCALL_RET_INT_T}, /* 181 = setgid */
 	{AC(setegid_args), _SYSCALL_CANCEL_NONE, KERNEL_FUNNEL, (sy_call_t *)setegid, munge_w, munge_d, _SYSCALL_RET_INT_T}, /* 182 = setegid */
 	{AC(seteuid_args), _SYSCALL_CANCEL_NONE, KERNEL_FUNNEL, (sy_call_t *)seteuid, munge_w, munge_d, _SYSCALL_RET_INT_T}, /* 183 = seteuid */
+#ifdef __ppc__
 	{AC(sigreturn_args), _SYSCALL_CANCEL_NONE, KERNEL_FUNNEL, (sy_call_t *)sigreturn, munge_ww, munge_dd, _SYSCALL_RET_INT_T}, /* 184 = sigreturn */
-	{AC(chud_args), _SYSCALL_CANCEL_NONE, NO_FUNNEL|UNSAFE_64BIT, (sy_call_t *)chud, munge_wwwwww, munge_dddddd, _SYSCALL_RET_INT_T}, /* 185 = chud */
+#else
+	{0, _SYSCALL_CANCEL_NONE, NO_FUNNEL, (sy_call_t *)nosys, NULL, NULL, _SYSCALL_RET_INT_T}, /* 184 = nosys */
+#endif
+	{0, _SYSCALL_CANCEL_NONE, NO_FUNNEL, (sy_call_t *)nosys, NULL, NULL, _SYSCALL_RET_INT_T}, /* 185 = nosys */
 	{0, _SYSCALL_CANCEL_NONE, NO_FUNNEL, (sy_call_t *)nosys, NULL, NULL, _SYSCALL_RET_INT_T}, /* 186 = nosys */
 	{0, _SYSCALL_CANCEL_NONE, NO_FUNNEL, (sy_call_t *)nosys, NULL, NULL, _SYSCALL_RET_INT_T}, /* 187 = nosys */
 	{AC(stat_args), _SYSCALL_CANCEL_NONE, NO_FUNNEL, (sy_call_t *)stat, munge_ww, munge_dd, _SYSCALL_RET_INT_T}, /* 188 = stat */
@@ -259,6 +283,7 @@ __private_extern__ struct sysent sysent[] = {
 	{AC(mlock_args), _SYSCALL_CANCEL_NONE, NO_FUNNEL, (sy_call_t *)mlock, munge_ww, munge_dd, _SYSCALL_RET_INT_T}, /* 203 = mlock */
 	{AC(munlock_args), _SYSCALL_CANCEL_NONE, NO_FUNNEL, (sy_call_t *)munlock, munge_ww, munge_dd, _SYSCALL_RET_INT_T}, /* 204 = munlock */
 	{AC(undelete_args), _SYSCALL_CANCEL_NONE, NO_FUNNEL, (sy_call_t *)undelete, munge_w, munge_d, _SYSCALL_RET_INT_T}, /* 205 = undelete */
+#ifdef __ppc__
 	{AC(ATsocket_args), _SYSCALL_CANCEL_NONE, NO_FUNNEL, (sy_call_t *)ATsocket, munge_w, munge_d, _SYSCALL_RET_INT_T}, /* 206 = ATsocket */
 	{AC(ATgetmsg_args), _SYSCALL_CANCEL_NONE, NO_FUNNEL|UNSAFE_64BIT, (sy_call_t *)ATgetmsg, munge_wwww, munge_dddd, _SYSCALL_RET_INT_T}, /* 207 = ATgetmsg */
 	{AC(ATputmsg_args), _SYSCALL_CANCEL_NONE, NO_FUNNEL|UNSAFE_64BIT, (sy_call_t *)ATputmsg, munge_wwww, munge_dddd, _SYSCALL_RET_INT_T}, /* 208 = ATputmsg */
@@ -267,6 +292,16 @@ __private_extern__ struct sysent sysent[] = {
 	{AC(ATPgetreq_args), _SYSCALL_CANCEL_NONE, NO_FUNNEL|UNSAFE_64BIT, (sy_call_t *)ATPgetreq, munge_www, munge_ddd, _SYSCALL_RET_INT_T}, /* 211 = ATPgetreq */
 	{AC(ATPgetrsp_args), _SYSCALL_CANCEL_NONE, NO_FUNNEL|UNSAFE_64BIT, (sy_call_t *)ATPgetrsp, munge_ww, munge_dd, _SYSCALL_RET_INT_T}, /* 212 = ATPgetrsp */
 	{0, _SYSCALL_CANCEL_NONE, NO_FUNNEL, (sy_call_t *)nosys, NULL, NULL, _SYSCALL_RET_INT_T}, /* 213 = nosys Reserved for AppleTalk */
+#else
+	{0, _SYSCALL_CANCEL_NONE, NO_FUNNEL, (sy_call_t *)nosys, NULL, NULL, _SYSCALL_RET_NONE}, /* 206 = ATsocket */
+	{0, _SYSCALL_CANCEL_NONE, NO_FUNNEL|UNSAFE_64BIT, (sy_call_t *)nosys, NULL, NULL, _SYSCALL_RET_NONE}, /* 207 = ATgetmsg */
+	{0, _SYSCALL_CANCEL_NONE, NO_FUNNEL|UNSAFE_64BIT, (sy_call_t *)nosys, NULL, NULL, _SYSCALL_RET_NONE}, /* 208 = ATputmsg */
+	{0, _SYSCALL_CANCEL_NONE, NO_FUNNEL|UNSAFE_64BIT, (sy_call_t *)nosys, NULL, NULL, _SYSCALL_RET_NONE}, /* 209 = ATPsndreq */
+	{0, _SYSCALL_CANCEL_NONE, NO_FUNNEL|UNSAFE_64BIT, (sy_call_t *)nosys, NULL, NULL, _SYSCALL_RET_NONE}, /* 210 = ATPsndrsp */
+	{0, _SYSCALL_CANCEL_NONE, NO_FUNNEL|UNSAFE_64BIT, (sy_call_t *)nosys, NULL, NULL, _SYSCALL_RET_NONE}, /* 211 = ATPgetreq */
+	{0, _SYSCALL_CANCEL_NONE, NO_FUNNEL|UNSAFE_64BIT, (sy_call_t *)nosys, NULL, NULL, _SYSCALL_RET_NONE}, /* 212 = ATPgetrsp */
+	{0, _SYSCALL_CANCEL_NONE, NO_FUNNEL, (sy_call_t *)nosys, NULL, NULL, _SYSCALL_RET_INT_T}, /* 213 = nosys Reserved for AppleTalk */
+#endif /* __ppc__ */
 	{AC(kqueue_from_portset_np_args), _SYSCALL_CANCEL_NONE, KERNEL_FUNNEL, (sy_call_t *)kqueue_from_portset_np, munge_w, munge_d, _SYSCALL_RET_INT_T}, /* 214 = kqueue_from_portset_np */
 	{AC(kqueue_portset_np_args), _SYSCALL_CANCEL_NONE, KERNEL_FUNNEL, (sy_call_t *)kqueue_portset_np, munge_w, munge_d, _SYSCALL_RET_INT_T}, /* 215 = kqueue_portset_np */
 	{0, _SYSCALL_CANCEL_NONE, NO_FUNNEL|UNSAFE_64BIT, (sy_call_t *)nosys, NULL, NULL, _SYSCALL_RET_NONE}, /* 216 = mkcomplex soon to be obsolete */
@@ -398,7 +433,7 @@ __private_extern__ struct sysent sysent[] = {
 	{AC(__pthread_canceled_args), _SYSCALL_CANCEL_NONE, NO_FUNNEL, (sy_call_t *)__pthread_canceled, munge_w, munge_d, _SYSCALL_RET_INT_T}, /* 333 = __pthread_canceled */
 	{AC(__semwait_signal_args), _SYSCALL_CANCEL_POST, NO_FUNNEL, (sy_call_t *)__semwait_signal, munge_wwwwww, munge_dddddd, _SYSCALL_RET_INT_T}, /* 334 = __semwait_signal */
 	{AC(utrace_args), _SYSCALL_CANCEL_NONE, KERNEL_FUNNEL, (sy_call_t *)utrace, munge_ww, munge_dd, _SYSCALL_RET_INT_T}, /* 335 = utrace */
-	{AC(proc_info_args), _SYSCALL_CANCEL_NONE, NO_FUNNEL, (sy_call_t *)proc_info, munge_wwwlww, munge_dddddd, _SYSCALL_RET_INT_T}, /* 336 = proc_info */
+	{0, _SYSCALL_CANCEL_NONE, NO_FUNNEL, (sy_call_t *)nosys, NULL, NULL, _SYSCALL_RET_INT_T}, /* 336 = nosys */
 	{0, _SYSCALL_CANCEL_NONE, NO_FUNNEL, (sy_call_t *)nosys, NULL, NULL, _SYSCALL_RET_INT_T}, /* 337 = nosys */
 	{0, _SYSCALL_CANCEL_NONE, NO_FUNNEL, (sy_call_t *)nosys, NULL, NULL, _SYSCALL_RET_INT_T}, /* 338 = nosys */
 	{0, _SYSCALL_CANCEL_NONE, NO_FUNNEL, (sy_call_t *)nosys, NULL, NULL, _SYSCALL_RET_INT_T}, /* 339 = nosys */
@@ -427,7 +462,7 @@ __private_extern__ struct sysent sysent[] = {
 	{0, _SYSCALL_CANCEL_NONE, NO_FUNNEL, (sy_call_t *)kqueue, NULL, NULL, _SYSCALL_RET_INT_T}, /* 362 = kqueue */
 	{AC(kevent_args), _SYSCALL_CANCEL_NONE, NO_FUNNEL, (sy_call_t *)kevent, munge_wwwwww, munge_dddddd, _SYSCALL_RET_INT_T}, /* 363 = kevent */
 	{AC(lchown_args), _SYSCALL_CANCEL_NONE, NO_FUNNEL, (sy_call_t *)lchown, munge_www, munge_ddd, _SYSCALL_RET_INT_T}, /* 364 = lchown */
-	{AC(stack_snapshot_args), _SYSCALL_CANCEL_NONE, NO_FUNNEL, (sy_call_t *)stack_snapshot, munge_wwww, munge_dddd, _SYSCALL_RET_INT_T}, /* 365 = stack_snapshot */
+	{0, _SYSCALL_CANCEL_NONE, NO_FUNNEL, (sy_call_t *)nosys, NULL, NULL, _SYSCALL_RET_INT_T}, /* 365 = nosys */
 	{0, _SYSCALL_CANCEL_NONE, NO_FUNNEL, (sy_call_t *)nosys, NULL, NULL, _SYSCALL_RET_INT_T}, /* 366 = nosys */
 	{0, _SYSCALL_CANCEL_NONE, NO_FUNNEL, (sy_call_t *)nosys, NULL, NULL, _SYSCALL_RET_INT_T}, /* 367 = nosys */
 	{0, _SYSCALL_CANCEL_NONE, NO_FUNNEL, (sy_call_t *)nosys, NULL, NULL, _SYSCALL_RET_INT_T}, /* 368 = nosys */

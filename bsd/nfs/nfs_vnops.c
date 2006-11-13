@@ -1,23 +1,31 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
+ * 
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code 
+ * as defined in and that are subject to the Apple Public Source License 
+ * Version 2.0 (the 'License'). You may not use this file except in 
+ * compliance with the License.  The rights granted to you under the 
+ * License may not be used to create, or enable the creation or 
+ * redistribution of, unlawful or unlicensed copies of an Apple operating 
+ * system, or to circumvent, violate, or enable the circumvention or 
+ * violation of, any terms of an Apple operating system software license 
+ * agreement.
  *
- * @APPLE_LICENSE_HEADER_START@
- * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
+ * Please obtain a copy of the License at 
+ * http://www.opensource.apple.com/apsl/ and read it before using this 
+ * file.
+ *
+ * The Original Code and all software distributed under the License are 
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
+ * Please see the License for the specific language governing rights and 
+ * limitations under the License.
+ *
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
@@ -1031,10 +1039,8 @@ nfs_setattr(ap)
 {
 	vnode_t vp = ap->a_vp;
 	struct nfsnode *np = VTONFS(vp);
-	struct nfsmount *nmp;
 	struct vnode_attr *vap = ap->a_vap;
 	int error = 0;
-	int biosize;
 	u_quad_t tsize;
 	kauth_cred_t cred;
 	proc_t p;
@@ -1042,10 +1048,6 @@ nfs_setattr(ap)
 #ifndef nolint
 	tsize = (u_quad_t)0;
 #endif
-	nmp = VFSTONFS(vnode_mount(vp));
-	if (!nmp)
-		return (ENXIO);
-	biosize = nmp->nm_biosize;
 
 	/* Setting of flags is not supported. */
 	if (VATTR_IS_ACTIVE(vap, va_flags))
@@ -1107,9 +1109,10 @@ nfs_setattr(ap)
 				}
 			} else if (np->n_size > vap->va_data_size) { /* shrinking? */
 				daddr64_t obn, bn;
-				int neweofoff, mustwrite;
+				int biosize, neweofoff, mustwrite;
 				struct nfsbuf *bp;
 
+				biosize = vfs_statfs(vnode_mount(vp))->f_iosize;
 				obn = (np->n_size - 1) / biosize;
 				bn = vap->va_data_size / biosize; 
 				for ( ; obn >= bn; obn--) {
@@ -4749,9 +4752,9 @@ nfs_pagein(ap)
 				UPL_ABORT_ERROR | UPL_ABORT_FREE_ON_EMPTY);
 		return (ENXIO);
 	}
-	biosize = nmp->nm_biosize;
 	if ((nmp->nm_flag & NFSMNT_NFSV3) && !(nmp->nm_state & NFSSTA_GOTFSINFO))
-		nfs_fsinfo(nmp, vp, cred, p);
+		(void)nfs_fsinfo(nmp, vp, cred, p);
+	biosize = vfs_statfs(vnode_mount(vp))->f_iosize;
 
 	plinfo = ubc_upl_pageinfo(pl);
 	ubc_upl_map(pl, &ioaddr);
@@ -4888,7 +4891,7 @@ nfs_pageout(ap)
 			ubc_upl_abort(pl, UPL_ABORT_DUMP_PAGES|UPL_ABORT_FREE_ON_EMPTY);
 		return (ENXIO);
 	}
-	biosize = nmp->nm_biosize;
+	biosize = vfs_statfs(vnode_mount(vp))->f_iosize;
 
 	/*
 	 * Check to see whether the buffer is incore.
@@ -5145,11 +5148,12 @@ nfs_blktooff(ap)
 {
 	int biosize;
 	vnode_t vp = ap->a_vp;
-	struct nfsmount *nmp = VFSTONFS(vnode_mount(vp));
+	mount_t mp = vnode_mount(vp);
 
-	if (!nmp)
+	if (!mp)
 		return (ENXIO);
-	biosize = nmp->nm_biosize;
+
+	biosize = vfs_statfs(mp)->f_iosize;
 
 	*ap->a_offset = (off_t)(ap->a_lblkno * biosize);
 
@@ -5167,11 +5171,12 @@ nfs_offtoblk(ap)
 {
 	int biosize;
 	vnode_t vp = ap->a_vp;
-	struct nfsmount *nmp = VFSTONFS(vnode_mount(vp));
+	mount_t mp = vnode_mount(vp);
 
-	if (!nmp)
+	if (!mp)
 		return (ENXIO);
-	biosize = nmp->nm_biosize;
+
+	biosize = vfs_statfs(mp)->f_iosize;
 
 	*ap->a_lblkno = (daddr64_t)(ap->a_offset / biosize);
 

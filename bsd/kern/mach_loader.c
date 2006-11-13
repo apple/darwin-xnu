@@ -1,23 +1,31 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
+ * 
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code 
+ * as defined in and that are subject to the Apple Public Source License 
+ * Version 2.0 (the 'License'). You may not use this file except in 
+ * compliance with the License.  The rights granted to you under the 
+ * License may not be used to create, or enable the creation or 
+ * redistribution of, unlawful or unlicensed copies of an Apple operating 
+ * system, or to circumvent, violate, or enable the circumvention or 
+ * violation of, any terms of an Apple operating system software license 
+ * agreement.
  *
- * @APPLE_LICENSE_HEADER_START@
- * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
+ * Please obtain a copy of the License at 
+ * http://www.opensource.apple.com/apsl/ and read it before using this 
+ * file.
+ *
+ * The Original Code and all software distributed under the License are 
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
+ * Please see the License for the specific language governing rights and 
+ * limitations under the License.
+ *
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
  */
 /*
  *	Copyright (C) 1988, 1989,  NeXT, Inc.
@@ -76,7 +84,7 @@
  * XXX vm/pmap.h should not treat these prototypes as MACH_KERNEL_PRIVATE
  * when KERNEL is defined.
  */
-extern pmap_t	pmap_create(vm_map_size_t size, boolean_t is_64bit);
+extern pmap_t	pmap_create(vm_map_size_t size);
 extern void	pmap_switch(pmap_t);
 extern void	pmap_map_sharedpage(task_t task, pmap_t pmap);
 
@@ -92,6 +100,7 @@ extern kern_return_t    thread_state_initialize(thread_t thread);
 
 
 /* XXX should have prototypes in a shared header file */
+extern int grade_binary(cpu_type_t exectype, cpu_subtype_t execsubtype);
 extern int	get_map_nentries(vm_map_t);
 extern kern_return_t	thread_userstack(thread_t, int, thread_state_t,
 				unsigned int, mach_vm_offset_t *, int *);
@@ -195,8 +204,7 @@ load_dylinker(
 	thread_t			thr_act,
 	int						depth,
 	load_result_t			*result,
-	boolean_t			clean_regions,
-	boolean_t			is_64bit
+	boolean_t			clean_regions
 );
 
 static load_return_t
@@ -236,22 +244,19 @@ load_machfile(
 
 	if (create_map) {
 		old_map = current_map();
-#ifdef NO_NESTED_PMAP
+#ifdef i386
 		pmap = get_task_pmap(current_task());
 		pmap_reference(pmap);
-#else	/* NO_NESTED_PMAP */
-		pmap = pmap_create((vm_map_size_t) 0, (imgp->ip_flags & IMGPF_IS_64BIT));
-#endif	/* NO_NESTED_PMAP */
+#else
+		pmap = pmap_create((vm_map_size_t) 0);
+#endif
 		map = vm_map_create(pmap,
-				0,
-				vm_compute_max_offset((imgp->ip_flags & IMGPF_IS_64BIT)),
-				TRUE);
+				get_map_min(old_map),
+				get_map_max(old_map),
+				TRUE); /**** FIXME ****/
 	} else
 		map = new_map;
-
-	if ( (header->flags & MH_ALLOW_STACK_EXECUTION) )
-	        vm_map_disable_NX(map);
-
+		
 	if (!result)
 		result = &myresult;
 
@@ -269,15 +274,6 @@ load_machfile(
 	}
 
 	/*
-	 * For 64-bit users, check for presence of a 4GB page zero
-	 * which will enable the kernel to share the user's address space
-	 * and hence avoid TLB flushes on kernel entry/exit
-	 */ 
-	if ((imgp->ip_flags & IMGPF_IS_64BIT) &&
-	     vm_map_has_4GB_pagezero(map))
-		vm_map_set_4GB_pagezero(map);
-
-	/*
 	 *	Commit to new map.  First make sure that the current
 	 *	users of the task get done with it, and that we clean
 	 *	up the old contents of IPC and memory.  The task is
@@ -288,15 +284,13 @@ load_machfile(
 	 *	That lets us get off the pmap associated with it, and
 	 *	then we can release it.
 	 */
-
 	 if (create_map) {
 		task_halt(current_task());
 
 		old_map = swap_task_map(current_task(), map);
-		vm_map_clear_4GB_pagezero(old_map);
-#ifndef NO_NESTED_PMAP
+#ifndef i386
 		pmap_switch(pmap);	/* Make sure we are using the new pmap */
-#endif	/* !NO_NESTED_PMAP */
+#endif
 		vm_map_deallocate(old_map);
 	}
 	return(LOAD_SUCCESS);
@@ -636,29 +630,19 @@ RedoLookup:
 		}
             }
 	    if (dlp != 0)
-			ret = load_dylinker(dlp, dlarchbits, map, thr_act, depth, result, clean_regions, abi64);
+			ret = load_dylinker(dlp, dlarchbits, map, thr_act, depth, result, clean_regions);
 
 	    if(depth == 1) {
 		if (result->thread_count == 0)
 			ret = LOAD_FAILURE;
+#ifdef __ppc__
 		else if ( abi64 ) {
 			/* Map in 64-bit commpage */
 			/* LP64todo - make this clean */
 			pmap_map_sharedpage(current_task(), get_map_pmap(map));
                         vm_map_commpage64(map);
-		} else {
-#ifdef __i386__
-			/*
-			 * On Intel, the comm page doesn't get mapped
-			 * automatically because it goes beyond the current end
-			 * of the VM map in the current 3GB/1GB address space
-			 * model.
-			 * XXX This will probably become unnecessary when we
-			 * switch to the 4GB/4GB address space model.
-			 */
-			vm_map_commpage32(map);
-#endif	/* __i386__ */
 		}
+#endif
 	    }
 	}
 
@@ -670,62 +654,6 @@ RedoLookup:
 		
 	return(ret);
 }
-
-#ifndef SG_PROTECTED_VERSION_1
-#define SG_PROTECTED_VERSION_1 0x8
-#endif /* SG_PROTECTED_VERSION_1 */
-
-#ifdef __i386__
-
-#define	APPLE_UNPROTECTED_HEADER_SIZE	(3 * PAGE_SIZE_64)
-
-static load_return_t
-unprotect_segment_64(
-	uint64_t	file_off,
-	uint64_t	file_size,
-	vm_map_t	map,
-	vm_map_offset_t	map_addr,
-	vm_map_size_t	map_size)
-{
-	kern_return_t	kr;
-
-	/*
-	 * The first APPLE_UNPROTECTED_HEADER_SIZE bytes (from offset 0 of
-	 * this part of a Universal binary) are not protected...
-	 * The rest needs to be "transformed".
-	 */
-	if (file_off <= APPLE_UNPROTECTED_HEADER_SIZE &&
-	    file_off + file_size <= APPLE_UNPROTECTED_HEADER_SIZE) {
-		/* it's all unprotected, nothing to do... */
-		kr = KERN_SUCCESS;
-	} else {
-		if (file_off <= APPLE_UNPROTECTED_HEADER_SIZE) {
-			/*
-			 * We start mapping in the unprotected area.
-			 * Skip the unprotected part...
-			 */
-			vm_map_offset_t	delta;
-
-			delta = APPLE_UNPROTECTED_HEADER_SIZE;
-			delta -= file_off;
-			map_addr += delta;
-			map_size -= delta;
-		}
-		/* ... transform the rest of the mapping. */
-		kr = vm_map_apple_protected(map,
-					    map_addr,
-					    map_addr + map_size);
-	}
-
-	if (kr != KERN_SUCCESS) {
-		return LOAD_FAILURE;
-	}
-	return LOAD_SUCCESS;
-}
-#else	/* __i386__ */
-#define unprotect_segment_64(file_off, file_size, map, map_addr, map_size) \
-	LOAD_SUCCESS
-#endif	/* __i386__ */
 
 static
 load_return_t
@@ -761,27 +689,6 @@ load_segment(
 	 */
 	map_size = round_page(scp->filesize);
 	map_addr = trunc_page(scp->vmaddr);
-
-#if 0	/* XXX (4596982) this interferes with Rosetta */
-	if (map_addr == 0 &&
-	    map_size == 0 &&
-	    seg_size != 0 &&
-	    (scp->initprot & VM_PROT_ALL) == VM_PROT_NONE &&
-	    (scp->maxprot & VM_PROT_ALL) == VM_PROT_NONE) {
-		/*
-		 * This is a "page zero" segment:  it starts at address 0,
-		 * is not mapped from the binary file and is not accessible.
-		 * User-space should never be able to access that memory, so
-		 * make it completely off limits by raising the VM map's
-		 * minimum offset.
-		 */
-		ret = vm_map_raise_min_offset(map, (vm_map_offset_t) seg_size);
-		if (ret != KERN_SUCCESS) {
-			return LOAD_FAILURE;
-		}
-		return LOAD_SUCCESS;
-	}
-#endif
 
 	map_offset = pager_offset + scp->fileoff;
 
@@ -833,28 +740,28 @@ load_segment(
 	if (delta_size > 0) {
 		vm_offset_t	tmp = map_addr + map_size;
 
-		ret = vm_map(map, &tmp, delta_size, 0, VM_FLAGS_FIXED,
-			     NULL, 0, FALSE,
-			     scp->initprot, scp->maxprot,
-			     VM_INHERIT_DEFAULT);
+		ret = vm_allocate(map, &tmp, delta_size, VM_FLAGS_FIXED);
 		if (ret != KERN_SUCCESS)
 			return(LOAD_NOSPACE);
 	}
 
+	/*
+	 *	Set protection values. (Note: ignore errors!)
+	 */
+
+	if (scp->maxprot != VM_PROT_DEFAULT) {
+		(void) vm_protect(map,
+					map_addr, seg_size,
+					TRUE, scp->maxprot);
+	}
+	if (scp->initprot != VM_PROT_DEFAULT) {
+		(void) vm_protect(map,
+				      map_addr, seg_size,
+				      FALSE, scp->initprot);
+	}
 	if ( (scp->fileoff == 0) && (scp->filesize != 0) )
 		result->mach_header = map_addr;
-
-	if (scp->flags & SG_PROTECTED_VERSION_1) {
-		ret = unprotect_segment_64((uint64_t) scp->fileoff,
-					   (uint64_t) scp->filesize,
-					   map,
-					   (vm_map_offset_t) map_addr,
-					   (vm_map_size_t) map_size);
-	} else {
-		ret = LOAD_SUCCESS;
-	}
-
-	return ret;
+	return(LOAD_SUCCESS);
 }
 
 static
@@ -891,25 +798,6 @@ load_segment_64(
 	 */
 	map_size = round_page_64(scp64->filesize);	/* limited to 32 bits */
 	map_addr = round_page_64(scp64->vmaddr);
-
-	if (map_addr == 0 &&
-	    map_size == 0 &&
-	    seg_size != 0 &&
-	    (scp64->initprot & VM_PROT_ALL) == VM_PROT_NONE &&
-	    (scp64->maxprot & VM_PROT_ALL) == VM_PROT_NONE) {
-		/*
-		 * This is a "page zero" segment:  it starts at address 0,
-		 * is not mapped from the binary file and is not accessible.
-		 * User-space should never be able to access that memory, so
-		 * make it completely off limits by raising the VM map's
-		 * minimum offset.
-		 */
-		ret = vm_map_raise_min_offset(map, seg_size);
-		if (ret != KERN_SUCCESS) {
-			return LOAD_FAILURE;
-		}
-		return LOAD_SUCCESS;
-	}
 
 	map_offset = pager_offset + scp64->fileoff;	/* limited to 32 bits */
 
@@ -961,28 +849,28 @@ load_segment_64(
 	if (delta_size > 0) {
 		mach_vm_offset_t tmp = map_addr + map_size;
 
-		ret = mach_vm_map(map, &tmp, delta_size, 0, VM_FLAGS_FIXED,
-				  NULL, 0, FALSE,
-				  scp64->initprot, scp64->maxprot,
-				  VM_INHERIT_DEFAULT);
+		ret = mach_vm_allocate(map, &tmp, delta_size, VM_FLAGS_FIXED);
 		if (ret != KERN_SUCCESS)
 			return(LOAD_NOSPACE);
 	}
 
+	/*
+	 *	Set protection values. (Note: ignore errors!)
+	 */
+
+	if (scp64->maxprot != VM_PROT_DEFAULT) {
+		(void) mach_vm_protect(map,
+					map_addr, seg_size,
+					TRUE, scp64->maxprot);
+	}
+	if (scp64->initprot != VM_PROT_DEFAULT) {
+		(void) mach_vm_protect(map,
+				      map_addr, seg_size,
+				      FALSE, scp64->initprot);
+	}
 	if ( (scp64->fileoff == 0) && (scp64->filesize != 0) )
 		result->mach_header = map_addr;
-
-	if (scp64->flags & SG_PROTECTED_VERSION_1) {
-		ret = unprotect_segment_64(scp64->fileoff,
-					   scp64->filesize,
-					   map,
-					   map_addr,
-					   map_size);
-	} else {
-		ret = LOAD_SUCCESS;
-	}
-
-	return ret;
+	return(LOAD_SUCCESS);
 }
 
 static
@@ -1224,8 +1112,7 @@ load_dylinker(
 	thread_t	thr_act,
 	int			depth,
 	load_result_t		*result,
-	boolean_t		clean_regions,
-	boolean_t		is_64bit
+	boolean_t		clean_regions
 )
 {
 	char			*name;
@@ -1259,8 +1146,7 @@ load_dylinker(
 	 *	Load the Mach-O.
 	 *	Use a temporary map to do the work.
 	 */
-	copy_map = vm_map_create(pmap_create(vm_map_round_page(macho_size),
-					     is_64bit),
+	copy_map = vm_map_create(pmap_create(vm_map_round_page(macho_size)),
 				 get_map_min(map), get_map_max(map), TRUE);
 	if (VM_MAP_NULL == copy_map) {
 		ret = LOAD_RESOURCE;

@@ -1,23 +1,31 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
+ * This file contains Original Code and/or Modifications of Original Code 
+ * as defined in and that are subject to the Apple Public Source License 
+ * Version 2.0 (the 'License'). You may not use this file except in 
+ * compliance with the License.  The rights granted to you under the 
+ * License may not be used to create, or enable the creation or 
+ * redistribution of, unlawful or unlicensed copies of an Apple operating 
+ * system, or to circumvent, violate, or enable the circumvention or 
+ * violation of, any terms of an Apple operating system software license 
+ * agreement.
+ *
+ * Please obtain a copy of the License at 
+ * http://www.opensource.apple.com/apsl/ and read it before using this 
+ * file.
+ *
+ * The Original Code and all software distributed under the License are 
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
+ * Please see the License for the specific language governing rights and 
+ * limitations under the License.
+ *
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -62,7 +70,6 @@
 
 #include <i386/mp.h>
 #include <i386/mp_slave_boot.h>
-#include <i386/cpuid.h>
 
 /*
  * GAS won't handle an intersegment jump with a relocatable offset.
@@ -74,26 +81,38 @@
 
 
 
-#define	PA(addr)	(addr)
-#define	VA(addr)	(addr)
+#define KVTOPHYS	(-KERNELBASE)
+#define	KVTOLINEAR	LINEAR_KERNELBASE
 
+
+#define	PA(addr)	((addr)+KVTOPHYS)
+#define	VA(addr)	((addr)-KVTOPHYS)
+
+	.data
+#if 0	/* Anyone need this? */
+	.align 	2
+	.globl	EXT(_kick_buffer_)
+EXT(_kick_buffer_):
+	.long	1
+	.long	3
+	.set	.,.+16836
+#endif	/* XXX */
 /*
  * Interrupt and bootup stack for initial processor.
  */
-
         /* in the __HIB section since the hibernate restore code uses this stack. */
         .section __HIB, __data
-	.align	12
+	.align	ALIGN
 
-	.globl	EXT(low_intstack)
-EXT(low_intstack):
+	.globl	EXT(intstack)
+EXT(intstack):
 	.globl  EXT(gIOHibernateRestoreStack)
 EXT(gIOHibernateRestoreStack):
 
 	.set	., .+INTSTACK_SIZE
 
-	.globl	EXT(low_eintstack)
-EXT(low_eintstack:)
+	.globl	EXT(eintstack)
+EXT(eintstack:)
 	.globl  EXT(gIOHibernateRestoreStackEnd)
 EXT(gIOHibernateRestoreStackEnd):
 
@@ -102,51 +121,26 @@ EXT(gIOHibernateRestoreStackEnd):
  */
 	.align	ALIGN
 	.globl	EXT(gdtptr)
-	/* align below properly */
-	.word   0 
 LEXT(gdtptr)
 	.word	Times(8,GDTSZ)-1
-	.long	EXT(master_gdt)
+	.long	EXT(gdt)
 
 	.align	ALIGN
 	.globl	EXT(idtptr)
-	/* align below properly */
-	.word   0 
 LEXT(idtptr)
 	.word	Times(8,IDTSZ)-1
-	.long	EXT(master_idt)
+	.long	EXT(idt)
 
-        /* back to the regular __DATA section. */
+          /* back to the regular __DATA section. */
 
           .section __DATA, __data
-
-/*
- * Stack for last-gasp double-fault handler.
- */
-	.align	12
-	.globl	EXT(df_task_stack)
-EXT(df_task_stack):
-	.set	., .+INTSTACK_SIZE
-	.globl	EXT(df_task_stack_end)
-EXT(df_task_stack_end):
-
-
-/*
- * Stack for machine-check handler.
- */
-	.align	12
-	.globl	EXT(mc_task_stack)
-EXT(mc_task_stack):
-	.set	., .+INTSTACK_SIZE
-	.globl	EXT(mc_task_stack_end)
-EXT(mc_task_stack_end):
 
 
 #if	MACH_KDB
 /*
  * Kernel debugger stack for each processor.
  */
-	.align	12
+	.align	ALIGN
 	.globl	EXT(db_stack_store)
 EXT(db_stack_store):
 	.set	., .+(INTSTACK_SIZE*MAX_CPUS)
@@ -154,7 +148,7 @@ EXT(db_stack_store):
 /*
  * Stack for last-ditch debugger task for each processor.
  */
-	.align	12
+	.align	ALIGN
 	.globl	EXT(db_task_stack_store)
 EXT(db_task_stack_store):
 	.set	., .+(INTSTACK_SIZE*MAX_CPUS)
@@ -169,46 +163,54 @@ EXT(kgdb_stack_store):
 #endif	/* MACH_KDB */
 
 	.data
-physfree:
-	.long	0			/* phys addr of next free page */
+	/*
+	 *	start_lock is very special.  We initialize the
+	 *	lock at allocation time rather than at run-time.
+	 *	Although start_lock should be an instance of a
+	 *	hw_lock, we hand-code all manipulation of the lock
+	 *	because the hw_lock code may require function calls;
+	 *	and we'd rather not introduce another dependency on
+	 *	a working stack at this point.
+	 */
+	.globl	EXT(start_lock)
+EXT(start_lock):
+	.long	0			/* synchronizes processor startup */
 
-	.globl	EXT(IdlePTD)
-EXT(IdlePTD):
-	.long	0			/* phys addr of kernel PTD */
+	.globl	EXT(master_is_up)
+EXT(master_is_up):
+	.long	0			/* 1 when OK for other processors */
+					/* to start */
+	.globl	EXT(mp_boot_pde)
+EXT(mp_boot_pde):
+	.long	0
+
+_KERNend:	.long	0			/* phys addr end of kernel (just after bss) */
+physfree:	.long	0			/* phys addr of next free page */
+
+	.globl	_IdlePTD
+_IdlePTD:	.long	0			/* phys addr of kernel PTD */
 #ifdef PAE
-	.globl	EXT(IdlePDPT)
-EXT(IdlePDPT):
-	.long 0				/* phys addr of kernel PDPT */
-#endif
-#ifdef X86_64
-	.globl EXT(IdlePML4)
-EXT(IdlePML4):
-	.long 0
-	.globl EXT(IdlePDPT64)
-EXT(IdlePDPT64):
-	.long 0
+	.globl	_IdlePDPT
+_IdlePDPT:	.long 0				/* phys addr of kernel PDPT */
 #endif
 
-KPTphys:
-	.long	0			/* phys addr of kernel page tables */
+	.globl	_KPTphys
 
-	.globl	EXT(KernelRelocOffset)
-EXT(KernelRelocOffset):
-	.long	0					/* Kernel relocation offset  */
-	
+_KPTphys:	.long	0			/* phys addr of kernel page tables */
+
 
 /*   Some handy macros */
 
-#define ALLOCPAGES(npages)			   \
-	movl	PA(physfree), %esi		 ; \
-	movl	$((npages) * PAGE_SIZE), %eax	 ; \
-	addl	%esi, %eax			 ; \
-	movl	%eax, PA(physfree)		 ; \
-	movl	%esi, %edi			 ; \
-	movl	$((npages) * PAGE_SIZE / 4),%ecx ; \
-	xorl	%eax,%eax			 ; \
-	cld					 ; \
-	rep					 ; \
+#define ALLOCPAGES(npages) \
+	movl	PA(physfree), %esi ; \
+	movl	$((npages) * PAGE_SIZE), %eax ;	\
+	addl	%esi, %eax ; \
+	movl	%eax, PA(physfree) ; \
+	movl	%esi, %edi ; \
+	movl	$((npages) * PAGE_SIZE / 4),%ecx ;	\
+	xorl	%eax,%eax ; \
+	cld ; \
+	rep ; \
 	stosl
 
 /*
@@ -220,7 +222,7 @@ EXT(KernelRelocOffset):
  *	prot = protection bits
  */
 #define	fillkpt(base, prot)		  \
-	shll	$(PTEINDX),%ebx		; \
+	shll	$(PTEINDX),%ebx			; \
 	addl	base,%ebx		; \
 	orl	$(PTE_V) ,%eax		; \
 	orl	prot,%eax		; \
@@ -238,11 +240,11 @@ EXT(KernelRelocOffset):
 #define	fillkptphys(prot)		  \
 	movl	%eax, %ebx		; \
 	shrl	$(PAGE_SHIFT), %ebx	; \
-	fillkpt(PA(KPTphys), prot)
+	fillkpt(PA(EXT(KPTphys)), prot)
 
+	
 /*
- * BSP CPU start here.
- *	eax points to kernbootstruct
+ * All CPUs start here.
  *
  * Environment:
  *	protected mode, no paging, flat 32-bit address space.
@@ -250,103 +252,50 @@ EXT(KernelRelocOffset):
  */
 	.text
 	.align	ALIGN
-	.globl	EXT(_start)
-	.globl	EXT(_pstart)
-LEXT(_start)
-LEXT(_pstart)
-	mov	%ds, %bx
-	mov	%bx, %es
-	mov	%eax, %ebp		// Move kernbootstruct to ebp
-	POSTCODE(_PSTART_ENTRY)
-	movl	KADDR(%ebp), %ebx	// Load boot image phys addr
-	movl	%ebx, %edx		// Set edx with boot load phys addr
-	addl	KSIZE(%ebp), %edx	// Add boot image size
-	addl	$(NBPG-1), %edx		// Round to a page size
-	andl	$(-NBPG), %edx		// Set edx to first free page
-	movl	%edx, %esp		// Set temporay stack
-	addl	$(NBPG), %esp		// add page size
-	call	Ls1
-Ls1:	popl	%esi			// Get return address
-	cmpl	$(PA(Ls1)), %esi 	// Compare with static physicall addr 
-	je	EXT(pstart)		// Branch if equal
-	subl	$(PA(Ls1)), %esi	// Extract relocation offset
-	movl	%esi, %esp		// Store relocation offset in esp
-	leal	(PA(Lreloc_start))(%esp),%esi
-					// Set esi to reloc_start boot phys addr
-	movl	%edx, %edi		// Set edi to first free page
-	movl	$(Lreloc_end-Lreloc_start), %ecx
-					// Set ecx to copy code size
-	cld				// count up
-	rep
-	movsb				// copy reloc copy code
-	wbinvd				// Write back and Invalidate cache
-	movl	%ebx, %esi		// Set esi to kernbootstruct kaddr
-	movl	KADDR(%ebp), %edi	// Load boot image phys addr
-	subl	%esp,  %edi		// Adjust to static phys addr
-	movl	KSIZE(%ebp), %ecx	// Set ecx to kernbootstruct ksize
-	addl	$(NBPG-1), %ecx		// Add NBPG-1 to ecx
-	andl	$(-NBPG), %ecx		// Truncate  ecx to a page aligned addr
-	sarl	$2, %ecx		// Divide ecx by 4
-	movl	%esp, (PA(EXT(KernelRelocOffset)))(%esp)
-					// Store relocation offset
-	movl	%edi, KADDR(%ebp)	// Relocate kaddr in kernbootstruct
-	subl	%esp, MEMORYMAP(%ebp)	// And relocate MemoryMap 
-	subl	%esp, DEVICETREEP(%ebp)	// And relocate deviceTreeP
-	subl	%esp, %ebp		// Set ebp with relocated phys addr
-	jmp	*%edx			// Branch to relocated copy code
-Lreloc_start:
-	POSTCODE(_PSTART_RELOC)
-	rep
-	movsl				// Copy boot image at BASE_KERNEL_PADDR
-	wbinvd				// Write back and Invalidate cache
-	movl	$(PA(EXT(pstart))), %edx	// Set branch target
-	jmp	*%edx			// Far jmp to pstart phys addr
-Lreloc_end:
-	/* NOTREACHED */
-	hlt
-
-	.text
-	.globl __start
-	.set __start, PA(EXT(_pstart))
-
-/*
- * BSP CPU continues here after possible relocation.
- *	ebp points to kernbootstruct
- */
-	.align	ALIGN
 	.globl	EXT(pstart)
+	.globl	EXT(_start)
+LEXT(_start)
 LEXT(pstart)
-	mov     %ebp, %ebx		/* get pointer to kernbootstruct */
+	mov     %eax, %ebx		/* save pointer to kernbootstruct */
 
-	POSTCODE(PSTART_ENTRY)
+	POSTCODE(PSTART_ENTRY);
 
 	mov	$0,%ax			/* fs must be zeroed; */
 	mov	%ax,%fs			/* some bootstrappers don`t do this */
 	mov	%ax,%gs
 
+	jmp	1f
+0:	cmpl	$0,PA(EXT(start_lock))
+	jne	0b
+1:	movb	$1,%eax
+	xchgl	%eax,PA(EXT(start_lock)) /* locked */
+	testl	%eax,%eax
+	jnz	0b
+
+	cmpl	$0,PA(EXT(master_is_up))	/* are we first? */
+	jne	EXT(slave_start)		/* no -- system already up. */
+	movl	$1,PA(EXT(master_is_up))	/* others become slaves */
+	jmp	3f
+3:
+
 /*
  * Get startup parameters.
  */
+
+        movl	%ebx,PA(EXT(boot_args_start))  /* Save KERNBOOTSTRUCT */
+	
 	movl	KADDR(%ebx), %eax
 	addl	KSIZE(%ebx), %eax
 	addl	$(NBPG-1),%eax
 	andl	$(-NBPG), %eax
+	movl	%eax, PA(EXT(KERNend))
 	movl	%eax, PA(physfree)
 	cld
 
 /* allocate kernel page table pages */
 	ALLOCPAGES(NKPT)
-	movl	%esi,PA(KPTphys)
+	movl	%esi,PA(EXT(KPTphys))
 
-#ifdef X86_64
-/* allocate PML4 page */
-	ALLOCPAGES(1)
-	movl	%esi,EXT(IdlePML4)
-/* allocate new 3rd level directory page */
-	ALLOCPAGES(1)
-	movl	%esi,EXT(IdlePDPT64)
-#endif
-	
 #ifdef PAE
 /* allocate Page Table Directory Page */
 	ALLOCPAGES(1)
@@ -368,23 +317,19 @@ LEXT(pstart)
 	movl	PA(EXT(IdlePDPT)), %eax
 	movl	$1, %ecx
 	fillkptphys( $(PTE_W) )
-	
-	movl	PA(EXT(IdlePDPT64)), %eax
-	movl	$1, %ecx
-	fillkptphys( $(PTE_W) )
 #endif
 	movl	PA(EXT(IdlePTD)),%eax
 	movl	$(NPGPTD), %ecx
 	fillkptphys( $(PTE_W) )
 
 /* install a pde for temp double map of bottom of VA */
-	movl	PA(KPTphys),%eax
+	movl	PA(EXT(KPTphys)),%eax
 	xorl	%ebx,%ebx
 	movl	$(NKPT), %ecx
 	fillkpt(PA(EXT(IdlePTD)), $(PTE_W))
 
 /* install pde's for page tables */
-	movl	PA(KPTphys),%eax
+	movl	PA(EXT(KPTphys)),%eax
 	movl	$(KPTDI),%ebx
 	movl	$(NKPT),%ecx
 	fillkpt(PA(EXT(IdlePTD)), $(PTE_W))
@@ -461,24 +406,24 @@ LEXT(pstart)
 	loop	1b
 #endif
 	
-	POSTCODE(PSTART_PAGE_TABLES)
+	POSTCODE(PSTART_PAGE_TABLES);
 
 /*
  * Fix initial descriptor tables.
  */
-	lea	PA(EXT(master_idt)),%esi	/* fix IDT */
+	lea	PA(EXT(idt)),%esi	/* fix IDT */
 	movl	$(IDTSZ),%ecx
 	movl	$(PA(fix_idt_ret)),%ebx
 	jmp	fix_desc_common		/* (cannot use stack) */
 fix_idt_ret:
 
-	lea	PA(EXT(master_gdt)),%esi	/* fix GDT */
+	lea	PA(EXT(gdt)),%esi	/* fix GDT */
 	movl	$(GDTSZ),%ecx
 	movl	$(PA(fix_gdt_ret)),%ebx
 	jmp	fix_desc_common		/* (cannot use stack) */
 fix_gdt_ret:
 
-	lea	PA(EXT(master_ldt)),%esi	/* fix LDT */
+	lea	PA(EXT(ldt)),%esi	/* fix LDT */
 	movl	$(LDTSZ),%ecx
 	movl	$(PA(fix_ldt_ret)),%ebx
 	jmp	fix_desc_common		/* (cannot use stack) */
@@ -491,7 +436,7 @@ fix_ldt_ret:
 	lgdt	PA(EXT(gdtptr))		/* load GDT */
 	lidt	PA(EXT(idtptr))		/* load IDT */
 
-	POSTCODE(PSTART_BEFORE_PAGING)
+	POSTCODE(PSTART_BEFORE_PAGING);
 
 /*
  * Turn on paging.
@@ -501,21 +446,8 @@ fix_ldt_ret:
 	movl	%eax, %cr3
 
 	movl	%cr4, %eax
-	orl	$(CR4_PAE|CR4_PGE|CR4_MCE), %eax
+	orl	$(CR4_PAE), %eax
 	movl	%eax, %cr4
-
-	movl	$0x80000001, %eax
-	cpuid
-	and	$(CPUID_EXTFEATURE_XD), %edx	/* clear all but bit 20 */
-	cmp	$0, %edx		/* skip setting NXE if 20 is not set */
-	je	1f
-	
-	movl	$(MSR_IA32_EFER), %ecx			/* MSR number in ecx */
-	rdmsr						/* MSR value return in edx: eax */
-	orl	$(MSR_IA32_EFER_NXE), %eax		/* Set NXE bit in low 32-bits */
-	wrmsr						/* Update Extended Feature Enable reg */
-1:
-
 #else	
 	movl	PA(EXT(IdlePTD)), %eax
 	movl	%eax,%cr3
@@ -528,7 +460,7 @@ fix_ldt_ret:
 	LJMP(KERNEL_CS,EXT(vstart))	/* switch to kernel code segment */
 
 /*
- * BSP is now running with correct addresses.
+ * Master is now running with correct addresses.
  */
 LEXT(vstart)
 	POSTCODE(VSTART_ENTRY)	; 
@@ -537,24 +469,20 @@ LEXT(vstart)
 	mov	%ax,%ds
 	mov	%ax,%es
 	mov	%ax,%ss
-	mov	%ax,EXT(master_ktss)+TSS_SS0	/* set kernel stack segment */
+	mov	%ax,EXT(ktss)+TSS_SS0	/* set kernel stack segment */
 					/* for traps to kernel */
-
 #if	MACH_KDB
-	mov	%ax,EXT(master_dbtss)+TSS_SS0	/* likewise for debug task switch */
+	mov	%ax,EXT(dbtss)+TSS_SS0	/* likewise for debug task switch */
 	mov	%cr3,%eax		/* get PDBR into debug TSS */
-	mov	%eax,EXT(master_dbtss)+TSS_PDBR
+	mov	%eax,EXT(dbtss)+TSS_PDBR
 	mov	$0,%eax
 #endif
-	mov	%cr3,%eax		/* get PDBR into DF TSS */
-	mov	%eax,EXT(master_dftss)+TSS_PDBR
-	mov	%eax,EXT(master_mctss)+TSS_PDBR
 
 	movw	$(KERNEL_LDT),%ax	/* get LDT segment */
 	lldt	%ax			/* load LDT */
 #if	MACH_KDB
-	mov	%ax,EXT(master_ktss)+TSS_LDT	/* store LDT in two TSS, as well... */
-	mov	%ax,EXT(master_dbtss)+TSS_LDT	/*   ...matters if we switch tasks */
+	mov	%ax,EXT(ktss)+TSS_LDT	/* store LDT in two TSS, as well... */
+	mov	%ax,EXT(dbtss)+TSS_LDT	/*   ...matters if we switch tasks */
 #endif
 	movw	$(KERNEL_TSS),%ax
 	ltr	%ax			/* set up KTSS */
@@ -562,56 +490,72 @@ LEXT(vstart)
 	mov	$(CPU_DATA_GS),%ax
 	mov	%ax,%gs
 
-	POSTCODE(VSTART_STACK_SWITCH)
+	POSTCODE(VSTART_STACK_SWITCH);
 
-	lea	EXT(low_eintstack),%esp	/* switch to the bootup stack */
-	pushl	%ebp			/* push boot args addr */
-	xorl	%ebp,%ebp		/* clear stack frame ptr */
+	lea	EXT(eintstack),%esp	/* switch to the bootup stack */
+	call EXT(i386_preinit)
 
-	POSTCODE(VSTART_EXIT)
+	POSTCODE(VSTART_EXIT);
 
 	call	EXT(i386_init)		/* run C code */
 	/*NOTREACHED*/
 	hlt
 
+	.text
+	.globl __start
+	.set __start, PA(EXT(pstart))
 
+	
 /*
- * AP (slave) CPUs enter here.
- *
- * Environment:
- *	protected mode, no paging, flat 32-bit address space.
- *	(Code/data/stack segments have base == 0, limit == 4G)
+ * master_up is used by the master cpu to signify that it is done
+ * with the interrupt stack, etc. See the code in pstart and svstart
+ * that this interlocks with.
  */
 	.align	ALIGN
-	.globl	EXT(slave_pstart)
-LEXT(slave_pstart)
+	.globl	EXT(master_up)
+LEXT(master_up)
+	pushl	%ebp			/* set up */
+	movl	%esp,%ebp		/* stack frame */
+	movl	$0,%ecx			/* unlock start_lock */
+	xchgl	%ecx,EXT(start_lock)	/* since we are no longer using */
+					/* bootstrap stack */
+	leave				/* pop stack frame */
+	ret
+
+/*
+ * We aren't the first.  Call slave_main to initialize the processor
+ * and get Mach going on it.
+ */
+	.align	ALIGN
+	.globl	EXT(slave_start)
+LEXT(slave_start)
 	cli				/* disable interrupts, so we don`t */
 					/* need IDT for a while */
 
-	POSTCODE(SLAVE_PSTART_ENTRY)
+	POSTCODE(SLAVE_START_ENTRY);
 /*
  * Turn on paging.
  */
-#ifdef PAE
-	movl	%cr4, %eax
-	orl	$(CR4_PAE|CR4_PGE|CR4_MCE), %eax
-	movl	%eax, %cr4
+	movl	$(EXT(spag_start)),%edx /* first paged code address */
 
-	movl	$(MSR_IA32_EFER), %ecx			/* MSR number in ecx */
-	rdmsr						/* MSR value return in edx: eax */
-	orl	$(MSR_IA32_EFER_NXE), %eax		/* Set NXE bit in low 32-bits */
-	wrmsr						/* Update Extended Feature Enable reg */
-#endif
+#ifdef PAE
+	movl	$(0x4000), %eax
+	movl	%eax, %cr3
+
+	movl	%cr4, %eax
+	orl	$(CR4_PAE), %eax
+	movl	%eax, %cr4
+#else
 	movl	$(0x4000),%eax  /* tmp until we get mapped */
 	movl	%eax,%cr3
+#endif
 
 	movl	%cr0,%eax
 	orl	$(CR0_PG|CR0_WP|CR0_PE),%eax
 	movl	%eax,%cr0		/* to enable paging */
 
-	POSTCODE(SLAVE_PSTART_EXIT)
+	POSTCODE(SLAVE_START_EXIT);
 
-	movl	$(EXT(spag_start)),%edx /* first paged code address */
 	jmp	*%edx			/* flush prefetch queue */
 
 /*
@@ -622,15 +566,15 @@ LEXT(spag_start)
 	lgdt	PA(EXT(gdtptr))		/* load GDT */
 	lidt	PA(EXT(idtptr))		/* load IDT */
 
-	LJMP(KERNEL_CS,EXT(slave_vstart))	/* switch to kernel code segment */
+	LJMP(KERNEL_CS,EXT(svstart))	/* switch to kernel code segment */
 
 
 /*
  * Slave is now running with correct addresses.
  */
-LEXT(slave_vstart)
+LEXT(svstart)
 
-	POSTCODE(SLAVE_VSTART_ENTRY)
+	POSTCODE(SVSTART_ENTRY);
 
 #ifdef PAE
 	movl	PA(EXT(IdlePDPT)), %eax
@@ -656,18 +600,19 @@ LEXT(slave_vstart)
 /*
  * Switch to the per-cpu descriptor tables
  */
-	POSTCODE(SLAVE_VSTART_DESC_INIT)
+	POSTCODE(SVSTART_DESC_INIT);
 
 	CPU_NUMBER_FROM_LAPIC(%eax)
 	movl	CX(EXT(cpu_data_ptr),%eax),%ecx
+	movl	CPU_DESC_TABLEP(%ecx), %ecx
 
 	movw	$(GDTSZ*8-1),0(%esp)	/* set GDT size in GDT descriptor */
-	movl	CPU_DESC_INDEX+CDI_GDT(%ecx),%edx
+	leal	MP_GDT(%ecx),%edx
 	movl	%edx,2(%esp)		/* point to local GDT (linear addr) */
 	lgdt	0(%esp)			/* load new GDT */
 	
 	movw	$(IDTSZ*8-1),0(%esp)	/* set IDT size in IDT descriptor */
-	movl	CPU_DESC_INDEX+CDI_IDT(%ecx),%edx
+	leal	MP_IDT(%ecx),%edx
 	movl	%edx,2(%esp)		/* point to local IDT (linear addr) */
 	lidt	0(%esp)			/* load new IDT */
 	
@@ -683,12 +628,15 @@ LEXT(slave_vstart)
 /*
  * Get stack top from pre-cpu data and switch
  */
-	POSTCODE(SLAVE_VSTART_STACK_SWITCH)
+	POSTCODE(SVSTART_STACK_SWITCH);
 
 	movl	%gs:CPU_INT_STACK_TOP,%esp
 	xorl    %ebp,%ebp               /* for completeness */
 
-	POSTCODE(SLAVE_VSTART_EXIT)
+	movl	$0,%eax			/* unlock start_lock */
+	xchgl	%eax,EXT(start_lock)	/* since we are no longer using */
+					/* bootstrap stack */
+	POSTCODE(SVSTART_EXIT);
 
 	call	EXT(i386_init_slave)	/* start MACH */
 	/*NOTREACHED*/

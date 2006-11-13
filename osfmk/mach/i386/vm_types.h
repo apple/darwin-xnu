@@ -1,23 +1,31 @@
 /*
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
+ * This file contains Original Code and/or Modifications of Original Code 
+ * as defined in and that are subject to the Apple Public Source License 
+ * Version 2.0 (the 'License'). You may not use this file except in 
+ * compliance with the License.  The rights granted to you under the 
+ * License may not be used to create, or enable the creation or 
+ * redistribution of, unlawful or unlicensed copies of an Apple operating 
+ * system, or to circumvent, violate, or enable the circumvention or 
+ * violation of, any terms of an Apple operating system software license 
+ * agreement.
+ *
+ * Please obtain a copy of the License at 
+ * http://www.opensource.apple.com/apsl/ and read it before using this 
+ * file.
+ *
+ * The Original Code and all software distributed under the License are 
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
+ * Please see the License for the specific language governing rights and 
+ * limitations under the License.
+ *
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -74,9 +82,9 @@
  *
  * They also had an implicit "same size as pointer" characteristic
  * to them (i.e. Mach's traditional types are very ILP32 or ILP64
- * centric).  We support x86 ABIs that do not follow either of
- * these models (specifically LP64).  Therefore, we had to make a
- * choice between making these types scale with pointers or stay
+ * centric).  We will likely support x86 ABIs that do not follow
+ * either ofthese models (specifically LP64).  Therefore, we had to
+ * make a choice between making these types scale with pointers or stay
  * tied to integers.  Because their use is predominantly tied to
  * to the size of an integer, we are keeping that association and
  * breaking free from pointer size guarantees.
@@ -90,22 +98,14 @@ typedef int			integer_t;
  * A vm_offset_t is a type-neutral pointer,
  * e.g. an offset into a virtual memory space.
  */
-#ifdef __LP64__
-typedef uintptr_t		vm_offset_t;
-#else	/* __LP64__ */
 typedef	natural_t		vm_offset_t;
-#endif	/* __LP64__ */
 
 /*
  * A vm_size_t is the proper type for e.g.
  * expressing the difference between two
  * vm_offset_t entities.
  */
-#ifdef __LP64__
-typedef uintptr_t		vm_size_t;
-#else	/* __LP64__ */
 typedef	natural_t		vm_size_t;
-#endif	/* __LP64__ */
 
 /*
  * This new type is independent of a particular vm map's
@@ -114,19 +114,23 @@ typedef	natural_t		vm_size_t;
  * where the size of the map is not known - or we don't
  * want to have to distinguish.
  */
-typedef uint64_t		mach_vm_address_t;
-typedef uint64_t		mach_vm_offset_t;
-typedef uint64_t		mach_vm_size_t;
+typedef uint32_t		mach_vm_address_t;
+typedef uint32_t		mach_vm_offset_t;
+typedef uint32_t		mach_vm_size_t;
 
 /* LP64todo - convert these over for good */
-#if 1 
+#if 0 
 typedef uint64_t		vm_map_offset_t;
 typedef uint64_t		vm_map_address_t;
 typedef uint64_t		vm_map_size_t;
+#define VM_MAP_MIN_ADDRESS	MACH_VM_MIN_ADDRESS
+#define VM_MAP_MAX_ADDRESS	MACH_VM_MAX_ADDRESS
 #else
 typedef uint32_t		vm_map_offset_t;
 typedef uint32_t		vm_map_address_t;
 typedef uint32_t		vm_map_size_t;
+#define VM_MAP_MIN_ADDRESS	VM_MIN_ADDRESS
+#define VM_MAP_MAX_ADDRESS	VM_MAX_ADDRESS
 #endif
 
 #ifdef	MACH_KERNEL_PRIVATE

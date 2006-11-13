@@ -1,23 +1,31 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
+ * This file contains Original Code and/or Modifications of Original Code 
+ * as defined in and that are subject to the Apple Public Source License 
+ * Version 2.0 (the 'License'). You may not use this file except in 
+ * compliance with the License.  The rights granted to you under the 
+ * License may not be used to create, or enable the creation or 
+ * redistribution of, unlawful or unlicensed copies of an Apple operating 
+ * system, or to circumvent, violate, or enable the circumvention or 
+ * violation of, any terms of an Apple operating system software license 
+ * agreement.
+ *
+ * Please obtain a copy of the License at 
+ * http://www.opensource.apple.com/apsl/ and read it before using this 
+ * file.
+ *
+ * The Original Code and all software distributed under the License are 
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
+ * Please see the License for the specific language governing rights and 
+ * limitations under the License.
+ *
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
  */
 /*
  * @OSF_FREE_COPYRIGHT@
@@ -114,7 +122,7 @@
 #include <vm/vm_map.h>
 #include <vm/vm_kern.h>		/* for kernel_map, ipc_kernel_map */
 #include <vm/vm_pageout.h>
-#include <vm/vm_protos.h>	/* for vm_map_remove_commpage */
+#include <vm/vm_protos.h>	/* for vm_map_remove_commpage64 */
 
 #if	MACH_KDB
 #include <ddb/db_sym.h>
@@ -188,44 +196,29 @@ task_set_64bit(
 		task_t task,
 		boolean_t is64bit)
 {
-        thread_t thread;
-
-	if (is64bit) {
-	        if (task_has_64BitAddr(task))
-		        return;
-
+	if(is64bit) {
 		/* LP64todo - no task working set for 64-bit */
 		task_set_64BitAddr(task);
 		task_working_set_disable(task);
+		task->map->max_offset = MACH_VM_MAX_ADDRESS;
 	} else {
-	        if ( !task_has_64BitAddr(task))
-		        return;
-
 		/*
 		 * Deallocate all memory previously allocated
 		 * above the 32-bit address space, since it won't
 		 * be accessible anymore.
 		 */
 		/* LP64todo - make this clean */
-		vm_map_remove_commpage(task->map);
+#ifdef __ppc__
+		vm_map_remove_commpage64(task->map);
 		pmap_unmap_sharedpage(task->map->pmap);	/* Unmap commpage */
+#endif
 		(void) vm_map_remove(task->map,
 				     (vm_map_offset_t) VM_MAX_ADDRESS,
 				     MACH_VM_MAX_ADDRESS,
 				     VM_MAP_NO_FLAGS);
 		task_clear_64BitAddr(task);
+		task->map->max_offset = (vm_map_offset_t)VM_MAX_ADDRESS;
 	}
-	/* FIXME: On x86, the thread save state flavor can diverge from the
-	 * task's 64-bit feature flag due to the 32-bit/64-bit register save
-	 * state dichotomy. Since we can be pre-empted in this interval,
-	 * certain routines may observe the thread as being in an inconsistent
-	 * state with respect to its task's 64-bitness.
-	 */
-#ifdef __i386__
-	queue_iterate(&task->threads, thread, thread_t, task_threads) {
-	        machine_thread_switch_addrmode(thread, !is64bit);
-	}
-#endif
 }
 
 void
@@ -240,7 +233,7 @@ task_init(void)
 	/*
 	 * Create the kernel task as the first task.
 	 */
-	if (task_create_internal(TASK_NULL, FALSE, FALSE, &kernel_task) != KERN_SUCCESS)
+	if (task_create_internal(TASK_NULL, FALSE, &kernel_task) != KERN_SUCCESS)
 		panic("task_init\n");
 
 	vm_map_deallocate(kernel_task->map);
@@ -322,7 +315,7 @@ task_create(
 		return(KERN_INVALID_ARGUMENT);
 
 	return task_create_internal(
-	    		parent_task, inherit_memory, task_has_64BitAddr(parent_task), child_task);
+	    		parent_task, inherit_memory, child_task);
 }
 
 kern_return_t
@@ -346,7 +339,7 @@ host_security_create_task_token(
 		return(KERN_INVALID_SECURITY);
 
 	result = task_create_internal(
-			parent_task, inherit_memory, task_has_64BitAddr(parent_task), child_task);
+			parent_task, inherit_memory, child_task);
 
         if (result != KERN_SUCCESS)
                 return(result);
@@ -367,7 +360,6 @@ kern_return_t
 task_create_internal(
 	task_t		parent_task,
 	boolean_t	inherit_memory,
-	boolean_t	is_64bit,
 	task_t		*child_task)		/* OUT */
 {
 	task_t		new_task;
@@ -384,7 +376,7 @@ task_create_internal(
 	if (inherit_memory)
 		new_task->map = vm_map_fork(parent_task->map);
 	else
-		new_task->map = vm_map_create(pmap_create(0, is_64bit),
+		new_task->map = vm_map_create(pmap_create(0),
 					(vm_map_offset_t)(VM_MIN_ADDRESS),
 					(vm_map_offset_t)(VM_MAX_ADDRESS), TRUE);
 
@@ -416,10 +408,6 @@ task_create_internal(
 #ifdef MACH_BSD
 	new_task->bsd_info = 0;
 #endif /* MACH_BSD */
-
-#ifdef __i386__
-	new_task->i386_ldt = 0;
-#endif
 
 #ifdef __ppc__
 	if(BootProcInfo.pf.Available & pf64Bit) new_task->taskFeatures[0] |= tf64BitData;	/* If 64-bit machine, show we have 64-bit registers at least */
@@ -466,11 +454,6 @@ task_create_internal(
 			convert_port_to_ledger(parent_task->paged_ledger_port));
 		if(task_has_64BitAddr(parent_task))
 			task_set_64BitAddr(new_task);
-
-#ifdef __i386__
-		if (inherit_memory && parent_task->i386_ldt)
-			new_task->i386_ldt = user_ldt_copy(parent_task->i386_ldt);
-#endif
 	}
 	else {
 		pset = &default_pset;
@@ -538,19 +521,6 @@ task_deallocate(
 	task_prof_deallocate(task);
 	zfree(task_zone, task);
 }
-
-/*
- *	task_name_deallocate:
- *
- *	Drop a reference on a task name.
- */
-void
-task_name_deallocate(
-	task_name_t		task_name)
-{
-	return(task_deallocate((task_t)task_name));
-}
-
 
 /*
  *	task_terminate:
@@ -665,11 +635,10 @@ task_terminate_internal(
 	ipc_space_destroy(task->itk_space);
 
 /* LP64todo - make this clean */
-	vm_map_remove_commpage(task->map);
+#ifdef __ppc__
+	vm_map_remove_commpage64(task->map);
 	pmap_unmap_sharedpage(task->map->pmap);		/* Unmap commpage */
-
-	if (vm_map_has_4GB_pagezero(task->map))
-		vm_map_clear_4GB_pagezero(task->map);
+#endif
 
 	/*
 	 * If the current thread is a member of the task

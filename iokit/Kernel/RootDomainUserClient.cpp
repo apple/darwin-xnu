@@ -1,23 +1,31 @@
 /*
  * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
+ * This file contains Original Code and/or Modifications of Original Code 
+ * as defined in and that are subject to the Apple Public Source License 
+ * Version 2.0 (the 'License'). You may not use this file except in 
+ * compliance with the License.  The rights granted to you under the 
+ * License may not be used to create, or enable the creation or 
+ * redistribution of, unlawful or unlicensed copies of an Apple operating 
+ * system, or to circumvent, violate, or enable the circumvention or 
+ * violation of, any terms of an Apple operating system software license 
+ * agreement.
+ *
+ * Please obtain a copy of the License at 
+ * http://www.opensource.apple.com/apsl/ and read it before using this 
+ * file.
+ *
+ * The Original Code and all software distributed under the License are 
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
+ * Please see the License for the specific language governing rights and 
+ * limitations under the License.
+ *
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
  */
 /*
  * Copyright (c) 1999 Apple Computer, Inc.  All rights reserved.
@@ -26,7 +34,6 @@
 
 #include <IOKit/assert.h>
 #include <IOKit/IOLib.h>
-#include <IOKit/IOKitKeys.h>
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include "RootDomainUserClient.h"
 #include <IOKit/pwr_mgt/IOPMLibDefs.h>
@@ -39,13 +46,9 @@ OSDefineMetaClassAndStructors(RootDomainUserClient, IOUserClient)
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-bool RootDomainUserClient::initWithTask(task_t owningTask, void *security_id, 
-					UInt32 type, OSDictionary * properties)
+bool RootDomainUserClient::initWithTask(task_t owningTask, void *security_id, UInt32)
 {
-    if (properties)
-	properties->setObject(kIOUserClientCrossEndianCompatibleKey, kOSBooleanTrue);
-
-    if (!super::initWithTask(owningTask, security_id, type, properties))
+    if (!super::init())
 	return false;
 
     fOwningTask = owningTask;
@@ -130,13 +133,13 @@ RootDomainUserClient::getTargetAndMethodForIndex( IOService ** targetP, UInt32 i
 {
     static IOExternalMethod sMethods[] = {
         { // kPMSetAggressiveness, 0
-            (IOService *)1, (IOMethod)&RootDomainUserClient::secureSetAggressiveness, kIOUCScalarIScalarO, 2, 1
+            1, (IOMethod)&RootDomainUserClient::secureSetAggressiveness, kIOUCScalarIScalarO, 2, 1
         },
         { // kPMGetAggressiveness, 1
             0, (IOMethod)&IOPMrootDomain::getAggressiveness, kIOUCScalarIScalarO, 1, 1
         },
         { // kPMSleepSystem, 2
-            (IOService *)1, (IOMethod)&RootDomainUserClient::secureSleepSystem, kIOUCScalarIScalarO, 0, 1
+            1, (IOMethod)&RootDomainUserClient::secureSleepSystem, kIOUCScalarIScalarO, 0, 1
         },
         { // kPMAllowPowerChange, 3
             0, (IOMethod)&IOPMrootDomain::allowPowerChange, kIOUCScalarIScalarO, 1, 0
@@ -151,7 +154,7 @@ RootDomainUserClient::getTargetAndMethodForIndex( IOService ** targetP, UInt32 i
             0, (IOMethod)&IOPMrootDomain::restartSystem, kIOUCScalarIScalarO, 0, 0
         },
         { // kPMSetPreventative, 7
-            (IOService *)1, (IOMethod)&RootDomainUserClient::setPreventative, kIOUCScalarIScalarO, 2, 0
+            1, (IOMethod) &RootDomainUserClient::setPreventative, kIOUCScalarIScalarO, 2, 0
         },
     };
     

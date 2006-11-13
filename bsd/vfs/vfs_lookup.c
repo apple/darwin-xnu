@@ -1,23 +1,31 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
+ * 
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code 
+ * as defined in and that are subject to the Apple Public Source License 
+ * Version 2.0 (the 'License'). You may not use this file except in 
+ * compliance with the License.  The rights granted to you under the 
+ * License may not be used to create, or enable the creation or 
+ * redistribution of, unlawful or unlicensed copies of an Apple operating 
+ * system, or to circumvent, violate, or enable the circumvention or 
+ * violation of, any terms of an Apple operating system software license 
+ * agreement.
  *
- * @APPLE_LICENSE_HEADER_START@
- * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
+ * Please obtain a copy of the License at 
+ * http://www.opensource.apple.com/apsl/ and read it before using this 
+ * file.
+ *
+ * The Original Code and all software distributed under the License are 
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
+ * Please see the License for the specific language governing rights and 
+ * limitations under the License.
+ *
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
@@ -932,7 +940,7 @@ kdebug_lookup(dp, cnp)
 	struct vnode *dp;
 	struct componentname *cnp;
 {
-	register unsigned int i, n, code;
+	register unsigned int i, n;
 	register int dbg_namelen;
 	register int save_dbg_namelen;
 	register char *dbg_nameptr;
@@ -976,27 +984,19 @@ kdebug_lookup(dp, cnp)
 	    else
 	        dbg_parms[i++] = 0;
 	}
-	dbg_namelen = save_dbg_namelen - 12;
 
 	/*
-	 * In the event that we collect multiple, consecutive pathname
-	 * entries, we must mark the start of the path's string and the end
-	 */
-	code = (FSDBG_CODE(DBG_FSRW,36)) | DBG_FUNC_START;
+	  In the event that we collect multiple, consecutive pathname
+	  entries, we must mark the start of the path's string.
+	*/
+	KERNEL_DEBUG_CONSTANT((FSDBG_CODE(DBG_FSRW,36)) | DBG_FUNC_START,
+		(unsigned int)dp, dbg_parms[0], dbg_parms[1], dbg_parms[2], 0);
 
-	if (dbg_namelen <= 0)
-	        code |= DBG_FUNC_END;
-
-	KERNEL_DEBUG_CONSTANT(code, (unsigned int)dp, dbg_parms[0], dbg_parms[1], dbg_parms[2], 0);
-
-	code &= ~DBG_FUNC_START;
-
-	for (i = 3; dbg_namelen > 0; i += 4) {
-
-	        dbg_namelen -= (4 * sizeof(long));
-	        if (dbg_namelen <= 0)
-		        code |= DBG_FUNC_END;
-
-	        KERNEL_DEBUG_CONSTANT(code, dbg_parms[i], dbg_parms[i+1], dbg_parms[i+2], dbg_parms[i+3], 0);
-	}
+	for (dbg_namelen = save_dbg_namelen-12, i=3;
+	     dbg_namelen > 0;
+	     dbg_namelen -=(4 * sizeof(long)), i+= 4)
+	  {
+	    KERNEL_DEBUG_CONSTANT((FSDBG_CODE(DBG_FSRW,36)) | DBG_FUNC_NONE,
+				  dbg_parms[i], dbg_parms[i+1], dbg_parms[i+2], dbg_parms[i+3], 0);
+	  }
 }

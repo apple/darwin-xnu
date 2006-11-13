@@ -1,23 +1,31 @@
 /*
  * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
+ * This file contains Original Code and/or Modifications of Original Code 
+ * as defined in and that are subject to the Apple Public Source License 
+ * Version 2.0 (the 'License'). You may not use this file except in 
+ * compliance with the License.  The rights granted to you under the 
+ * License may not be used to create, or enable the creation or 
+ * redistribution of, unlawful or unlicensed copies of an Apple operating 
+ * system, or to circumvent, violate, or enable the circumvention or 
+ * violation of, any terms of an Apple operating system software license 
+ * agreement.
+ *
+ * Please obtain a copy of the License at 
+ * http://www.opensource.apple.com/apsl/ and read it before using this 
+ * file.
+ *
+ * The Original Code and all software distributed under the License are 
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
+ * Please see the License for the specific language governing rights and 
+ * limitations under the License.
+ *
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
  */
 /*[
     1999-8-10	Godfrey van der Linden(gvdl)
@@ -48,7 +56,7 @@ check if the hardware is active, if so it will add the request to a pending
 queue internal to the device or the device's family.  Otherwise if the hardware
 is inactive then this request can be acted upon immediately.
 <br><br>
-    CAUTION: The runAction and runCommand functions can not be called from an interrupt context. But attemptCommand can, though it may return an error
+	CAUTION: The runAction and runCommand functions can not be called from an interrupt context.
 
 */
 class IOCommandGate : public IOEventSource
@@ -110,12 +118,6 @@ compiler warning.  Defaults to zero, see $link IOEventSource::setAction.
     @result True if inherited classes initialise successfully. */
     virtual bool init(OSObject *owner, Action action = 0);
 
-#if !(defined(__ppc__) && defined(KPI_10_4_0_PPC_COMPAT))
-    // Superclass overrides
-    virtual void free();
-    virtual void setWorkLoop(IOWorkLoop *inWorkLoop);
-#endif
-
 /*! @function runCommand
     @abstract Single thread a command with the target work-loop.
     @discussion Client function that causes the current action to be called in
@@ -123,12 +125,13 @@ a single threaded manner.  Beware the work-loop's gate is recursive and command
 gates can cause direct or indirect re-entrancy.	 When the executing on a
 client's thread runCommand will sleep until the work-loop's gate opens for
 execution of client actions, the action is single threaded against all other
-work-loop event sources.  If the command is disabled the attempt to run a command will be stalled until enable is called.
+work-loop event sources.
     @param arg0 Parameter for action of command gate, defaults to 0.
     @param arg1 Parameter for action of command gate, defaults to 0.
     @param arg2 Parameter for action of command gate, defaults to 0.
     @param arg3 Parameter for action of command gate, defaults to 0.
-    @result kIOReturnSuccess if successful. kIOReturnAborted if a disabled command gate is free()ed before being reenabled, kIOReturnNoResources if no action available.
+    @result kIOReturnSuccess if successful. kIOReturnNotPermitted if this
+event source is currently disabled, kIOReturnNoResources if no action available.
 */
     virtual IOReturn runCommand(void *arg0 = 0, void *arg1 = 0,
 				void *arg2 = 0, void *arg3 = 0);
@@ -140,13 +143,13 @@ a single threaded manner.  Beware the work-loop's gate is recursive and command
 gates can cause direct or indirect re-entrancy.	 When the executing on a
 client's thread runAction will sleep until the work-loop's gate opens for
 execution of client actions, the action is single threaded against all other
-work-loop event sources.  If the command is disabled the attempt to run a command will be stalled until enable is called.
+work-loop event sources.
     @param action Pointer to function to be executed in work-loop context.
     @param arg0 Parameter for action parameter, defaults to 0.
     @param arg1 Parameter for action parameter, defaults to 0.
     @param arg2 Parameter for action parameter, defaults to 0.
     @param arg3 Parameter for action parameter, defaults to 0.
-    @result kIOReturnSuccess if successful. kIOReturnBadArgument if action is not defined, kIOReturnAborted if a disabled command gate is free()ed before being reenabled.
+    @result kIOReturnSuccess if successful. kIOReturnBadArgument if action is not defined, kIOReturnNotPermitted if this event source is currently disabled.
 */
     virtual IOReturn runAction(Action action,
 			       void *arg0 = 0, void *arg1 = 0,
@@ -155,7 +158,9 @@ work-loop event sources.  If the command is disabled the attempt to run a comman
 /*! @function attemptCommand
     @abstract Single thread a command with the target work-loop.
     @discussion Client function that causes the current action to be called in
-a single threaded manner.  When the executing on a client's thread attemptCommand will fail if the work-loop's gate is closed.
+a single threaded manner.  Beware the work-loop's gate is recursive and command
+gates can cause direct or indirect re-entrancy.	 When the executing on a
+client's thread attemptCommand will fail if the work-loop's gate is open.
     @param arg0 Parameter for action of command gate, defaults to 0.
     @param arg1 Parameter for action of command gate, defaults to 0.
     @param arg2 Parameter for action of command gate, defaults to 0.
@@ -170,7 +175,7 @@ a single threaded manner.  When the executing on a client's thread attemptComman
     @discussion Client function that causes the given action to be called in
 a single threaded manner.  Beware the work-loop's gate is recursive and command
 gates can cause direct or indirect re-entrancy.	 When the executing on a
-client's thread attemptCommand will fail if the work-loop's gate is closed.
+client's thread attemptCommand will fail if the work-loop's gate is open.
     @param action Pointer to function to be executed in work-loop context.
     @param arg0 Parameter for action parameter, defaults to 0.
     @param arg1 Parameter for action parameter, defaults to 0.
@@ -197,18 +202,6 @@ client's thread attemptCommand will fail if the work-loop's gate is closed.
     @param event Pointer to an address.
     @param onlyOneThread true to only wake up at most one thread, false otherwise. */
     virtual void commandWakeup(void *event, bool oneThread = false);
-
-#if !(defined(__ppc__) && defined(KPI_10_4_0_PPC_COMPAT))
-/*! @function disable
-    @abstract Disable the command gate
-    @discussion When a command gate is disabled all future calls to runAction and runCommand will stall until the gate is enable()d later.  This can be used to block client threads when a system sleep is requested.  The IOWorkLoop thread itself will never stall, even when making runAction/runCommand calls.  This call must be made from a gated context, to clear potential race conditions.  */
-    virtual void disable();
-
-/*! @function enable
-    @abstract Enable command gate, this will unblock any blocked Commands and Actions.
-    @discussion  Enable the command gate.  The attemptAction/attemptCommand calls will now be enabled and can succeeed.  Stalled runCommand/runAction calls will be woken up. */
-    virtual void enable();
-#endif
 
 private:
     OSMetaClassDeclareReservedUnused(IOCommandGate, 0);

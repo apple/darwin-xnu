@@ -1,23 +1,31 @@
 /*
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
+ * This file contains Original Code and/or Modifications of Original Code 
+ * as defined in and that are subject to the Apple Public Source License 
+ * Version 2.0 (the 'License'). You may not use this file except in 
+ * compliance with the License.  The rights granted to you under the 
+ * License may not be used to create, or enable the creation or 
+ * redistribution of, unlawful or unlicensed copies of an Apple operating 
+ * system, or to circumvent, violate, or enable the circumvention or 
+ * violation of, any terms of an Apple operating system software license 
+ * agreement.
+ *
+ * Please obtain a copy of the License at 
+ * http://www.opensource.apple.com/apsl/ and read it before using this 
+ * file.
+ *
+ * The Original Code and all software distributed under the License are 
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
+ * Please see the License for the specific language governing rights and 
+ * limitations under the License.
+ *
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
  */
 #include <mach/mach_types.h>
 
@@ -31,7 +39,6 @@
 #include <ipc/ipc_port.h>
 #include <ipc/ipc_object.h>
 #include <vm/vm_map.h>
-#include <vm/vm_kern.h>
 #include <vm/pmap.h>
 #include <vm/vm_protos.h> /* last */
 
@@ -261,9 +268,6 @@ swap_task_map(task_t task,vm_map_t map)
 	old_map = task->map;
 	thread->map = task->map = map;
 	task_unlock(task);
-
-	inval_copy_windows(thread);
-
 	return old_map;
 }
 
@@ -521,159 +525,3 @@ astbsd_on(void)
 	ast_on_fast(AST_BSD);
 	(void)ml_set_interrupts_enabled(reenable);
 }
-
-
-#include <sys/bsdtask_info.h>
-
-void
-fill_taskprocinfo(task_t task, struct proc_taskinfo_internal * ptinfo)
-{
-	vm_map_t map;
-	task_absolutetime_info_data_t   tinfo;
-	thread_t thread;
-	int numrunning = 0;
-	
-	map = (task == kernel_task)? kernel_map: task->map;
-
-	ptinfo->pti_virtual_size  = map->size;
-	ptinfo->pti_resident_size  = (mach_vm_size_t)(pmap_resident_count(map->pmap)
-				   * PAGE_SIZE);
-
-	task_lock(task);
-
-	ptinfo->pti_policy = ((task != kernel_task)?
-                                          POLICY_TIMESHARE: POLICY_RR);
-
-	tinfo.threads_user = tinfo.threads_system = 0;
-	tinfo.total_user = task->total_user_time;
-	tinfo.total_system = task->total_system_time;
-
-	queue_iterate(&task->threads, thread, thread_t, task_threads) {
-		uint64_t    tval;
-
-		if ((thread->state & TH_RUN) == TH_RUN)
-			numrunning++;
-		tval = timer_grab(&thread->user_timer);
-		tinfo.threads_user += tval;
-		tinfo.total_user += tval;
-
-		tval = timer_grab(&thread->system_timer);
-		tinfo.threads_system += tval;
-		tinfo.total_system += tval;
-	}
-
-	ptinfo->pti_total_system = tinfo.total_system;
-	ptinfo->pti_total_user = tinfo.total_user;
-	ptinfo->pti_threads_system = tinfo.threads_system;
-	ptinfo->pti_threads_user = tinfo.threads_user;
-	
-	ptinfo->pti_faults = task->faults;
-	ptinfo->pti_pageins = task->pageins;
-	ptinfo->pti_cow_faults = task->cow_faults;
-	ptinfo->pti_messages_sent = task->messages_sent;
-	ptinfo->pti_messages_received = task->messages_received;
-	ptinfo->pti_syscalls_mach = task->syscalls_mach;
-	ptinfo->pti_syscalls_unix = task->syscalls_unix;
-	ptinfo->pti_csw = task->csw;
-	ptinfo->pti_threadnum = task->thread_count;
-	ptinfo->pti_numrunning = numrunning;
-	ptinfo->pti_priority = task->priority;
-
-	task_unlock(task);
-}
-
-int 
-fill_taskthreadinfo(task_t task, uint64_t thaddr, struct proc_threadinfo_internal * ptinfo)
-{
-	thread_t  thact;
-	int err=0, count;
-	thread_basic_info_data_t basic_info;
-	kern_return_t kret;
-
-	task_lock(task);
-
-	for (thact  = (thread_t)queue_first(&task->threads);
-			!queue_end(&task->threads, (queue_entry_t)thact); ) {
-#if defined(__ppc__)
-		if (thact->machine.cthread_self == thaddr)
-#elif defined (__i386__)
-		if (thact->machine.pcb->cthread_self == thaddr)
-#else
-#error architecture not supported
-#endif
-		{
-		
-			count = THREAD_BASIC_INFO_COUNT;
-			if ((kret = thread_info_internal(thact, THREAD_BASIC_INFO, &basic_info, &count)) != KERN_SUCCESS) {
-				err = 1;
-				goto out;	
-			}
-#if 0
-			ptinfo->pth_user_time = timer_grab(&basic_info.user_time);
-			ptinfo->pth_system_time = timer_grab(&basic_info.system_time);
-#else
-			ptinfo->pth_user_time = ((basic_info.user_time.seconds * NSEC_PER_SEC) + (basic_info.user_time.microseconds * NSEC_PER_USEC));
-			ptinfo->pth_system_time = ((basic_info.system_time.seconds * NSEC_PER_SEC) + (basic_info.system_time.microseconds * NSEC_PER_USEC));
-
-#endif
-			ptinfo->pth_cpu_usage = basic_info.cpu_usage;
-			ptinfo->pth_policy = basic_info.policy;
-			ptinfo->pth_run_state = basic_info.run_state;
-			ptinfo->pth_flags = basic_info.flags;
-			ptinfo->pth_sleep_time = basic_info.sleep_time;
-			ptinfo->pth_curpri = thact->sched_pri;
-			ptinfo->pth_priority = thact->priority;
-			ptinfo->pth_maxpriority = thact->max_priority;
-			
-			err = 0;
-			goto out; 
-		}
-		thact = (thread_t)queue_next(&thact->task_threads);
-	}
-	err = 1;
-
-out:
-	task_unlock(task);
-	return(err);
-}
-
-int
-fill_taskthreadlist(task_t task, void * buffer, int thcount)
-{
-	int numthr=0;
-	thread_t thact;
-	uint64_t * uptr;
-	uint64_t  thaddr;
-
-	uptr = (uint64_t *)buffer;
-
-	task_lock(task);
-
-	for (thact  = (thread_t)queue_first(&task->threads);
-			!queue_end(&task->threads, (queue_entry_t)thact); ) {
-#if defined(__ppc__)
-		thaddr = thact->machine.cthread_self;
-#elif defined (__i386__)
-		thaddr = thact->machine.pcb->cthread_self;
-#else
-#error architecture not supported
-#endif
-		*uptr++ = thaddr;
-		numthr++;
-		if (numthr >= thcount)
-			goto out;
-		thact = (thread_t)queue_next(&thact->task_threads);
-	}
-
-out:
-	task_unlock(task);
-	return(numthr * sizeof(uint64_t));
-	
-}
-
-int
-get_numthreads(task_t task)
-{
-	return(task->thread_count);
-}
-

@@ -12,11 +12,13 @@ INSTINC_SUBDIRS_I386 =
 EXPORT_FILES = 		\
 	asm_help.h	\
 	cpu.h		\
+	fpu.h		\
 	io.h		\
-	pio.h		\
 	sel.h		\
 	tss.h		\
+	byte_order.h	\
 	desc.h		\
+	frame.h		\
 	reg_help.h	\
 	table.h
 

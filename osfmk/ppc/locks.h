@@ -1,23 +1,31 @@
 /*
  * Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
+ * This file contains Original Code and/or Modifications of Original Code 
+ * as defined in and that are subject to the Apple Public Source License 
+ * Version 2.0 (the 'License'). You may not use this file except in 
+ * compliance with the License.  The rights granted to you under the 
+ * License may not be used to create, or enable the creation or 
+ * redistribution of, unlawful or unlicensed copies of an Apple operating 
+ * system, or to circumvent, violate, or enable the circumvention or 
+ * violation of, any terms of an Apple operating system software license 
+ * agreement.
+ *
+ * Please obtain a copy of the License at 
+ * http://www.opensource.apple.com/apsl/ and read it before using this 
+ * file.
+ *
+ * The Original Code and all software distributed under the License are 
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
+ * Please see the License for the specific language governing rights and 
+ * limitations under the License.
+ *
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
  */
 
 #ifndef	_PPC_LOCKS_H_
@@ -134,8 +142,7 @@ typedef struct {
 	union {
 		struct {
 			unsigned int			lck_rwd_shared_cnt:16,	/* No. of shared granted request */
-									lck_rwd_priv_excl:1,	/* priority for Writer */
-									lck_rwd_pad17:11,		/* padding */
+									lck_rwd_pad16:12,		/* padding */
 									lck_rwd_want_excl:1,	/* Writer is waiting, or locked for write */
 									lck_rwd_want_upgrade:1,	/* Read-to-write upgrade waiting */
 									lck_rwd_waiting:1,		/* Someone is sleeping on lock */
@@ -155,7 +162,6 @@ typedef struct {
 #define	lck_rw_want_upgrade		lck_rw_sw.lck_rwd.lck_rwd_want_upgrade
 #define	lck_rw_want_excl		lck_rw_sw.lck_rwd.lck_rwd_want_excl
 #define	lck_rw_waiting			lck_rw_sw.lck_rwd.lck_rwd_waiting
-#define	lck_rw_priv_excl		lck_rw_sw.lck_rwd.lck_rwd_priv_excl
 #define	lck_rw_shared_cnt		lck_rw_sw.lck_rwd.lck_rwd_shared_cnt
 
 #define lck_rw_tag				lck_rw_sw.lck_rwi.lck_rwi_tag

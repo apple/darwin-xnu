@@ -1,23 +1,31 @@
 /*
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
+ * This file contains Original Code and/or Modifications of Original Code 
+ * as defined in and that are subject to the Apple Public Source License 
+ * Version 2.0 (the 'License'). You may not use this file except in 
+ * compliance with the License.  The rights granted to you under the 
+ * License may not be used to create, or enable the creation or 
+ * redistribution of, unlawful or unlicensed copies of an Apple operating 
+ * system, or to circumvent, violate, or enable the circumvention or 
+ * violation of, any terms of an Apple operating system software license 
+ * agreement.
+ *
+ * Please obtain a copy of the License at 
+ * http://www.opensource.apple.com/apsl/ and read it before using this 
+ * file.
+ *
+ * The Original Code and all software distributed under the License are 
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
+ * Please see the License for the specific language governing rights and 
+ * limitations under the License.
+ *
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -53,7 +61,7 @@
 
 /*
  * User LDT management.
- * Each task may have its own LDT.
+ * Each thread in a task may have its own LDT.
  */
 
 #include <kern/kalloc.h>
@@ -65,328 +73,366 @@
 #include <i386/seg.h>
 #include <i386/thread.h>
 #include <i386/user_ldt.h>
-#include <i386/mp_desc.h>
-#include <i386/proc_reg.h>
-#include <i386/machdep_call.h>
-#include <i386/mp.h>
-#include <i386/machine_routines.h>
 
-#include <sys/errno.h>
+char	acc_type[8][3] = {
+    /*	code	stack	data */
+    {	0,	0,	1	},	/* data */
+    {	0,	1,	1	},	/* data, writable */
+    {	0,	0,	1	},	/* data, expand-down */
+    {	0,	1,	1	},	/* data, writable, expand-down */
+    {	1,	0,	0	},	/* code */
+    {	1,	0,	1	},	/* code, readable */
+    {	1,	0,	0	},	/* code, conforming */
+    {	1,	0,	1	},	/* code, readable, conforming */
+};
 
-static void user_ldt_set_action(void *);
+#if 0
+/* Forward */
+
+extern boolean_t	selector_check(
+				thread_t		thread,
+				int			sel,
+				int			type);
+
+boolean_t
+selector_check(
+	thread_t		thread,
+	int			sel,
+	int			type)
+{
+	struct user_ldt	*ldt;
+	int	access;
+
+	ldt = thread->machine.pcb->ims.ldt;
+	if (ldt == 0) {
+	    switch (type) {
+		case S_CODE:
+		    return sel == USER_CS;
+		case S_STACK:
+		    return sel == USER_DS;
+		case S_DATA:
+		    return sel == 0 ||
+			   sel == USER_CS ||
+			   sel == USER_DS;
+	    }
+	}
+
+	if (type != S_DATA && sel == 0)
+	    return FALSE;
+	if ((sel & (SEL_LDTS|SEL_PL)) != (SEL_LDTS|SEL_PL_U)
+	  || sel > ldt->desc.limit_low)
+		return FALSE;
+
+	access = ldt->ldt[sel_idx(sel)].access;
+	
+	if ((access & (ACC_P|ACC_PL|ACC_TYPE_USER))
+		!= (ACC_P|ACC_PL_U|ACC_TYPE_USER))
+	    return FALSE;
+		/* present, pl == pl.user, not system */
+
+	return acc_type[(access & 0xe)>>1][type];
+}
 
 /*
  * Add the descriptors to the LDT, starting with
  * the descriptor for 'first_selector'.
  */
 
-int
+kern_return_t
 i386_set_ldt(
-	int			*retval,
-	uint32_t		start_sel,
-	uint32_t		descs,	/* out */
-	uint32_t		num_sels)
+	thread_t		thr_act,
+	int			first_selector,
+	descriptor_list_t	desc_list,
+	mach_msg_type_number_t	count)
 {
-	user_ldt_t	new_ldt, old_ldt;
+	user_ldt_t	new_ldt, old_ldt, temp;
 	struct real_descriptor *dp;
-	unsigned int	i;
-	unsigned int	min_selector = LDTSZ_MIN;	/* do not allow the system selectors to be changed */
-	task_t		task = current_task();
-	unsigned int	ldt_count;
-	kern_return_t err;
+	int		i;
+	int		min_selector = 0;
+	pcb_t		pcb;
+	vm_size_t	ldt_size_needed;
+	int		first_desc = sel_idx(first_selector);
+	vm_map_copy_t	old_copy_object;
+	thread_t		thread;
 
-	if (start_sel != LDT_AUTO_ALLOC
-	    && (start_sel != 0 || num_sels != 0)
-	    && (start_sel < min_selector || start_sel >= LDTSZ))
-	    return EINVAL;
-	if (start_sel != LDT_AUTO_ALLOC
-	    && start_sel + num_sels > LDTSZ)
-	    return EINVAL;
+	if (first_desc < min_selector || first_desc > 8191)
+	    return KERN_INVALID_ARGUMENT;
+	if (first_desc + count >= 8192)
+	    return KERN_INVALID_ARGUMENT;
+	if (thr_act == THREAD_NULL)
+	    return KERN_INVALID_ARGUMENT;
+	if ((thread = act_lock_thread(thr_act)) == THREAD_NULL) {
+		act_unlock_thread(thr_act);
+	    return KERN_INVALID_ARGUMENT;
+	}
+	if (thread == current_thread())
+		min_selector = LDTSZ;
+	act_unlock_thread(thr_act);
 
-	task_lock(task);
-	
-	old_ldt = task->i386_ldt;
+	/*
+	 * We must copy out desc_list to the kernel map, and wire
+	 * it down (we touch it while the PCB is locked).
+	 *
+	 * We make a copy of the copyin object, and clear
+	 * out the old one, so that the MIG stub will have a
+	 * a empty (but valid) copyin object to discard.
+	 */
+	{
+	    kern_return_t	kr;
+	    vm_map_offset_t	dst_addr;
 
-	if (start_sel == LDT_AUTO_ALLOC) {
-	    if (old_ldt) {
-		unsigned int null_count;
-		struct real_descriptor null_ldt;
-		
-		bzero(&null_ldt, sizeof(null_ldt));
+	    old_copy_object = (vm_map_copy_t) desc_list;
 
-		/*
-		 * Look for null selectors among the already-allocated
-		 * entries.
-		 */
-		null_count = 0;
-		i = 0;
-		while (i < old_ldt->count)
-		{
-		    if (!memcmp(&old_ldt->ldt[i++], &null_ldt, sizeof(null_ldt))) {
-			null_count++;
-			if (null_count == num_sels)
-			    break;  /* break out of while loop */
-		    } else {
-			null_count = 0;
-		    }
-		}
+	    kr = vm_map_copyout(ipc_kernel_map, &dst_addr,
+				vm_map_copy_copy(old_copy_object));
+	    if (kr != KERN_SUCCESS)
+		return kr;
 
-		/*
-		 * If we broke out of the while loop, i points to the selector
-		 * after num_sels null selectors.  Otherwise it points to the end
-		 * of the old LDTs, and null_count is the number of null selectors
-		 * at the end. 
-		 *
-		 * Either way, there are null_count null selectors just prior to
-		 * the i-indexed selector, and either null_count >= num_sels,
-		 * or we're at the end, so we can extend.
-		 */
-		start_sel = old_ldt->start + i - null_count;
-	    } else {
-		start_sel = LDTSZ_MIN;
-	    }
-		
-	    if (start_sel + num_sels > LDTSZ) {
-		task_unlock(task);
-		return ENOMEM;
-	    }
+	    (void) vm_map_wire(ipc_kernel_map,
+			vm_map_trunc_page(dst_addr),
+			vm_map_round_page(dst_addr + 
+				count * sizeof(struct real_descriptor)),
+			VM_PROT_READ|VM_PROT_WRITE, FALSE);
+	    desc_list = CAST_DOWN(descriptor_list_t, dst_addr);
 	}
 
-	if (start_sel == 0 && num_sels == 0) {
-	    new_ldt = NULL;
-	} else {
+	for (i = 0, dp = (struct real_descriptor *) desc_list;
+	     i < count;
+	     i++, dp++)
+	{
+	    switch (dp->access & ~ACC_A) {
+		case 0:
+		case ACC_P:
+		    /* valid empty descriptor */
+		    break;
+		case ACC_P | ACC_CALL_GATE:
+		    /* Mach kernel call */
+		    *dp = *(struct real_descriptor *)
+				&ldt[sel_idx(USER_SCALL)];
+		    break;
+		case ACC_P | ACC_PL_U | ACC_DATA:
+		case ACC_P | ACC_PL_U | ACC_DATA_W:
+		case ACC_P | ACC_PL_U | ACC_DATA_E:
+		case ACC_P | ACC_PL_U | ACC_DATA_EW:
+		case ACC_P | ACC_PL_U | ACC_CODE:
+		case ACC_P | ACC_PL_U | ACC_CODE_R:
+		case ACC_P | ACC_PL_U | ACC_CODE_C:
+		case ACC_P | ACC_PL_U | ACC_CODE_CR:
+		case ACC_P | ACC_PL_U | ACC_CALL_GATE_16:
+		case ACC_P | ACC_PL_U | ACC_CALL_GATE:
+		    break;
+		default:
+		    (void) vm_map_remove(ipc_kernel_map, 
+					 vm_map_trunc_page(desc_list),
+					 vm_map_round_page(&desc_list[count]),
+					 VM_MAP_REMOVE_KUNWIRE);
+		    return KERN_INVALID_ARGUMENT;
+	    }
+	}
+	ldt_size_needed = sizeof(struct real_descriptor)
+			* (first_desc + count);
+
+	pcb = thr_act->machine.pcb;
+	new_ldt = 0;
+    Retry:
+	simple_lock(&pcb->lock);
+	old_ldt = pcb->ims.ldt;
+	if (old_ldt == 0 ||
+	    old_ldt->desc.limit_low + 1 < ldt_size_needed)
+	{
 	    /*
-	     * Allocate new LDT
+	     * No old LDT, or not big enough
 	     */
+	    if (new_ldt == 0) {
+		simple_unlock(&pcb->lock);
 
-	    unsigned int    begin_sel = start_sel;
-	    unsigned int    end_sel = begin_sel + num_sels;
-	    
-	    if (old_ldt != NULL) {
-		if (old_ldt->start < begin_sel)
-		    begin_sel = old_ldt->start;
-		if (old_ldt->start + old_ldt->count > end_sel)
-		    end_sel = old_ldt->start + old_ldt->count;
+		new_ldt = (user_ldt_t) kalloc(ldt_size_needed
+					      + sizeof(struct real_descriptor));
+		new_ldt->desc.limit_low   = ldt_size_needed - 1;
+		new_ldt->desc.limit_high  = 0;
+		new_ldt->desc.base_low    = 
+				((vm_offset_t)&new_ldt->ldt[0]) & 0xffff;
+		new_ldt->desc.base_med    = 
+				(((vm_offset_t)&new_ldt->ldt[0]) >> 16)
+						 & 0xff;
+		new_ldt->desc.base_high   = 
+				((vm_offset_t)&new_ldt->ldt[0]) >> 24;
+		new_ldt->desc.access      = ACC_P | ACC_LDT;
+		new_ldt->desc.granularity = 0;
+
+		goto Retry;
 	    }
-
-	    ldt_count = end_sel - begin_sel;
-
-	    new_ldt = (user_ldt_t)kalloc(sizeof(struct user_ldt) + (ldt_count * sizeof(struct real_descriptor)));
-	    if (new_ldt == NULL) {
-		task_unlock(task);
-		return ENOMEM;
-	    }
-
-	    new_ldt->start = begin_sel;
-	    new_ldt->count = ldt_count;
 
 	    /*
 	     * Have new LDT.  If there was a an old ldt, copy descriptors
-	     * from old to new.
+	     * from old to new.  Otherwise copy the default ldt.
 	     */
 	    if (old_ldt) {
-		bcopy(&old_ldt->ldt[0],
-		      &new_ldt->ldt[old_ldt->start - begin_sel],
-		      old_ldt->count * sizeof(struct real_descriptor));
-
-		/*
-		 * If the old and new LDTs are non-overlapping, fill the 
-		 * center in with null selectors.
-		 */
-		 		 
-		if (old_ldt->start + old_ldt->count < start_sel)
-		    bzero(&new_ldt->ldt[old_ldt->count],
-			  (start_sel - (old_ldt->start + old_ldt->count)) * sizeof(struct real_descriptor));
-		else if (old_ldt->start > start_sel + num_sels)
-		    bzero(&new_ldt->ldt[num_sels],
-			  (old_ldt->start - (start_sel + num_sels)) * sizeof(struct real_descriptor));
+		bcopy((char *)&old_ldt->ldt[0],
+		      (char *)&new_ldt->ldt[0],
+		      old_ldt->desc.limit_low + 1);
 	    }
+	    else if (thr_act == current_thread()) {
+		struct real_descriptor template = {0, 0, 0, ACC_P, 0, 0 ,0};
 
-	    /*
-	     * Install new descriptors.
-	     */
-	    if (descs != 0) {
-		err = copyin(descs, (char *)&new_ldt->ldt[start_sel - begin_sel],
-			     num_sels * sizeof(struct real_descriptor));
-		if (err != 0)
-		{
-		    task_unlock(task);
-		    user_ldt_free(new_ldt);
-		    return err;
-		}
-	    } else {
-		bzero(&new_ldt->ldt[start_sel - begin_sel], num_sels * sizeof(struct real_descriptor));
-	    }
-
-	    /*
-	     * Validate descriptors.
-	     * Only allow descriptors with user priviledges.
-	     */
-	    for (i = 0, dp = (struct real_descriptor *) &new_ldt->ldt[start_sel - begin_sel];
-		 i < num_sels;
-		 i++, dp++)
-	    {
-		switch (dp->access & ~ACC_A) {
-		    case 0:
-		    case ACC_P:
-			/* valid empty descriptor */
-			break;
-		    case ACC_P | ACC_PL_U | ACC_DATA:
-		    case ACC_P | ACC_PL_U | ACC_DATA_W:
-		    case ACC_P | ACC_PL_U | ACC_DATA_E:
-		    case ACC_P | ACC_PL_U | ACC_DATA_EW:
-		    case ACC_P | ACC_PL_U | ACC_CODE:
-		    case ACC_P | ACC_PL_U | ACC_CODE_R:
-		    case ACC_P | ACC_PL_U | ACC_CODE_C:
-		    case ACC_P | ACC_PL_U | ACC_CODE_CR:
-		    case ACC_P | ACC_PL_U | ACC_CALL_GATE_16:
-		    case ACC_P | ACC_PL_U | ACC_CALL_GATE:
-			break;
-		    default:
-			task_unlock(task);
-			user_ldt_free(new_ldt);
-			return EACCES;
+		for (dp = &new_ldt->ldt[0], i = 0; i < first_desc; i++, dp++) {
+		    if (i < LDTSZ)
+		    	*dp = *(struct real_descriptor *) &ldt[i];
+		    else
+			*dp = template;
 		}
 	    }
+
+	    temp = old_ldt;
+	    old_ldt = new_ldt;	/* use new LDT from now on */
+	    new_ldt = temp;	/* discard old LDT */
+
+	    pcb->ims.ldt = old_ldt;	/* new LDT for thread */
 	}
 
-	task->i386_ldt = new_ldt; /* new LDT for task */
+	/*
+	 * Install new descriptors.
+	 */
+	bcopy((char *)desc_list,
+	      (char *)&old_ldt->ldt[first_desc],
+	      count * sizeof(struct real_descriptor));
+
+	simple_unlock(&pcb->lock);
+
+	if (new_ldt)
+	    kfree((vm_offset_t)new_ldt,
+		  new_ldt->desc.limit_low+1+sizeof(struct real_descriptor));
 
 	/*
-	 * Switch to new LDT.  We need to do this on all CPUs, since
-	 * another thread in this same task may be currently running,
-	 * and we need to make sure the new LDT is in place
-	 * throughout the task before returning to the user.
+	 * Free the descriptor list.
 	 */
-	mp_rendezvous_no_intrs(user_ldt_set_action, task);
-
-	task_unlock(task);
-
-	/* free old LDT.  We can't do this until after we've
-	 * rendezvoused with all CPUs, in case another thread
-	 * in this task was in the process of context switching.
-	 */
-	if (old_ldt)
-	    user_ldt_free(old_ldt);
-
-	*retval = start_sel;
-
-	return 0;
+	(void) vm_map_remove(ipc_kernel_map, vm_map_trunc_page(desc_list),
+			     vm_map_round_page(&desc_list[count]),
+			     VM_MAP_REMOVE_KUNWIRE);
+	return KERN_SUCCESS;
 }
 
-int
+kern_return_t
 i386_get_ldt(
-	int			*retval,
-	uint32_t		start_sel,
-	uint32_t		descs,	/* out */
-	uint32_t		num_sels)
+	thread_t		thr_act,
+	int			first_selector,
+	int			selector_count,	/* number wanted */
+	descriptor_list_t	*desc_list,	/* in/out */
+	mach_msg_type_number_t	*count)		/* in/out */
 {
-	user_ldt_t	user_ldt;
-	task_t		task = current_task();
+	struct user_ldt *user_ldt;
+	pcb_t		pcb = thr_act->machine.pcb;
+	int		first_desc = sel_idx(first_selector);
 	unsigned int	ldt_count;
-	kern_return_t	err;
+	vm_size_t	ldt_size;
+	vm_size_t	size, size_needed;
+	vm_offset_t	addr;
+	thread_t		thread;
 
-	if (start_sel >= 8192)
-	    return EINVAL;
-	if (start_sel + num_sels > 8192)
-	    return EINVAL;
-	if (descs == 0)
-	    return EINVAL;
+	if (thr_act == THREAD_NULL)
+	    return KERN_INVALID_ARGUMENT;
 
-	task_lock(task);
+	if (first_desc < 0 || first_desc > 8191)
+	    return KERN_INVALID_ARGUMENT;
+	if (first_desc + selector_count >= 8192)
+	    return KERN_INVALID_ARGUMENT;
 
-	user_ldt = task->i386_ldt;
-	err = 0;
+	addr = 0;
+	size = 0;
+
+	for (;;) {
+	    simple_lock(&pcb->lock);
+	    user_ldt = pcb->ims.ldt;
+	    if (user_ldt == 0) {
+		simple_unlock(&pcb->lock);
+		if (addr)
+		    kmem_free(ipc_kernel_map, addr, size);
+		*count = 0;
+		return KERN_SUCCESS;
+	    }
+
+	    /*
+	     * Find how many descriptors we should return.
+	     */
+	    ldt_count = (user_ldt->desc.limit_low + 1) /
+			sizeof (struct real_descriptor);
+	    ldt_count -= first_desc;
+	    if (ldt_count > selector_count)
+		ldt_count = selector_count;
+
+	    ldt_size = ldt_count * sizeof(struct real_descriptor);
+
+	    /*
+	     * Do we have the memory we need?
+	     */
+	    if (ldt_count <= *count)
+		break;		/* fits in-line */
+
+	    size_needed = round_page(ldt_size);
+	    if (size_needed <= size)
+		break;
+
+	    /*
+	     * Unlock the pcb and allocate more memory
+	     */
+	    simple_unlock(&pcb->lock);
+
+	    if (size != 0)
+		kmem_free(ipc_kernel_map, addr, size);
+
+	    size = size_needed;
+
+	    if (kmem_alloc(ipc_kernel_map, &addr, size)
+			!= KERN_SUCCESS)
+		return KERN_RESOURCE_SHORTAGE;
+	}
 
 	/*
 	 * copy out the descriptors
 	 */
+	bcopy((char *)&user_ldt->ldt[first_desc],
+	      (char *)addr,
+	      ldt_size);
+	*count = ldt_count;
+	simple_unlock(&pcb->lock);
 
-	if (user_ldt != 0)
-	    ldt_count = user_ldt->start + user_ldt->count;
-	else
-	    ldt_count = LDTSZ_MIN;
+	if (addr) {
+	    vm_size_t		size_used, size_left;
+	    vm_map_copy_t	memory;
 
+	    /*
+	     * Free any unused memory beyond the end of the last page used
+	     */
+	    size_used = round_page(ldt_size);
+	    if (size_used != size)
+		kmem_free(ipc_kernel_map,
+			addr + size_used, size - size_used);
 
-	if (start_sel < ldt_count)
-	{
-	    unsigned int copy_sels = num_sels;
+	    /*
+	     * Zero the remainder of the page being returned.
+	     */
+	    size_left = size_used - ldt_size;
+	    if (size_left > 0)
+		bzero((char *)addr + ldt_size, size_left);
 
-	    if (start_sel + num_sels > ldt_count)
-		copy_sels = ldt_count - start_sel;
-
-	    err = copyout((char *)(current_ldt() + start_sel),
-			  descs, copy_sels * sizeof(struct real_descriptor));
+	    /*
+	     * Unwire the memory and make it into copyin form.
+	     */
+	    (void) vm_map_unwire(ipc_kernel_map, vm_map_trunc_page(addr),
+				 vm_map_round_page(addr + size_used), FALSE);
+	    (void) vm_map_copyin(ipc_kernel_map, (vm_map_address_t)addr, 
+				 (vm_map_size_t)size_used, TRUE, &memory);
+	    *desc_list = (descriptor_list_t) memory;
 	}
 
-	task_unlock(task);
-
-	*retval = ldt_count;
-
-	return err;
+	return KERN_SUCCESS;
 }
 
+#endif 
 void
 user_ldt_free(
 	user_ldt_t	user_ldt)
 {
-	kfree(user_ldt, sizeof(struct user_ldt) + (user_ldt->count * sizeof(struct real_descriptor)));
-}
-
-user_ldt_t
-user_ldt_copy(
-	user_ldt_t	user_ldt)
-{
-	if (user_ldt != NULL) {
-	    size_t	size = sizeof(struct user_ldt) + (user_ldt->count * sizeof(struct real_descriptor));
-	    user_ldt_t	new_ldt = (user_ldt_t)kalloc(size);
-	    if (new_ldt != NULL)
-		bcopy(user_ldt, new_ldt, size);
-	    return new_ldt;
-	}
-	
-	return 0;
-}
-
-void
-user_ldt_set_action(
-	void *arg)
-{
-	task_t		arg_task = (task_t)arg;
-
-	if (arg_task == current_task())	{
-	    user_ldt_set(current_thread());
-	}
-}
-
-/*
- * Set the LDT for the given thread on the current CPU.  Should be invoked
- * with interrupts disabled.
- */
-void
-user_ldt_set(
-	thread_t thread)
-{
-        task_t		task = thread->task;
-	user_ldt_t	user_ldt;
-
-	user_ldt = task->i386_ldt;
-
-	if (user_ldt != 0) {
-	    struct real_descriptor *ldtp = (struct real_descriptor *)current_ldt();
-
-	    if (user_ldt->start > LDTSZ_MIN) {
-		bzero(&ldtp[LDTSZ_MIN],
-		      sizeof(struct real_descriptor) * (user_ldt->start - LDTSZ_MIN));
-	    }
-	    
-	    bcopy(user_ldt->ldt, &ldtp[user_ldt->start],
-		  sizeof(struct real_descriptor) * (user_ldt->count));
-
-	    gdt_desc_p(USER_LDT)->limit_low = (sizeof(struct real_descriptor) * (user_ldt->start + user_ldt->count)) - 1;
-
-	    ml_cpu_set_ldt(USER_LDT);
-	} else {
-	    ml_cpu_set_ldt(KERNEL_LDT);
-	}
+	kfree(user_ldt,
+		user_ldt->desc.limit_low+1+sizeof(struct real_descriptor));
 }

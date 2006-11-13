@@ -1,23 +1,31 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
+ * 
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code 
+ * as defined in and that are subject to the Apple Public Source License 
+ * Version 2.0 (the 'License'). You may not use this file except in 
+ * compliance with the License.  The rights granted to you under the 
+ * License may not be used to create, or enable the creation or 
+ * redistribution of, unlawful or unlicensed copies of an Apple operating 
+ * system, or to circumvent, violate, or enable the circumvention or 
+ * violation of, any terms of an Apple operating system software license 
+ * agreement.
  *
- * @APPLE_LICENSE_HEADER_START@
- * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
+ * Please obtain a copy of the License at 
+ * http://www.opensource.apple.com/apsl/ and read it before using this 
+ * file.
+ *
+ * The Original Code and all software distributed under the License are 
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
+ * Please see the License for the specific language governing rights and 
+ * limitations under the License.
+ *
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
  */
 /*-
  * Copyright (c) 1982, 1986, 1989, 1993
@@ -92,7 +100,6 @@
 #include <kern/task.h>
 #include <vm/vm_kern.h>
 #include <mach/host_info.h>
-#include <kern/pms.h>
 
 extern vm_map_t bsd_pageable_map;
 
@@ -105,15 +112,7 @@ extern vm_map_t bsd_pageable_map;
 #include <machine/machine_routines.h>
 #include <machine/cpu_capabilities.h>
 
-#ifdef __i386__
-#include <i386/cpuid.h>		/* for cpuid_info() */
-#endif
-
-#ifndef MAX
-#define MAX(a,b) (a >= b ? a : b)
-#endif
-
-static int	cputype, cpusubtype, cputhreadtype, cpufamily, cacheconfig[10];;
+static int	cputype, cpusubtype, cputhreadtype;
 
 SYSCTL_NODE(, 0,	  sysctl, CTLFLAG_RW, 0,
 	"Sysctl internal magic");
@@ -274,10 +273,8 @@ sysctl_hw_generic SYSCTL_HANDLER_ARGS
 		if (epochTemp == -1)
 			return(EINVAL);
 		return(SYSCTL_RETURN(req, epochTemp));
-	case HW_VECTORUNIT: {
-		int vector = cpu_info.vector_unit == 0? 0 : 1;
-		return(SYSCTL_RETURN(req, vector));
-	}
+	case HW_VECTORUNIT:
+		return(SYSCTL_RETURN(req, cpu_info.vector_unit));
 	case HW_L2SETTINGS:
 		if (cpu_info.l2_cache_size == 0xFFFFFFFF)
 			return(EINVAL);
@@ -310,8 +307,6 @@ SYSCTL_PROC    (_hw, OID_AUTO, logicalcpu_max, CTLTYPE_INT | CTLFLAG_RD | CTLFLA
 SYSCTL_INT     (_hw, HW_BYTEORDER, byteorder, CTLFLAG_RD | CTLFLAG_KERN, NULL, BYTE_ORDER, "");
 SYSCTL_INT     (_hw, OID_AUTO, cputype, CTLFLAG_RD | CTLFLAG_KERN, &cputype, 0, "");
 SYSCTL_INT     (_hw, OID_AUTO, cpusubtype, CTLFLAG_RD | CTLFLAG_KERN, &cpusubtype, 0, "");
-SYSCTL_INT     (_hw, OID_AUTO, cpufamily, CTLFLAG_RD | CTLFLAG_KERN, &cpufamily, 0, "");
-SYSCTL_OPAQUE  (_hw, OID_AUTO, cacheconfig, CTLFLAG_RD, &cacheconfig, sizeof(cacheconfig), "I", "");
 SYSCTL_INT2QUAD(_hw, OID_AUTO, pagesize, CTLFLAG_RD | CTLFLAG_KERN, &page_size, "");
 SYSCTL_QUAD    (_hw, OID_AUTO, busfrequency, CTLFLAG_RD | CTLFLAG_KERN, &gPEClockFrequencyInfo.bus_frequency_hz, "");
 SYSCTL_QUAD    (_hw, OID_AUTO, busfrequency_min, CTLFLAG_RD | CTLFLAG_KERN, &gPEClockFrequencyInfo.bus_frequency_min_hz, "");
@@ -368,29 +363,6 @@ SYSCTL_PROC(_hw, HW_EPOCH,        epoch, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MASK
 SYSCTL_PROC(_hw, HW_VECTORUNIT,   vectorunit, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MASKED, 0, HW_VECTORUNIT, sysctl_hw_generic, "I", "");
 SYSCTL_PROC(_hw, HW_L2SETTINGS,   l2settings, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MASKED, 0, HW_L2SETTINGS, sysctl_hw_generic, "I", "");
 SYSCTL_PROC(_hw, HW_L3SETTINGS,   l3settings, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MASKED, 0, HW_L3SETTINGS, sysctl_hw_generic, "I", "");
-
-/*
- * Debugging interface to the CPU power management code.
- */
-static void pmsSysctl SYSCTL_HANDLER_ARGS {
-
-	pmsctl_t	ctl;
-	int		error;
-	boolean_t	intr;
-
-	if ((error = SYSCTL_IN(req, &ctl, sizeof(ctl))))
-		return(error);
-
-	intr = ml_set_interrupts_enabled(FALSE);		/* No interruptions in here */
-	error = pmsControl(ctl.request, (user_addr_t)ctl.reqaddr, ctl.reqsize);
-	(void)ml_set_interrupts_enabled(intr);			/* Restore interruptions */
-
-	return(error);
-}
-
-SYSCTL_PROC(_hw, OID_AUTO, pms, CTLTYPE_STRUCT | CTLFLAG_WR, 0, 0, pmsSysctl, "S", "Processor Power Management");
-
-
 
 /******************************************************************************
  * Generic MIB initialisation.
@@ -497,78 +469,7 @@ sysctl_mib_init(void)
 		if (dcbtstreams_flag >= 0)
 			sysctl_register_oid(&sysctl__hw_optional_dcbtstreams);
 	}
-
-	/* hw.cpufamily */
-	switch (cpusubtype) {
-	case CPU_SUBTYPE_POWERPC_750:
-		cpufamily = CPUFAMILY_POWERPC_G3;
-		break;
-	case CPU_SUBTYPE_POWERPC_7400:
-	case CPU_SUBTYPE_POWERPC_7450:
-		cpufamily = CPUFAMILY_POWERPC_G4;
-		break;
-	case CPU_SUBTYPE_POWERPC_970:
-		cpufamily = CPUFAMILY_POWERPC_G5;
-		break;
-	default:
-		cpufamily = CPUFAMILY_UNKNOWN;
-	}
-
-	/* hw.cacheconfig */
-	cacheconfig[0] = 0; /* XXX not supported on PowerPC */
-
-#elif defined (__i386__)
-
-
-#define DECLARE_X86_HW_OPTIONAL_FLAGS(named, BITS, flags) { \
-	static int named##_flag = -1;	\
-	static SYSCTL_INT(_hw_optional, OID_AUTO, named, CTLFLAG_RD | CTLFLAG_NOAUTO | CTLFLAG_KERN | flags, &named##_flag, 0, "");	\
-	named##_flag = ((_get_cpu_capabilities() & BITS) == BITS)? 1 : 0;	\
-	sysctl_register_oid(&sysctl__hw_optional_##named);	\
-	}
-
-#define DECLARE_X86_HW_OPTIONAL(named, BITS) \
-	DECLARE_X86_HW_OPTIONAL_FLAGS(named, BITS, 0)
-
-#define DECLARE_X86_HW_OPTIONAL_MASKED(named, BITS) \
-	DECLARE_X86_HW_OPTIONAL_FLAGS(named, BITS, CTLFLAG_MASKED)
-
-	DECLARE_X86_HW_OPTIONAL(mmx, kHasMMX);
-	DECLARE_X86_HW_OPTIONAL(sse, kHasSSE);
-	DECLARE_X86_HW_OPTIONAL(sse2, kHasSSE2);
-	DECLARE_X86_HW_OPTIONAL(sse3, kHasSSE3);
-	if (_get_cpu_capabilities() & k64Bit)
-		DECLARE_X86_HW_OPTIONAL(x86_64, k64Bit);
-	if (_get_cpu_capabilities() & kHasSupplementalSSE3) {
-		DECLARE_X86_HW_OPTIONAL_MASKED(mni, kHasSupplementalSSE3); /* XXX */
-		DECLARE_X86_HW_OPTIONAL(supplementalsse3, kHasSupplementalSSE3);
-	}
-
-	/* hw.cpufamily */
-	switch (cpuid_info()->cpuid_family) {
-	case 6:
-		switch (cpuid_info()->cpuid_model) {
-		case 14:
-			cpufamily = CPUFAMILY_INTEL_6_14; /* Core Solo/Duo */
-			break;
-		case 15:
-			cpufamily = CPUFAMILY_INTEL_6_15;
-			break;
-		default:
-			cpufamily = CPUFAMILY_UNKNOWN;
-		}
-		break;
-	default:
-		cpufamily = CPUFAMILY_UNKNOWN;
-	}
-	/* hw.cacheconfig */
-	cacheconfig[0] = cpuid_info()->cpuid_cores_per_package;
-	cacheconfig[1] = MAX(cpuid_info()->cache_sharing[L1I], cpuid_info()->cache_sharing[L1D]);
-	cacheconfig[2] = cpuid_info()->cache_sharing[L2U];
-	cacheconfig[3] = cpuid_info()->cache_sharing[L3U];
-	cacheconfig[4] = 0;
-
-#else /* end __i386 */
+#else
 # warning we do not support this platform yet
 #endif /* __ppc__ */
 

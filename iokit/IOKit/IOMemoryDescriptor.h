@@ -1,23 +1,31 @@
 /*
  * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
+ * This file contains Original Code and/or Modifications of Original Code 
+ * as defined in and that are subject to the Apple Public Source License 
+ * Version 2.0 (the 'License'). You may not use this file except in 
+ * compliance with the License.  The rights granted to you under the 
+ * License may not be used to create, or enable the creation or 
+ * redistribution of, unlawful or unlicensed copies of an Apple operating 
+ * system, or to circumvent, violate, or enable the circumvention or 
+ * violation of, any terms of an Apple operating system software license 
+ * agreement.
+ *
+ * Please obtain a copy of the License at 
+ * http://www.opensource.apple.com/apsl/ and read it before using this 
+ * file.
+ *
+ * The Original Code and all software distributed under the License are 
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
+ * Please see the License for the specific language governing rights and 
+ * limitations under the License.
+ *
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
  */
 #ifndef _IOMEMORYDESCRIPTOR_H
 #define _IOMEMORYDESCRIPTOR_H
@@ -64,8 +72,6 @@ enum {
     kIOMemoryTypeUPL		= 0x00000030,
     kIOMemoryTypePersistentMD	= 0x00000040,	// Persistent Memory Descriptor
     kIOMemoryTypeUIO		= 0x00000050,
-    kIOMemoryTypeVirtual64	= 0x00000060,
-    kIOMemoryTypePhysical64	= 0x00000070,
     kIOMemoryTypeMask		= 0x000000f0,
 
     kIOMemoryAsReference	= 0x00000100,
@@ -89,9 +95,6 @@ enum
     kIOMemoryIncoherentIOFlush	 = 1,
     kIOMemoryIncoherentIOStore	 = 2,
 };
-
-#define	IOMEMORYDESCRIPTOR_SUPPORTS_DMACOMMAND	1
-
 
 /*! @class IOMemoryDescriptor : public OSObject
     @abstract An abstract base class defining common methods for describing physical or virtual memory.
@@ -129,7 +132,7 @@ protected:
     IOOptionBits 	_tag;
 
 public:
-typedef IOOptionBits DMACommandOps;
+
     virtual IOPhysicalAddress getSourceSegment( IOByteCount offset,
 						IOByteCount * length );
     OSMetaClassDeclareReservedUsed(IOMemoryDescriptor, 0);
@@ -143,7 +146,7 @@ typedef IOOptionBits DMACommandOps;
                                  UInt32		offset,
                                  task_t		task,
                                  IOOptionBits	options,
-                                 IOMapper *	mapper = kIOMapperSystem);
+                                 IOMapper *	mapper = 0);
     OSMetaClassDeclareReservedUsed(IOMemoryDescriptor, 1);
 
     virtual addr64_t getPhysicalSegment64( IOByteCount offset,
@@ -183,16 +186,9 @@ typedef IOOptionBits DMACommandOps;
                                         IOByteCount offset, IOByteCount length );
     OSMetaClassDeclareReservedUsed(IOMemoryDescriptor, 4);
 
-#if !(defined(__ppc__) && defined(KPI_10_4_0_PPC_COMPAT))
-    // Used for dedicated communications for IODMACommand
-    virtual IOReturn dmaCommandOperation(DMACommandOps op, void *vData, UInt dataSize) const;
-    OSMetaClassDeclareReservedUsed(IOMemoryDescriptor, 5);
-#endif
-
 private:
-#if (defined(__ppc__) && defined(KPI_10_4_0_PPC_COMPAT))
+
     OSMetaClassDeclareReservedUnused(IOMemoryDescriptor, 5);
-#endif
     OSMetaClassDeclareReservedUnused(IOMemoryDescriptor, 6);
     OSMetaClassDeclareReservedUnused(IOMemoryDescriptor, 7);
     OSMetaClassDeclareReservedUnused(IOMemoryDescriptor, 8);
@@ -265,43 +261,6 @@ public:
                                             task_t           withTask,
                                             bool             asReference = false);
 
-#if !(defined(__ppc__) && defined(KPI_10_4_0_PPC_COMPAT))
-/*! @function withAddressRange
-    @abstract Create an IOMemoryDescriptor to describe one virtual range of the specified map.
-    @discussion This method creates and initializes an IOMemoryDescriptor for memory consisting of a single virtual memory range mapped into the specified map.
-    @param address The virtual address of the first byte in the memory.
-    @param withLength The length of memory.
-    @param options
-        kIOMemoryDirectionMask (options:direction)     This nibble indicates the I/O direction to be associated with the descriptor, which may affect the operation of the prepare and complete methods on some architectures. 
-        kIOMemoryNoAutoPrepare Indicates that the temporary AutoPrepare of kernel_task memory should not be performed.
-    @param task The task the virtual ranges are mapped into.
-    @result The created IOMemoryDescriptor on success, to be released by the caller, or zero on failure. */
-
-    static IOMemoryDescriptor * withAddressRange(
-                                       mach_vm_address_t address,
-                                       mach_vm_size_t    length,
-                                       IOOptionBits      options,
-                               task_t            task);
-
-/*! @function withAddressRanges
-    @abstract Create an IOMemoryDescriptor to describe one or more virtual ranges.
-    @discussion This method creates and initializes an IOMemoryDescriptor for memory consisting of an array of virtual memory ranges each mapped into a specified source task.
-    @param ranges An array of IOAddressRange structures which specify the virtual ranges in the specified map which make up the memory to be described. IOAddressRange is the 64bit version of IOVirtualRange.
-    @param rangeCount The member count of the ranges array.
-    @param options
-        kIOMemoryDirectionMask (options:direction)     This nibble indicates the I/O direction to be associated with the descriptor, which may affect the operation of the prepare and complete methods on some architectures. 
-        kIOMemoryAsReference   For options:type = Virtual or Physical this indicate that the memory descriptor need not copy the ranges array into local memory.  This is an optimisation to try to minimise unnecessary allocations.
-        kIOMemoryNoAutoPrepare Indicates that the temporary AutoPrepare of kernel_task memory should not be performed.
-    @param task The task each of the virtual ranges are mapped into.
-    @result The created IOMemoryDescriptor on success, to be released by the caller, or zero on failure. */
-
-    static IOMemoryDescriptor * withAddressRanges(
-                                       IOAddressRange * ranges,
-                                       UInt32           rangeCount,
-                                       IOOptionBits     options,
-                                       task_t           withTask);
-#endif
-
 /*! @function withOptions
     @abstract Master initialiser for all variants of memory descriptors.
     @discussion This method creates and initializes an IOMemoryDescriptor for memory it has three main variants: Virtual, Physical & mach UPL.  These variants are selected with the options parameter, see below.  This memory descriptor needs to be prepared before it can be used to extract data from the memory described.  However we temporarily have setup a mechanism that automatically prepares kernel_task memory descriptors at creation time.
@@ -331,7 +290,7 @@ public:
                                            UInt32	offset,
                                            task_t	task,
                                            IOOptionBits	options,
-                                           IOMapper *	mapper = kIOMapperSystem);
+                                           IOMapper *	mapper = 0);
 
 /*! @function withPhysicalRanges
     @abstract Create an IOMemoryDescriptor to describe one or more physical ranges.
@@ -725,9 +684,8 @@ class IOGeneralMemoryDescriptor : public IOMemoryDescriptor
 
 public:
     union Ranges {
-        IOVirtualRange   *v;
-        IOAddressRange   *v64;
-        IOPhysicalRange  *p;
+        IOVirtualRange *  v;
+        IOPhysicalRange * p;
 	void 		 *uio;
     };
 protected:
@@ -752,27 +710,35 @@ protected:
 
     virtual void free();
 
-#if !(defined(__ppc__) && defined(KPI_10_4_0_PPC_COMPAT))
-    virtual IOReturn dmaCommandOperation(DMACommandOps op, void *vData, UInt dataSize) const;
-#endif
 
 private:
-
-    /* DEPRECATED */ virtual void setPosition(IOByteCount position);
-    /* DEPRECATED */ virtual void mapIntoKernel(unsigned rangeIndex);
-    /* DEPRECATED */ virtual void unmapFromKernel();
-
     // Internal APIs may be made virtual at some time in the future.
     IOReturn wireVirtual(IODirection forDirection);
-    void *createNamedEntry();
+    void *createNamedEntry();	
 
-    // Internal
-    OSData *	    _memoryEntries;
-    unsigned int    _pages;
-    ppnum_t	    _highestPage;
-    uint32_t	    __iomd_reservedA;
-    uint32_t	    __iomd_reservedB;
-    uint32_t	    __iomd_reservedC;
+
+    /* DEPRECATED */ IOByteCount _position; /* absolute position over all ranges */
+    /* DEPRECATED */ virtual void setPosition(IOByteCount position);
+
+/*
+ * DEPRECATED IOByteCount _positionAtIndex; // relative position within range #n
+ *
+ * Re-use the _positionAtIndex as a count of the number of pages in
+ * this memory descriptor.  Convieniently vm_address_t is an unsigned integer
+ * type so I can get away without having to change the type.
+ */
+    unsigned int		_pages;
+
+/* DEPRECATED */ unsigned    _positionAtOffset;  //range #n in which position is now
+
+    OSData *_memoryEntries;
+
+    /* DEPRECATED */ vm_offset_t _kernPtrAligned;
+    /* DEPRECATED */ unsigned    _kernPtrAtIndex;
+    /* DEPRECATED */ IOByteCount  _kernSize;
+
+    /* DEPRECATED */ virtual void mapIntoKernel(unsigned rangeIndex);
+    /* DEPRECATED */ virtual void unmapFromKernel();
 
 public:
     /*
@@ -785,7 +751,7 @@ public:
                                  UInt32		offset,
                                  task_t		task,
                                  IOOptionBits	options,
-                                 IOMapper *	mapper = kIOMapperSystem);
+                                 IOMapper *	mapper = 0);
 
     // Secondary initialisers
     virtual bool initWithAddress(void *		address,
@@ -812,11 +778,6 @@ public:
                                         UInt32           withCount,
                                         IODirection      withDirection,
                                         bool             asReference = false);
-
-#if !(defined(__ppc__) && defined(KPI_10_4_0_PPC_COMPAT))
-    virtual addr64_t getPhysicalSegment64( IOByteCount offset,
-                                            IOByteCount * length );
-#endif
 
     virtual IOPhysicalAddress getPhysicalSegment(IOByteCount offset,
 						 IOByteCount * length);
@@ -894,11 +855,6 @@ protected:
     IOMemoryDescriptor::withRanges;
     IOMemoryDescriptor::withSubRange;
 
-#if !(defined(__ppc__) && defined(KPI_10_4_0_PPC_COMPAT))
-    // used by IODMACommand
-    virtual IOReturn dmaCommandOperation(DMACommandOps op, void *vData, UInt dataSize) const;
-#endif
-
 public:
     /*
      * Initialize or reinitialize an IOSubMemoryDescriptor to describe
@@ -915,11 +871,6 @@ public:
     /*
      * IOMemoryDescriptor required methods
      */
-
-#if !(defined(__ppc__) && defined(KPI_10_4_0_PPC_COMPAT))
-    virtual addr64_t getPhysicalSegment64( IOByteCount offset,
-                                            IOByteCount * length );
-#endif
 
     virtual IOPhysicalAddress getPhysicalSegment(IOByteCount offset,
 						 IOByteCount * length);

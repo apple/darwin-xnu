@@ -1,23 +1,31 @@
 /*
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
+ * This file contains Original Code and/or Modifications of Original Code 
+ * as defined in and that are subject to the Apple Public Source License 
+ * Version 2.0 (the 'License'). You may not use this file except in 
+ * compliance with the License.  The rights granted to you under the 
+ * License may not be used to create, or enable the creation or 
+ * redistribution of, unlawful or unlicensed copies of an Apple operating 
+ * system, or to circumvent, violate, or enable the circumvention or 
+ * violation of, any terms of an Apple operating system software license 
+ * agreement.
+ *
+ * Please obtain a copy of the License at 
+ * http://www.opensource.apple.com/apsl/ and read it before using this 
+ * file.
+ *
+ * The Original Code and all software distributed under the License are 
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
+ * Please see the License for the specific language governing rights and 
+ * limitations under the License.
+ *
+ * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
  */
 /*
  * Copyright (C) 1998 Apple Computer
@@ -87,7 +95,15 @@ typedef struct {
 #endif  /* MACH_LDEBUG */
 } mutex_t;
 
-typedef lck_rw_t lock_t;
+typedef struct {
+	decl_simple_lock_data(,interlock) /* "hardware" interlock field */
+	volatile unsigned int
+		read_count:16,	/* No. of accepted readers */
+		want_upgrade:1,	/* Read-to-write upgrade waiting */
+		want_write:1,	/* Writer is waiting, or locked for write */ 
+		waiting:1,		/* Someone is sleeping on lock */
+	can_sleep:1;		/* Can attempts to lock go to sleep? */
+} lock_t;
 
 extern unsigned int LockTimeOut;			/* Number of hardware ticks of a lock timeout */
 
@@ -144,21 +160,21 @@ static inline unsigned long i_bit_isset(unsigned int test, volatile unsigned lon
 
 static inline char	xchgb(volatile char * cp, char new);
 
-static inline void	atomic_incl(volatile long * p, long delta);
-static inline void	atomic_incs(volatile short * p, short delta);
-static inline void	atomic_incb(volatile char * p, char delta);
+static inline void	atomic_incl(long * p, long delta);
+static inline void	atomic_incs(short * p, short delta);
+static inline void	atomic_incb(char * p, char delta);
 
-static inline void	atomic_decl(volatile long * p, long delta);
-static inline void	atomic_decs(volatile short * p, short delta);
-static inline void	atomic_decb(volatile char * p, char delta);
+static inline void	atomic_decl(long * p, long delta);
+static inline void	atomic_decs(short * p, short delta);
+static inline void	atomic_decb(char * p, char delta);
 
-static inline long	atomic_getl(const volatile long * p);
-static inline short	atomic_gets(const volatile short * p);
-static inline char	atomic_getb(const volatile char * p);
+static inline long	atomic_getl(long * p);
+static inline short	atomic_gets(short * p);
+static inline char	atomic_getb(char * p);
 
-static inline void	atomic_setl(volatile long * p, long value);
-static inline void	atomic_sets(volatile short * p, short value);
-static inline void	atomic_setb(volatile char * p, char value);
+static inline void	atomic_setl(long * p, long value);
+static inline void	atomic_sets(short * p, short value);
+static inline void	atomic_setb(char * p, char value);
 
 static inline char	xchgb(volatile char * cp, char new)
 {
@@ -191,7 +207,35 @@ atomic_cmpxchg(uint32_t *p, uint32_t old, uint32_t new)
 	return (res);
 }
 
-static inline void	atomic_incl(volatile long * p, long delta)
+static inline uint64_t
+atomic_load64(uint64_t *quadp)
+{
+	uint64_t ret;
+
+	asm volatile(
+		"	lock; cmpxchg8b	%1"
+		: "=A" (ret)
+		: "m" (*quadp), "a" (0), "d" (0), "b" (0), "c" (0));
+	return (ret);
+}
+
+static inline uint64_t
+atomic_loadstore64(uint64_t *quadp, uint64_t new)
+{
+	uint64_t ret;
+
+	ret = *quadp;
+	asm volatile(
+		"1:				\n\t"
+		"	lock; cmpxchg8b	%1	\n\t"
+		"	jnz	1b"
+		: "+A" (ret)
+		: "m" (*quadp),
+		  "b" ((uint32_t)new), "c" ((uint32_t)(new >> 32)));
+	return (ret);
+}
+
+static inline void	atomic_incl(long * p, long delta)
 {
 	__asm__ volatile ("	lock		\n		\
 				addl    %0,%1"		:	\
@@ -199,7 +243,7 @@ static inline void	atomic_incl(volatile long * p, long delta)
 				"r" (delta), "m" (*(volatile long *)p));
 }
 
-static inline void	atomic_incs(volatile short * p, short delta)
+static inline void	atomic_incs(short * p, short delta)
 {
 	__asm__ volatile ("	lock		\n		\
 				addw    %0,%1"		:	\
@@ -207,7 +251,7 @@ static inline void	atomic_incs(volatile short * p, short delta)
 				"q" (delta), "m" (*(volatile short *)p));
 }
 
-static inline void	atomic_incb(volatile char * p, char delta)
+static inline void	atomic_incb(char * p, char delta)
 {
 	__asm__ volatile ("	lock		\n		\
 				addb    %0,%1"		:	\
@@ -215,7 +259,7 @@ static inline void	atomic_incb(volatile char * p, char delta)
 				"q" (delta), "m" (*(volatile char *)p));
 }
 
-static inline void	atomic_decl(volatile long * p, long delta)
+static inline void	atomic_decl(long * p, long delta)
 {
 	__asm__ volatile ("	lock		\n		\
 				subl	%0,%1"		:	\
@@ -223,7 +267,7 @@ static inline void	atomic_decl(volatile long * p, long delta)
 				"r" (delta), "m" (*(volatile long *)p));
 }
 
-static inline int	atomic_decl_and_test(volatile long * p, long delta)
+static inline int	atomic_decl_and_test(long * p, long delta)
 {
 	uint8_t	ret;
 	asm volatile (
@@ -235,7 +279,7 @@ static inline int	atomic_decl_and_test(volatile long * p, long delta)
 	return ret;
 }
 
-static inline void	atomic_decs(volatile short * p, short delta)
+static inline void	atomic_decs(short * p, short delta)
 {
 	__asm__ volatile ("	lock		\n		\
 				subw    %0,%1"		:	\
@@ -243,7 +287,7 @@ static inline void	atomic_decs(volatile short * p, short delta)
 				"q" (delta), "m" (*(volatile short *)p));
 }
 
-static inline void	atomic_decb(volatile char * p, char delta)
+static inline void	atomic_decb(char * p, char delta)
 {
 	__asm__ volatile ("	lock		\n		\
 				subb    %0,%1"		:	\
@@ -251,32 +295,32 @@ static inline void	atomic_decb(volatile char * p, char delta)
 				"q" (delta), "m" (*(volatile char *)p));
 }
 
-static inline long	atomic_getl(const volatile long * p)
+static inline long	atomic_getl(long * p)
 {
 	return (*p);
 }
 
-static inline short	atomic_gets(const volatile short * p)
+static inline short	atomic_gets(short * p)
 {
 	return (*p);
 }
 
-static inline char	atomic_getb(const volatile char * p)
+static inline char	atomic_getb(char * p)
 {
 	return (*p);
 }
 
-static inline void	atomic_setl(volatile long * p, long value)
+static inline void	atomic_setl(long * p, long value)
 {
 	*p = value;
 }
 
-static inline void	atomic_sets(volatile short * p, short value)
+static inline void	atomic_sets(short * p, short value)
 {
 	*p = value;
 }
 
-static inline void	atomic_setb(volatile char * p, char value)
+static inline void	atomic_setb(char * p, char value)
 {
 	*p = value;
 }
