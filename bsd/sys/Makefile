@@ -36,7 +36,7 @@ DATAFILES = \
 	ttydefaults.h ttydev.h  types.h ubc.h ucontext.h ucred.h uio.h un.h unistd.h unpcb.h \
 	user.h utfconv.h utsname.h vadvise.h vcmd.h  version.h \
 	vm.h vmmeter.h vmparam.h vnioctl.h vnode.h vnode_if.h vstat.h wait.h xattr.h \
-	_types.h _endian.h domain.h protosw.h
+	_types.h _endian.h domain.h protosw.h 
 
 # Only in the framework PrivateHeader area
 PRIVATE_DATAFILES = \
@@ -46,6 +46,7 @@ PRIVATE_DATAFILES = \
 	shm_internal.h \
 	ux_exception.h \
 	ktrace.h \
+	proc_info.h \
 	vnioctl.h
 
 # KERNELFILES will appear only in the kernel framework
@@ -93,7 +94,7 @@ INSTALL_MI_LIST	= ${DATAFILES}
 
 INSTALL_MI_DIR = sys
 
-EXPORT_MI_LIST	= ${KERNELFILES} ${PRIVATE_KERNELFILES} syscall.h ktrace.h linker_set.h
+EXPORT_MI_LIST	= ${KERNELFILES} ${PRIVATE_KERNELFILES} syscall.h ktrace.h linker_set.h bsdtask_info.h
 
 EXPORT_MI_DIR = sys
 

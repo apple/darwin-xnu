@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -58,7 +58,6 @@
 #include <netat/adsp.h>
 #include <netat/adsp_internal.h>
 
-extern atlock_t adspgen_lock;
 
 /*
  * InitContinue
@@ -78,7 +77,6 @@ static void InitContinue(sp, pb) /* (CCBPtr sp, DSPPBPtr pb, int soc) */
     CCBPtr sp;
     struct adspcmd *pb;
 {
-    int s;
 
     /* Save connection's socket # in CCB */
     sp->localSocket = pb->socket; 
@@ -86,9 +84,7 @@ static void InitContinue(sp, pb) /* (CCBPtr sp, DSPPBPtr pb, int soc) */
     /*
      * Link the new ccb onto queue.  Must be done with interrupts off.
      */
-    ATDISABLE(s, adspgen_lock);
     qAddToEnd(AT_ADSP_STREAMS, sp); /* Put on linked list of connections */
-    ATENABLE(s, adspgen_lock);
     return;
 }
 

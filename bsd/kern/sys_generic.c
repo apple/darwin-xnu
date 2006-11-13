@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -1707,8 +1707,6 @@ selthreadclear(sip)
 
 
 
-
-#define DBG_EVENT	0x10
 
 #define DBG_POST	0x10
 #define DBG_WATCH	0x11

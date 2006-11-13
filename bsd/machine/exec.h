@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -33,10 +33,21 @@
 #ifndef _BSD_MACHINE_EXEC_H_
 #define _BSD_MACHINE_EXEC_H_
 
+#include <sys/param.h>
+
+struct exec_archhandler {
+	char path[MAXPATHLEN];
+	uint32_t fsid;
+	long fileid;
+};
+
+extern struct exec_archhandler exec_archhandler_ppc;
+extern int set_archhandler(struct proc *p, int arch);
+extern int grade_binary(cpu_type_t exectype, cpu_subtype_t execsubtype);
 
 #if defined (__ppc__) || defined (__ppc64__)
 #include "ppc/exec.h"
-#elif defined (__i386__)
+#elif defined (__i386__) || defined(__x86_64__)
 #include "i386/exec.h"
 #else
 #error architecture not supported

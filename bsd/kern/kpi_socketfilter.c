@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -54,12 +54,9 @@ sflt_init(void)
 	
 	/* Allocate a spin lock */
 	grp_attrib = lck_grp_attr_alloc_init();
-	lck_grp_attr_setdefault(grp_attrib);
 	lck_group = lck_grp_alloc_init("socket filter lock", grp_attrib);
 	lck_grp_attr_free(grp_attrib);
 	lck_attrib = lck_attr_alloc_init();
-	lck_attr_setdefault(lck_attrib);
-	lck_attr_setdebug(lck_attrib);
 	sock_filter_lock = lck_mtx_alloc_init(lck_group, lck_attrib);
 	lck_grp_free(lck_group);
 	lck_attr_free(lck_attrib);

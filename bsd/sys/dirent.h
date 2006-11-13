@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -87,9 +87,7 @@ typedef	__darwin_ino_t	ino_t;		/* inode number */
 
 #define __DARWIN_MAXNAMLEN	255
 
-#if __DARWIN_ALIGN_POWER
-#pragma options align=power
-#endif
+#pragma pack(4)
 
 struct dirent {
 	ino_t d_ino;			/* file number of entry */
@@ -99,9 +97,7 @@ struct dirent {
 	char d_name[__DARWIN_MAXNAMLEN + 1];	/* name must be no longer than this */
 };
 
-#if __DARWIN_ALIGN_POWER
-#pragma options align=reset
-#endif
+#pragma pack()
 
 #ifdef KERNEL
 #include <sys/kernel_types.h>

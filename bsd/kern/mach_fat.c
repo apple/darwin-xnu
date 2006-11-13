@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -46,13 +46,8 @@
 #include <kern/cpu_number.h>
 #include <mach-o/fat.h>
 #include <kern/mach_loader.h>
-#include <architecture/byte_order.h>
-
-/* XXX should be in common header */
-extern int grade_binary(cpu_type_t exectype, cpu_subtype_t execsubtype);
-
-#define CPU_TYPE_NATIVE		(cpu_type())
-#define CPU_TYPE_CLASSIC	CPU_TYPE_POWERPC
+#include <libkern/OSByteOrder.h>
+#include <machine/exec.h>
 
 /**********************************************************************
  * Routine:	fatfile_getarch2()
@@ -108,7 +103,7 @@ fatfile_getarch2(
 	 *	Map portion that must be accessible directly into
 	 *	kernel's map.
 	 */
-	nfat_arch = NXSwapBigLongToHost(header->nfat_arch);
+	nfat_arch = OSSwapBigToHostInt32(header->nfat_arch);
 
 	end_of_archs = sizeof(struct fat_header)
 		+ nfat_arch * sizeof(struct fat_arch);
@@ -142,15 +137,15 @@ fatfile_getarch2(
 		/*
 		 *	Check to see if right cpu type.
 		 */
-		if(((cpu_type_t)NXSwapBigIntToHost(arch->cputype) & ~mask_bits) != req_cpu_type)
+		if(((cpu_type_t)OSSwapBigToHostInt32(arch->cputype) & ~mask_bits) != req_cpu_type)
 			continue;
 
 		/*
 		 * 	Get the grade of the cpu subtype.
 		 */
 		grade = grade_binary(
-			    NXSwapBigIntToHost(arch->cputype),
-			    NXSwapBigIntToHost(arch->cpusubtype));
+			    OSSwapBigToHostInt32(arch->cputype),
+			    OSSwapBigToHostInt32(arch->cpusubtype));
 
 		/*
 		 *	Remember it if it's the best we've seen.
@@ -168,15 +163,15 @@ fatfile_getarch2(
 		lret = LOAD_BADARCH;
 	} else {
 		archret->cputype	=
-			    NXSwapBigIntToHost(best_arch->cputype);
+			    OSSwapBigToHostInt32(best_arch->cputype);
 		archret->cpusubtype	=
-			    NXSwapBigIntToHost(best_arch->cpusubtype);
+			    OSSwapBigToHostInt32(best_arch->cpusubtype);
 		archret->offset		=
-			    NXSwapBigLongToHost(best_arch->offset);
+			    OSSwapBigToHostInt32(best_arch->offset);
 		archret->size		=
-			    NXSwapBigLongToHost(best_arch->size);
+			    OSSwapBigToHostInt32(best_arch->size);
 		archret->align		=
-			    NXSwapBigLongToHost(best_arch->align);
+			    OSSwapBigToHostInt32(best_arch->align);
 
 		lret = LOAD_SUCCESS;
 	}
@@ -187,8 +182,6 @@ fatfile_getarch2(
 	return(lret);
 }
 
-extern char classichandler[];
-
 load_return_t
 fatfile_getarch_affinity(
 		struct vnode		*vp,
@@ -197,15 +190,15 @@ fatfile_getarch_affinity(
 		int 				affinity)
 {
 		load_return_t lret;
-		int handler = (classichandler[0] != 0);
+		int handler = (exec_archhandler_ppc.path[0] != 0);
 		cpu_type_t primary_type, fallback_type;
 
 		if (handler && affinity) {
-				primary_type = CPU_TYPE_CLASSIC;
-				fallback_type = CPU_TYPE_NATIVE;
+				primary_type = CPU_TYPE_POWERPC;
+				fallback_type = cpu_type();
 		} else {
-				primary_type = CPU_TYPE_NATIVE;
-				fallback_type = CPU_TYPE_CLASSIC;
+				primary_type = cpu_type();
+				fallback_type = CPU_TYPE_POWERPC;
 		}
 		/*
 		 * Ignore the architectural bits when determining if an image
@@ -239,7 +232,7 @@ fatfile_getarch(
 	vm_offset_t 	data_ptr,
 	struct fat_arch		*archret)
 {
-	return fatfile_getarch2(vp, data_ptr, CPU_TYPE_NATIVE, 0, archret);
+	return fatfile_getarch2(vp, data_ptr, cpu_type(), 0, archret);
 }
 
 /**********************************************************************
@@ -264,6 +257,6 @@ fatfile_getarch_with_bits(
 	vm_offset_t 	data_ptr,
 	struct fat_arch		*archret)
 {
-	return fatfile_getarch2(vp, data_ptr, archbits | CPU_TYPE_NATIVE, 0, archret);
+	return fatfile_getarch2(vp, data_ptr, archbits | cpu_type(), 0, archret);
 }
 

@@ -49,10 +49,10 @@
 #include <mach/boolean.h>
 #include <kern/ast.h>
 #include <kern/cpu_data.h>
+#include <kern/pms.h>
 #include <pexpert/pexpert.h>
 #include <IOKit/IOInterrupts.h>
 #include <ppc/machine_routines.h>
-#include <ppc/pms.h>
 #include <ppc/rtclock.h>
 
 /*	Per processor CPU features */
@@ -351,7 +351,7 @@ struct per_proc_info {
 	/* PPC cache line boundary here - 140 */
 	void *			pp_cbfr;
 	void *			pp_chud;
-	uint64_t		rtclock_tick_deadline;
+	uint64_t		rtclock_intr_deadline;
 	rtclock_timer_t	rtclock_timer;
 	unsigned int	ppbbTaskEnv;		/* BlueBox Task Environment */
     

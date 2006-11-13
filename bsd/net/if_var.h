@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -93,7 +93,7 @@
 #define APPLE_IF_FAM_STF       12
 #define APPLE_IF_FAM_FIREWIRE  13
 #define APPLE_IF_FAM_BOND      14
-#endif __APPLE__
+#endif /* __APPLE__ */
 
 /*
  * 72 was chosen below because it is the size of a TCP/IP

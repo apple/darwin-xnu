@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -363,10 +363,15 @@ typedef struct kauth_filesec *kauth_filesec_t;
 
 #define KAUTH_FILESEC_XATTR	"com.apple.system.Security"
 
+/* Allowable first arguments to kauth_filesec_acl_setendian() */
+#define	KAUTH_ENDIAN_HOST	0x00000001	/* set host endianness */
+#define	KAUTH_ENDIAN_DISK	0x00000002	/* set disk endianness */
+
 __BEGIN_DECLS
 kauth_filesec_t	kauth_filesec_alloc(int size);
 void		kauth_filesec_free(kauth_filesec_t fsp);
 int		kauth_copyinfilesec(user_addr_t xsecurity, kauth_filesec_t *xsecdestpp);
+ void		kauth_filesec_acl_setendian(int, kauth_filesec_t, kauth_acl_t);
 __END_DECLS	
 
 #endif /* KERNEL || <sys/acl.h> */

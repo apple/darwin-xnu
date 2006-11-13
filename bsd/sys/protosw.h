@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -114,9 +114,7 @@ struct socket_filter;
 #include <kern/locks.h>
 #endif /* KERNEL */
 
-#if __DARWIN_ALIGN_POWER
-#pragma options align=power
-#endif
+#pragma pack(4)
 
 struct protosw {
 	short	pr_type;		/* socket type used for */
@@ -164,9 +162,7 @@ struct protosw {
 #endif
 };
 
-#if __DARWIN_ALIGN_POWER
-#pragma options align=reset
-#endif
+#pragma pack()
 
 /*
  * Values for pr_flags.

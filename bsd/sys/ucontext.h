@@ -64,10 +64,6 @@ typedef struct ucontext64	ucontext64_t;
 #ifdef KERNEL
 #include <machine/types.h>	/* user_addr_t, user_size_t */
 
-#if __DARWIN_ALIGN_NATURAL
-#pragma options align=natural
-#endif
-
 /* kernel representation of struct ucontext64 for 64 bit processes */
 struct user_ucontext64 {
 	int				uc_onstack;
@@ -77,10 +73,6 @@ struct user_ucontext64 {
 	user_size_t			uc_mcsize;	/* mcontext size */
 	user_addr_t			uc_mcontext64;	/* machine context */
 };
-
-#if __DARWIN_ALIGN_NATURAL
-#pragma options align=reset
-#endif
 
 typedef struct user_ucontext64 user_ucontext64_t;
 #endif	/* KERNEL */

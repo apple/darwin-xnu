@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -228,9 +228,9 @@ getfh(proc_t p, struct getfh_args *uap, __unused int *retval)
 	}
 
 	bzero(&nfh, sizeof(nfh));
-	nfh.nfh_xh.nxh_version = NFS_FH_VERSION;
-	nfh.nfh_xh.nxh_fsid = nxfs->nxfs_id;
-	nfh.nfh_xh.nxh_expid = nx->nx_id;
+	nfh.nfh_xh.nxh_version = htonl(NFS_FH_VERSION);
+	nfh.nfh_xh.nxh_fsid = htonl(nxfs->nxfs_id);
+	nfh.nfh_xh.nxh_expid = htonl(nx->nx_id);
 	nfh.nfh_xh.nxh_flags = 0;
 	nfh.nfh_xh.nxh_reserved = 0;
 	nfh.nfh_len = NFS_MAX_FID_SIZE;
@@ -693,7 +693,7 @@ nfskerb_clientd(
 		    error = tsleep((caddr_t)&nmp->nm_authstr, PSOCK | PCATCH,
 			"nfskrbtimr", hz / 3);
 		    if (error == EINTR || error == ERESTART)
-			    dounmount(nmp->nm_mountp, 0, p);
+			    dounmount(nmp->nm_mountp, 0, NULL, p);
 	    }
 	}
 

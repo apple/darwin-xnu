@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -95,6 +95,7 @@ static caddr_t devzerobuf;
 
 extern pmap_t kernel_pmap;
 extern boolean_t kernacc(off_t, size_t );
+extern int setup_kmem;
 
 int mmread(dev_t dev, struct uio *uio);
 int mmrw(dev_t dev, struct uio *uio, enum uio_rw rw);
@@ -120,9 +121,14 @@ mmwrite(dev, uio)
 }
 
 int
-mmioctl(__unused dev_t dev, u_long cmd, __unused caddr_t data, 
+mmioctl(dev_t dev, u_long cmd, __unused caddr_t data, 
 		__unused int flag, __unused struct proc *p)
 {
+	int minnum = minor(dev);
+
+	if ((setup_kmem == 0) && ((minnum == 0) || (minnum == 1)))
+		return(EINVAL);
+
 	switch (cmd) {
 	case FIONBIO:
 	case FIOASYNC:
@@ -151,6 +157,7 @@ mmrw(dev, uio, rw)
 	int error = 0;
 	vm_offset_t	where;
 
+
 	while (uio_resid(uio) > 0 && error == 0) {
 		if (uio_iov_len(uio) == 0) {
 			uio_next_iov(uio);
@@ -163,6 +170,8 @@ mmrw(dev, uio, rw)
 
 /* minor device 0 is physical memory */
 		case 0:
+			if (setup_kmem == 0)
+				return(ENODEV);
 			vll = trunc_page_64(uio->uio_offset);
 			if(((vll >> 31) == 1) || vll >= ((dgWork.dgFlags & enaDiagDM) ? mem_actual : max_mem))
 				goto fault;
@@ -198,6 +207,8 @@ mmrw(dev, uio, rw)
 
 		/* minor device 1 is kernel memory */
 		case 1:
+			if (setup_kmem == 0)
+				return(ENODEV);
 			/* Do some sanity checking */
 			if (((addr64_t)uio->uio_offset > vm_last_addr) ||
 				((addr64_t)uio->uio_offset < VM_MIN_KERNEL_ADDRESS))

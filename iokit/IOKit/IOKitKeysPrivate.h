@@ -36,6 +36,7 @@
 // properties found in the registry root
 #define kIOConsoleUsersKey		"IOConsoleUsers"		/* value is OSArray */
 #define kIOMaximumMappedIOByteCountKey  "IOMaximumMappedIOByteCount"    /* value is OSNumber */
+#define kIOStartupMkextCRC		"IOStartupMkextCRC"		/* value is 32-bit OSNumber */
 
 // properties found in the console user dict
 
@@ -50,5 +51,9 @@
 #define kIOConsoleUsersSeedKey		"IOConsoleUsersSeed"		/* value is OSNumber */
 
 #define kIOKernelHasSafeSleep		1
+
+enum { kIOPrepareToPhys32 = 0x04 };
+
+#define kIODirectionPrepareToPhys32 ((IODirection) kIOPrepareToPhys32)
 
 #endif /* ! _IOKIT_IOKITKEYSPRIVATE_H */

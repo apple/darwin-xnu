@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -55,7 +55,6 @@
 #include <netat/adsp.h>
 #include <netat/adsp_internal.h>
 
-extern atlock_t adspgen_lock;
 
 /*
  * NextCID
@@ -69,12 +68,10 @@ extern atlock_t adspgen_lock;
  */
 unsigned short NextCID()
 {
-	int s;
 	unsigned short num;
 	register CCB *queue;
 
 	while (1) {
-	    ATDISABLE(s, adspgen_lock);		/* Disable interrupts */
 	    num = ++adspGlobal.lastCID;
 	    /* qfind_w below is in 68K assembly */
 	    /* point to the first element */
@@ -85,7 +82,6 @@ unsigned short NextCID()
 			break;
 		    queue = queue->ccbLink;
 	    }
-	    ATENABLE(s, adspgen_lock);
 	    if (queue == (CCBPtr)NULL)
 		break;	
 	}
@@ -249,7 +245,7 @@ int adspOpen(sp, pb)		/* (DSPPBPtr pb) */
     if (ocMode == ocEstablish) { /* Only set these if establish mode */
 	sp->recvSeq = pb->u.openParams.recvSeq;
 	sp->attnRecvSeq = pb->u.openParams.attnRecvSeq;
-	UAS_ASSIGN(sp->f.CID, sp->locCID); /* Preset the CID in the ADSP header */
+	UAS_ASSIGN_HTON(sp->f.CID, sp->locCID); /* Preset the CID in the ADSP header */
 	/* This is done elsewhere for all other modes */
 	InsertTimerElem(&adspGlobal.slowTimers, &sp->ProbeTimer, 
 			sp->probeInterval);

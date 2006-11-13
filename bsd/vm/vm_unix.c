@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -66,9 +66,11 @@
 #include <sys/kernel.h>
 #include <sys/ubc_internal.h>
 #include <sys/user.h>
+#include <sys/syslog.h>
 #include <sys/stat.h>
 #include <sys/sysproto.h>
 #include <sys/mman.h>
+#include <sys/sysctl.h>
 
 #include <bsm/audit_kernel.h>
 #include <bsm/audit_kevents.h>
@@ -83,6 +85,12 @@
 #include <vm/vm_shared_memory_server.h>
 
 #include <vm/vm_protos.h>
+
+void
+log_nx_failure(addr64_t vaddr, vm_prot_t prot)
+{
+        printf("NX failure: %s  -  vaddr=%qx,  prot=%x\n", current_proc()->p_comm, vaddr, prot);
+}
 
 
 int
@@ -351,6 +359,19 @@ pftout:
  *
  * XXX This should be a BSD system call, not a Mach trap!!!
  */
+/* 
+ *
+ * tfp_policy = KERN_TFP_POLICY_DENY; Deny Mode: None allowed except for self
+ * tfp_policy = KERN_TFP_POLICY_PERMISSIVE; Permissive Mode: all permissive; related ones allowed or privileged
+ * tfp_policy = KERN_TFP_POLICY_RESTRICTED; Restricted Mode: self access allowed; setgid (to tfp_group) are allowed for other tasks
+ *
+ */
+static  int tfp_policy = KERN_TFP_POLICY_RESTRICTED;
+/* the groutp is inited to kmem group and is modifiable by sysctl */
+static int tfp_group_inited = 0; /* policy groups are loaded ... */
+static  gid_t tfp_group_ronly = 0; /* procview group */
+static  gid_t tfp_group_rw = 0; /* procmod group */
+
 kern_return_t
 task_for_pid(
 	struct task_for_pid_args *args)
@@ -365,7 +386,10 @@ task_for_pid(
 	mach_port_name_t	tret;
 	void * sright;
 	int error = 0;
+	int is_member = 0;
 	boolean_t funnel_state;
+	boolean_t ispermitted = FALSE;
+	char procname[MAXCOMLEN+1];
 
 	AUDIT_MACH_SYSCALL_ENTER(AUE_TASKFORPID);
 	AUDIT_ARG(pid, pid);
@@ -380,7 +404,7 @@ task_for_pid(
 
 	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 
-	p1 = get_bsdtask_info(t1);	/* XXX current proc */
+	p1 = current_proc();
 
 	/*
 	 * Delayed binding of thread credential to process credential, if we
@@ -401,24 +425,70 @@ task_for_pid(
 	p = pfind(pid);
 	AUDIT_ARG(process, p);
 
-	if (
-		(p != (struct proc *) 0)
-		&& (p1 != (struct proc *) 0)
-		&& (
-			(p1 == p)
-			|| !(suser(kauth_cred_get(), 0))
-			 || ((kauth_cred_getuid(p->p_ucred) == kauth_cred_getuid(kauth_cred_get())) 
-				&& (p->p_ucred->cr_ruid == kauth_cred_get()->cr_ruid)
-				&& ((p->p_flag & P_SUGID) == 0))
-		  )
-		&& (p->p_stat != SZOMB)
-		) {
-			if (p->task != TASK_NULL) {
-				task_reference(p->task);
-				sright = (void *)convert_task_to_port(p->task);
-				tret = ipc_port_copyout_send(
-					sright, 
-					get_task_ipcspace(current_task()));
+	switch (tfp_policy) {
+
+		case KERN_TFP_POLICY_PERMISSIVE:
+			/* self or suser or related ones */
+			if ((p != (struct proc *) 0)
+				&& (p1 != (struct proc *) 0)
+				&& (
+					(p1 == p)
+					|| !(suser(kauth_cred_get(), 0))
+					|| ((kauth_cred_getuid(p->p_ucred) == kauth_cred_getuid(kauth_cred_get())) && 
+						((p->p_ucred->cr_ruid == kauth_cred_get()->cr_ruid))
+						&& ((p->p_flag & P_SUGID) == 0))
+					)
+				&& (p->p_stat != SZOMB)
+				)
+					ispermitted = TRUE;
+			break;
+
+		case KERN_TFP_POLICY_RESTRICTED:
+			/* self or suser or  setgid and related ones only */
+			if ((p != (struct proc *) 0)
+				&& (p1 != (struct proc *) 0)
+				&& (
+					(p1 == p)
+					|| !(suser(kauth_cred_get(), 0))
+					|| (((tfp_group_inited != 0) && 
+							(
+							((kauth_cred_ismember_gid(kauth_cred_get(), 
+									tfp_group_ronly, &is_member) == 0) && is_member)
+							||((kauth_cred_ismember_gid(kauth_cred_get(), 
+									tfp_group_rw, &is_member) == 0) && is_member)
+							)
+					   )
+					   && ((kauth_cred_getuid(p->p_ucred) == kauth_cred_getuid(kauth_cred_get())) && 
+							((p->p_ucred->cr_ruid == kauth_cred_get()->cr_ruid))
+							&& ((p->p_flag & P_SUGID) == 0))
+					  )
+					)
+				&& (p->p_stat != SZOMB)
+				)
+					ispermitted = TRUE;
+
+			break;
+
+		case KERN_TFP_POLICY_DENY:
+			/* self or suser only */
+		default:
+			/* do not return task port of other task at all */
+			if ((p1 != (struct proc *) 0) && (p != (struct proc *) 0) && (p->p_stat != SZOMB)
+					&& ((p1 == p)  || !(suser(kauth_cred_get(), 0))))
+				ispermitted = TRUE;
+			else
+				ispermitted = FALSE;
+			break;
+	};
+
+
+	if (ispermitted == TRUE) {
+		if (p->task != TASK_NULL) {
+			task_reference(p->task);
+			sright = (void *)convert_task_to_port(p->task);
+			tret = ipc_port_copyout_send(
+						sright, 
+						get_task_ipcspace(current_task()));
 			} else
 				tret  = MACH_PORT_NULL;
 			AUDIT_ARG(mach_port2, tret);
@@ -426,7 +496,20 @@ task_for_pid(
 	        task_deallocate(t1);
 			error = KERN_SUCCESS;
 			goto tfpout;
+	} else {
+		/* 
+		 * There is no guarantee that p_comm is null terminated and
+		 * kernel implementation of string functions are complete. So 
+		 * ensure stale info is not leaked out, bzero the  buffer
+		 */
+		bzero(&procname[0], MAXCOMLEN+1);
+		strncpy(&procname[0], &p1->p_comm[0], MAXCOMLEN);
+		if (tfp_policy != KERN_TFP_POLICY_PERMISSIVE)
+			log(LOG_NOTICE, "(%d: %s)tfp: failed on %d:\n",
+				((p1 != PROC_NULL)?(p1->p_pid):0), &procname[0],
+				((p != PROC_NULL)?(p->p_pid):0));
 	}
+
     task_deallocate(t1);
 	tret = MACH_PORT_NULL;
 	(void) copyout((char *) &tret, task_addr, sizeof(mach_port_name_t));
@@ -437,6 +520,182 @@ tfpout:
 	return(error);
 }
 
+/*
+ *	Routine:	task_name_for_pid
+ *	Purpose:
+ *		Get the task name port for another "process", named by its
+ *		process ID on the same host as "target_task".
+ *
+ *		Only permitted to privileged processes, or processes
+ *		with the same user ID.
+ *
+ * XXX This should be a BSD system call, not a Mach trap!!!
+ */
+
+kern_return_t
+task_name_for_pid(
+	struct task_name_for_pid_args *args)
+{
+	mach_port_name_t	target_tport = args->target_tport;
+	int			pid = args->pid;
+	user_addr_t		task_addr = args->t;
+	struct uthread		*uthread;
+	struct proc	*p;
+	struct proc *p1;
+	task_t		t1;
+	mach_port_name_t	tret;
+	void * sright;
+	int error = 0;
+	boolean_t funnel_state;
+
+	AUDIT_MACH_SYSCALL_ENTER(AUE_TASKNAMEFORPID);
+	AUDIT_ARG(pid, pid);
+	AUDIT_ARG(mach_port1, target_tport);
+
+	t1 = port_name_to_task(target_tport);
+	if (t1 == TASK_NULL) {
+		(void ) copyout((char *)&t1, task_addr, sizeof(mach_port_name_t));
+		AUDIT_MACH_SYSCALL_EXIT(KERN_FAILURE);
+		return(KERN_FAILURE);
+	} 
+
+	funnel_state = thread_funnel_set(kernel_flock, TRUE);
+
+	p1 = current_proc();
+
+	/*
+	 * Delayed binding of thread credential to process credential, if we
+	 * are not running with an explicitly set thread credential.
+	 */
+	uthread = get_bsdthread_info(current_thread());
+	if (uthread->uu_ucred != p1->p_ucred &&
+	    (uthread->uu_flag & UT_SETUID) == 0) {
+		kauth_cred_t old = uthread->uu_ucred;
+		proc_lock(p1);
+		uthread->uu_ucred = p1->p_ucred;
+		kauth_cred_ref(uthread->uu_ucred);
+		proc_unlock(p1);
+		if (old != NOCRED)
+			kauth_cred_rele(old);
+	}
+
+	p = pfind(pid);
+	AUDIT_ARG(process, p);
+
+	if ((p != (struct proc *) 0)
+	    && (p->p_stat != SZOMB)
+	    && (p1 != (struct proc *) 0)
+	    && ((p1 == p)
+		|| !(suser(kauth_cred_get(), 0))
+		|| ((kauth_cred_getuid(p->p_ucred) == kauth_cred_getuid(kauth_cred_get())) && 
+		    ((p->p_ucred->cr_ruid == kauth_cred_get()->cr_ruid)))))
+	{
+		if (p->task != TASK_NULL)
+		{
+			task_reference(p->task);
+			sright = (void *)convert_task_name_to_port(p->task);
+			tret = ipc_port_copyout_send(
+						sright, 
+						get_task_ipcspace(current_task()));
+		} else
+			tret  = MACH_PORT_NULL;
+		AUDIT_ARG(mach_port2, tret);
+		(void ) copyout((char *)&tret, task_addr, sizeof(mach_port_name_t));
+	        task_deallocate(t1);
+		error = KERN_SUCCESS;
+		goto tnfpout;
+	}
+
+	task_deallocate(t1);
+	tret = MACH_PORT_NULL;
+	(void) copyout((char *) &tret, task_addr, sizeof(mach_port_name_t));
+	error = KERN_FAILURE;
+tnfpout:
+	thread_funnel_set(kernel_flock, funnel_state);
+	AUDIT_MACH_SYSCALL_EXIT(error);
+	return(error);
+}
+
+static int
+sysctl_settfp_policy(__unused struct sysctl_oid *oidp, void *arg1,
+    __unused int arg2, struct sysctl_req *req)
+{
+    int error = 0;
+	int new_value;
+
+    error = SYSCTL_OUT(req, arg1, sizeof(int));
+    if (error || req->newptr == USER_ADDR_NULL)
+        return(error);
+
+	if (!is_suser())
+		return(EPERM);
+
+	if ((error = SYSCTL_IN(req, &new_value, sizeof(int)))) {
+		goto out;
+	}
+	if ((new_value == KERN_TFP_POLICY_DENY) 
+		|| (new_value == KERN_TFP_POLICY_PERMISSIVE)
+		|| (new_value == KERN_TFP_POLICY_RESTRICTED))
+			tfp_policy = new_value;
+	else
+			error = EINVAL;		
+out:
+    return(error);
+
+}
+
+static int
+sysctl_settfp_groups(__unused struct sysctl_oid *oidp, void *arg1,
+    __unused int arg2, struct sysctl_req *req)
+{
+    int error = 0;
+	int new_value;
+
+    error = SYSCTL_OUT(req, arg1, sizeof(int));
+    if (error || req->newptr == USER_ADDR_NULL)
+        return(error);
+
+	if (!is_suser())
+		return(EPERM);
+
+	/* 
+	 * Once set; cannot be reset till next boot. Launchd will set this
+	 * in its pid 1 init and no one can set after that.
+	 */
+	if (tfp_group_inited != 0)
+		return(EPERM);
+		
+	if ((error = SYSCTL_IN(req, &new_value, sizeof(int)))) {
+		goto out;
+	}
+
+	if (new_value >= 100) 
+			error = EINVAL;		
+	else {
+		if (arg1 == &tfp_group_ronly) 
+			tfp_group_ronly = new_value;
+		else if (arg1 == &tfp_group_rw)
+			tfp_group_rw = new_value;
+		else
+			error = EINVAL;
+		if ((tfp_group_ronly != 0 ) && (tfp_group_rw != 0 ))
+			tfp_group_inited = 1;
+	}
+
+out:
+    return(error);
+}
+
+SYSCTL_NODE(_kern, KERN_TFP, tfp, CTLFLAG_RW, 0, "tfp");
+SYSCTL_PROC(_kern_tfp, KERN_TFP_POLICY, policy, CTLTYPE_INT | CTLFLAG_RW,
+    &tfp_policy, sizeof(uint32_t), &sysctl_settfp_policy ,"I","policy");
+SYSCTL_PROC(_kern_tfp, KERN_TFP_READ_GROUP, read_group, CTLTYPE_INT | CTLFLAG_RW,
+    &tfp_group_ronly, sizeof(uint32_t), &sysctl_settfp_groups ,"I","read_group");
+SYSCTL_PROC(_kern_tfp, KERN_TFP_RW_GROUP, rw_group, CTLTYPE_INT | CTLFLAG_RW,
+    &tfp_group_rw, sizeof(uint32_t), &sysctl_settfp_groups ,"I","rw_group");
+
+
+SYSCTL_INT(_vm, OID_AUTO, shared_region_trace_level, CTLFLAG_RW, &shared_region_trace_level, 0, "");
 
 /*
  * shared_region_make_private_np:
@@ -474,6 +733,12 @@ shared_region_make_private_np(
 	range_count = uap->rangeCount;
 	user_ranges = uap->ranges;
 	ranges_size = (vm_size_t) (range_count * sizeof (ranges[0]));
+
+	SHARED_REGION_TRACE(
+		SHARED_REGION_TRACE_INFO,
+		("shared_region: %p [%d(%s)] "
+		 "make_private(rangecount=%d)\n",
+		 current_thread(), p->p_pid, p->p_comm, range_count));
 
 	/* allocate kernel space for the "ranges" */
 	if (range_count != 0) {
@@ -561,7 +826,18 @@ done:
 			  ranges_size);
 		ranges = NULL;
 	}
-	
+
+	SHARED_REGION_TRACE(
+		SHARED_REGION_TRACE_INFO,
+		("shared_region: %p [%d(%s)] "
+		 "make_private(rangecount=%d) -> %d "
+		 "shared_region=%p[%x,%x,%x]\n",
+		 current_thread(), p->p_pid, p->p_comm,
+		 range_count, error, shared_region,
+		 task_mapping_info.fs_base,
+		 task_mapping_info.system,
+		 task_mapping_info.flags));
+
 	return error;
 }
 
@@ -625,17 +901,33 @@ shared_region_map_file_np(
 	/* get file structure from file descriptor */
 	error = fp_lookup(p, fd, &fp, 0);
 	if (error) {
+		SHARED_REGION_TRACE(
+			SHARED_REGION_TRACE_ERROR,
+			("shared_region: %p [%d(%s)] map_file: "
+			 "fd=%d lookup failed (error=%d)\n",
+			 current_thread(), p->p_pid, p->p_comm, fd, error));
 		goto done;
 	}
 
 	/* make sure we're attempting to map a vnode */
 	if (fp->f_fglob->fg_type != DTYPE_VNODE) {
+		SHARED_REGION_TRACE(
+			SHARED_REGION_TRACE_ERROR,
+			("shared_region: %p [%d(%s)] map_file: "
+			 "fd=%d not a vnode (type=%d)\n",
+			 current_thread(), p->p_pid, p->p_comm,
+			 fd, fp->f_fglob->fg_type));
 		error = EINVAL;
 		goto done;
 	}
 
 	/* we need at least read permission on the file */
 	if (! (fp->f_fglob->fg_flag & FREAD)) {
+		SHARED_REGION_TRACE(
+			SHARED_REGION_TRACE_ERROR,
+			("shared_region: %p [%d(%s)] map_file: "
+			 "fd=%d not readable\n",
+			 current_thread(), p->p_pid, p->p_comm, fd));
 		error = EPERM;
 		goto done;
 	}
@@ -643,12 +935,23 @@ shared_region_map_file_np(
 	/* get vnode from file structure */
 	error = vnode_getwithref((vnode_t)fp->f_fglob->fg_data);
 	if (error) {
+		SHARED_REGION_TRACE(
+			SHARED_REGION_TRACE_ERROR,
+			("shared_region: %p [%d(%s)] map_file: "
+			 "fd=%d getwithref failed (error=%d)\n",
+			 current_thread(), p->p_pid, p->p_comm, fd, error));
 		goto done;
 	}
 	vp = (struct vnode *) fp->f_fglob->fg_data;
 
 	/* make sure the vnode is a regular file */
 	if (vp->v_type != VREG) {
+		SHARED_REGION_TRACE(
+			SHARED_REGION_TRACE_ERROR,
+			("shared_region: %p [%d(%s)] map_file(%p:'%s'): "
+			 "not a file (type=%d)\n",
+			 current_thread(), p->p_pid, p->p_comm,
+			 vp, vp->v_name, vp->v_type));
 		error = EINVAL;
 		goto done;
 	}
@@ -659,8 +962,16 @@ shared_region_map_file_np(
 		
 		context.vc_proc = p;
 		context.vc_ucred = kauth_cred_get();
-		if ((error = vnode_size(vp, &fs, &context)) != 0)
+		if ((error = vnode_size(vp, &fs, &context)) != 0) {
+			SHARED_REGION_TRACE(
+				SHARED_REGION_TRACE_ERROR,
+				("shared_region: %p [%d(%s)] "
+				 "map_file(%p:'%s'): "
+				 "vnode_size(%p) failed (error=%d)\n",
+				 current_thread(), p->p_pid, p->p_comm,
+				 vp, vp->v_name, vp));
 			goto done;
+		}
 		file_size = fs;
 	}
 
@@ -670,6 +981,12 @@ shared_region_map_file_np(
 	mapping_count = uap->mappingCount; /* the number of mappings */
 	mappings_size = (vm_size_t) (mapping_count * sizeof (mappings[0]));
 	if (mapping_count == 0) {
+		SHARED_REGION_TRACE(
+			SHARED_REGION_TRACE_INFO,
+			("shared_region: %p [%d(%s)] map_file(%p:'%s'): "
+			 "no mappings\n",
+			 current_thread(), p->p_pid, p->p_comm,
+			 vp, vp->v_name));
 		error = 0;	/* no mappings: we're done ! */
 		goto done;
 	} else if (mapping_count <= SFM_MAX_STACK) {
@@ -685,6 +1002,13 @@ shared_region_map_file_np(
 				(vm_offset_t *) &mappings,
 				mappings_size);
 		if (kr != KERN_SUCCESS) {
+			SHARED_REGION_TRACE(
+				SHARED_REGION_TRACE_ERROR,
+				("shared_region: %p [%d(%s)] "
+				 "map_file(%p:'%s'): "
+				 "failed to allocate %d mappings (kr=0x%x)\n",
+				 current_thread(), p->p_pid, p->p_comm,
+				 vp, vp->v_name, mapping_count, kr));
 			error = ENOMEM;
 			goto done;
 		}
@@ -695,6 +1019,12 @@ shared_region_map_file_np(
 		       mappings,
 		       mappings_size);
 	if (error != 0) {
+		SHARED_REGION_TRACE(
+			SHARED_REGION_TRACE_ERROR,
+			("shared_region: %p [%d(%s)] map_file(%p:'%s'): "
+			 "failed to copyin %d mappings (error=%d)\n",
+			 current_thread(), p->p_pid, p->p_comm,
+			 vp, vp->v_name, mapping_count, error));
 		goto done;
 	}
 
@@ -723,6 +1053,15 @@ shared_region_map_file_np(
 			/* this mapping is not in the shared region... */
 			if (user_slide_p == NULL) {
 				/* ... and we can't slide it in: fail */
+				SHARED_REGION_TRACE(
+					SHARED_REGION_TRACE_CONFLICT,
+					("shared_region: %p [%d(%s)] "
+					 "map_file(%p:'%s'): "
+					 "mapping %p not in shared segment & "
+					 "no sliding\n",
+					 current_thread(), p->p_pid, p->p_comm,
+					 vp, vp->v_name,
+					 mappings[j].sfm_address));
 				error = EINVAL;
 				goto done;
 			}
@@ -731,6 +1070,15 @@ shared_region_map_file_np(
 				mappings_in_segment = FALSE;
 			} else if (mappings_in_segment != FALSE) {
 				/* other mappings were not outside: fail */
+				SHARED_REGION_TRACE(
+					SHARED_REGION_TRACE_CONFLICT,
+					("shared_region: %p [%d(%s)] "
+					 "map_file(%p:'%s'): "
+					 "mapping %p not in shared segment & "
+					 "other mappings in shared segment\n",
+					 current_thread(), p->p_pid, p->p_comm,
+					 vp, vp->v_name,
+					 mappings[j].sfm_address));
 				error = EINVAL;
 				goto done;
 			}
@@ -741,6 +1089,15 @@ shared_region_map_file_np(
 				mappings_in_segment = TRUE;
 			} else if (mappings_in_segment != TRUE) {
 				/* other mappings were not inside: fail */
+				SHARED_REGION_TRACE(
+					SHARED_REGION_TRACE_CONFLICT,
+					("shared_region: %p [%d(%s)] "
+					 "map_file(%p:'%s'): "
+					 "mapping %p in shared segment & "
+					 "others in shared segment\n",
+					 current_thread(), p->p_pid, p->p_comm,
+					 vp, vp->v_name,
+					 mappings[j].sfm_address));
 				error = EINVAL;
 				goto done;
 			}
@@ -784,6 +1141,12 @@ shared_region_map_file_np(
 	UBCINFOCHECK("shared_region_map_file_np", vp);
 	file_control = ubc_getobject(vp, UBC_HOLDOBJECT);
 	if (file_control == MEMORY_OBJECT_CONTROL_NULL) {
+		SHARED_REGION_TRACE(
+			SHARED_REGION_TRACE_ERROR,
+			("shared_region: %p [%d(%s)] map_file(%p:'%s'): "
+			 "ubc_getobject() failed\n",
+			 current_thread(), p->p_pid, p->p_comm,
+			 vp, vp->v_name));
 		error = EINVAL;
 		goto done;
 	}
@@ -832,6 +1195,13 @@ shared_region_map_file_np(
 		 * (via shared_region_make_private()) the shared region and
 		 * try to establish the mapping privately for this process.
 		 */
+		SHARED_REGION_TRACE(
+			SHARED_REGION_TRACE_CONFLICT,
+			("shared_region: %p [%d(%s)] "
+			 "map_file(%p:'%s'): "
+			 "not on root volume\n",
+			 current_thread(), p->p_pid, p->p_comm,
+			 vp->v_name));
 		error = EXDEV;
 		goto done;
 	}
@@ -848,8 +1218,7 @@ shared_region_map_file_np(
 			     base_offset,
 			     (user_slide_p) ? &slide : NULL);
 
-	switch (kr) {
-	case KERN_SUCCESS:
+	if (kr == KERN_SUCCESS) {
 		/*
 		 * The mapping was successful.  Let the buffer cache know
 		 * that we've mapped that file with these protections.  This
@@ -857,21 +1226,30 @@ shared_region_map_file_np(
 		 */
 		(void) ubc_map(vp, max_prot);
 		error = 0;
-		break;
-	case KERN_INVALID_ADDRESS:
-		error = EFAULT;
-		goto done;
-	case KERN_PROTECTION_FAILURE:
-		error = EPERM;
-		goto done;
-	case KERN_NO_SPACE:
-		error = ENOMEM;
-		goto done;
-	case KERN_FAILURE:
-	case KERN_INVALID_ARGUMENT:
-	default:
-		error = EINVAL;
-		goto done;
+	} else {
+		SHARED_REGION_TRACE(
+			SHARED_REGION_TRACE_CONFLICT,
+			("shared_region: %p [%d(%s)] "
+			 "map_file(%p:'%s'): "
+			 "map_shared_file failed, kr=0x%x\n",
+			 current_thread(), p->p_pid, p->p_comm,
+			 vp, vp->v_name, kr));
+		switch (kr) {
+		case KERN_INVALID_ADDRESS:
+			error = EFAULT;
+			goto done;
+		case KERN_PROTECTION_FAILURE:
+			error = EPERM;
+			goto done;
+		case KERN_NO_SPACE:
+			error = ENOMEM;
+			goto done;
+		case KERN_FAILURE:
+		case KERN_INVALID_ARGUMENT:
+		default:
+			error = EINVAL;
+			goto done;
+		}
 	}
 
 	if (p->p_flag & P_NOSHLIB) {
@@ -900,7 +1278,16 @@ shared_region_map_file_np(
 		}
 		error = copyout(&slide,
 				user_slide_p,
-				sizeof (int64_t));
+				sizeof (slide));
+		if (slide != 0) {
+			SHARED_REGION_TRACE(
+				SHARED_REGION_TRACE_CONFLICT,
+				("shared_region: %p [%d(%s)] "
+				 "map_file(%p:'%s'): "
+				 "slid by 0x%llx\n",
+				 current_thread(), p->p_pid, p->p_comm,
+				 vp, vp->v_name, slide));
+		}
 	}
 
 done:
@@ -983,23 +1370,31 @@ clone_system_shared_regions(
 		&(old_info.fs_base),
 		&(old_info.system),
 		&(old_info.flags), &next);
-	if ((shared_regions_active) ||
-		(base_vnode == ENV_DEFAULT_ROOT)) {
-	   if (shared_file_create_system_region(&new_shared_region))
-		return (ENOMEM);
+
+	if (shared_regions_active ||
+	    base_vnode == ENV_DEFAULT_ROOT) {
+		if (shared_file_create_system_region(&new_shared_region,
+						     old_info.fs_base,
+						     old_info.system))
+			return ENOMEM;
 	} else {
-	   new_shared_region = 
-		lookup_default_shared_region(
-			base_vnode, old_info.system);
-	   if(new_shared_region == NULL) {
-		shared_file_boot_time_init(
-			base_vnode, old_info.system);
-		vm_get_shared_region(current_task(), &new_shared_region);
-	   } else {
-		vm_set_shared_region(current_task(), new_shared_region);
-	   }
-	   if(old_shared_region)
-		shared_region_mapping_dealloc(old_shared_region);
+		if (old_shared_region &&
+		    base_vnode == ENV_DEFAULT_ROOT) {
+			base_vnode = old_info.fs_base;
+		}
+		new_shared_region =
+			lookup_default_shared_region(base_vnode,
+						     old_info.system);
+		if (new_shared_region == NULL) {
+			shared_file_boot_time_init(base_vnode,
+						   old_info.system);
+			vm_get_shared_region(current_task(),
+					     &new_shared_region);
+		} else {
+			vm_set_shared_region(current_task(), new_shared_region);
+		}
+		if (old_shared_region)
+			shared_region_mapping_dealloc(old_shared_region);
 	}
 	new_info.self = (vm_offset_t)new_shared_region;
 	shared_region_mapping_info(new_shared_region,
@@ -1067,6 +1462,22 @@ clone_system_shared_regions(
 	/* chain attach */
 	if (!shared_regions_active || !chain_regions)
 		shared_region_mapping_dealloc(old_shared_region);
+
+	SHARED_REGION_TRACE(
+		SHARED_REGION_TRACE_INFO,
+		("shared_region: %p task=%p "
+		 "clone(active=%d, base=0x%x,chain=%d) "
+		 "old=%p[%x,%x,%x] new=%p[%x,%x,%x]\n",
+		 current_thread(), current_task(), 
+		 shared_regions_active, base_vnode, chain_regions,
+		 old_shared_region,
+		 old_info.fs_base,
+		 old_info.system,
+		 old_info.flags,
+		 new_shared_region,
+		 new_info.fs_base,
+		 new_info.system,
+		 new_info.flags));
 
 	return(0);
 
@@ -1424,9 +1835,12 @@ restart:
 	resid_off = 0;
 
 	while(size) {
+		int resid_int;
 		error = vn_rdwr(UIO_READ, names_vp, (caddr_t)buf_ptr, 
 			size, resid_off,
-			UIO_SYSSPACE32, IO_NODELOCKED, kauth_cred_get(), &resid, p);
+			UIO_SYSSPACE32, IO_NODELOCKED, kauth_cred_get(),
+			&resid_int, p);
+		resid = (vm_size_t) resid_int;
 		if((error) || (size == resid)) {
 			if(!error) {
 				error = EINVAL;
@@ -1568,10 +1982,12 @@ bsd_read_page_cache_file(
 		}
 		*bufsize = profile_size;
 		while(profile_size) {
+			int resid_int;
 			error = vn_rdwr(UIO_READ, data_vp, 
 				(caddr_t) *buffer, profile_size, 
 				profile, UIO_SYSSPACE32, IO_NODELOCKED, 
-				kauth_cred_get(), &resid, p);
+				kauth_cred_get(), &resid_int, p);
+			resid = (vm_size_t) resid_int;
 			if((error) || (profile_size == resid)) {
 				bsd_close_page_cache_files(uid_files);
 				kmem_free(kernel_map, (vm_offset_t)*buffer, profile_size);
@@ -1683,10 +2099,12 @@ bsd_search_page_cache_data_base(
 		}
 		resid_off = 0;
 		while(size) {
+			int resid_int;
 			error = vn_rdwr(UIO_READ, vp, 
 				CAST_DOWN(caddr_t, (local_buf + resid_off)),
 				size, file_off + resid_off, UIO_SYSSPACE32, 
-				IO_NODELOCKED, kauth_cred_get(), &resid, p);
+				IO_NODELOCKED, kauth_cred_get(), &resid_int, p);
+			resid = (vm_size_t) resid_int;
 			if((error) || (size == resid)) {
 				if(local_buf != 0) {
 					kmem_free(kernel_map, local_buf, 4 * PAGE_SIZE);

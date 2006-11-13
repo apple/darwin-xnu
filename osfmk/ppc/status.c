@@ -1332,6 +1332,19 @@ thread_adjuserstack(thread_t thread, int adjust)
 	
 }    
 
+void
+thread_setsinglestep(thread_t thread, int on)
+{
+	savearea *sv;
+	
+	sv = get_user_regs(thread);	/* Get the user state registers */
+	
+	if (on)
+	        sv->save_srr1 |= MASK(MSR_SE);
+	else
+	        sv->save_srr1 &= ~MASK(MSR_SE);
+}    
+
 /*
  * thread_setentrypoint:
  *

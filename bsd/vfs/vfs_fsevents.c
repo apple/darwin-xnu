@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -49,7 +49,6 @@
 #include <miscfs/specfs/specdev.h>
 #include <miscfs/devfs/devfs.h>
 #include <sys/filio.h>
-#include <architecture/byte_order.h>
 #include <kern/locks.h>
 #include <libkern/OSAtomic.h>
 
@@ -96,6 +95,7 @@ typedef struct fs_event_watcher {
     int32_t      eventq_size;            // number of event pointers in queue
     int32_t      rd, wr;                 // indices to the event_queue
     int32_t      blockers;
+    int32_t      num_readers;
 } fs_event_watcher;
 
 // fs_event_watcher flags
@@ -257,7 +257,7 @@ add_fsevent(int type, vfs_context_t ctx, ...)
     kfs_event        *kfse;
     fs_event_watcher *watcher;
     va_list           ap;
-    int 	      error = 0;
+    int 	      error = 0, base;
     dev_t             dev = 0;
 
     va_start(ap, ctx);
@@ -275,8 +275,9 @@ add_fsevent(int type, vfs_context_t ctx, ...)
     //       the lock is dropped.
     lock_fs_event_buf();
     
+    base = free_event_idx;
     for(i=0; i < MAX_KFS_EVENTS; i++) {
-	if (fs_event_buf[(free_event_idx + i) % MAX_KFS_EVENTS].type == FSE_INVALID) {
+	if (fs_event_buf[(base + i) % MAX_KFS_EVENTS].type == FSE_INVALID) {
 	    break;
 	}
     }
@@ -298,12 +299,12 @@ add_fsevent(int type, vfs_context_t ctx, ...)
 	return ENOSPC;
     }
 
-    kfse = &fs_event_buf[(free_event_idx + i) % MAX_KFS_EVENTS];
+    kfse = &fs_event_buf[(base + i) % MAX_KFS_EVENTS];
 
-    free_event_idx++;
+    free_event_idx = ((base + i) % MAX_KFS_EVENTS) + 1;
     
     kfse->type     = type;
-    kfse->refcount = 0;
+    kfse->refcount = 1;
     kfse->pid      = p->p_pid;
 
     unlock_fs_event_buf();  // at this point it's safe to unlock
@@ -470,9 +471,8 @@ add_fsevent(int type, vfs_context_t ctx, ...)
     
   clean_up:
     // just in case no one was interested after all...
-    if (num_deliveries == 0) {
+    if (OSAddAtomic(-1, (SInt32 *)&kfse->refcount) == 1) {
 	do_free_event(kfse);
-	free_event_idx = (int)(kfse - &fs_event_buf[0]);
     }	
 
     lck_rw_done(&fsevent_big_lock);
@@ -487,8 +487,10 @@ do_free_event(kfs_event *kfse)
     
     lock_fs_event_buf();
     
-    // mark this fsevent as invalid
-    kfse->type = FSE_INVALID;
+    if (kfse->refcount > 0) {
+	panic("do_free_event: free'ing a kfsevent w/refcount == %d (kfse %p)\n",
+	    kfse->refcount, kfse);
+    }
 
     // make a copy of this so we can free things without
     // holding the fs_event_buf lock
@@ -498,6 +500,9 @@ do_free_event(kfs_event *kfse)
     // and just to be anal, set this so that there are no args
     kfse->args[0].type = FSE_ARG_DONE;
     
+    // mark this fsevent as invalid
+    kfse->type = FSE_INVALID;
+
     free_event_idx = (kfse - fs_event_buf);
 
     unlock_fs_event_buf();
@@ -550,6 +555,7 @@ add_watcher(int8_t *event_list, int32_t num_events, int32_t eventq_size, fs_even
     watcher->rd           = 0;
     watcher->wr           = 0;
     watcher->blockers     = 0;
+    watcher->num_readers  = 0;
 
     lock_watch_list();
 
@@ -658,9 +664,15 @@ fmod_watch(fs_event_watcher *watcher, struct uio *uio)
 	return EINVAL;
     }
 
+    if (OSAddAtomic(1, (SInt32 *)&watcher->num_readers) != 0) {
+	// don't allow multiple threads to read from the fd at the same time
+	OSAddAtomic(-1, (SInt32 *)&watcher->num_readers);
+	return EAGAIN;
+    }
 
     if (watcher->rd == watcher->wr) {
 	if (watcher->flags & WATCHER_CLOSING) {
+	    OSAddAtomic(-1, (SInt32 *)&watcher->num_readers);
 	    return 0;
 	}
 	OSAddAtomic(1, (SInt32 *)&watcher->blockers);
@@ -671,6 +683,7 @@ fmod_watch(fs_event_watcher *watcher, struct uio *uio)
 	OSAddAtomic(-1, (SInt32 *)&watcher->blockers);
 
 	if (error != 0 || (watcher->flags & WATCHER_CLOSING)) {
+	    OSAddAtomic(-1, (SInt32 *)&watcher->num_readers);
 	    return error;
 	}
     }
@@ -689,6 +702,7 @@ fmod_watch(fs_event_watcher *watcher, struct uio *uio)
 	} 
 
 	if (error) {
+	    OSAddAtomic(-1, (SInt32 *)&watcher->num_readers);
 	    return error;
 	}
 	
@@ -858,6 +872,7 @@ fmod_watch(fs_event_watcher *watcher, struct uio *uio)
     }
 
   get_out:
+    OSAddAtomic(-1, (SInt32 *)&watcher->num_readers);
     return error;
 }
 
@@ -910,6 +925,9 @@ fsevent_unmount(struct mount *mp)
 
 			if (vname)
 			        vnode_putname(vname);
+
+			strcpy(pathbuff, "UNKNOWN-FILE");
+			pathbuff_len = strlen(pathbuff) + 1;
 		}
 
 		// switch the type of the string

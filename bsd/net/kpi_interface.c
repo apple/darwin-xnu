@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -1032,7 +1032,10 @@ errno_t ifnet_get_multicast_list(ifnet_t interface, ifmultiaddr_t **addresses)
 	}
 	
 	MALLOC(*addresses, ifmultiaddr_t*, sizeof(ifmultiaddr_t) * (cmax + 1), M_TEMP, M_NOWAIT);
-	if (*addresses == NULL) return ENOMEM;
+	if (*addresses == NULL) {
+		if (lock) ifnet_lock_done(interface);
+		return ENOMEM;
+	}
 	
 	LIST_FOREACH(addr, &interface->if_multiaddrs, ifma_link)
 	{

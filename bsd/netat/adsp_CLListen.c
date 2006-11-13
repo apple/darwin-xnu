@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -77,7 +77,6 @@ int adspCLListen(sp, pb)	/* (DSPPBPtr pb) */
 {
     register struct adspcmd *clpb;
     gbuf_t *mp;
-    int s;
 
     if (sp == 0) {
 	pb->ioResult = errRefNum;
@@ -95,12 +94,8 @@ int adspCLListen(sp, pb)	/* (DSPPBPtr pb) */
 	    clpb = (struct adspcmd *)gbuf_rptr(mp);
 	    clpb->ioc = 0;
 	    clpb->mp = mp;
-	    ATDISABLE(s, sp->lock);
-	    if (qAddToEnd(&sp->opb, clpb)){	/* Add to list of listeners */
-	     ATENABLE(s, sp->lock);
-		return EFAULT; /* bogus, but discriminate from other errors */
-	    }
-	    ATENABLE(s, sp->lock);
+	    if (qAddToEnd(&sp->opb, clpb))	/* Add to list of listeners */
+			return EFAULT; /* bogus, but discriminate from other errors */
     } else {
 	    pb->ioResult = errDSPQueueSize;
 	    return ENOBUFS;

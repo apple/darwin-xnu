@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -57,7 +57,7 @@
    subject to change. Applications should only use zlib.h.
  */
 
-/* @(#) $Id: zlib.c,v 1.10 2004/07/29 19:17:20 lindak Exp $ */
+/* @(#) $Id: zlib.c,v 1.10.874.1 2005/06/24 01:47:11 lindak Exp $ */
 
 #ifndef _Z_UTIL_H
 #define _Z_UTIL_H
@@ -303,7 +303,7 @@ void   zcfree  OF((voidpf opaque, voidpf ptr));
    subject to change. Applications should only use zlib.h.
  */
 
-/* @(#) $Id: zlib.c,v 1.10 2004/07/29 19:17:20 lindak Exp $ */
+/* @(#) $Id: zlib.c,v 1.10.874.1 2005/06/24 01:47:11 lindak Exp $ */
 
 #ifndef _DEFLATE_H
 #define _DEFLATE_H
@@ -663,7 +663,7 @@ void _tr_stored_block OF((deflate_state *s, charf *buf, ulg stored_len,
  *
  */
 
-/* @(#) $Id: zlib.c,v 1.10 2004/07/29 19:17:20 lindak Exp $ */
+/* @(#) $Id: zlib.c,v 1.10.874.1 2005/06/24 01:47:11 lindak Exp $ */
 
 /* #include "deflate.h" */
 
@@ -2005,7 +2005,7 @@ local block_state deflate_slow(s, flush)
  *          Addison-Wesley, 1983. ISBN 0-201-06672-6.
  */
 
-/* @(#) $Id: zlib.c,v 1.10 2004/07/29 19:17:20 lindak Exp $ */
+/* @(#) $Id: zlib.c,v 1.10.874.1 2005/06/24 01:47:11 lindak Exp $ */
 
 /* #define GEN_TREES_H */
 
@@ -5550,7 +5550,7 @@ z_streamp z;
  * For conditions of distribution and use, see copyright notice in zlib.h 
  */
 
-/* @(#) $Id: zlib.c,v 1.10 2004/07/29 19:17:20 lindak Exp $ */
+/* @(#) $Id: zlib.c,v 1.10.874.1 2005/06/24 01:47:11 lindak Exp $ */
 
 /* #include "zutil.h" */
 
@@ -5780,7 +5780,7 @@ void  zcfree (opaque, ptr)
  * For conditions of distribution and use, see copyright notice in zlib.h 
  */
 
-/* @(#) $Id: zlib.c,v 1.10 2004/07/29 19:17:20 lindak Exp $ */
+/* @(#) $Id: zlib.c,v 1.10.874.1 2005/06/24 01:47:11 lindak Exp $ */
 
 /* #include "zlib.h" */
 

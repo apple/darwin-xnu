@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2006 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
@@ -32,21 +32,41 @@
 #include <machine/cpu_capabilities.h>
 #include <machine/commpage.h>
 
-#define _PTHREAD_TSD_OFFSET 0x48
+#define _PTHREAD_TSD_OFFSET32 0x48
+#define _PTHREAD_TSD_OFFSET64 0x60
 
+
+/* These routines do not need to be on the copmmpage on Intel.  They are for now
+ * to avoid revlock, but the code should move to Libc, and we should eventually remove
+ * these.
+ */
         .text
         .align  2, 0x90
 
 Lpthread_getspecific:
 	movl	4(%esp), %eax
-	movl	%gs:_PTHREAD_TSD_OFFSET(,%eax,4), %eax
+	movl	%gs:_PTHREAD_TSD_OFFSET32(,%eax,4), %eax
 	ret
 
 	COMMPAGE_DESCRIPTOR(pthread_getspecific,_COMM_PAGE_PTHREAD_GETSPECIFIC,0,0)
 
 Lpthread_self:
-	movl	4(%esp), %eax
-	movl	%gs:_PTHREAD_TSD_OFFSET, %eax
+	movl	%gs:_PTHREAD_TSD_OFFSET32, %eax
 	ret
 
 	COMMPAGE_DESCRIPTOR(pthread_self,_COMM_PAGE_PTHREAD_SELF,0,0)
+
+/* the 64-bit versions: */
+	
+	.code64
+Lpthread_getspecific_64:
+	movq	%gs:_PTHREAD_TSD_OFFSET64(,%rdi,8), %rax
+	ret
+
+	COMMPAGE_DESCRIPTOR(pthread_getspecific_64,_COMM_PAGE_PTHREAD_GETSPECIFIC,0,0)
+
+Lpthread_self_64:
+	movq	%gs:_PTHREAD_TSD_OFFSET64, %rax
+	ret
+
+	COMMPAGE_DESCRIPTOR(pthread_self_64,_COMM_PAGE_PTHREAD_SELF,0,0)

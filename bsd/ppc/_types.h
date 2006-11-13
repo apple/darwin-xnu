@@ -41,7 +41,7 @@ typedef __signed char		__int8_t;
 typedef char			__int8_t;
 #endif	/* !__GNUC__ */
 typedef unsigned char		__uint8_t;
-typedef	unsigned short		__int16_t;
+typedef	short			__int16_t;
 typedef	unsigned short		__uint16_t;
 typedef int			__int32_t;
 typedef unsigned int		__uint32_t;

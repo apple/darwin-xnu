@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -125,6 +125,9 @@ typedef u_int64_t	user_ulong_t;
 typedef int64_t		user_time_t;
 #define USER_ADDR_NULL	((user_addr_t) 0)
 #define CAST_USER_ADDR_T(a_ptr)   ((user_addr_t)((uintptr_t)(a_ptr)))
+
+/* This defines the size of syscall arguments after copying into the kernel: */
+typedef u_int64_t	syscall_arg_t;
 
 #ifndef __offsetof
 #define __offsetof(type, field) ((size_t)(&((type *)0)->field))

@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -59,13 +59,6 @@
 #include <netat/at_pcb.h>
 #include <netat/debug.h>
 
-int (*sys_ATsocket)() = 0;
-int (*sys_ATgetmsg)() = 0;
-int (*sys_ATputmsg)() = 0;
-int (*sys_ATPsndreq)() = 0;
-int (*sys_ATPsndrsp)() = 0;
-int (*sys_ATPgetreq)() = 0;
-int (*sys_ATPgetrsp)() = 0;
 
 extern at_state_t at_state;	/* global state of AT network */
 extern at_ifaddr_t *ifID_home;	/* default interface */
@@ -79,6 +72,12 @@ extern lck_mtx_t * atalk_mutex;
 #define f_offset f_fglob->fg_offset
 #define f_data f_fglob->fg_data
 
+extern int _ATsocket(int, int *, void *);
+extern int _ATgetmsg(int, strbuf_t *, strbuf_t *, int *, int *, void *);
+extern int _ATputmsg();
+extern int _ATPsndreq(), _ATPsndrsp(), _ATPgetreq(), _ATPgetrsp();
+
+
 int ATsocket(proc, uap, retval)
 	struct proc *proc;
 	struct ATsocket_args *uap;
@@ -86,13 +85,13 @@ int ATsocket(proc, uap, retval)
 {
 	int err;
 	atalk_lock();
-	if (sys_ATsocket) {
+	if (_ATsocket) {
 		/* required check for all AppleTalk system calls */
 		if (!(at_state.flags & AT_ST_STARTED) || !ifID_home) {
 			*retval = -1;
 			err = ENOTREADY;
 		} else {
-			*retval = (*sys_ATsocket)(uap->proto, &err, proc);
+			*retval = _ATsocket((int)uap->proto, (int *)&err, (void *)proc);
 		}
 	} else {
 		*retval = -1;
@@ -110,14 +109,14 @@ int ATgetmsg(proc, uap, retval)
 	int err;
 
 	atalk_lock();
-	if (sys_ATgetmsg) {
+	if (_ATgetmsg) {
 		/* required check for all AppleTalk system calls */
 		if (!(at_state.flags & AT_ST_STARTED) || !ifID_home) {
 			*retval = -1;
 			err = ENOTREADY;
 		} else {
 			*retval = 
-			  (*sys_ATgetmsg)(uap->fd, uap->ctlptr, uap->datptr, 
+			  (*_ATgetmsg)(uap->fd, uap->ctlptr, uap->datptr, 
 					  uap->flags, &err, proc);
 		}
 	} else {
@@ -136,14 +135,14 @@ int ATputmsg(proc, uap, retval)
 	int err;
 
 	atalk_lock();
-	if (sys_ATputmsg) {
+	if (_ATputmsg) {
 		/* required check for all AppleTalk system calls */
 		if (!(at_state.flags & AT_ST_STARTED) || !ifID_home) {
 			*retval = -1;
 			err = ENOTREADY;
 		} else {
 			*retval = 
-			  (*sys_ATputmsg)(uap->fd, uap->ctlptr, uap->datptr, 
+			  _ATputmsg(uap->fd, uap->ctlptr, uap->datptr, 
 					  uap->flags, &err, proc);
 		}
 	} else {
@@ -162,14 +161,14 @@ int ATPsndreq(proc, uap, retval)
 	int err;
 
 	atalk_lock();
-	if (sys_ATPsndreq) {
+	if (_ATPsndreq) {
 		/* required check for all AppleTalk system calls */
 		if (!(at_state.flags & AT_ST_STARTED) || !ifID_home) {
 			*retval = -1;
 			err = ENOTREADY;
 		} else {
 			*retval = 
-			  (*sys_ATPsndreq)(uap->fd, uap->buf, uap->len, 
+			  _ATPsndreq(uap->fd, uap->buf, uap->len, 
 					   uap->nowait, &err, proc);
 		}
 	} else {
@@ -188,14 +187,14 @@ int ATPsndrsp(proc, uap, retval)
 	int err;
 
 	atalk_lock();
-	if (sys_ATPsndrsp) {
+	if (_ATPsndrsp) {
 		/* required check for all AppleTalk system calls */
 		if (!(at_state.flags & AT_ST_STARTED) || !ifID_home) {
 			*retval = -1;
 			err = ENOTREADY;
 		} else { 
 			*retval = 
-			  (*sys_ATPsndrsp)(uap->fd, uap->respbuff, 
+			  _ATPsndrsp(uap->fd, uap->respbuff, 
 					   uap->resplen, uap->datalen, &err, proc);
 		}
 	} else {
@@ -214,14 +213,14 @@ int ATPgetreq(proc, uap, retval)
 	int err;
 
 	atalk_lock();
-	if (sys_ATPgetreq) {
+	if (_ATPgetreq) {
 		/* required check for all AppleTalk system calls */
 		if (!(at_state.flags & AT_ST_STARTED) || !ifID_home) {
 			*retval = -1;
 			err = ENOTREADY;
 		} else {
 			*retval = 
-			  (*sys_ATPgetreq)(uap->fd, uap->buf, uap->buflen, 
+			  _ATPgetreq(uap->fd, uap->buf, uap->buflen, 
 					   &err, proc);
 		}
 	} else {
@@ -240,14 +239,14 @@ int ATPgetrsp(proc, uap, retval)
 	int err = 0;
 
 	atalk_lock();
-	if (sys_ATPgetrsp) {
+	if (_ATPgetrsp) {
 		/* required check for all AppleTalk system calls */
 		if (!(at_state.flags & AT_ST_STARTED) || !ifID_home) {
 			*retval = -1;
 			err = ENOTREADY;
 		} else {
 			*retval = 
-			  (*sys_ATPgetrsp)(uap->fd, uap->bdsp, &err, proc);
+			  _ATPgetrsp(uap->fd, uap->bdsp, &err, proc);
 		}
 	} else {
 		*retval = -1;

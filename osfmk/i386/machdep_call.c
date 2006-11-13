@@ -43,11 +43,6 @@
 #include <i386/machdep_call.h>
 
 extern kern_return_t	kern_invalid(void);
-#ifdef	FIXME
-extern kern_return_t	PCcreate(), PCldt(), PCresume();
-extern kern_return_t	PCcopyBIOSData(), PCmapBIOSRom();
-extern kern_return_t	PCsizeBIOSExtData(), PCcopyBIOSExtData();
-#endif
 
 machdep_call_t		machdep_call_table[] = {
 	MACHDEP_CALL_ROUTINE(thread_get_cthread_self,0),
@@ -55,16 +50,19 @@ machdep_call_t		machdep_call_table[] = {
 	MACHDEP_CALL_ROUTINE(kern_invalid,0),
 	MACHDEP_CALL_ROUTINE(thread_fast_set_cthread_self,1),
 	MACHDEP_CALL_ROUTINE(thread_set_user_ldt,3),
-#ifdef	FIXME
-	MACHDEP_CALL_ROUTINE(PCcreate,3),
-	MACHDEP_CALL_ROUTINE(PCldt,3),
-	MACHDEP_CALL_ROUTINE(PCresume,0),
-	MACHDEP_CALL_ROUTINE(PCcopyBIOSData,1),
-	MACHDEP_CALL_ROUTINE(PCsizeBIOSExtData,0),
-	MACHDEP_CALL_ROUTINE(PCcopyBIOSExtData,1),
-	MACHDEP_CALL_ROUTINE(PCmapBIOSRom,3),
-#endif
+	MACHDEP_BSD_CALL_ROUTINE(i386_set_ldt,3),
+	MACHDEP_BSD_CALL_ROUTINE(i386_get_ldt,3),
+};
+machdep_call_t		machdep_call_table64[] = {
+	MACHDEP_CALL_ROUTINE(kern_invalid,0),
+	MACHDEP_CALL_ROUTINE(kern_invalid,0),
+	MACHDEP_CALL_ROUTINE(kern_invalid,0),
+	MACHDEP_CALL_ROUTINE64(thread_fast_set_cthread_self64,1),
+	MACHDEP_CALL_ROUTINE(kern_invalid,0),
+	MACHDEP_CALL_ROUTINE(kern_invalid,0),
+	MACHDEP_CALL_ROUTINE(kern_invalid,0),
 };
 
 int	machdep_call_count =
     (sizeof (machdep_call_table) / sizeof (machdep_call_t));
+

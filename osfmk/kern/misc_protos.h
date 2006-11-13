@@ -97,6 +97,10 @@ extern int copyoutmsg(
 	user_addr_t     user_addr,
 	mach_msg_size_t nbytes);
 
+/* Invalidate copy window(s) cache */
+extern void	inval_copy_windows(thread_t);
+
+
 extern int sscanf(const char *input, const char *fmt, ...);
 
 extern integer_t sprintf(char *buf, const char *fmt, ...);

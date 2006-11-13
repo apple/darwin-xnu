@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -73,6 +73,20 @@ hw_cpu_features SYSCTL_HANDLER_ARGS
     return SYSCTL_OUT(req, buf, strlen(buf) + 1);
 }
 
+static int
+hw_cpu_extfeatures SYSCTL_HANDLER_ARGS
+{
+    __unused struct sysctl_oid *unused_oidp = oidp;
+    __unused void *unused_arg1 = arg1;
+    __unused int unused_arg2 = arg2; 
+    char buf[256];
+
+    buf[0] = '\0';
+    cpuid_get_extfeature_names(cpuid_extfeatures(), buf, sizeof(buf));
+
+    return SYSCTL_OUT(req, buf, strlen(buf) + 1);
+}
+
 SYSCTL_NODE(_machdep, OID_AUTO, cpu, CTLFLAG_RW, 0,
 	"CPU info");
 
@@ -87,10 +101,6 @@ SYSCTL_PROC(_machdep_cpu, OID_AUTO, brand_string, CTLTYPE_STRING | CTLFLAG_RD,
 SYSCTL_PROC(_machdep_cpu, OID_AUTO, model_string, CTLTYPE_STRING | CTLFLAG_RD, 
 	    (void *)offsetof(i386_cpu_info_t, cpuid_model_string), -1,
 	    hw_cpu_sysctl, "A", "CPU model string");
-
-SYSCTL_PROC(_machdep_cpu, OID_AUTO, value, CTLTYPE_INT | CTLFLAG_RD, 
-	    (void *)offsetof(i386_cpu_info_t, cpuid_value), sizeof(uint32_t),
-	    hw_cpu_sysctl, "I", "CPU value");
 
 SYSCTL_PROC(_machdep_cpu, OID_AUTO, family, CTLTYPE_INT | CTLFLAG_RD, 
 	    (void *)offsetof(i386_cpu_info_t, cpuid_family), sizeof(uint8_t),
@@ -112,9 +122,13 @@ SYSCTL_PROC(_machdep_cpu, OID_AUTO, stepping, CTLTYPE_INT | CTLFLAG_RD,
 	    (void *)offsetof(i386_cpu_info_t, cpuid_stepping), sizeof(uint8_t),
 	    hw_cpu_sysctl, "I", "CPU stepping");
 
-SYSCTL_PROC(_machdep_cpu, OID_AUTO, feature_bits, CTLTYPE_INT | CTLFLAG_RD, 
-	    (void *)offsetof(i386_cpu_info_t, cpuid_features), sizeof(uint32_t),
+SYSCTL_PROC(_machdep_cpu, OID_AUTO, feature_bits, CTLTYPE_QUAD | CTLFLAG_RD, 
+	    (void *)offsetof(i386_cpu_info_t, cpuid_features), sizeof(uint64_t),
 	    hw_cpu_sysctl, "I", "CPU features");
+
+SYSCTL_PROC(_machdep_cpu, OID_AUTO, extfeature_bits, CTLTYPE_QUAD | CTLFLAG_RD, 
+	    (void *)offsetof(i386_cpu_info_t, cpuid_extfeatures), sizeof(uint64_t),
+	    hw_cpu_sysctl, "I", "CPU extended features");
 
 SYSCTL_PROC(_machdep_cpu, OID_AUTO, signature, CTLTYPE_INT | CTLFLAG_RD, 
 	    (void *)offsetof(i386_cpu_info_t, cpuid_signature), sizeof(uint32_t),
@@ -128,6 +142,22 @@ SYSCTL_PROC(_machdep_cpu, OID_AUTO, features, CTLTYPE_STRING | CTLFLAG_RD,
 	    0, 0,
 	    hw_cpu_features, "A", "CPU feature names");
 
+SYSCTL_PROC(_machdep_cpu, OID_AUTO, extfeatures, CTLTYPE_STRING | CTLFLAG_RD, 
+	    0, 0,
+	    hw_cpu_extfeatures, "A", "CPU extended feature names");
+
+SYSCTL_PROC(_machdep_cpu, OID_AUTO, logical_per_package,
+	    CTLTYPE_INT | CTLFLAG_RD, 
+	    (void *)offsetof(i386_cpu_info_t, cpuid_logical_per_package),
+	    sizeof(uint32_t),
+	    hw_cpu_sysctl, "I", "CPU logical cpus per package");
+
+SYSCTL_PROC(_machdep_cpu, OID_AUTO, cores_per_package,
+	    CTLTYPE_INT | CTLFLAG_RD, 
+	    (void *)offsetof(i386_cpu_info_t, cpuid_cores_per_package),
+	    sizeof(uint32_t),
+	    hw_cpu_sysctl, "I", "CPU cores per package");
+
 
 struct sysctl_oid *machdep_sysctl_list[] =
 {
@@ -135,16 +165,19 @@ struct sysctl_oid *machdep_sysctl_list[] =
     &sysctl__machdep_cpu_vendor,
     &sysctl__machdep_cpu_brand_string,
     &sysctl__machdep_cpu_model_string,
-    &sysctl__machdep_cpu_value,
     &sysctl__machdep_cpu_family,
     &sysctl__machdep_cpu_model,
     &sysctl__machdep_cpu_extmodel,
     &sysctl__machdep_cpu_extfamily,
     &sysctl__machdep_cpu_feature_bits,
+    &sysctl__machdep_cpu_extfeature_bits,
     &sysctl__machdep_cpu_stepping,
     &sysctl__machdep_cpu_signature,
     &sysctl__machdep_cpu_brand,
     &sysctl__machdep_cpu_features,
+    &sysctl__machdep_cpu_extfeatures,
+    &sysctl__machdep_cpu_logical_per_package,
+    &sysctl__machdep_cpu_cores_per_package,
     (struct sysctl_oid *) 0
 };
 

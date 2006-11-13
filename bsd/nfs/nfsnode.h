@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -132,6 +132,8 @@ struct nfsbuf {
 	struct ucred *		nb_wcred;	/* write credentials reference */
 	void *			nb_pagelist;	/* upl */
 };
+
+#define NFS_MAXBSIZE	(32 * PAGE_SIZE)	/* valid/dirty page masks limit buffer size */
 
 /*
  * These flags are kept in b_lflags... 

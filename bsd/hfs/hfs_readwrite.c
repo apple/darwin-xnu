@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -860,6 +860,18 @@ hfs_vnop_ioctl( struct vnop_ioctl_args /* {
 
 	switch (ap->a_command) {
 
+	case HFS_RESIZE_PROGRESS: {
+
+		vfsp = vfs_statfs(HFSTOVFS(hfsmp));
+		if (suser(cred, NULL) &&
+			kauth_cred_getuid(cred) != vfsp->f_owner) {
+			return (EACCES); /* must be owner of file system */
+		}
+		if (!vnode_isvroot(vp)) {
+			return (EINVAL);
+		}
+		return hfs_resize_progress(hfsmp, (u_int32_t *)ap->a_data);
+	}
 	case HFS_RESIZE_VOLUME: {
 		u_int64_t newsize;
 		u_int64_t cursize;
@@ -2557,7 +2569,8 @@ hfs_vnop_bwrite(struct vnop_bwrite_args *ap)
 	/* Trap B-Tree writes */
 	if ((VTOC(vp)->c_fileid == kHFSExtentsFileID) ||
 	    (VTOC(vp)->c_fileid == kHFSCatalogFileID) ||
-	    (VTOC(vp)->c_fileid == kHFSAttributesFileID)) {
+	    (VTOC(vp)->c_fileid == kHFSAttributesFileID) ||
+	    (vp == VTOHFS(vp)->hfc_filevp)) {
 
 		/* 
 		 * Swap and validate the node if it is in native byte order.
@@ -2826,10 +2839,10 @@ out:
 		lockflags = 0;
 	}
 
-	// See comment up above about calls to hfs_fsync()
-	//
-	//if (retval == 0)
-	//	retval = hfs_fsync(vp, MNT_WAIT, 0, p);
+	/* Push cnode's new extent data to disk. */
+	if (retval == 0) {
+		(void) hfs_update(vp, MNT_WAIT);
+	}
 
 	if (hfsmp->jnl) {
 		if (cp->c_cnid < kHFSFirstUserCatalogNodeID)
@@ -2923,7 +2936,7 @@ hfs_clonefile(struct vnode *vp, int blkstart, int blkcnt, int blksize)
 	filesize = VTOF(vp)->ff_blocks * blksize;  /* virtual file size */
 	writebase = blkstart * blksize;
 	copysize = blkcnt * blksize;
-	iosize = bufsize = MIN(copysize, 4096 * 16);
+	iosize = bufsize = MIN(copysize, 128 * 1024);
 	offset = 0;
 
 	if (kmem_alloc(kernel_map, (vm_offset_t *)&bufp, bufsize)) {

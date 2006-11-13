@@ -38,8 +38,9 @@
 
 extern vm_offset_t	io_map(
 				vm_offset_t		phys_addr,
-				vm_size_t		size);
-extern vm_offset_t io_map_spec(vm_offset_t phys_addr, vm_size_t size);
+				vm_size_t		size,
+				unsigned int            flags);
+extern vm_offset_t io_map_spec(vm_offset_t phys_addr, vm_size_t size, unsigned int flags);
 
 #endif	/* _PPC_IO_MAP_ENTRIES_H_ */
 

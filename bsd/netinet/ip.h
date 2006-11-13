@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -66,7 +66,7 @@
 #ifndef _NETINET_IP_H_
 #define _NETINET_IP_H_
 #include <sys/appleapiopts.h>
-#include <sys/types.h>>		/* XXX temporary hack to get u_ types */
+#include <sys/types.h>		/* XXX temporary hack to get u_ types */
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
 

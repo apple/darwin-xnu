@@ -120,7 +120,27 @@
 					~(I386_PGBYTES-1))
 #define i386_trunc_page(x)	(((pmap_paddr_t)(x)) & ~(I386_PGBYTES-1))
 
-#define VM_MAX_PAGE_ADDRESS     0x00000000C0000000ULL
+
+
+#define VM_MIN_ADDRESS64	((user_addr_t) 0x0000000000000000ULL)
+/*
+ * default top of user stack... it grows down from here
+ */
+#define VM_USRSTACK64		((user_addr_t) 0x00007FFF5FC00000ULL)
+#define VM_DYLD64		((user_addr_t) 0x00007FFF5FC00000ULL)
+#define VM_LIB64_SHR_DATA	((user_addr_t) 0x00007FFF60000000ULL)
+#define VM_LIB64_SHR_TEXT	((user_addr_t) 0x00007FFF80000000ULL)
+/*
+ * the end of the usable user address space , for now about 47 bits.
+ * the 64 bit commpage is past the end of this
+ */
+#define VM_MAX_PAGE_ADDRESS	((user_addr_t) 0x00007FFFFFE00000ULL)
+/*
+ * canonical end of user address space for limits checking
+ */
+#define VM_MAX_USER_PAGE_ADDRESS ((user_addr_t)0x00007FFFFFFFF000ULL)
+
+
 
 /* system-wide values */
 #define MACH_VM_MIN_ADDRESS		((mach_vm_offset_t) 0)
@@ -128,14 +148,29 @@
 
 /* process-relative values (all 32-bit legacy only for now) */
 #define VM_MIN_ADDRESS		((vm_offset_t) 0)
-#define VM_MAX_ADDRESS		((vm_offset_t) (VM_MAX_PAGE_ADDRESS & 0xFFFFFFFF))
+#define VM_USRSTACK32		((vm_offset_t) 0xC0000000)
+#define VM_MAX_ADDRESS		((vm_offset_t) 0xFFE00000)
+
+
+
 
 #ifdef	KERNEL_PRIVATE 
 
 /* Kernel-wide values */
-#define VM_MIN_KERNEL_ADDRESS	((vm_offset_t) 0xC0000000U)
-#define VM_MAX_KERNEL_ADDRESS	((vm_offset_t) 0xFfffffffU)
+#define VM_MIN_KERNEL_ADDRESS	((vm_offset_t) 0x00001000U)
+/*
+ * XXX
+ * The kernel max VM address is limited to 0xFF3FFFFF for now because
+ * some data structures are explicitly allocated at 0xFF400000 without
+ * VM's knowledge (see osfmk/i386/locore.s for the allocation of PTmap and co.).
+ * We can't let VM allocate memory from there.
+ */
+
+#define VM_MAX_KERNEL_ADDRESS	((vm_offset_t) 0xFE7FFFFF)
 #define KERNEL_STACK_SIZE		(I386_PGBYTES*4)
+
+#define VM_MAP_MIN_ADDRESS	MACH_VM_MIN_ADDRESS
+#define VM_MAP_MAX_ADDRESS	MACH_VM_MAX_ADDRESS
 
 /* FIXME  - always leave like this? */
 #define	INTSTACK_SIZE	(I386_PGBYTES*4)
@@ -147,10 +182,12 @@
 #define VM32_MIN_ADDRESS		((vm32_offset_t) 0)
 #define VM32_MAX_ADDRESS		((vm32_offset_t) (VM_MAX_PAGE_ADDRESS & 0xFFFFFFFF))
 
-#define LINEAR_KERNEL_ADDRESS	((vm_offset_t) 0xc0000000)
+#define LINEAR_KERNEL_ADDRESS	((vm_offset_t) 0x00000000)
 
-#define VM_MIN_KERNEL_LOADED_ADDRESS	((vm_offset_t) 0x0c000000U)
+#define VM_MIN_KERNEL_LOADED_ADDRESS	((vm_offset_t) 0x00000000U)
 #define VM_MAX_KERNEL_LOADED_ADDRESS	((vm_offset_t) 0x1fffffffU)
+
+#define NCOPY_WINDOWS	4
 
 /*
  *	Conversion between 80386 pages and VM pages
@@ -182,6 +219,9 @@
 		(wired)					\
 	 );						\
 	MACRO_END
+
+#define IS_USERADDR64_CANONICAL(addr)			\
+	((addr) < (VM_MAX_USER_PAGE_ADDRESS + PAGE_SIZE))
 
 #endif	/* MACH_KERNEL_PRIVATE */
 

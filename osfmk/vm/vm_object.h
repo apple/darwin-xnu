@@ -138,7 +138,7 @@ struct vm_object {
 						 * asserted.
 						 */
 
-	unsigned int		paging_in_progress;
+	int			paging_in_progress;
 						/* The memory object ports are
 						 * being used (e.g., for pagein
 						 * or pageout) -- don't change
@@ -279,6 +279,17 @@ struct vm_object {
 			not_in_use:24;
 #ifdef	UPL_DEBUG
 	queue_head_t		uplq;		/* List of outstanding upls */
+#ifdef	VM_PIP_DEBUG
+/*
+ * Keep track of the stack traces for the first holders
+ * of a "paging_in_progress" reference for this VM object.
+ */
+#define VM_PIP_DEBUG_STACK_FRAMES	25	/* depth of each stack trace */
+#define VM_PIP_DEBUG_MAX_REFS		10	/* track that many references */
+	struct __pip_backtrace {
+		void *pip_retaddr[VM_PIP_DEBUG_STACK_FRAMES];
+	} pip_holders[VM_PIP_DEBUG_MAX_REFS];
+#endif	/* VM_PIP_DEBUG  */
 #endif /* UPL_DEBUG */
 };
 
@@ -457,7 +468,8 @@ __private_extern__ boolean_t	vm_object_shadow(
 
 __private_extern__ void		vm_object_collapse(
 					vm_object_t		object,
-					vm_object_offset_t	offset);
+					vm_object_offset_t	offset,
+					boolean_t		can_bypass);
 
 __private_extern__ boolean_t	vm_object_copy_quickly(
 				vm_object_t		*_object,
@@ -568,9 +580,23 @@ __private_extern__ kern_return_t vm_object_populate_with_private(
 	ppnum_t			phys_page,
 	vm_size_t		size);
 
-__private_extern__ kern_return_t adjust_vm_object_cache(
+extern kern_return_t adjust_vm_object_cache(
 	vm_size_t oval,
 	vm_size_t nval);
+
+extern kern_return_t vm_object_page_op(
+	vm_object_t		object,
+	vm_object_offset_t	offset,
+	int			ops,
+	ppnum_t			*phys_entry,
+	int			*flags);
+
+extern kern_return_t vm_object_range_op(
+	vm_object_t		object,
+	vm_object_offset_t	offset_beg,
+	vm_object_offset_t	offset_end,
+	int                     ops,
+	int                     *range);
 
 /*
  *	Event waiting handling
@@ -620,15 +646,30 @@ __private_extern__ kern_return_t adjust_vm_object_cache(
 /*
  *	Routines implemented as macros
  */
+#ifdef VM_PIP_DEBUG
+extern unsigned OSBacktrace(void **bt, unsigned maxAddrs);
+#define VM_PIP_DEBUG_BEGIN(object)					\
+	MACRO_BEGIN							\
+	if ((object)->paging_in_progress < VM_PIP_DEBUG_MAX_REFS) {	\
+		int pip = (object)->paging_in_progress;			\
+		(void) OSBacktrace(&(object)->pip_holders[pip].retaddr[0], \
+				   VM_PIP_DEBUG_STACK_FRAMES);		\
+	}								\
+	MACRO_END
+#else	/* VM_PIP_DEBUG */
+#define VM_PIP_DEBUG_BEGIN(object)
+#endif	/* VM_PIP_DEBUG */
 
 #define		vm_object_paging_begin(object) 				\
 	MACRO_BEGIN							\
+	assert((object)->paging_in_progress >= 0);			\
+	VM_PIP_DEBUG_BEGIN((object));					\
 	(object)->paging_in_progress++;					\
 	MACRO_END
 
 #define		vm_object_paging_end(object) 				\
 	MACRO_BEGIN							\
-	assert((object)->paging_in_progress != 0);			\
+	assert((object)->paging_in_progress > 0);			\
 	if (--(object)->paging_in_progress == 0) {			\
 		vm_object_wakeup(object,				\
 			VM_OBJECT_EVENT_PAGING_IN_PROGRESS);		\

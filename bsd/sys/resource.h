@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -181,13 +181,9 @@ struct	rusage {
  * WARNING - keep in sync with struct timeval
  */
 
-#if __DARWIN_ALIGN_NATURAL
-#pragma options align=natural
-#endif
-
 struct user_rusage_timeval {
 	user_time_t		tv_sec;		/* seconds */
-	__darwin_suseconds_t	tv_usec;	/* and microseconds */
+	__darwin_suseconds_t	tv_usec __attribute((aligned(8)));	/* and microseconds */
 };	
 struct	user_rusage {
 	struct user_rusage_timeval ru_utime;	/* user time used */
@@ -207,10 +203,6 @@ struct	user_rusage {
 	user_long_t	ru_nvcsw;		/* voluntary context switches */
 	user_long_t	ru_nivcsw;		/* involuntary " */
 };
-
-#if __DARWIN_ALIGN_NATURAL
-#pragma options align=reset
-#endif
 
 #endif // KERNEL
 

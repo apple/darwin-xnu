@@ -12,7 +12,7 @@
 #  osfmk = [intel pc mach small event vol pst gdb fixpri simple_clock mkernserv uxpr kernstack ipc_compat ipc_debug mk30 mk30_i386]
 #  RELEASE = [intel pc iokit mach_pe mach mach_kdp small event vol hd pst gdb fixpri simple_clock mkernserv uxpr kernstack ipc_compat ipc_debug fb mk30 mk30_i386]
 #  DEBUG_KDP = [intel pc iokit mach_pe mach mach_kdp small event vol hd pst gdb fixpri simple_clock mkernserv uxpr kernstack ipc_compat ipc_debug fb mk30 mk30_i386 osf_debug debug]
-#  DEBUG= [intel pc iokit mach_pe mach mach_kdp small event vol hd pst gdb fixpri simple_clock mkernserv uxpr kernstack ipc_compat ipc_debug fb mk30 mk30_i386 osf_debug debug]
+#  DEBUG= [intel pc iokit mach_pe mach mach_kdp small event vol hd pst gdb fixpri simple_clock mkernserv uxpr kernstack ipc_compat ipc_debug fb mk30 mk30_i386 osf_debug debug mach_kdb]
 #  PROFILE = [ RELEASE profile ]
 #
 ######################################################################
@@ -48,7 +48,8 @@ options		MACH_BSD
 options         IOKIT		#				# <iokit>
 options         MACH_PE		#				# <mach_pe>
 
-#options	DDB		# Inline debugger		# <debug>
+options		DDB		# Inline debugger		# <debug>
+options		MACH_KDB	#				# <mach_kdb>
 options		MACH_KDP	# KDP				# <mach_kdp>
-#options		PAE
-
+options		PAE
+options		X86_64

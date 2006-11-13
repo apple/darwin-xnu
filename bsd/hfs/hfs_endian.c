@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -34,8 +34,6 @@
  * This file implements endian swapping routines for the HFS/HFS Plus
  * volume format.
  */
-
-#include <architecture/byte_order.h>
 
 #include "hfs_endian.h"
 #include "hfs_dbg.h"

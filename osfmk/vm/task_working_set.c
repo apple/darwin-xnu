@@ -1079,9 +1079,13 @@ tws_build_cluster(
 		return;
 
 	if (!object->internal) {
+		/* XXX FBDP !internal doesn't mean vnode pager */
 		kret = vnode_pager_get_object_size(
        		 	object->pager,
 			&object_size);
+		if (kret != KERN_SUCCESS) {
+			object_size = object->size;
+		}
 	} else {
 		object_size = object->size;
 	}

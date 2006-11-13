@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -87,13 +87,22 @@
 #define	ATP_XO_8MIN		4
 
 typedef struct {
+#if BYTE_ORDER == BIG_ENDIAN
         unsigned       cmd : 2,
                        xo : 1,
                        eom : 1,
                        sts : 1,
                        xo_relt : 3;
+#endif
+#if BYTE_ORDER == LITTLE_ENDIAN
+		unsigned		xo_relt : 3,
+						sts : 1,
+						eom : 1,
+						xo : 1,
+						cmd : 2;
+#endif
         u_char         bitmap;
-	ua_short       tid;
+		ua_short       tid;
         ua_long        user_bytes;
         u_char         data[ATP_DATA_SIZE];
 } at_atp_t;

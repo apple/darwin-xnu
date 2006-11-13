@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -185,7 +185,8 @@ struct extern_proc {
 #define	P_OWEUPC	0x00008000	/* Owe process an addupc() call at next ast. */
 
 #define	P_AFFINITY	0x00010000	/* xxx */
-#define	P_CLASSIC	0x00020000	/* xxx */
+#define	P_TRANSLATED	0x00020000	/* xxx */
+#define	P_CLASSIC	P_TRANSLATED	/* xxx */
 /*
 #define	P_FSTRACE	0x10000	/ * tracing via file system (elsewhere?) * /
 #define	P_SSTEP		0x20000	/ * process needs single-step fixup ??? * /

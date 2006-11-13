@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -386,26 +386,18 @@ struct fssearchblock {
  */
 // LP64todo - should this move?
 
-#if __DARWIN_ALIGN_NATURAL
-#pragma options align=natural
-#endif
-
 struct user_fssearchblock {
 	user_addr_t         returnattrs;
 	user_addr_t         returnbuffer;
 	user_size_t         returnbuffersize;
 	user_ulong_t        maxmatches;
-	struct timeval		timelimit;
-	user_addr_t         searchparams1;
+	struct user_timeval	timelimit;
+	user_addr_t         searchparams1 __attribute((aligned(8)));
 	user_size_t         sizeofsearchparams1;
 	user_addr_t         searchparams2;
 	user_size_t         sizeofsearchparams2;
 	struct attrlist		searchattrs;
 };
-
-#if __DARWIN_ALIGN_NATURAL
-#pragma options align=reset
-#endif
 
 
 #endif // KERNEL

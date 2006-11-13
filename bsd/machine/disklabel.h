@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -33,7 +33,7 @@
 
 #if defined (__ppc__) || defined (__ppc64__)
 #include "ppc/disklabel.h"
-#elif defined (__i386__)
+#elif defined (__i386__) || defined(__x86_64__)
 #include "i386/disklabel.h"
 #else
 #error architecture not supported

@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -223,7 +223,7 @@ buf_timestamp(void)
 int lru_is_stale = LRU_IS_STALE;
 int age_is_stale = AGE_IS_STALE;
 int meta_is_stale = META_IS_STALE;
-
+static int boot_nbuf = 0;
 
 
 /* LIST_INSERT_HEAD() with assertions */
@@ -241,15 +241,19 @@ blistenterhead(struct bufhashhdr * head, buf_t bp)
 static __inline__ void 
 binshash(buf_t bp, struct bufhashhdr *dp)
 {
+#if DIAGNOSTIC
 	buf_t	nbp;
+#endif /* DIAGNOSTIC */
 
 	BHASHENTCHECK(bp);
 
+#if DIAGNOSTIC
 	nbp = dp->lh_first;
 	for(; nbp != NULL; nbp = nbp->b_hash.le_next) {
 		if(nbp == bp) 
 			panic("buf already in hashlist");
 	}
+#endif /* DIAGNOSTIC */
 
 	blistenterhead(dp, bp);
 }
@@ -1379,15 +1383,17 @@ bufinit()
 	int	metabuf;
 	long	whichq;
 
+	nbuf = 0;
 	/* Initialize the buffer queues ('freelists') and the hash table */
 	for (dp = bufqueues; dp < &bufqueues[BQUEUES]; dp++)
 		TAILQ_INIT(dp);
-	bufhashtbl = hashinit(nbuf, M_CACHE, &bufhash);
+	bufhashtbl = hashinit(nbuf_hashelements, M_CACHE, &bufhash);
 
-	metabuf = nbuf/8; /* reserved for meta buf */
+	metabuf = max_nbuf_headers/8; /* reserved for meta buf */
 
 	/* Initialize the buffer headers */
-	for (i = 0; i < nbuf; i++) {
+	for (i = 0; i < max_nbuf_headers; i++) {
+		nbuf++;
 		bp = &buf[i];
 		bufhdrinit(bp);
 
@@ -1406,24 +1412,24 @@ bufinit()
 		binshash(bp, &invalhash);
 	}
 
+	boot_nbuf = nbuf;
+
 	for (; i < nbuf + niobuf; i++) {
 		bp = &buf[i];
 		bufhdrinit(bp);
 		binsheadfree(bp, &iobufqueue, -1);
 	}
 
-        /*
+    /*
 	 * allocate lock group attribute and group
 	 */
-        buf_mtx_grp_attr = lck_grp_attr_alloc_init();
-	//lck_grp_attr_setstat(buf_mtx_grp_attr);
+    buf_mtx_grp_attr = lck_grp_attr_alloc_init();
 	buf_mtx_grp = lck_grp_alloc_init("buffer cache", buf_mtx_grp_attr);
 		
 	/*
 	 * allocate the lock attribute
 	 */
 	buf_mtx_attr = lck_attr_alloc_init();
-	//lck_attr_setdebug(buf_mtx_attr);
 
 	/*
 	 * allocate and initialize mutex's for the buffer and iobuffer pools
@@ -2499,7 +2505,7 @@ allocbuf(buf_t bp, int size)
 						bp->b_datap = (uintptr_t)zalloc(z);
 					} else {
 					        bp->b_datap = (uintptr_t)NULL;
-					        kmem_alloc(kernel_map, (vm_offset_t *)&bp->b_datap, desired_size);
+					        kmem_alloc_wired(kernel_map, (vm_offset_t *)&bp->b_datap, desired_size);
 						CLR(bp->b_flags, B_ZALLOC);
 					}
 					bcopy((void *)elem, (caddr_t)bp->b_datap, bp->b_bufsize);
@@ -2512,7 +2518,7 @@ allocbuf(buf_t bp, int size)
 				if ((vm_size_t)bp->b_bufsize < desired_size) {
 					/* reallocate to a bigger size */
 				        bp->b_datap = (uintptr_t)NULL;
-					kmem_alloc(kernel_map, (vm_offset_t *)&bp->b_datap, desired_size);
+					kmem_alloc_wired(kernel_map, (vm_offset_t *)&bp->b_datap, desired_size);
 					bcopy((const void *)elem, (caddr_t)bp->b_datap, bp->b_bufsize);
 					kmem_free(kernel_map, elem, bp->b_bufsize); 
 				} else {
@@ -2527,7 +2533,7 @@ allocbuf(buf_t bp, int size)
 				bp->b_datap = (uintptr_t)zalloc(z);
 				SET(bp->b_flags, B_ZALLOC);
 			} else
-				kmem_alloc(kernel_map, (vm_offset_t *)&bp->b_datap, desired_size);
+				kmem_alloc_wired(kernel_map, (vm_offset_t *)&bp->b_datap, desired_size);
 		}
 	}
 	bp->b_bufsize = desired_size;
@@ -2575,6 +2581,16 @@ start:
 	if ((*queue > BQUEUES) || (*queue < 0)
 		|| (*queue == BQ_LAUNDRY) || (*queue == BQ_LOCKED))
 		*queue = BQ_EMPTY;
+	/* need to grow number of bufs, add another one rather than recycling */
+	if (nbuf < max_nbuf_headers) {
+		/*
+		 * Increment  count now as lock 
+		 * is dropped for allocation.
+		 * That avoids over commits
+		 */
+		nbuf++;
+		goto add_newbufs;
+	}
 
 	/*
 	 * (*queue == BQUEUES) means no preference
@@ -2601,6 +2617,13 @@ start:
 			*queue = BQ_EMPTY;
 			goto found;
 		}
+		/*
+		 * We have seen is this is hard to trigger.
+		 * This is an overcommit of nbufs but needed 
+		 * in some scenarios with diskiamges
+		 */
+
+add_newbufs:
 		lck_mtx_unlock(buf_mtxp);
 
 		/* Create a new temporary buffer header */
@@ -2618,6 +2641,9 @@ start:
 			buf_hdr_count++;
 			goto found;
 		}
+		/* subtract already accounted bufcount */
+		nbuf--;
+
 		bufstats.bufs_sleeps++;
 
 		/* wait for a free buffer of any kind */
@@ -2627,7 +2653,6 @@ start:
 		/* the hz value is 100; which leads to 10ms */
 		ts.tv_nsec = (slptimeo % 1000) * NSEC_PER_USEC * 1000 * 10;
 		msleep(&needbuffer, buf_mtxp, slpflag|(PRIBIO+1), (char *)"getnewbuf", &ts);
-
 		return (0);
 	}
 
@@ -3121,9 +3146,12 @@ count_busy_buffers(void)
 	buf_t	bp;
 	int	nbusy = 0;
 
-	for (bp = &buf[nbuf]; --bp >= buf; )
+	lck_mtx_lock(buf_mtxp);
+	for (bp = &buf[boot_nbuf]; --bp >= buf; )
 	        if (!ISSET(bp->b_flags, B_INVAL) && ISSET(bp->b_lflags, BL_BUSY))
 			nbusy++;
+	lck_mtx_unlock(buf_mtxp);
+
 	return (nbusy);
 }
 

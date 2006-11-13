@@ -87,6 +87,9 @@ extern kern_return_t vm_map_create_upl(
 	unsigned int		*count,
 	int			*flags);
 
+extern ppnum_t upl_get_highest_page(
+	upl_t			upl);
+
 #ifdef	MACH_KERNEL_PRIVATE
 
 #include <vm/vm_page.h>
@@ -148,6 +151,7 @@ struct upl {
 	upl_size_t	size;	    /* size in bytes of the address space */
 	vm_offset_t	kaddr;      /* secondary mapping in kernel */
 	vm_object_t	map_object;
+	ppnum_t		highest_page;
 #ifdef	UPL_DEBUG
 	unsigned int	ubc_alias1;
 	unsigned int	ubc_alias2;

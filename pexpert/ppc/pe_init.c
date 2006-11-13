@@ -39,6 +39,7 @@
 #include <pexpert/pe_images.h>
 #include <kern/debug.h>
 #include <kern/sched_prim.h>
+#include <vm/pmap.h>
 
 
 /* extern references */

@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -190,6 +190,7 @@ struct	proc {
 	u_char	p_usrpri;	/* User-priority based on p_cpu and p_nice. */
 	char	p_nice;		/* Process "nice" value. */
 	char	p_comm[MAXCOMLEN+1];
+	char	p_name[(2*MAXCOMLEN)+1];
 
 	struct 	pgrp *p_pgrp;	/* Pointer to process group. */
 
@@ -252,6 +253,7 @@ struct	proc {
 #define P_LREFDRAIN		0x40
 #define P_LREFDRAINWAIT		0x80
 #define P_LREFDEAD		0x100
+#define P_LTHSIGSTACK	0x200
 
 /* advisory flags in the proc */
 #define P_LADVLOCK		0x01
@@ -265,10 +267,6 @@ struct	proc {
 
 #ifdef KERNEL
 #include <sys/time.h>	/* user_timeval, user_itimerval */
-
-#if __DARWIN_ALIGN_NATURAL
-#pragma options align=natural
-#endif
 
 struct user_extern_proc {
 	union {
@@ -286,7 +284,7 @@ struct user_extern_proc {
 	pid_t	p_oppid;		/* Save parent pid during ptrace. XXX */
 	int		p_dupfd;		/* Sideways return value from fdopen. XXX */
 	/* Mach related  */
-	user_addr_t user_stack;	/* where user stack was allocated */
+	user_addr_t user_stack __attribute((aligned(8)));	/* where user stack was allocated */
 	user_addr_t exit_thread;  /* XXX Which thread is exiting? */
 	int		p_debugger;		/* allow to debug */
 	boolean_t	sigwait;	/* indication to suspend */
@@ -294,7 +292,7 @@ struct user_extern_proc {
 	u_int	p_estcpu;	 /* Time averaged value of p_cpticks. */
 	int		p_cpticks;	 /* Ticks of cpu time. */
 	fixpt_t	p_pctcpu;	 /* %cpu for this process during p_swtime */
-	user_addr_t	p_wchan;	 /* Sleep address. */
+	user_addr_t	p_wchan __attribute((aligned(8)));	 /* Sleep address. */
 	user_addr_t	p_wmesg;	 /* Reason for sleep. */
 	u_int	p_swtime;	 /* Time swapped in or out. */
 	u_int	p_slptime;	 /* Time since last blocked. */
@@ -304,9 +302,9 @@ struct user_extern_proc {
 	u_quad_t p_sticks;		/* Statclock hits in system mode. */
 	u_quad_t p_iticks;		/* Statclock hits processing intr. */
 	int		p_traceflag;		/* Kernel trace points. */
-	user_addr_t	p_tracep;	/* Trace to vnode. */
+	user_addr_t	p_tracep __attribute((aligned(8)));	/* Trace to vnode. */
 	int		p_siglist;		/* DEPRECATED */
-	user_addr_t	p_textvp;	/* Vnode of executable. */
+	user_addr_t	p_textvp __attribute((aligned(8)));	/* Vnode of executable. */
 	int		p_holdcnt;		/* If non-zero, don't swap. */
 	sigset_t p_sigmask;	/* DEPRECATED. */
 	sigset_t p_sigignore;	/* Signals being ignored. */
@@ -315,16 +313,12 @@ struct user_extern_proc {
 	u_char	p_usrpri;	/* User-priority based on p_cpu and p_nice. */
 	char	p_nice;		/* Process "nice" value. */
 	char	p_comm[MAXCOMLEN+1];
-	user_addr_t	p_pgrp;	/* Pointer to process group. */
+	user_addr_t	p_pgrp __attribute((aligned(8)));	/* Pointer to process group. */
 	user_addr_t	p_addr;	/* Kernel virtual addr of u-area (PROC ONLY). */
 	u_short	p_xstat;	/* Exit status for wait; also stop signal. */
 	u_short	p_acflag;	/* Accounting flags. */
-	user_addr_t	p_ru;	/* Exit information. XXX */
+	user_addr_t	p_ru __attribute((aligned(8)));	/* Exit information. XXX */
 };
-
-#if __DARWIN_ALIGN_NATURAL
-#pragma options align=reset
-#endif
 #endif	/* KERNEL */
 
 /*
@@ -332,6 +326,7 @@ struct user_extern_proc {
  * as it is used to represent "no process group".
  */
 extern int nprocs, maxproc;		/* Current and max number of procs. */
+extern int maxprocperuid;		/* Current number of procs per uid */
 __private_extern__ int hard_maxproc;	/* hard limit */
 
 #define	PID_MAX		30000

@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -152,4 +152,4 @@ int	arpresolve(struct ifnet *, struct rtentry *, struct mbuf *,
 void	arp_ifinit(struct ifnet *, struct ifaddr *);
 #endif KERNEL_PRIVATE
 
-#endif _NETINET_IF_ETHER_H_
+#endif /* _NETINET_IF_ETHER_H_ */

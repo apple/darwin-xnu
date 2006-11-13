@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -817,27 +817,6 @@ err_pageout(struct vnop_pageout_args *ap)
 {
         if ( !(ap->a_flags & UPL_NOCOMMIT))
 	        ubc_upl_abort_range(ap->a_pl, ap->a_pl_offset, ap->a_size, UPL_ABORT_FREE_ON_EMPTY | UPL_ABORT_ERROR);
-	return (ENOTSUP);
-}
-
-
-struct vnop_devblocksize_args /* {
-	struct vnode *a_vp;
-	register_t *a_retval;
-} */;
-
-int
-nop_devblocksize(struct vnop_devblocksize_args *ap)
-{
-	/* XXX default value because the call sites do not check error */
-	*ap->a_retval = 512;
-	return (0);
-}
-
-int
-err_devblocksize(struct vnop_devblocksize_args *ap)
-{
-	(void)nop_devblocksize(ap);
 	return (ENOTSUP);
 }
 

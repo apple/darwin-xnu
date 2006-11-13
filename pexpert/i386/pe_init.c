@@ -39,6 +39,7 @@
 #include <pexpert/device_tree.h>
 #include <pexpert/pe_images.h>
 #include <kern/sched_prim.h>
+#include <kern/debug.h>
 
 #include "fakePPCStructs.h"
 #include "fakePPCDeviceTree.h"
@@ -47,9 +48,6 @@
 /* extern references */
 extern void pe_identify_machine(void * args);
 extern void initialize_screen(void *, unsigned int);
-
-/* Local references */
-static int         PE_fb_mode  = TEXT_MODE;
 
 /* private globals */
 PE_state_t  PE_state;
@@ -60,6 +58,9 @@ dt_data     gCompatibleProp;
 
 /* Clock Frequency Info */
 clock_frequency_info_t gPEClockFrequencyInfo;
+
+void *gPEEFISystemTable     = 0;
+void *gPEEFIRuntimeServices = 0;
 
 int PE_initialize_console( PE_Video * info, int op )
 {
@@ -80,7 +81,7 @@ int PE_initialize_console( PE_Video * info, int op )
         bootInfo.v_depth     = info->v_depth;
         bInfo = &bootInfo;
         if (info == &PE_state.video) {
-            bootInfo.v_display  = PE_fb_mode;
+            bootInfo.v_display   = info->v_display;
         } else {
             bootInfo.v_display  = GRAPHICS_MODE;
         }
@@ -92,19 +93,16 @@ int PE_initialize_console( PE_Video * info, int op )
 
         case kPEDisableScreen:
             initialize_screen((void *) bInfo, op);
-#ifdef FIXME
-            last_console = switch_to_serial_console();
-#endif
             kprintf("kPEDisableScreen %d\n", last_console);
+	    if (!console_is_serial())
+		last_console = switch_to_serial_console();
             break;
 
         case kPEEnableScreen:
             initialize_screen((void *) bInfo, op);
             kprintf("kPEEnableScreen %d\n", last_console);
-#ifdef FIXME
             if( last_console != -1)
                 switch_to_old_console( last_console);
-#endif
             break;
 	
         default:
@@ -117,11 +115,7 @@ int PE_initialize_console( PE_Video * info, int op )
 
 void PE_init_iokit(void)
 {
-    long * dt;
-    int    i;
-    KernelBootArgs_t *kap = (KernelBootArgs_t *)PE_state.bootArgs;
     enum { kMaxBootVar = 128 };
-    char *rdValue, *platformValue;
         
     typedef struct {
         char            name[32];
@@ -129,98 +123,50 @@ void PE_init_iokit(void)
         unsigned long   value[2];
     } DriversPackageProp;
 
+    boolean_t bootClutInitialized = FALSE;
+    boolean_t norootInitialized = FALSE;
+    DTEntry             entry;
+    int			size;
+    void **		map;
+
     PE_init_kprintf(TRUE);
     PE_init_printf(TRUE);
 
-    /*
-     * Update the fake device tree with the driver information provided by
-     * the booter.
-     */
-
-    gDriversProp.length   = kap->numBootDrivers * sizeof(DriversPackageProp);
-    gMemoryMapNode.length = 2 * sizeof(long);
-
-    rdValue = kalloc(kMaxBootVar);
-    if ( PE_parse_boot_arg("rd", rdValue) ) {
-        if (*rdValue == '*') {
-            gRootpathProp.address = (rdValue + 1);
-        } else {
-            gRootpathProp.address = rdValue;
-        }
-        strcat(rdValue, ",");
-    } else {
-        gRootpathProp.address = rdValue;
-        rdValue[0] = '\0';
-    }
-    strcat(rdValue, kap->bootFile);
-    gRootpathProp.length = strlen(rdValue) + 1;
-
-    platformValue = kalloc(kMaxBootVar);
-    if ( ! PE_parse_boot_arg("platform", platformValue) ) {
-        strcpy(platformValue, kDefaultPlatformName);
-    }
-    gCompatibleProp.address = platformValue;
-    gCompatibleProp.length = strlen(platformValue) + 1;
-
-    dt = (long *) createdt( fakePPCDeviceTree,
-            	  &((boot_args*)PE_state.fakePPCBootArgs)->deviceTreeLength );
-
-    kfree(rdValue, kMaxBootVar);
-    kfree(platformValue, kMaxBootVar);
-
-
-    if ( dt )
-    {
-        DriversPackageProp * prop = (DriversPackageProp *) gDriversProp.address;
-
-        /* Copy driver info in kernBootStruct to fake device tree */
-
-        for ( i = 0; i < kap->numBootDrivers; i++, prop++ )
-        {
-            switch ( kap->driverConfig[i].type )
-            {
-                case kBootDriverTypeKEXT:
-                    sprintf(prop->name, "Driver-%lx", kap->driverConfig[i].address);
-                    break;
-                
-                 case kBootDriverTypeMKEXT:
-                    sprintf(prop->name, "DriversPackage-%lx", kap->driverConfig[i].address);
-                    break;
-
-                default:
-                    sprintf(prop->name, "DriverBogus-%lx", kap->driverConfig[i].address);
-                    break;
-            }
-            prop->length   = sizeof(prop->value);
-            prop->value[0] = kap->driverConfig[i].address;
-            prop->value[1] = kap->driverConfig[i].size;
-        }
-
-        *((long *)gMemoryMapNode.address) = kap->numBootDrivers + 1;
-    }
-
-    /* Setup powermac_info and powermac_machine_info structures */
-
-    ((boot_args*)PE_state.fakePPCBootArgs)->deviceTreeP	= (unsigned long *) dt;
-    ((boot_args*)PE_state.fakePPCBootArgs)->topOfKernelData = (unsigned long) kalloc(0x2000);
-
-    /* 
-     * Setup the OpenFirmware Device Tree routines
-     * so the console can be found and the right I/O space 
-     * can be used..
-     */
-    DTInit(dt);
+    kprintf("Kernel boot args: '%s'\n", PE_boot_args());
 
     /*
      * Fetch the CLUT and the noroot image.
      */
-    bcopy( (void *) (uintptr_t) bootClut, (void *) appleClut8, sizeof(appleClut8) );
+	boot_progress_element * bootPict;
 
+    if( kSuccess == DTLookupEntry(0, "/chosen/memory-map", &entry)) {
+	if( kSuccess == DTGetProperty(entry, "BootCLUT", (void **) &map, &size)) {
+	    bcopy( map[0], appleClut8, sizeof(appleClut8) );
+            bootClutInitialized = TRUE;
+        }
+
+	if( kSuccess == DTGetProperty(entry, "Pict-FailedBoot", (void **) &map, &size)) {
+	    bootPict = (boot_progress_element *) map[0];
+	    default_noroot.width  = bootPict->width;
+	    default_noroot.height = bootPict->height;
+	    default_noroot.dx     = 0;
+	    default_noroot.dy     = bootPict->yOffset;
+	    default_noroot_data   = &bootPict->data[0];
+            norootInitialized = TRUE;
+	}
+    }
+
+    if (!bootClutInitialized) {
+    bcopy( (void *) (uintptr_t) bootClut, (void *) appleClut8, sizeof(appleClut8) );
+    }
+
+    if (!norootInitialized) {
     default_noroot.width  = kFailedBootWidth;
     default_noroot.height = kFailedBootHeight;
     default_noroot.dx     = 0;
     default_noroot.dy     = kFailedBootOffset;
     default_noroot_data   = failedBootPict;
+    }
     
     /*
      * Initialize the panic UI
@@ -233,53 +179,50 @@ void PE_init_iokit(void)
     vc_progress_initialize( &default_progress, default_progress_data,
                             (unsigned char *) appleClut8 );
 
-    (void) StartIOKit( (void*)dt, PE_state.bootArgs, 0, 0);
+    (void) StartIOKit( PE_state.deviceTreeHead, PE_state.bootArgs, gPEEFIRuntimeServices, 0);
 }
 
-void PE_init_platform(boolean_t vm_initialized, void * args)
+void PE_init_platform(boolean_t vm_initialized, void * _args)
 {
-	if (PE_state.initialized == FALSE)
-	{
-	    KernelBootArgs_t *kap = (KernelBootArgs_t *) args;
+    boot_args *args = (boot_args *)_args;
 
+    if (PE_state.initialized == FALSE) {
 	    PE_state.initialized        = TRUE;
-	    PE_state.bootArgs           = args;
-	    PE_state.video.v_baseAddr   = kap->video.v_baseAddr;
-	    PE_state.video.v_rowBytes   = kap->video.v_rowBytes;
-	    PE_state.video.v_height     = kap->video.v_height;
-	    PE_state.video.v_width      = kap->video.v_width;
-	    PE_state.video.v_depth      = kap->video.v_depth;
-	    PE_state.video.v_display    = kap->video.v_display;
-	    PE_fb_mode                  = kap->graphicsMode;
-	    PE_state.fakePPCBootArgs    = (boot_args *)&fakePPCBootArgs;
-	    ((boot_args *)PE_state.fakePPCBootArgs)->machineType	= 386;
 
-        if (PE_fb_mode == TEXT_MODE)
-        {
-            /* Force a text display if the booter did not setup a
-             * VESA frame buffer.
-             */
-            PE_state.video.v_display = 0;
-        }
+        // New EFI-style
+        PE_state.bootArgs           = _args;
+        PE_state.deviceTreeHead	    = args->deviceTreeP;
+        PE_state.video.v_baseAddr   = args->Video.v_baseAddr;
+        PE_state.video.v_rowBytes   = args->Video.v_rowBytes;
+        PE_state.video.v_width	    = args->Video.v_width;
+        PE_state.video.v_height	    = args->Video.v_height;
+        PE_state.video.v_depth	    = args->Video.v_depth;
+        PE_state.video.v_display    = args->Video.v_display;
+        strcpy( PE_state.video.v_pixelFormat, "PPPPPPPP");
     }
 
-    if (!vm_initialized)
-    {
+    if (!vm_initialized) {
 		/* Hack! FIXME.. */ 
         outb(0x21, 0xff);   /* Maskout all interrupts Pic1 */
         outb(0xa1, 0xff);   /* Maskout all interrupts Pic2 */
  
-        pe_identify_machine(args);
+        if (PE_state.deviceTreeHead) {
+            DTInit(PE_state.deviceTreeHead);
     }
-    else
-    {
+
+        pe_identify_machine(args);
+    } else {
+        DTEntry entry;
+        void *ptr;
+        uint32_t size;
+
         pe_init_debug();
     }
 }
 
 void PE_create_console( void )
 {
-    if ( PE_state.video.v_display )
+    if ( PE_state.video.v_display == GRAPHICS_MODE )
         PE_initialize_console( &PE_state.video, kPEGraphicsMode );
     else
         PE_initialize_console( &PE_state.video, kPETextMode );
@@ -288,22 +231,6 @@ void PE_create_console( void )
 int PE_current_console( PE_Video * info )
 {
     *info = PE_state.video;
-
-    if ( PE_fb_mode == TEXT_MODE )
-    {
-        /*
-         * FIXME: Prevent the IOBootFrameBuffer from starting up
-         * when we are in Text mode.
-         */
-        info->v_baseAddr = 0;
-        
-        /*
-         * Scale the size of the text screen from characters
-         * to pixels.
-         */
-        info->v_width  *= 8;   // CHARWIDTH
-        info->v_height *= 16;  // CHARHEIGHT
-    }
 
     return (0);
 }

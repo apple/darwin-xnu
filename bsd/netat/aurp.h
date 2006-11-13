@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -34,6 +34,8 @@
  *
  *	File: aurp.h
  */
+
+#ifdef AURP_SUPPORT
 
 #ifndef _NETAT_AURP_H_
 #define	_NETAT_AURP_H_
@@ -174,9 +176,6 @@ typedef struct {
 	unsigned short flags;
 } aurp_hdr_t;
 
-#ifdef AURP_SUPPORT
-
-extern atlock_t aurpgen_lock;
 extern gref_t *aurp_gref;
 extern unsigned char dst_addr_cnt;
 extern unsigned char net_access_cnt;
@@ -186,7 +185,6 @@ extern int net_port;
 extern int update_tmo;
 extern aurp_state_t aurp_state[];
 extern unsigned short net_access[];
-#endif
 
 struct myq
 {	struct mbuf *q_head;
@@ -194,7 +192,6 @@ struct myq
 	int q_cnt;
 };
 
-#define LOCK_DECL(x)	atlock_t x
 
 #include <sys/uio_internal.h>
 
@@ -297,3 +294,5 @@ extern struct aurp_global_t aurp_global;
 #endif /* KERNEL_PRIVATE */
 #endif /* __APPLE_API_OBSOLETE */
 #endif /* _NETAT_AURP_H_ */
+
+#endif  /* AURP_SUPPORT */

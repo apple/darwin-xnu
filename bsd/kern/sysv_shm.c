@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -837,12 +837,10 @@ sysv_shm_lock_init( void )
 {
 
 	sysv_shm_subsys_lck_grp_attr = lck_grp_attr_alloc_init();
-	lck_grp_attr_setstat(sysv_shm_subsys_lck_grp_attr);
 	
 	sysv_shm_subsys_lck_grp = lck_grp_alloc_init("sysv_shm_subsys_lock", sysv_shm_subsys_lck_grp_attr);
 	
 	sysv_shm_subsys_lck_attr = lck_attr_alloc_init();
-	/* lck_attr_setdebug(sysv_shm_subsys_lck_attr); */
 	lck_mtx_init(&sysv_shm_subsys_mutex, sysv_shm_subsys_lck_grp, sysv_shm_subsys_lck_attr);
 }
 
@@ -855,14 +853,14 @@ sysctl_shminfo(__unused struct sysctl_oid *oidp, void *arg1,
 	int error = 0;
 	int sysctl_shminfo_ret = 0;
 
-	error = SYSCTL_OUT(req, arg1, sizeof(user_ssize_t));
+	error = SYSCTL_OUT(req, arg1, sizeof(int64_t));
 	if (error || req->newptr == USER_ADDR_NULL)
 		return(error);
 
 	SYSV_SHM_SUBSYS_LOCK();
 	/* Set the values only if shared memory is not initialised */
 	if (!shm_inited) {
-		if ((error = SYSCTL_IN(req, arg1, sizeof(user_ssize_t))) 
+		if ((error = SYSCTL_IN(req, arg1, sizeof(int64_t))) 
 		    != 0) {
 			sysctl_shminfo_ret = error;
 			goto sysctl_shminfo_out;
@@ -870,18 +868,18 @@ sysctl_shminfo(__unused struct sysctl_oid *oidp, void *arg1,
 
 		if (arg1 == &shminfo.shmmax) {
 			if (shminfo.shmmax & PAGE_MASK_64) {
-				shminfo.shmmax = (user_ssize_t)-1;
+				shminfo.shmmax = (int64_t)-1;
 				sysctl_shminfo_ret = EINVAL;
 				goto sysctl_shminfo_out;
 			}
 		}
 
 		/* Initialize only when all values are set */
-		if ((shminfo.shmmax != (user_ssize_t)-1) &&
-			(shminfo.shmmin != (user_ssize_t)-1) &&	
-			(shminfo.shmmni != (user_ssize_t)-1) &&
-			(shminfo.shmseg != (user_ssize_t)-1) &&
-			(shminfo.shmall != (user_ssize_t)-1)) {
+		if ((shminfo.shmmax != (int64_t)-1) &&
+			(shminfo.shmmin != (int64_t)-1) &&	
+			(shminfo.shmmni != (int64_t)-1) &&
+			(shminfo.shmseg != (int64_t)-1) &&
+			(shminfo.shmall != (int64_t)-1)) {
 				shminit(NULL);
 		}
 	}

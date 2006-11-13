@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -1619,12 +1619,10 @@ bpf_init(__unused void *unused)
 		bpf_devsw_installed = 1;
 
         bpf_mlock_grp_attr = lck_grp_attr_alloc_init();
-        lck_grp_attr_setdefault(bpf_mlock_grp_attr);
 
         bpf_mlock_grp = lck_grp_alloc_init("bpf", bpf_mlock_grp_attr);
 
         bpf_mlock_attr = lck_attr_alloc_init();
-        lck_attr_setdefault(bpf_mlock_attr);
 
         bpf_mlock = lck_mtx_alloc_init(bpf_mlock_grp, bpf_mlock_attr);
 

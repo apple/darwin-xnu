@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -603,4 +603,4 @@ u_long	in_netof(struct in_addr);
 const char	*inet_ntop(int, const void *, char *, size_t); /* in libkern */
 #endif /* KERNEL */
 
-#endif _NETINET_IN_H_
+#endif /* _NETINET_IN_H_ */

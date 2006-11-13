@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -193,7 +193,7 @@ ether_pre_output(
 	eh = (struct ether_header *)dst_netaddr->sa_data;
 	bcopy((caddr_t)eh->ether_dhost, (caddr_t)edst, 6);
 		
-	*(u_short *)type = m->m_pkthdr.len;
+	*(u_short *)type = htons(m->m_pkthdr.len);
     }
     break;
 

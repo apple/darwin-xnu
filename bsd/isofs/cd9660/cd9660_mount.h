@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -100,20 +100,12 @@ struct iso_args {
  */
 /* LP64todo - should this move? */
 
-#if __DARWIN_ALIGN_NATURAL
-#pragma options align=natural
-#endif
-
 struct user_iso_args {
 	int	flags;			/* mounting flags, see below */
 	int	ssector;		/* starting sector, 0 for 1st session */
 	int	toc_length;		/* Size of *toc, including the toc.length field */
-	user_addr_t toc;
+	user_addr_t toc __attribute((aligned(8)));
 };
-
-#if __DARWIN_ALIGN_NATURAL
-#pragma options align=reset
-#endif
 
 #endif /* KERNEL */
 

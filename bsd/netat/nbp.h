@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -99,8 +99,16 @@
 #define	NBP_HDR_SIZE	2
 
 typedef struct at_nbp {
-        unsigned      	control : 4,
-        	      	tuple_count : 4;
+#if BYTE_ORDER == BIG_ENDIAN
+        unsigned      	
+        	control : 4,
+        	tuple_count : 4;
+#endif
+#if BYTE_ORDER == LITTLE_ENDIAN
+		unsigned
+			tuple_count : 4,
+			control : 4;
+#endif
 	u_char		at_nbp_id;
 	at_nbptuple_t	tuple[NBP_TUPLE_MAX];
 } at_nbp_t;

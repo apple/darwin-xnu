@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -74,8 +74,6 @@ unsigned char adspAssignSocket();
 int adspallocate(), adsprelease();
 int adspInited = 0;
 
-atlock_t adspall_lock;
-atlock_t adspgen_lock;
 GLOBAL adspGlobal;
 
 /**********/
@@ -94,17 +92,14 @@ void adsp_input(mp)
 	gref_t *gref;
 	CCBPtr sp;
 	at_ddp_t *p;
-	int s, l;
 	gbuf_t *mb;
 
 	switch (gbuf_type(mp)) {
 	case MSG_DATA:
 		p = (at_ddp_t *)gbuf_rptr(mp);
-		ATDISABLE(s, adspall_lock);
 		sp = adsp_inputQ[p->dst_socket];
 		if ((sp == 0) || (sp->gref==0) || (sp->state==sClosed))
 		{
-			ATENABLE(s, adspall_lock);
 			gbuf_freem(mp);
 			return;
 		}
@@ -117,7 +112,6 @@ void adsp_input(mp)
 			} while ((sp = sp->otccbLink) != 0);
 			if (sp == 0)
 			{
-				ATENABLE(s, adspall_lock);
 				gbuf_freem(mp);
 				return;
 			}
@@ -129,12 +123,9 @@ void adsp_input(mp)
 				gbuf_next(mb) = mp;
 			} else
 				sp->deferred_mb = mp;
-			ATENABLE(s, adspall_lock);
 			return;
 		}
-		ATDISABLE(l, sp->lockRemove);
 		sp->lockFlag = 1;
-		ATENABLE(l, adspall_lock);
 		while (mp) {
 			adsp_rput(sp->gref, mp);
 			if ((mp = sp->deferred_mb) != 0) {
@@ -143,7 +134,6 @@ void adsp_input(mp)
 			}
 		}
 		sp->lockFlag = 0;
-		ATENABLE(s, sp->lockRemove);
 		return;
 
 	case MSG_IOCACK:
@@ -193,7 +183,7 @@ int adsp_readable(gref)
 int adsp_writeable(gref)
 	gref_t *gref;
 {
-	int s, rc;
+	int rc;
 	CCBPtr sp;
 
 	if (gref->info == 0)
@@ -209,9 +199,7 @@ int adsp_writeable(gref)
 	        return(1);
 
 	sp = (CCBPtr)gbuf_rptr(((gbuf_t *)gref->info));
-	ATDISABLE(s, sp->lock);
 	rc = CalcSendQFree(sp);
-	ATENABLE(s, sp->lock);
 
 	return rc;
 }
@@ -237,7 +225,6 @@ int adsp_open(gref)
 	gref_t *gref;
 {
     register CCBPtr sp;
-    int s;
     
     if (!adspInited)
 		adsp_init();
@@ -248,28 +235,21 @@ int adsp_open(gref)
 	sp = (CCBPtr)gbuf_rptr(((gbuf_t *)gref->info));
 	gref->readable = adsp_readable;
 	gref->writeable = adsp_writeable;
-	ATDISABLE(s, adspall_lock);
 	if ((sp->otccbLink = ccb_used_list) != 0)
 		sp->otccbLink->ccbLink = sp;
 	ccb_used_list = sp;
-	ATENABLE(s, adspall_lock);
 	return 0;
 }
 
 int adsp_close(gref)
 	gref_t *gref;
 {
-  int s, l;
   unsigned char localSocket;
 
   /* make sure we've not yet removed the CCB (e.g., due to TrashSession) */
-  ATDISABLE(l, adspgen_lock);
   if (gref->info) {
 	CCBPtr sp = (CCBPtr)gbuf_rptr(((gbuf_t *)gref->info));
-	ATDISABLE(s, sp->lock);
-	ATENABLE(s, adspgen_lock);
 	localSocket = sp->localSocket;
-	ATENABLE(l, sp->lock);
 	if (localSocket)
 		adspRelease(gref);
 	else
@@ -278,7 +258,6 @@ int adsp_close(gref)
 		gbuf_freeb((gbuf_t *)gref->info);
 	}
   } else
-	ATENABLE(l, adspgen_lock);
     return 0;
 }
 
@@ -344,7 +323,6 @@ int adsp_wput(gref, mp)
     gbuf_t *mp;
 {
 	int rc;
-	int s;
 	gbuf_t *xm;
 	ioc_t *iocbp;
 	CCBPtr sp;
@@ -366,17 +344,14 @@ int adsp_wput(gref, mp)
 				adsp_iocnak(gref, mp, EINVAL);
 			}
 			v = *(unsigned char *)gbuf_rptr(gbuf_cont(mp));
-			ATDISABLE(s, adspall_lock);
 			if ( (v != 0)
 			     && ((v > DDP_SOCKET_LAST) || (v < 2)
 				 || ddp_socket_inuse(v, DDP_ADSP))) {
-				ATENABLE(s, adspall_lock);
 				iocbp->ioc_rval = -1;
 				adsp_iocnak(gref, mp, EINVAL);
 			}
 			else {
 				if (v == 0) {
-					ATENABLE(s, adspall_lock);
 					if ((v = adspAssignSocket(gref, 0)) == 0) {
 						iocbp->ioc_rval = -1;
 						adsp_iocnak(gref, mp, EINVAL);
@@ -386,7 +361,6 @@ int adsp_wput(gref, mp)
 					adsp_inputC[v] = 1;
 					adsp_inputQ[v] = sp;
 					adsp_pidM[v] = sp->pid;
-					ATENABLE(s, adspall_lock);
 					adsp_dequeue_ccb(sp);
 				}
 				*(unsigned char *)gbuf_rptr(gbuf_cont(mp)) = v;
@@ -458,9 +432,7 @@ int adsp_wput(gref, mp)
 	if (!gref->info)
 	    gbuf_freem(mp);
 	else {
-	    ATDISABLE(s, sp->lockClose);
 	    rc = adspWriteHandler(gref, mp);
-	    ATENABLE(s, sp->lockClose);
 
 	    switch (rc) {
 	    case STR_PUTNEXT:
@@ -545,12 +517,10 @@ adspAssignSocket(gref, flag)
 {
 	unsigned char sVal, sMax, sMin, sSav, inputC;
 	CCBPtr sp;
-	int s;
 
 	sMax = flag ? DDP_SOCKET_LAST-46 : DDP_SOCKET_LAST-6;
 	sMin = DDP_SOCKET_1st_DYNAMIC;
 
-	ATDISABLE(s, adspall_lock);
 	for (inputC=255, sVal=sMax; sVal >= sMin; sVal--) {
 		if (!ddp_socket_inuse(sVal, DDP_ADSP))
 			break;
@@ -565,22 +535,17 @@ adspAssignSocket(gref, flag)
 		}
 	}
 	if (sVal < sMin) {
-		if (!flag || (inputC == 255)) {
-			ATENABLE(s, adspall_lock);
+		if (!flag || (inputC == 255))
 			return 0;
-		}
 		sVal = sSav;
 	}
 	sp = (CCBPtr)gbuf_rptr(((gbuf_t *)gref->info));
-	ATENABLE(s, adspall_lock);
 	adsp_dequeue_ccb(sp);
-	ATDISABLE(s, adspall_lock);
 	adsp_inputC[sVal]++;
 	sp->otccbLink = adsp_inputQ[sVal];
 	adsp_inputQ[sVal] = sp;
 	if (!flag)
 		adsp_pidM[sVal] = sp->pid;
-	ATENABLE(s, adspall_lock);
 	return sVal;
 }
 
@@ -592,11 +557,9 @@ adspDeassignSocket(sp)
 	CCBPtr curr_sp;
 	CCBPtr prev_sp;
 	int pid = 0;
-	int s, l;
 
 	dPrintf(D_M_ADSP, D_L_TRACE, ("adspDeassignSocket: pid=%d,s=%d\n",
 		sp->pid, sp->localSocket));
-	ATDISABLE(s, adspall_lock);
 	sVal = sp->localSocket;
 	if ((curr_sp = adsp_inputQ[sVal]) != 0) {
 		prev_sp = 0;
@@ -605,12 +568,10 @@ adspDeassignSocket(sp)
 			curr_sp = curr_sp->otccbLink;
 		}
 		if (curr_sp) {
-			ATDISABLE(l, sp->lockRemove);
 			if (prev_sp)
 				prev_sp->otccbLink = sp->otccbLink;
 			else
 				adsp_inputQ[sVal] = sp->otccbLink;
-			ATENABLE(l, sp->lockRemove);
 			if (adsp_inputQ[sVal])
 				adsp_inputC[sVal]--;
 			else {
@@ -621,11 +582,9 @@ adspDeassignSocket(sp)
 			sp->ccbLink = 0;
 			sp->otccbLink = 0;
 			sp->localSocket = 0;
-			ATENABLE(s, adspall_lock);
 		    return pid ? 0 : 1;
 		}
 	}
-	ATENABLE(s, adspall_lock);
 
 	dPrintf(D_M_ADSP, D_L_ERROR, 
 		("adspDeassignSocket: closing, no CCB block, trouble ahead\n"));
@@ -639,9 +598,7 @@ void
 adsp_dequeue_ccb(sp)
 	CCB *sp;
 {
-	int s;
 
-	ATDISABLE(s, adspall_lock);
 	if (sp == ccb_used_list) {
 		if ((ccb_used_list = sp->otccbLink) != 0)
 			sp->otccbLink->ccbLink = 0;
@@ -652,7 +609,6 @@ adsp_dequeue_ccb(sp)
 
 	sp->otccbLink = 0;
 	sp->ccbLink = 0;
-	ATENABLE(s, adspall_lock);
 }
 
 void SndMsgUp(gref, mp)

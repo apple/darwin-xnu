@@ -129,8 +129,10 @@ osfmk/ipc/mach_port.c			standard
 osfmk/ipc/mig_log.c			optional mig_debug
 osfmk/kern/ast.c			standard
 osfmk/kern/clock.c			standard
+osfmk/kern/clock_oldops.c		standard
 osfmk/kern/counters.c			standard
 osfmk/kern/debug.c			standard
+osfmk/kern/etimer.c			standard
 osfmk/kern/exception.c		standard
 osfmk/kern/host.c			standard
 osfmk/kern/host_notify.c		standard
@@ -147,6 +149,8 @@ osfmk/kern/mach_clock.c		standard
 osfmk/kern/machine.c			standard
 osfmk/kern/mk_sp.c			standard
 osfmk/kern/mk_timer.c		standard
+osfmk/kern/pms.c			standard
+osfmk/kern/page_decrypt.c	standard
 osfmk/kern/profile.c			standard
 osfmk/kern/printf.c			standard
 osfmk/kern/priority.c			standard
@@ -241,3 +245,14 @@ osfmk/kern/kmod.c			standard
 # funcs).
 #
 osfmk/device/subrs.c			standard
+
+#
+# MI CHUD:
+#
+osfmk/chud/chud_cpu.c			standard
+osfmk/chud/chud_glue.c			standard
+osfmk/chud/chud_memory.c		standard
+osfmk/chud/chud_osfmk_callback.c	standard
+osfmk/chud/chud_thread.c		standard
+
+osfmk/console/serial_general.c	standard

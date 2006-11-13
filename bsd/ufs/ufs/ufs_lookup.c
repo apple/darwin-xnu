@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -86,10 +86,9 @@
 #include <ufs/ffs/ffs_extern.h>
 #if REV_ENDIAN_FS
 #include <ufs/ufs/ufs_byte_order.h>
-#include <architecture/byte_order.h>
 #endif /* REV_ENDIAN_FS */
 
-extern struct	nchstats nchstats;
+struct	nchstats ufs_nchstats;
 #if DIAGNOSTIC
 int	dirchk = 1;
 #else
@@ -237,7 +236,7 @@ ufs_lookup(ap)
 		    (error = ffs_blkatoff(vdp, (off_t)dp->i_offset, NULL, &bp)))
 		    	goto out;
 		numdirpasses = 2;
-		nchstats.ncs_2passes++;
+		ufs_nchstats.ncs_2passes++;
 	}
 	prevoff = dp->i_offset;
 	endsearch = roundup(dp->i_size, DIRBLKSIZ);
@@ -443,7 +442,7 @@ notfound:
 
 found:
 	if (numdirpasses == 2)
-		nchstats.ncs_pass2++;
+		ufs_nchstats.ncs_pass2++;
 	/*
 	 * Check that directory length properly reflects presence
 	 * of this entry.

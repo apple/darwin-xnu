@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -78,9 +78,7 @@
 #include <sys/kernel_types.h>
 #endif
 
-#if __DARWIN_ALIGN_POWER
-#pragma options align=power
-#endif
+#pragma pack(4)
 
 /* for the compat sake;  */
 struct extern_file {
@@ -95,9 +93,7 @@ struct extern_file {
 	caddr_t	f_data;		/* vnode or socket or SHM or semaphore */
 };
 
-#if __DARWIN_ALIGN_POWER
-#pragma options align=reset
-#endif
+#pragma pack()
 
 #ifdef KERNEL
 __BEGIN_DECLS

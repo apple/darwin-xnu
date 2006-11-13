@@ -55,23 +55,15 @@ struct aiocb {
 // LP64todo - should this move?
 #ifdef KERNEL
 
-#if __DARWIN_ALIGN_NATURAL
-#pragma options align=natural
-#endif
-
 struct user_aiocb {
 	int					aio_fildes;		/* File descriptor */
 	off_t				aio_offset;		/* File offset */
-	user_addr_t			aio_buf;		/* Location of buffer */
+	user_addr_t			aio_buf __attribute((aligned(8)));		/* Location of buffer */
 	user_size_t			aio_nbytes;		/* Length of transfer */
 	int					aio_reqprio;	/* Request priority offset */
-	struct user_sigevent aio_sigevent;	/* Signal number and value */
+	struct user_sigevent aio_sigevent __attribute((aligned(8)));	/* Signal number and value */
 	int					aio_lio_opcode;	/* Operation to be performed */
 };
-
-#if __DARWIN_ALIGN_NATURAL
-#pragma options align=reset
-#endif
 
 #endif // KERNEL
 

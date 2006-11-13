@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -88,6 +88,32 @@ vnode_pager_get_filesize(struct vnode *vp)
 {
 
 	return (vm_object_offset_t) ubc_getsize(vp);
+}
+
+kern_return_t
+vnode_pager_get_pathname(
+	struct vnode	*vp,
+	char		*pathname,
+	vm_size_t	*length_p)
+{
+	int	error, len;
+
+	len = (int) *length_p;
+	error = vn_getpath(vp, pathname, &len);
+	if (error != 0) {
+		return KERN_FAILURE;
+	}
+	*length_p = (vm_size_t) len;
+	return KERN_SUCCESS;
+}
+
+kern_return_t
+vnode_pager_get_filename(
+	struct vnode	*vp,
+	char		**filename)
+{
+	*filename = vp->v_name;
+	return KERN_SUCCESS;
 }
 
 pager_return_t

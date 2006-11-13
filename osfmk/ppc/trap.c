@@ -90,6 +90,7 @@ extern int not_in_kdp;
 #define PROT_RO		(VM_PROT_READ)
 #define PROT_RW		(VM_PROT_READ|VM_PROT_WRITE)
 
+
 /* A useful macro to update the ppc_exception_state in the PCB
  * before calling doexception
  */
@@ -136,11 +137,11 @@ struct savearea *trap(int trapno,
 
 	myast = ast_pending();
 	if(perfASTHook) {
-		if(*myast & AST_PPC_CHUD_ALL) {
+		if(*myast & AST_CHUD_ALL) {
 			perfASTHook(trapno, ssp, dsisr, (unsigned int)dar);
 		}
 	} else {
-		*myast &= ~AST_PPC_CHUD_ALL;
+		*myast &= ~AST_CHUD_ALL;
 	}
 
 	if(perfTrapHook) {							/* Is there a hook? */
@@ -377,7 +378,7 @@ struct savearea *trap(int trapno,
 			map = kernel_map;
 			
 			code = vm_fault(map, vm_map_trunc_page(ssp->save_srr0),
-					PROT_EXEC, FALSE, THREAD_UNINT, NULL, vm_map_trunc_page(0));
+					(PROT_EXEC | PROT_RO), FALSE, THREAD_UNINT, NULL, vm_map_trunc_page(0));
 
 			if (code != KERN_SUCCESS) {
 				unresolved_kernel_trap(trapno, ssp, dsisr, dar, NULL);
@@ -606,7 +607,7 @@ struct savearea *trap(int trapno,
 			map = thread->map;
 			
 			code = vm_fault(map, vm_map_trunc_page(ssp->save_srr0),
-				PROT_EXEC, FALSE, THREAD_ABORTSAFE, NULL, vm_map_trunc_page(0));
+					(PROT_EXEC | PROT_RO), FALSE, THREAD_ABORTSAFE, NULL, vm_map_trunc_page(0));
 
 			if ((code != KERN_SUCCESS) && (code != KERN_ABORTED)) {
 				UPDATE_PPC_EXCEPTION_STATE;

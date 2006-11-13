@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -282,23 +282,15 @@ typedef unsigned long long	user_speed_t;
  * WARNING - keep in sync with struct termios
  */
 
-#if __DARWIN_ALIGN_NATURAL
-#pragma options align=natural
-#endif
-
 struct user_termios {
 	user_tcflag_t	c_iflag;	/* input flags */
 	user_tcflag_t	c_oflag;	/* output flags */
 	user_tcflag_t	c_cflag;	/* control flags */
 	user_tcflag_t	c_lflag;	/* local flags */
 	cc_t		c_cc[NCCS];	/* control chars */
-	user_speed_t	c_ispeed;	/* input speed */
+	user_speed_t	c_ispeed __attribute((aligned(8)));	/* input speed */
 	user_speed_t	c_ospeed;	/* output speed */
 };
-
-#if __DARWIN_ALIGN_NATURAL
-#pragma options align=reset
-#endif
 
 #endif	/* KERNEL */
 

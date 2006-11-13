@@ -33,7 +33,7 @@
 
 #if defined (__ppc__) || defined (__ppc64__)
 #include "mach/ppc/ndr_def.h"
-#elif defined (__i386__)
+#elif defined (__i386__) || defined(__x86_64__)
 #include "mach/i386/ndr_def.h"
 #else
 #error architecture not supported

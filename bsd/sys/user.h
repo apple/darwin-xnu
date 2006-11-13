@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -90,15 +90,15 @@
  *	Per-thread U area.
  */
 struct uthread {
-	int	*uu_ar0;		/* address of users saved R0 */
-
 	/* syscall parameters, results and catches */
 	u_int64_t uu_arg[8]; /* arguments to current system call */
 	int	*uu_ap;			/* pointer to arglist */
-    int uu_rval[2];
+        int uu_rval[2];
 
 	/* thread exception handling */
+	int	uu_exception;
 	int	uu_code;			/* ``code'' to trap */
+	int	uu_subcode;
 	char uu_cursig;			/* p_cursig for exc. */
 	/* support for select - across system calls */
 	struct _select {
@@ -159,7 +159,7 @@ struct uthread {
 	struct ucred	*uu_ucred;		/* per thread credential */
         int		uu_defer_reclaims;
         vnode_t		uu_vreclaims;
-
+		struct user_sigaltstack uu_sigstk;
 #ifdef JOE_DEBUG
         int		uu_iocount;
         int		uu_vpindex;
@@ -176,6 +176,7 @@ typedef struct uthread * uthread_t;
 #define UT_CANCEL	0x00000008             /* thread marked for cancel */
 #define UT_CANCELED	0x00000010            /* thread cancelled */
 #define UT_CANCELDISABLE 0x00000020            /* thread cancel disabled */
+#define UT_ALTSTACK 0x00000040  /* this thread has alt stack for signals */
 
 #define	UT_VFORK	0x02000000	/* thread has vfork children */
 #define	UT_SETUID	0x04000000	/* thread is settugid() */

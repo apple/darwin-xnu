@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -101,7 +101,7 @@
 #include <sys/lock.h>
 #include <sys/ubc_internal.h>
 #include <sys/uio_internal.h>
-#include <architecture/byte_order.h>
+#include <libkern/OSByteOrder.h>
 
 #include <vm/vm_map.h>
 #include <vm/vm_kern.h>		/* kmem_alloc, kmem_free */
@@ -983,12 +983,12 @@ cd9660_xa_init(struct iso_node *ip, struct iso_directory_record *isodir)
 	sectors = ip->i_size / 2048;
 
 	strncpy(header->riff, "RIFF", 4);
-	header->fileSize = NXSwapHostLongToLittle(sectors * CDXA_SECTOR_SIZE + sizeof(struct riff_header) - 8);
+	header->fileSize = OSSwapHostToLittleInt32(sectors * CDXA_SECTOR_SIZE + sizeof(struct riff_header) - 8);
 	strncpy(header->cdxa, "CDXA", 4);
 	strncpy(header->fmt, "fmt ", 4);
-	header->fmtSize = NXSwapHostLongToLittle(16);
+	header->fmtSize = OSSwapHostToLittleConstInt32(16);
 	strncpy(header->data, "data", 4);
-	header->dataSize = NXSwapHostLongToLittle(sectors * CDXA_SECTOR_SIZE);
+	header->dataSize = OSSwapHostToLittleInt32(sectors * CDXA_SECTOR_SIZE);
 
 	/*
 	 * Copy the CD-ROM XA extended directory information into the header.  As far as
@@ -1369,7 +1369,6 @@ struct vnodeopv_entry_desc cd9660_specop_entries[] = {
 	{ &vnop_pathconf_desc, (VOPFUNC)spec_pathconf },	/* pathconf */
 	{ &vnop_advlock_desc, (VOPFUNC)spec_advlock },	/* advlock */
 	{ &vnop_bwrite_desc, (VOPFUNC)vn_bwrite },
-	{ &vnop_devblocksize_desc, (VOPFUNC)spec_devblocksize }, /* devblocksize */
 	{ &vnop_pagein_desc, (VOPFUNC)cd9660_pagein },		/* Pagein */
 	{ &vnop_pageout_desc, (VOPFUNC)cd9660_pageout },		/* Pageout */
 	{ &vnop_blktooff_desc, (VOPFUNC)cd9660_blktooff },	/* blktooff */

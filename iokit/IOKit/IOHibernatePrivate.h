@@ -73,7 +73,10 @@ struct IOHibernateImageHeader
     uint32_t	signature;
     uint32_t	processorFlags;
 
-    uint8_t	reserved2[24];
+    uint32_t    runtimePages;
+    uint32_t    runtimePageCount;
+
+    uint8_t	reserved2[16];
     
     uint64_t	encryptStart;
     uint64_t	machineSignature;
@@ -83,7 +86,13 @@ struct IOHibernateImageHeader
 
     uint32_t	diag[4];
 
-    uint32_t	reserved[82];		// make sizeof == 512
+    int32_t	graphicsInfoOffset;
+    int32_t	cryptVarsOffset;
+    int32_t	memoryMapOffset;
+    uint32_t    memoryMapSize;
+    uint32_t    systemTableOffset;
+
+    uint32_t	reserved[77];		// make sizeof == 512
 
     uint32_t		fileExtentMapSize;
     IOPolledFileExtent	fileExtentMap[2];
@@ -233,15 +242,25 @@ hibernate_vm_lock(void);
 void
 hibernate_vm_unlock(void);
 
+// mark pages not to be saved, based on VM system accounting
 void
 hibernate_page_list_setall(hibernate_page_list_t * page_list,
 			   hibernate_page_list_t * page_list_wired,
 			   uint32_t * pagesOut);
 
+// mark pages to be saved, or pages not to be saved but available 
+// for scratch usage during restore
 void
 hibernate_page_list_setall_machine(hibernate_page_list_t * page_list,
                                     hibernate_page_list_t * page_list_wired,
                                     uint32_t * pagesOut);
+
+// mark pages not to be saved and not for scratch usage during restore
+void
+hibernate_page_list_set_volatile( hibernate_page_list_t * page_list,
+				  hibernate_page_list_t * page_list_wired,
+				  uint32_t * pagesOut);
+
 void
 hibernate_page_list_discard(hibernate_page_list_t * page_list);
 
@@ -251,11 +270,15 @@ hibernate_set_page_state(hibernate_page_list_t * page_list, hibernate_page_list_
 
 void 
 hibernate_page_bitset(hibernate_page_list_t * list, boolean_t set, uint32_t page);
+
 boolean_t 
 hibernate_page_bittst(hibernate_page_list_t * list, uint32_t page);
 
+hibernate_bitmap_t *
+hibernate_page_bitmap_pin(hibernate_page_list_t * list, uint32_t * page);
+
 uint32_t
-hibernate_page_list_count(hibernate_page_list_t *list, uint32_t set, uint32_t page);
+hibernate_page_bitmap_count(hibernate_bitmap_t * bitmap, uint32_t set, uint32_t page);
 
 void 
 hibernate_restore_phys_page(uint64_t src, uint64_t dst, uint32_t len, uint32_t procFlags);
@@ -269,6 +292,10 @@ long
 hibernate_machine_entrypoint(IOHibernateImageHeader * header, void * p2, void * p3, void * p4);
 long
 hibernate_kernel_entrypoint(IOHibernateImageHeader * header, void * p2, void * p3, void * p4);
+void
+hibernate_newruntime_map(void * map, vm_size_t map_size, 
+			    uint32_t system_table_offset);
+
 
 extern uint32_t    gIOHibernateState;
 extern uint32_t    gIOHibernateMode;
@@ -337,6 +364,8 @@ enum
 #define kIOHibernateMemorySignatureKey	  "memory-signature"
 #define kIOHibernateMemorySignatureEnvKey "mem-sig"
 #define kIOHibernateMachineSignatureKey	  "machine-signature"
+
+#define kIOHibernateRTCVariablesKey	"IOHibernateRTCVariables"
 
 #ifdef __cplusplus
 }

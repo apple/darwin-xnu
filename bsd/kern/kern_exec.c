@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -174,17 +174,10 @@ static kern_return_t create_unix_stack(vm_map_t map, user_addr_t user_stack,
 static int copyoutptr(user_addr_t ua, user_addr_t ptr, int ptr_size);
 
 /* XXX forward; should be in headers, but can't be for one reason or another */
-extern int grade_binary(cpu_type_t exectype, cpu_subtype_t execsubtype);
 extern void vfork_return(thread_t th_act,
 				struct proc * p,
 				struct proc *p2,
 				register_t *retval);
-
-
-extern char classichandler[32];
-extern uint32_t classichandler_fsid;
-extern long classichandler_fileid;
-
 
 /*
  * exec_add_string
@@ -292,6 +285,75 @@ exec_save_path(struct image_params *imgp, user_addr_t path, /*uio_seg*/int seg)
 	return(error);
 }
 
+#ifdef IMGPF_POWERPC
+/*
+ * exec_powerpc32_imgact
+ *
+ * Implicitly invoke the PowerPC handler for a byte-swapped image magic
+ * number.  This may happen either as a result of an attempt to invoke a
+ * PowerPC image directly, or indirectly as the interpreter used in an
+ * interpreter script.
+ *
+ * Parameters;	struct image_params *	image parameter block
+ *
+ * Returns:	-1		not an PowerPC image (keep looking)
+ *		-3		Success: exec_archhandler_ppc: relookup
+ *		>0		Failure: exec_archhandler_ppc: error number
+ *
+ * Note:	This image activator does not handle the case of a direct
+ *		invocation of the exec_archhandler_ppc, since in that case, the
+ *		exec_archhandler_ppc itself is not a PowerPC binary; instead,
+ *		binary image activators must recognize the exec_archhandler_ppc;
+ *		This is managed in exec_check_permissions().
+ *
+ * Note:	This image activator is limited to 32 bit powerpc images;
+ *		if support for 64 bit powerpc images is desired, it would
+ *		be more in line with this design to write a separate 64 bit
+ *		image activator.
+ */
+static int
+exec_powerpc32_imgact(struct image_params *imgp)
+{
+	struct mach_header *mach_header = (struct mach_header *)imgp->ip_vdata;
+	int error;
+	size_t len = 0;
+
+	/*
+	 * Make sure it's a PowerPC binary.  If we've already redirected
+	 * from an interpreted file once, don't do it again.
+	 */
+	if (mach_header->magic != MH_CIGAM)
+		return (-1);
+
+	/* If there is no exec_archhandler_ppc, we can't run it */
+	if (exec_archhandler_ppc.path[0] == 0)
+		return (EBADARCH);
+
+	/*
+	 * The PowerPC flag will be set by the exec_check_permissions()
+	 * call anyway; however, we set this flag here so that the relookup
+	 * in execve() does not follow symbolic links, as a side effect.
+	 */
+	imgp->ip_flags |= IMGPF_POWERPC;
+
+	/* impute an interpreter */
+	error = copystr(exec_archhandler_ppc.path, imgp->ip_interp_name,
+			IMG_SHSIZE, &len);
+	if (error)
+		return (error);
+
+	/*
+	 * provide a replacement string for p->p_comm; we have to use an
+	 * an alternate buffer for this, rather than replacing it directly,
+	 * since the exec may fail and return to the parent.  In that case,
+	 * we would have erroneously changed the parent p->p_comm instead.
+	 */
+	strncpy(imgp->ip_p_comm, imgp->ip_ndp->ni_cnd.cn_nameptr, MAXCOMLEN);
+	imgp->ip_p_comm[MAXCOMLEN] = '\0';
+
+	return (-3);
+}
+#endif	/* IMGPF_POWERPC */
 
 
 /*
@@ -299,7 +361,7 @@ exec_save_path(struct image_params *imgp, user_addr_t path, /*uio_seg*/int seg)
  *
  * Image activator for interpreter scripts.  If the image begins with the
  * characters "#!", then it is an interpreter script.  Verify that we are
- * not already executing in Classic mode, and that the length of the script
+ * not already executing in PowerPC mode, and that the length of the script
  * line indicating the interpreter is not in excess of the maximum allowed
  * size.  If this is the case, then break out the arguments, if any, which
  * are separated by white space, and copy them into the argument save area
@@ -327,8 +389,8 @@ exec_shell_imgact(struct image_params *imgp)
 	 * Make sure it's a shell script.  If we've already redirected
 	 * from an interpreted file once, don't do it again.
 	 *
-	 * Note: We disallow Classic, since the expectation is that we
-	 * may run a Classic interpreter, but not an interpret a Classic
+	 * Note: We disallow PowerPC, since the expectation is that we
+	 * may run a PowerPC interpreter, but not an interpret a PowerPC 
 	 * image.  This is consistent with historical behaviour.
 	 */
 	if (vdata[0] != '#' ||
@@ -337,6 +399,10 @@ exec_shell_imgact(struct image_params *imgp)
 		return (-1);
 	}
 
+#ifdef IMGPF_POWERPC
+	if ((imgp->ip_flags & IMGPF_POWERPC) != 0)
+		  return (EBADARCH);
+#endif	/* IMGPF_POWERPC */
 
 	imgp->ip_flags |= IMGPF_INTERPRET;
 
@@ -493,9 +559,12 @@ exec_mach_imgact(struct image_params *imgp)
 	vm_map_t old_map = VM_MAP_NULL;
 	vm_map_t map;
 	boolean_t				clean_regions = FALSE;
-    shared_region_mapping_t initial_region = NULL;
 	load_return_t		lret;
 	load_result_t		load_result;
+	shared_region_mapping_t shared_region, initial_region;
+#ifdef IMGPF_POWERPC
+	int powerpcParent, powerpcImage;
+#endif /* IMGPF_POWERPC */
 		
 	/*
 	 * make sure it's a Mach-O 1.0 or Mach-O 2.0 binary; the difference
@@ -544,11 +613,25 @@ exec_mach_imgact(struct image_params *imgp)
 	imgp->ip_strendp[2] = 0;
 	imgp->ip_strendp += (((imgp->ip_strendp - imgp->ip_strings) + NBPW-1) & ~(NBPW-1));
 
+#ifdef IMGPF_POWERPC
+	/*
+	 * XXX
+	 *
+	 * Should be factored out; this is here because we might be getting
+	 * invoked this way as the result of a shell script, and the check
+	 * in exec_check_permissions() is not interior to the jump back up
+	 * to the "encapsulated_binary:" label in execve().
+	 */
+	if (imgp->ip_vattr->va_fsid == exec_archhandler_ppc.fsid &&
+		imgp->ip_vattr->va_fileid == (uint64_t)((u_long)exec_archhandler_ppc.fileid)) {
+		imgp->ip_flags |= IMGPF_POWERPC;
+	}
+#endif	/* IMGPF_POWERPC */
 
 	if (vfexec) {
  		kern_return_t	result;
 
-		result = task_create_internal(task, FALSE, &new_task);
+		result = task_create_internal(task, FALSE, (imgp->ip_flags & IMGPF_IS_64BIT), &new_task);
 		if (result != KERN_SUCCESS)
 	    	printf("execve: task_create failed. Code: 0x%x\n", result);
 		p->task = new_task;
@@ -556,6 +639,12 @@ exec_mach_imgact(struct image_params *imgp)
 		if (p->p_nice != 0)
 			resetpriority(p);
 		map = get_task_map(new_task);
+
+		if (imgp->ip_flags & IMGPF_IS_64BIT)
+		        vm_map_set_64bit(map);
+		else
+		        vm_map_set_32bit(map);
+
 		result = thread_create(new_task, &imgp->ip_vfork_thread);
 		if (result != KERN_SUCCESS)
 	    	printf("execve: thread_create failed. Code: 0x%x\n", result);
@@ -591,7 +680,94 @@ if((imgp->ip_flags & IMGPF_IS_64BIT) == 0)
 
 	vm_get_shared_region(task, &initial_region);
 
-	
+#ifdef IMGPF_POWERPC
+	/*
+	 * If we are transitioning to/from powerpc, then we need to do extra
+	 * work here.
+	 */
+	powerpcParent = (p->p_flag & P_TRANSLATED) ? 1 : 0;
+	powerpcImage = (imgp->ip_flags & IMGPF_POWERPC) ? 1 : 0;
+
+	if (powerpcParent ^ powerpcImage) {
+		cpu_type_t cpu = (powerpcImage ? CPU_TYPE_POWERPC : cpu_type());
+		struct vnode *rootDir = p->p_fd->fd_rdir;
+
+		shared_region = lookup_default_shared_region((int)rootDir, cpu);
+		if (shared_region == NULL) {
+			shared_region_mapping_t old_region;
+			shared_region_mapping_t new_region;
+			vm_get_shared_region(current_task(), &old_region);
+			/* grrrr... this sets current_task(), not task
+			* -- they're different (usually)
+			*/
+			shared_file_boot_time_init((int)rootDir,cpu);
+			if ( current_task() != task ) {
+				vm_get_shared_region(current_task(),&new_region);
+				vm_set_shared_region(task,new_region);
+				vm_set_shared_region(current_task(),old_region);
+			}
+		} else {
+			vm_set_shared_region(task, shared_region);
+		}
+		shared_region_mapping_dealloc(initial_region);
+	} else 
+#endif	/* IMGPF_POWERPC */
+
+	{
+		struct shared_region_task_mappings map_info;
+		shared_region_mapping_t next;
+
+		shared_region_mapping_info(initial_region,
+					   &map_info.text_region,
+					   &map_info.text_size,
+					   &map_info.data_region,
+					   &map_info.data_size,
+					   &map_info.region_mappings,
+					   &map_info.client_base,
+					   &map_info.alternate_base,
+					   &map_info.alternate_next,
+					   &map_info.fs_base,
+					   &map_info.system,
+					   &map_info.flags,
+					   &next);
+		if (map_info.flags & SHARED_REGION_STANDALONE) {
+			/*
+			 * We were using a private shared region.
+			 * Try and get back to a system-wide shared region
+			 * with matching "fs_base" (for chroot) and "system"
+			 * (for CPU type).
+			 */
+			shared_region = lookup_default_shared_region(
+				map_info.fs_base,
+				map_info.system);
+			if (shared_region == NULL) {
+				/*
+				 * No system-wide default regions, stick to
+				 * our private region...
+				 */
+			} else {
+				SHARED_REGION_TRACE(
+					SHARED_REGION_TRACE_INFO,
+					("shared_region: %p [%d(%s)] "
+					 "exec(\"%s\"): "
+					 "moving from private %p[%x,%x,%x] "
+					 "to default %p\n",
+					 current_thread(),
+					 p->p_pid, p->p_comm,
+					 (imgp->ip_p_comm[0] ?
+					  imgp->ip_p_comm :
+					  imgp->ip_ndp->ni_cnd.cn_nameptr),
+					 initial_region,
+					 map_info.fs_base,
+					 map_info.system,
+					 map_info.flags,
+					 shared_region));
+				vm_set_shared_region(task, shared_region);
+				shared_region_mapping_dealloc(initial_region);
+			}
+		}
+	}
+
 	/*
 	 * NOTE: An error after this point  indicates we have potentially
 	 * destroyed or overwrote some process state while attempting an
@@ -602,6 +778,7 @@ if((imgp->ip_flags & IMGPF_IS_64BIT) == 0)
 	 * We reset the task to 64-bit (or not) here.  It may have picked up
 	 * a new map, and we need that to reflect its true 64-bit nature.
 	 */
+
 	task_set_64bit(task, 
 		       ((imgp->ip_flags & IMGPF_IS_64BIT) == IMGPF_IS_64BIT));
 
@@ -642,7 +819,6 @@ if((imgp->ip_flags & IMGPF_IS_64BIT) == 0)
 	}
 
 	if (vfexec) {
-		uthread->uu_ar0 = (void *)get_user_regs(thread);
 		old_map = vm_map_switch(get_task_map(task));
 	}
 
@@ -670,10 +846,15 @@ if((imgp->ip_flags & IMGPF_IS_64BIT) == 0)
 		/* Adjust the stack */
 		if (imgp->ip_flags & IMGPF_IS_64BIT) {
 			ap = thread_adjuserstack(thread, -8);
-			(void)copyoutptr(load_result.mach_header, ap, 8);
+			error = copyoutptr(load_result.mach_header, ap, 8);
 		} else {
 			ap = thread_adjuserstack(thread, -4);
-			(void)suword(ap, load_result.mach_header);
+			error = suword(ap, load_result.mach_header);
+		}
+		if (error) {
+			if (vfexec)
+				vm_map_switch(old_map);
+			goto badtoolate;
 		}
 	}
 
@@ -728,32 +909,42 @@ if((imgp->ip_flags & IMGPF_IS_64BIT) == 0)
 		p->p_comm[imgp->ip_ndp->ni_cnd.cn_namelen] = '\0';
 	}
 
-	{
-	  /* This is for kdebug */
-	  long dbg_arg1, dbg_arg2, dbg_arg3, dbg_arg4;
+	if (kdebug_enable) {
+	          long dbg_arg1, dbg_arg2, dbg_arg3, dbg_arg4;
 
-	  /* Collect the pathname for tracing */
-	  kdbg_trace_string(p, &dbg_arg1, &dbg_arg2, &dbg_arg3, &dbg_arg4);
+	          /*
+		   * Collect the pathname for tracing
+		   */
+	          kdbg_trace_string(p, &dbg_arg1, &dbg_arg2, &dbg_arg3, &dbg_arg4);
 
-
-
-	  if (vfexec)
-	  {
-		  KERNEL_DEBUG_CONSTANT1((TRACEDBG_CODE(DBG_TRACE_DATA, 2)) | DBG_FUNC_NONE,
-		                        p->p_pid ,0,0,0, (unsigned int)thread);
-	          KERNEL_DEBUG_CONSTANT1((TRACEDBG_CODE(DBG_TRACE_STRING, 2)) | DBG_FUNC_NONE,
-					dbg_arg1, dbg_arg2, dbg_arg3, dbg_arg4, (unsigned int)thread);
-	  }
-	  else
-	  {
-		  KERNEL_DEBUG_CONSTANT((TRACEDBG_CODE(DBG_TRACE_DATA, 2)) | DBG_FUNC_NONE,
-		                        p->p_pid ,0,0,0,0);
-	          KERNEL_DEBUG_CONSTANT((TRACEDBG_CODE(DBG_TRACE_STRING, 2)) | DBG_FUNC_NONE,
-					dbg_arg1, dbg_arg2, dbg_arg3, dbg_arg4, 0);
-	  }
+		  if (vfexec)
+		  {
+		          KERNEL_DEBUG_CONSTANT1((TRACEDBG_CODE(DBG_TRACE_DATA, 2)) | DBG_FUNC_NONE,
+						 p->p_pid ,0,0,0, (unsigned int)thread);
+			  KERNEL_DEBUG_CONSTANT1((TRACEDBG_CODE(DBG_TRACE_STRING, 2)) | DBG_FUNC_NONE,
+						 dbg_arg1, dbg_arg2, dbg_arg3, dbg_arg4, (unsigned int)thread);
+		  }
+		  else
+		  {
+		          KERNEL_DEBUG_CONSTANT((TRACEDBG_CODE(DBG_TRACE_DATA, 2)) | DBG_FUNC_NONE,
+						p->p_pid ,0,0,0,0);
+			  KERNEL_DEBUG_CONSTANT((TRACEDBG_CODE(DBG_TRACE_STRING, 2)) | DBG_FUNC_NONE,
+						dbg_arg1, dbg_arg2, dbg_arg3, dbg_arg4, 0);
+		  }
 	}
 
-		p->p_flag &= ~P_CLASSIC;
+#ifdef IMGPF_POWERPC
+	/*
+	 * Mark the process as powerpc or not.  If powerpc, set the affinity
+	 * flag, which will be used for grading binaries in future exec's
+	 * from the process.
+	 */
+	if (((imgp->ip_flags & IMGPF_POWERPC) != 0))
+		p->p_flag |= P_TRANSLATED;
+	else
+#endif	/* IMGPF_POWERPC */
+		p->p_flag &= ~P_TRANSLATED;
+	p->p_flag &= ~P_AFFINITY;
 
 	/*
 	 * mark as execed, wakeup the process that vforked (if any) and tell
@@ -797,6 +988,9 @@ struct execsw {
 } execsw[] = {
 	{ exec_mach_imgact,		"Mach-o Binary" },
 	{ exec_fat_imgact,		"Fat Binary" },
+#ifdef IMGPF_POWERPC
+	{ exec_powerpc32_imgact,	"PowerPC binary" },
+#endif	/* IMGPF_POWERPC */
 	{ exec_shell_imgact,		"Interpreter Script" },
 	{ NULL, NULL}
 };
@@ -821,7 +1015,7 @@ execve(struct proc *p, struct execve_args *uap, register_t *retval)
 	int numthreads;
 	int vfexec=0;
 	int once = 1;	/* save SGUID-ness for interpreted files */
-	char alt_p_comm[sizeof(p->p_comm)] = {0};	/* for Classic */
+	char alt_p_comm[sizeof(p->p_comm)] = {0};	/* for PowerPC */
 	int is_64 = IS_64BIT_PROCESS(p);
 	int seg = (is_64 ? UIO_USERSPACE64 : UIO_USERSPACE32);
 	struct vfs_context context;
@@ -842,7 +1036,7 @@ execve(struct proc *p, struct execve_args *uap, register_t *retval)
 	imgp->ip_vfs_context = &context;
 	imgp->ip_flags = (is_64 ? IMGPF_WAS_64BIT : IMGPF_NONE);
 	imgp->ip_tws_cache_name = NULL;
-	imgp->ip_p_comm = alt_p_comm;		/* for Classic */
+	imgp->ip_p_comm = alt_p_comm;		/* for PowerPC */
 
 	/*
          * XXXAUDIT: Currently, we only audit the pathname of the binary.
@@ -943,6 +1137,15 @@ encapsulated_binary:
 			nd.ni_cnd.cn_flags = (nd.ni_cnd.cn_flags & HASBUF) |
 						(FOLLOW | LOCKLEAF);
 
+#ifdef IMGPF_POWERPC
+			/*
+			 * PowerPC does not follow symlinks because the
+			 * code which sets exec_archhandler_ppc.fsid and
+			 * exec_archhandler_ppc.fileid doesn't follow them.
+			 */
+			if (imgp->ip_flags & IMGPF_POWERPC)
+				nd.ni_cnd.cn_flags &= ~FOLLOW;
+#endif	/* IMGPF_POWERPC */
 
 			nd.ni_segflg = UIO_SYSSPACE32;
 			nd.ni_dirp = CAST_USER_ADDR_T(imgp->ip_interp_name);
@@ -1098,6 +1301,27 @@ exec_copyout_strings(struct image_params *imgp, user_addr_t *stackp)
 
 	stack = *stackp;
 
+	unsigned patharea_len = imgp->ip_argv - imgp->ip_strings;
+	int envc_add = 0;
+	
+#ifdef IMGPF_POWERPC
+	/*
+	 * oah750 expects /usr/lib/dyld\0 as the start of the program name.
+	 * It also expects to have a certain environment variable set to 0.
+	 * 50 bytes for each to ensure we have enough space without having
+	 * to count every byte.
+	 */
+	char *progname, *envvar;
+	char progname_str[] = "/usr/lib/dyld";
+	char envvar_str[] = "OAH750_CFG_FU_STACK_SIZE=0";
+	
+	if (imgp->ip_flags & IMGPF_POWERPC) {
+		progname = progname_str;
+		envvar = envvar_str;
+		patharea_len += strlen(progname) + strlen(envvar) + 2;
+		envc_add = 1;
+	}
+#endif /* IMGPF_POWERPC */
 	/*
 	 * Set up pointers to the beginning of the string area, the beginning
 	 * of the path area, and the beginning of the pointer area (actually,
@@ -1105,8 +1329,8 @@ exec_copyout_strings(struct image_params *imgp, user_addr_t *stackp)
 	 * but we use ptr_size worth of space for it, for alignment).
 	 */
 	string_area = stack - (((imgp->ip_strendp - imgp->ip_strings) + ptr_size-1) & ~(ptr_size-1)) - ptr_size;
-	path_area = string_area - (((imgp->ip_argv - imgp->ip_strings) + ptr_size-1) & ~(ptr_size-1));
-	ptr_area = path_area - ((imgp->ip_argc + imgp->ip_envc + 4) * ptr_size) - ptr_size /*argc*/;
+	path_area = string_area - ((patharea_len + ptr_size-1) & ~(ptr_size-1));
+	ptr_area = path_area - ((imgp->ip_argc + imgp->ip_envc + 4 + envc_add) * ptr_size) - ptr_size /*argc*/;
 
 	/* Return the initial stack address: the location of argc */
 	*stackp = ptr_area;
@@ -1125,8 +1349,20 @@ exec_copyout_strings(struct image_params *imgp, user_addr_t *stackp)
 	 * copy it just before the string area.
 	 */
 	len = 0;
+#ifdef IMGPF_POWERPC
+	if (imgp->ip_flags & IMGPF_POWERPC) {
+		error = copyoutstr(progname, path_area,
+						   patharea_len,
+						   (size_t *)&len);
+		if (error)
+			goto bad;
+		error = copyoutstr(imgp->ip_strings, path_area + strlen(progname) + 1,
+						   patharea_len,
+						   (size_t *)&len);
+	} else
+#endif /* IMGPF_POWERPC */
 	error = copyoutstr(imgp->ip_strings, path_area,
-				(unsigned)(imgp->ip_argv - imgp->ip_strings),
+						   patharea_len,
 				(size_t *)&len);
 	if (error)
 		goto bad;
@@ -1169,6 +1405,27 @@ exec_copyout_strings(struct image_params *imgp, user_addr_t *stackp)
 			/* argv[n] = NULL */
 			(void)copyoutptr(0LL, ptr_area, ptr_size);
 			ptr_area += ptr_size;
+#ifdef IMGPF_POWERPC
+			if (envc_add) {
+				(void)copyoutptr(string_area, ptr_area, ptr_size);
+				
+				do {
+					if (strspace <= 0) {
+						error = E2BIG;
+						break;
+					}
+					error = copyoutstr(envvar, string_area,
+									   (unsigned)strspace,
+									   (size_t *)&len);
+					string_area += len;
+					envvar += len;
+					strspace -= len;
+				} while (error == ENAMETOOLONG);				
+				if (error == EFAULT || error == E2BIG)
+					break;
+				ptr_area += ptr_size;
+			}
+#endif /* IMGPF_POWERPC */
 		}
 		if (--stringc < 0)
 			break;
@@ -1363,6 +1620,17 @@ exec_check_permissions(struct image_params *imgp)
 	if (vp->v_writecount)
 		return (ETXTBSY);
 
+#ifdef IMGPF_POWERPC
+	/*
+	 * If the file we are about to attempt to load is the exec_handler_ppc,
+	 * which is determined by matching the vattr fields against previously
+	 * cached values, then we set the PowerPC environment flag.
+	 */
+	if (vap->va_fsid == exec_archhandler_ppc.fsid &&
+		vap->va_fileid == (uint64_t)((u_long)exec_archhandler_ppc.fileid)) {
+		imgp->ip_flags |= IMGPF_POWERPC;
+	}
+#endif	/* IMGPF_POWERPC */
 
 	/* XXX May want to indicate to underlying FS that vnode is open */
 

@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -191,7 +191,6 @@ int at_pcbbind(pcb, nam)
 	register struct atpcb *pcb;
 	struct sockaddr *nam;
 {
-	register struct socket *so = pcb->atpcb_socket;
 	register struct sockaddr_at *local = (struct sockaddr_at *) nam;
 	u_char ddpsock = local->sat_port;
 

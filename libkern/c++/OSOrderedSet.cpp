@@ -107,7 +107,7 @@ void OSOrderedSet::free()
     flushCollection();
 
     if (array) {
-        kfree((vm_offset_t)array, sizeof(_Element) * capacity);
+        kfree(array, sizeof(_Element) * capacity);
         ACCUMSIZE( -(sizeof(_Element) * capacity) );
     }
 
@@ -145,7 +145,7 @@ unsigned int OSOrderedSet::ensureCapacity(unsigned int newCapacity)
 
         bcopy(array, newArray, oldSize);
         bzero(&newArray[capacity], newSize - oldSize);
-        kfree((vm_offset_t)array, oldSize);
+        kfree(array, oldSize);
         array = newArray;
         capacity = newCapacity;
     }

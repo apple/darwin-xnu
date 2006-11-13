@@ -252,6 +252,12 @@ unsigned int	vm_page_gobble_count_warning = 0;
 unsigned int	vm_page_purgeable_count = 0; /* # of pages purgeable now */
 uint64_t	vm_page_purged_count = 0;    /* total count of purged pages */
 
+ppnum_t		vm_lopage_poolstart = 0;
+ppnum_t		vm_lopage_poolend = 0;
+int		vm_lopage_poolsize = 0;
+uint64_t	max_valid_dma_address = 0xffffffffffffffffULL;
+
+
 /*
  *	Several page replacement parameters are also
  *	shared with this module, so that page allocation
@@ -557,6 +563,8 @@ pmap_startup(
 	vm_page_t	pages;
 	ppnum_t		phys_page;
 	addr64_t	tmpaddr;
+	unsigned int	num_of_lopages = 0;
+	unsigned int	last_index;
 
 	/*
 	 *	We calculate how many page frames we will have
@@ -572,7 +580,6 @@ pmap_startup(
 	/*
 	 *	Initialize the page frames.
 	 */
-
 	for (i = 0, pages_initialized = 0; i < npages; i++) {
 		if (!pmap_next_page(&phys_page))
 			break;
@@ -583,20 +590,64 @@ pmap_startup(
 	}
 
 	/*
+	 * Check if we want to initialize pages to a known value
+	 */
+	fill = 0;								/* Assume no fill */
+	if (PE_parse_boot_arg("fill", &fillval)) fill = 1;			/* Set fill */
+
+	/*
+	 * if vm_lopage_poolsize is non-zero, than we need to reserve
+	 * a pool of pages whose addresess are less than 4G... this pool
+	 * is used by drivers whose hardware can't DMA beyond 32 bits...
+	 *
+	 * note that I'm assuming that the page list is ascending and
+	 * ordered w/r to the physical address
+	 */
+	for (i = 0, num_of_lopages = vm_lopage_poolsize; num_of_lopages && i < pages_initialized; num_of_lopages--, i++) {
+	        vm_page_t m;
+
+		m = &pages[i];
+
+		if (m->phys_page >= (1 << (32 - PAGE_SHIFT)))
+		        panic("couldn't reserve the lopage pool: not enough lo pages\n");
+
+		if (m->phys_page < vm_lopage_poolend)
+		        panic("couldn't reserve the lopage pool: page list out of order\n");
+
+		vm_lopage_poolend = m->phys_page;
+
+		if (vm_lopage_poolstart == 0)
+		        vm_lopage_poolstart = m->phys_page;
+		else {
+		        if (m->phys_page < vm_lopage_poolstart)
+			        panic("couldn't reserve the lopage pool: page list out of order\n");
+		}
+
+		if (fill)
+		        fillPage(m->phys_page, fillval);		/* Fill the page with a know value if requested at boot */			
+
+		vm_page_release(m);
+	} 
+	last_index = i;
+
+	// -debug code remove
+	if (2 == vm_himemory_mode) {
+		// free low -> high so high is preferred
+		for (i = last_index + 1; i <= pages_initialized; i++) {
+			if(fill) fillPage(pages[i - 1].phys_page, fillval);		/* Fill the page with a know value if requested at boot */			
+			vm_page_release(&pages[i - 1]);
+		}
+	}
+	else
+	// debug code remove-
+
+	/*
 	 * Release pages in reverse order so that physical pages
 	 * initially get allocated in ascending addresses. This keeps
 	 * the devices (which must address physical memory) happy if
 	 * they require several consecutive pages.
 	 */
-
-/*
- *		Check if we want to initialize pages to a known value
- */
-	
-	fill = 0;													/* Assume no fill */
-	if (PE_parse_boot_arg("fill", &fillval)) fill = 1;			/* Set fill */
-	
-	for (i = pages_initialized; i > 0; i--) {
+	for (i = pages_initialized; i > last_index; i--) {
 		if(fill) fillPage(pages[i - 1].phys_page, fillval);		/* Fill the page with a know value if requested at boot */			
 		vm_page_release(&pages[i - 1]);
 	}
@@ -814,7 +865,8 @@ vm_page_replace(
 	register vm_object_t		object,
 	register vm_object_offset_t	offset)
 {
-	register vm_page_bucket_t *bucket;
+	vm_page_bucket_t *bucket;
+	vm_page_t	 found_m = VM_PAGE_NULL;
 
 	VM_PAGE_CHECK(mem);
 #if DEBUG
@@ -840,46 +892,60 @@ vm_page_replace(
 
 	bucket = &vm_page_buckets[vm_page_hash(object, offset)];
 	simple_lock(&vm_page_bucket_lock);
+
 	if (bucket->pages) {
 		vm_page_t *mp = &bucket->pages;
 		register vm_page_t m = *mp;
+
 		do {
 			if (m->object == object && m->offset == offset) {
 				/*
-				 * Remove page from bucket and from object,
-				 * and return it to the free list.
+				 * Remove old page from hash list
 				 */
 				*mp = m->next;
-				VM_PAGE_REMOVE(m);
-				m->tabled = FALSE;
-				m->object = VM_OBJECT_NULL;
-				m->offset = (vm_object_offset_t) -1;
-				object->resident_page_count--;
 
-				if (object->purgable == VM_OBJECT_PURGABLE_VOLATILE ||
-				    object->purgable == VM_OBJECT_PURGABLE_EMPTY) {
-					assert(vm_page_purgeable_count > 0);
-					vm_page_purgeable_count--;
-				}
-					
-				/*
-				 * Return page to the free list.
-				 * Note the page is not tabled now, so this
-				 * won't self-deadlock on the bucket lock.
-				 */
-
-				vm_page_free(m);
+				found_m = m;
 				break;
 			}
 			mp = &m->next;
 		} while ((m = *mp));
+
 		mem->next = bucket->pages;
 	} else {
 		mem->next = VM_PAGE_NULL;
 	}
+	/*
+	 * insert new page at head of hash list
+	 */
 	bucket->pages = mem;
+
 	simple_unlock(&vm_page_bucket_lock);
 
+	if (found_m) {
+	        /*
+		 * there was already a page at the specified
+		 * offset for this object... remove it from
+		 * the object and free it back to the free list
+		 */
+		VM_PAGE_REMOVE(found_m);
+		found_m->tabled = FALSE;
+
+		found_m->object = VM_OBJECT_NULL;
+		found_m->offset = (vm_object_offset_t) -1;
+		object->resident_page_count--;
+
+		if (object->purgable == VM_OBJECT_PURGABLE_VOLATILE ||
+		    object->purgable == VM_OBJECT_PURGABLE_EMPTY) {
+		        assert(vm_page_purgeable_count > 0);
+			vm_page_purgeable_count--;
+		}
+					
+		/*
+		 * Return page to the free list.
+		 * Note the page is not tabled now
+		 */
+		vm_page_free(found_m);
+	}
 	/*
 	 *	Now link into the object's list of backed pages.
 	 */
@@ -1042,7 +1108,19 @@ vm_page_lookup(
 
 	bucket = &vm_page_buckets[vm_page_hash(object, offset)];
 
+        /*
+         * since we hold the object lock, we are guaranteed that no
+         * new pages can be inserted into this object... this in turn
+         * guarantess that the page we're looking for can't exist
+         * if the bucket it hashes to is currently NULL even when looked
+         * at outside the scope of the hash bucket lock... this is a
+         * really cheap optimiztion to avoid taking the lock
+         */
+        if (bucket->pages == VM_PAGE_NULL) {
+                return (VM_PAGE_NULL);
+        }
 	simple_lock(&vm_page_bucket_lock);
+
 	for (mem = bucket->pages; mem != VM_PAGE_NULL; mem = mem->next) {
 		VM_PAGE_CHECK(mem);
 		if ((mem->object == object) && (mem->offset == offset))
@@ -1344,6 +1422,55 @@ vm_pool_low(void)
 	return( vm_page_free_count < vm_page_free_reserved );
 }
 
+
+
+/*
+ * this is an interface to support bring-up of drivers
+ * on platforms with physical memory > 4G...
+ */
+int		vm_himemory_mode = 0;
+
+
+/*
+ * this interface exists to support hardware controllers
+ * incapable of generating DMAs with more than 32 bits
+ * of address on platforms with physical memory > 4G...
+ */
+unsigned int	vm_lopage_free_count = 0;
+unsigned int	vm_lopage_max_count = 0;
+vm_page_t	vm_lopage_queue_free = VM_PAGE_NULL;
+
+vm_page_t
+vm_page_grablo(void)
+{
+	register vm_page_t	mem;
+	unsigned int vm_lopage_alloc_count;
+
+	if (vm_lopage_poolsize == 0)
+	        return (vm_page_grab());
+
+	mutex_lock(&vm_page_queue_free_lock);
+
+	if ((mem = vm_lopage_queue_free) != VM_PAGE_NULL) {
+
+	        vm_lopage_queue_free = (vm_page_t) mem->pageq.next;
+		mem->pageq.next = NULL;
+		mem->pageq.prev = NULL;
+		mem->free = FALSE;
+		mem->no_isync = TRUE;
+
+		vm_lopage_free_count--;
+		vm_lopage_alloc_count = (vm_lopage_poolend - vm_lopage_poolstart) - vm_lopage_free_count;
+		if (vm_lopage_alloc_count > vm_lopage_max_count)
+			vm_lopage_max_count = vm_lopage_alloc_count;
+	}
+	mutex_unlock(&vm_page_queue_free_lock);
+
+	return (mem);
+}
+
+
+
 /*
  *	vm_page_grab:
  *
@@ -1469,36 +1596,46 @@ vm_page_release(
 	assert(mem->object == VM_OBJECT_NULL);
 	assert(mem->pageq.next == NULL &&
 	       mem->pageq.prev == NULL);
-	mem->pageq.next = (queue_entry_t) vm_page_queue_free;
-	vm_page_queue_free = mem;
-	vm_page_free_count++;
 
-	/*
-	 *	Check if we should wake up someone waiting for page.
-	 *	But don't bother waking them unless they can allocate.
-	 *
-	 *	We wakeup only one thread, to prevent starvation.
-	 *	Because the scheduling system handles wait queues FIFO,
-	 *	if we wakeup all waiting threads, one greedy thread
-	 *	can starve multiple niceguy threads.  When the threads
-	 *	all wakeup, the greedy threads runs first, grabs the page,
-	 *	and waits for another page.  It will be the first to run
-	 *	when the next page is freed.
-	 *
-	 *	However, there is a slight danger here.
-	 *	The thread we wake might not use the free page.
-	 *	Then the other threads could wait indefinitely
-	 *	while the page goes unused.  To forestall this,
-	 *	the pageout daemon will keep making free pages
-	 *	as long as vm_page_free_wanted is non-zero.
-	 */
+	if (mem->phys_page <= vm_lopage_poolend && mem->phys_page >= vm_lopage_poolstart) {
+	        /*
+		 * this exists to support hardware controllers
+		 * incapable of generating DMAs with more than 32 bits
+		 * of address on platforms with physical memory > 4G...
+		 */
+	        mem->pageq.next = (queue_entry_t) vm_lopage_queue_free;
+		vm_lopage_queue_free = mem;
+		vm_lopage_free_count++;
+	} else {	  
+	        mem->pageq.next = (queue_entry_t) vm_page_queue_free;
+		vm_page_queue_free = mem;
+		vm_page_free_count++;
+		/*
+		 *	Check if we should wake up someone waiting for page.
+		 *	But don't bother waking them unless they can allocate.
+		 *
+		 *	We wakeup only one thread, to prevent starvation.
+		 *	Because the scheduling system handles wait queues FIFO,
+		 *	if we wakeup all waiting threads, one greedy thread
+		 *	can starve multiple niceguy threads.  When the threads
+		 *	all wakeup, the greedy threads runs first, grabs the page,
+		 *	and waits for another page.  It will be the first to run
+		 *	when the next page is freed.
+		 *
+		 *	However, there is a slight danger here.
+		 *	The thread we wake might not use the free page.
+		 *	Then the other threads could wait indefinitely
+		 *	while the page goes unused.  To forestall this,
+		 *	the pageout daemon will keep making free pages
+		 *	as long as vm_page_free_wanted is non-zero.
+		 */
 
-	if ((vm_page_free_wanted > 0) &&
-	    (vm_page_free_count >= vm_page_free_reserved)) {
-		vm_page_free_wanted--;
-		thread_wakeup_one((event_t) &vm_page_free_count);
+		if ((vm_page_free_wanted > 0) &&
+		    (vm_page_free_count >= vm_page_free_reserved)) {
+		        vm_page_free_wanted--;
+			thread_wakeup_one((event_t) &vm_page_free_count);
+		}
 	}
-
 	mutex_unlock(&vm_page_queue_free_lock);
 }
 
@@ -1575,6 +1712,27 @@ vm_page_alloc(
 
 	return(mem);
 }
+
+
+vm_page_t
+vm_page_alloclo(
+	vm_object_t		object,
+	vm_object_offset_t	offset)
+{
+	register vm_page_t	mem;
+
+#if DEBUG
+	_mutex_assert(&object->Lock, MA_OWNED);
+#endif
+	mem = vm_page_grablo();
+	if (mem == VM_PAGE_NULL)
+		return VM_PAGE_NULL;
+
+	vm_page_insert(mem, object, offset);
+
+	return(mem);
+}
+
 
 counter(unsigned int c_laundry_pages_freed = 0;)
 

@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -38,21 +38,6 @@
 
 #ifndef _BSD_I386_REG_H_
 #define _BSD_I386_REG_H_
-
-/* FIXME - should include mach/i386/thread_status.h and 
-  construct the values from i386_saved_state
- */
-#define	EDX	9
-#define	ECX	10
-#define	EAX	11
-#define	EIP	14
-#define	EFL	16
-#define	ESP	7
-#define	UESP	17
-#define	PS	EFL
-#define	PC	EIP
-#define	SP	UESP
-
 
 
 #endif	/* _BSD_I386_REG_H_ */

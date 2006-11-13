@@ -51,7 +51,6 @@
  * states and the structures of those flavors for each machine.
  */
 #include <mach/machine/thread_status.h>
-#include <architecture/byte_order.h>
 
 /*
  * The mach header appears at the very beginning of the object file; it
@@ -84,11 +83,11 @@ struct mach_header_64 {
 
 /* Constant for the magic field of the mach_header (32-bit architectures) */
 #define	MH_MAGIC	0xfeedface	/* the mach magic number */
-#define MH_CIGAM	NXSwapInt(MH_MAGIC)
+#define MH_CIGAM	0xcefaedfe
 
 /* Constant for the magic field of the mach_header_64 (64-bit architectures) */
 #define MH_MAGIC_64	0xfeedfacf	/* the 64-bit mach magic number */
-#define MH_CIGAM_64	NXSwapInt(MH_MAGIC_64)
+#define MH_CIGAM_64	0xcffaedfe	
 
 /* Constants for the cmd field of new load commands, the type */
 #define LC_SEGMENT_64	0x19	/* 64-bit segment of this file to be mapped */
@@ -141,6 +140,10 @@ struct mach_header_64 {
 					   linker when loaded. */
 #define MH_PREBOUND	0x10		/* the file has it's dynamic undefined
 					   references prebound. */
+#define MH_ALLOW_STACK_EXECUTION 0x20000/* When this bit is set, all stacks 
+					   in the task will be given stack
+					   execution privilege.  Only used in
+					   MH_EXECUTE filetypes. */
 
 /*
  * The load commands directly follow the mach_header.  The total size of all

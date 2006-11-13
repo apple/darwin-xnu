@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -145,7 +145,6 @@ kmstartup(void)
 	
 	mcount_lock_grp = lck_grp_alloc_init("MCOUNT", LCK_GRP_ATTR_NULL);
 	mcount_lock_attr = lck_attr_alloc_init();
-	//lck_attr_setdebug(mcount_lock_attr);
 	mcount_lock = lck_spin_alloc_init(mcount_lock_grp, mcount_lock_attr);
 
 }

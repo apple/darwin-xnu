@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -80,10 +80,8 @@ int RXFReset(sp, f)		/* (CCBPtr sp, ADSP_FRAMEPtr f) */
     unsigned int hi;
     register gbuf_t *mp;
     register struct adspcmd *pb;
-    int s;
 
-    ATDISABLE(s, sp->lock);
-    pktFirstByteSeq = netdw(UAL_VALUE(f->pktFirstByteSeq));
+    pktFirstByteSeq = UAL_VALUE_NTOH(f->pktFirstByteSeq);
     
     hi = sp->recvSeq + CalcRecvWdw(sp);
 
@@ -122,7 +120,6 @@ int RXFReset(sp, f)		/* (CCBPtr sp, ADSP_FRAMEPtr f) */
 	sp->callSend = 1;
     }
 
-    ATENABLE(s, sp->lock);
     return 0;
 }
 
@@ -145,13 +142,11 @@ int RXFResetAck(sp, f)		/* (CCBPtr sp, ADSP_FRAMEPtr f) */
     ADSP_FRAMEPtr f;
 {
     unsigned int  PktNextRecvSeq;
-    int s;
 
     if (sp->frpb == 0)		/* Not expecting frwd reset Ack packet */
 	return 1;
 
-    ATDISABLE(s, sp->lock);
-    PktNextRecvSeq = netdw(UAL_VALUE(f->pktNextRecvSeq));
+    PktNextRecvSeq = UAL_VALUE_NTOH(f->pktNextRecvSeq);
 
     if (BETWEEN(sp->sendSeq, PktNextRecvSeq, sp->sendWdwSeq+1)) {
 	struct adspcmd *pb;
@@ -178,7 +173,6 @@ int RXFResetAck(sp, f)		/* (CCBPtr sp, ADSP_FRAMEPtr f) */
 	}
     }
 
-    ATENABLE(s, sp->lock);
     return 0;
 }
 
@@ -201,7 +195,6 @@ int adspReset(sp, pb)		/* (DSPPBPtr pb) */
     CCBPtr sp;
     struct adspcmd *pb;
 {
-    int s;
     register gbuf_t *mp;
     register struct adspcmd *rpb;
 	
@@ -215,7 +208,6 @@ int adspReset(sp, pb)		/* (DSPPBPtr pb) */
 	return EINVAL;
     }
 	
-    ATDISABLE(s, sp->lock);
 
     while (mp = sp->sbuf_mb) { /* clear the send queue */
 	sp->sbuf_mb = gbuf_next(mp);
@@ -243,7 +235,6 @@ int adspReset(sp, pb)		/* (DSPPBPtr pb) */
 				 * bookkeeping for it.  yetch! */
 	    adspioc_ack(0, pb->ioc, pb->gref);
     }
-    ATENABLE(s, sp->lock);
 
     CheckSend(sp);
     return STR_IGNORE;

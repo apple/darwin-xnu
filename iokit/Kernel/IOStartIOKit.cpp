@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
@@ -53,6 +53,7 @@
 extern "C" {
 
 extern void OSlibkernInit (void);
+extern void ml_hpet_cfg(uint32_t, uint32_t);
 
 #include <kern/clock.h>
 
@@ -67,6 +68,7 @@ void IOKitResetTime( void )
 #ifndef i386
 	IOService::waitForService(
 		IOService::resourceMatching("IONVRAM"), &t );
+
 #endif
 
     clock_initialize_calendar();

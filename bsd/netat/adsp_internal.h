@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -252,9 +252,6 @@ typedef struct ccb {
     ADSP_OPEN_DATA of;		/* Holds the data for the open exchange */
     gref_t *gref;			/* The queue associated with the CCB */
     gbuf_t *sp_mp;
-    atlock_t lock;
-    atlock_t lockClose;
-    atlock_t lockRemove;
 } CCB, *CCBPtr;
 
 

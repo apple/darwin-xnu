@@ -98,6 +98,7 @@ kernel_trap(init_process,-41,0)
 kernel_trap(map_fd,-43,5)
 #endif	/* __LP64__ */
 
+kernel_trap(task_name_for_pid,-44,3)
 kernel_trap(task_for_pid,-45,3)
 kernel_trap(pid_for_task,-46,2)
 

@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -39,6 +39,20 @@
 #include <sys/cdefs.h>
 #include <machine/signal.h>
 
+
+#if defined(__x86_64__)
+/*
+ * _JBLEN is number of ints required to save the following:
+ * rflags, rip, rbp, rsp, rbx, r12, r13, r14, r15... these are 8 bytes each
+ * mxcsr, fp control word, sigmask... these are 4 bytes each
+ * add 16 ints for future expansion needs...
+ */
+#define _JBLEN ((9 * 2) + 3 + 16)
+typedef int jmp_buf[_JBLEN];
+typedef int sigjmp_buf[_JBLEN + 1];
+
+#else
+
 /*
  * _JBLEN is number of ints required to save the following:
  * eax, ebx, ecx, edx, edi, esi, ebp, esp, ss, eflags, eip,
@@ -56,6 +70,7 @@ typedef int jmp_buf[_JBLEN];
 typedef int sigjmp_buf[_JBLEN + 1];
 #endif
 
+#endif
 
 __BEGIN_DECLS
 extern int setjmp(jmp_buf env);

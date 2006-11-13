@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -153,5 +153,5 @@ lck_mtx_t *	udp_getlock (struct socket *, int);
 void *	udp_getlock (struct socket *, int);
 #endif
 
-#endif KERNEL_PRIVATE
-#endif _NETINET_UDP_VAR_H_
+#endif /* KERNEL_PRIVATE */
+#endif /* _NETINET_UDP_VAR_H_ */

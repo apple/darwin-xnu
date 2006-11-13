@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -318,8 +318,8 @@ struct kev_atalk_data {
 
 void atalk_post_msg(struct ifnet *ifp, u_long event_code, struct at_addr *address, at_nvestr_t *zone);
 void aarp_sched_probe(void *);
-void atalk_lock();
-void atalk_unlock();
+void atalk_lock(void);
+void atalk_unlock(void);
 
 #endif /* KERNEL_PRIVATE */
 #endif /* __APPLE_API_OBSOLETE */

@@ -2,7 +2,7 @@
 #	@(#)makesyscalls.sh	8.1 (Berkeley) 6/10/93
 # $FreeBSD: src/sys/kern/makesyscalls.sh,v 1.60 2003/04/01 01:12:24 jeff Exp $
 #
-# Copyright (c) 2006 Apple Computer, Inc. All rights reserved.
+# Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
 #
 # @APPLE_LICENSE_OSREFERENCE_HEADER_START@
 # 
@@ -154,13 +154,8 @@ s/\$//g
 		printf "#include <mach/shared_memory_server.h>\n" > sysarg
 		printf "\n#ifdef KERNEL\n" > sysarg
 		printf "#ifdef __APPLE_API_PRIVATE\n" > sysarg
-		printf "#ifdef __ppc__\n" > sysarg
 		printf "#define\tPAD_(t)\t(sizeof(uint64_t) <= sizeof(t) \\\n " > sysarg
 		printf "\t\t? 0 : sizeof(uint64_t) - sizeof(t))\n" > sysarg
-		printf "#else\n" > sysarg
-		printf "#define\tPAD_(t)\t(sizeof(register_t) <= sizeof(t) \\\n " > sysarg
-		printf "\t\t? 0 : sizeof(register_t) - sizeof(t))\n" > sysarg
-		printf "#endif\n" > sysarg
 		printf "#if BYTE_ORDER == LITTLE_ENDIAN\n"> sysarg
 		printf "#define\tPADL_(t)\t0\n" > sysarg
 		printf "#define\tPADR_(t)\tPAD_(t)\n" > sysarg
@@ -171,7 +166,6 @@ s/\$//g
 		printf "\n__BEGIN_DECLS\n" > sysarg
 		printf "#ifndef __MUNGE_ONCE\n" > sysarg
 		printf "#define __MUNGE_ONCE\n" > sysarg
-		printf "#ifdef __ppc__\n" > sysarg
 		printf "void munge_w(const void *, void *);  \n" > sysarg
 		printf "void munge_ww(const void *, void *);  \n" > sysarg
 		printf "void munge_www(const void *, void *);  \n" > sysarg
@@ -180,6 +174,16 @@ s/\$//g
 		printf "void munge_wwwwww(const void *, void *);  \n" > sysarg
 		printf "void munge_wwwwwww(const void *, void *);  \n" > sysarg
 		printf "void munge_wwwwwwww(const void *, void *);  \n" > sysarg
+		printf "void munge_wl(const void *, void *);  \n" > sysarg
+		printf "void munge_wlw(const void *, void *);  \n" > sysarg
+		printf "void munge_wwwl(const void *, void *);  \n" > sysarg
+		printf "void munge_wwwlww(const void *, void *); \n" > sysarg
+		printf "void munge_wwwwl(const void *, void *);  \n" > sysarg
+		printf "void munge_wwwwwl(const void *, void *);  \n" > sysarg
+		printf "void munge_wsw(const void *, void *);  \n" > sysarg
+		printf "void munge_wws(const void *, void *);  \n" > sysarg
+		printf "void munge_wwwsw(const void *, void *);  \n" > sysarg
+		printf "#ifdef __ppc__\n" > sysarg
 		printf "void munge_d(const void *, void *);  \n" > sysarg
 		printf "void munge_dd(const void *, void *);  \n" > sysarg
 		printf "void munge_ddd(const void *, void *);  \n" > sysarg
@@ -188,23 +192,7 @@ s/\$//g
 		printf "void munge_dddddd(const void *, void *);  \n" > sysarg
 		printf "void munge_ddddddd(const void *, void *);  \n" > sysarg
 		printf "void munge_dddddddd(const void *, void *);  \n" > sysarg
-		printf "void munge_wl(const void *, void *);  \n" > sysarg
-		printf "void munge_wlw(const void *, void *);  \n" > sysarg
-		printf "void munge_wwwl(const void *, void *);  \n" > sysarg
-		printf "void munge_wwwwl(const void *, void *);  \n" > sysarg
-		printf "void munge_wwwwwl(const void *, void *);  \n" > sysarg
-		printf "void munge_wsw(const void *, void *);  \n" > sysarg
-		printf "void munge_wws(const void *, void *);  \n" > sysarg
-		printf "void munge_wwwsw(const void *, void *);  \n" > sysarg
 		printf "#else \n" > sysarg
-		printf "#define munge_w  NULL \n" > sysarg
-		printf "#define munge_ww  NULL \n" > sysarg
-		printf "#define munge_www  NULL \n" > sysarg
-		printf "#define munge_wwww  NULL \n" > sysarg
-		printf "#define munge_wwwww  NULL \n" > sysarg
-		printf "#define munge_wwwwww  NULL \n" > sysarg
-		printf "#define munge_wwwwwww  NULL \n" > sysarg
-		printf "#define munge_wwwwwwww  NULL \n" > sysarg
 		printf "#define munge_d  NULL \n" > sysarg
 		printf "#define munge_dd  NULL \n" > sysarg
 		printf "#define munge_ddd  NULL \n" > sysarg
@@ -213,14 +201,6 @@ s/\$//g
 		printf "#define munge_dddddd  NULL \n" > sysarg
 		printf "#define munge_ddddddd  NULL \n" > sysarg
 		printf "#define munge_dddddddd  NULL \n" > sysarg
-		printf "#define munge_wl  NULL \n" > sysarg
-		printf "#define munge_wlw  NULL \n" > sysarg
-		printf "#define munge_wwwl  NULL \n" > sysarg
-		printf "#define munge_wwwwl  NULL \n" > sysarg
-		printf "#define munge_wwwwwl  NULL \n" > sysarg
-		printf "#define munge_wsw  NULL \n" > sysarg
-		printf "#define munge_wws  NULL \n" > sysarg
-		printf "#define munge_wwwsw  NULL \n" > sysarg
 		printf "#endif // __ppc__\n" > sysarg
 		printf "#endif /* !__MUNGE_ONCE */\n" > sysarg
 		
@@ -679,11 +659,7 @@ s/\$//g
 	}
 
 	END {
-		printf "#ifdef __ppc__\n" > sysinc
 		printf "#define AC(name) (sizeof(struct name) / sizeof(uint64_t))\n" > sysinc
-		printf "#else\n" > sysinc
-		printf "#define AC(name) (sizeof(struct name) / sizeof(register_t))\n" > sysinc
-		printf "#endif\n" > sysinc
 		printf "\n" > sysinc
 
 		printf("\n__END_DECLS\n") > sysprotoend

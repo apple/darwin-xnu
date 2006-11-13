@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -48,6 +48,9 @@ struct hfs_backingstoreinfo {
 
 
 /* HFS FS CONTROL COMMANDS */
+
+#define HFSIOC_RESIZE_PROGRESS  _IOR('h', 1, u_int32_t)
+#define HFS_RESIZE_PROGRESS  IOCBASECMD(HFSIOC_RESIZE_PROGRESS)
 
 #define HFSIOC_RESIZE_VOLUME  _IOW('h', 2, u_int64_t)
 #define HFS_RESIZE_VOLUME  IOCBASECMD(HFSIOC_RESIZE_VOLUME)

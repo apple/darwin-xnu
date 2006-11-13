@@ -80,6 +80,7 @@
 #define S_ARG1	 8(%esp)
 #define S_ARG2	12(%esp)
 #define S_ARG3	16(%esp)
+#define S_ARG4	20(%esp)
 
 #define FRAME	pushl %ebp; movl %esp, %ebp
 #define EMARF	leave
@@ -93,7 +94,7 @@
 
 /* There is another definition of ALIGN for .c sources */
 #ifdef ASSEMBLER
-#define ALIGN 2,0x90
+#define ALIGN 4,0x90
 #endif /* ASSEMBLER */
 
 #ifndef FALIGN

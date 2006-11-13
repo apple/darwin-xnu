@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -115,7 +115,7 @@ void
 ktrsyscall(p, code, narg, args)
 	struct proc *p;
 	int code, narg;
-	u_int64_t args[];
+	syscall_arg_t args[];
 {
 #if KTRACE
 	struct vnode *vp;

@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -1233,6 +1233,7 @@ findpcb:
 	 */
 	if (tp->t_state != TCPS_LISTEN && optp)
 		tcp_dooptions(tp, optp, optlen, th, &to);
+
 
 	if (tp->t_state == TCPS_SYN_SENT && (thflags & TH_SYN)) {
 		if (to.to_flags & TOF_SCALE) {

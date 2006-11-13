@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -1344,7 +1344,6 @@ static struct vnodeopv_entry_desc devfs_spec_vnodeop_entries[] = {
 	{ &vnop_pathconf_desc, (VOPFUNC)spec_pathconf },		/* pathconf */
 	{ &vnop_advlock_desc, (VOPFUNC)spec_advlock },		/* advlock */
 	{ &vnop_bwrite_desc, (VOPFUNC)vn_bwrite },
-	{ &vnop_devblocksize_desc, (VOPFUNC)spec_devblocksize },	/* devblocksize */
 	{ &vnop_pagein_desc, (VOPFUNC)err_pagein },		/* Pagein */
 	{ &vnop_pageout_desc, (VOPFUNC)err_pageout },		/* Pageout */
 	{ &vnop_copyfile_desc, (VOPFUNC)err_copyfile },		/* Copyfile */

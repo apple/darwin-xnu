@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -199,8 +199,15 @@ struct kqueue;
 int fp_getfkq(struct proc *p, int fd, struct fileproc **resultfp, struct kqueue  **resultkq);
 struct psemnode;
 int fp_getfpsem(struct proc *p, int fd, struct fileproc **resultfp, struct psemnode  **resultpsem);
+struct pshmnode;
+int fp_getfpshm(struct proc *p, int fd, struct fileproc **resultfp, struct pshmnode  **resultpshm);
+struct pipe;
+int fp_getfpipe(struct proc *p, int fd, struct fileproc **resultfp, struct pipe  **resultpipe);
+struct atalk;
+int fp_getfatalk(struct proc *p, int fd, struct fileproc **resultfp, struct atalk  **resultatalk);
 struct vnode;
 int fp_getfvp(struct proc *p, int fd, struct fileproc **resultfp, struct vnode  **resultvp);
+int fp_getfvpandvid(struct proc *p, int fd, struct fileproc **resultfp, struct vnode  **resultvp, uint32_t * vidp);
 struct socket;
 int fp_getfsock(struct proc *p, int fd, struct fileproc **resultfp, struct socket  **results);
 int fp_lookup(struct proc *p, int fd, struct fileproc **resultfp, int locked);

@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -90,7 +90,7 @@
 #include <ufs/ufs/ufs_extern.h>
 #if REV_ENDIAN_FS
 #include <ufs/ufs/ufs_byte_order.h>
-#include <architecture/byte_order.h>
+#include <libkern/OSByteOrder.h>
 #endif /* REV_ENDIAN_FS */
 
 
@@ -228,7 +228,7 @@ ufs_bmaparray(vp, bn, bnp, ap, nump, runp)
 		daddr = dataptr[xap->in_off];
 #if REV_ENDIAN_FS
 		if (rev_endian)
-			daddr = NXSwapLong(daddr);
+			daddr = OSSwapInt32(daddr);
 #endif /* REV_ENDIAN_FS */
 		if (num == 1 && daddr && runp) {
 #if REV_ENDIAN_FS
@@ -236,8 +236,8 @@ ufs_bmaparray(vp, bn, bnp, ap, nump, runp)
 			for (bn = xap->in_off + 1;
 			    bn < MNINDIR(ump) && *runp < maxrun &&
 			    is_sequential(ump,
-			    NXSwapLong(dataptr[bn - 1]),
-			    NXSwapLong(dataptr[bn]));
+			    OSSwapInt32(dataptr[bn - 1]),
+			    OSSwapInt32(dataptr[bn]));
 			    ++bn, ++*runp);
 		 } else {
 #endif /* REV_ENDIAN_FS */

@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -297,6 +297,8 @@ exit:
 }
 
 
+#define HFS_CLUMP_ADJ_LIMIT  (200*1024*1024)
+
 __private_extern__
 OSStatus ExtendBTreeFile(FileReference vp, FSSize minEOF, FSSize maxEOF)
 {
@@ -329,7 +331,13 @@ OSStatus ExtendBTreeFile(FileReference vp, FSSize minEOF, FSSize maxEOF)
 	}
 
 	vcb = VTOVCB(vp);
-	
+
+	/* Take past growth into account when extending the catalog file. */
+	if ((VTOC(vp)->c_fileid == kHFSCatalogFileID) &&
+	    (bytesToAdd / vcb->blockSize) < filePtr->fcbExtents[0].blockCount) {
+			bytesToAdd = filePtr->fcbExtents[0].blockCount * (UInt64)vcb->blockSize;
+			bytesToAdd = MIN(bytesToAdd, HFS_CLUMP_ADJ_LIMIT);
+	}
 	/*
 	 * The Extents B-tree can't have overflow extents. ExtendFileC will
 	 * return an error if an attempt is made to extend the Extents B-tree

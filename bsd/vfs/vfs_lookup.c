@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -940,7 +940,7 @@ kdebug_lookup(dp, cnp)
 	struct vnode *dp;
 	struct componentname *cnp;
 {
-	register unsigned int i, n;
+	register unsigned int i, n, code;
 	register int dbg_namelen;
 	register int save_dbg_namelen;
 	register char *dbg_nameptr;
@@ -984,19 +984,27 @@ kdebug_lookup(dp, cnp)
 	    else
 	        dbg_parms[i++] = 0;
 	}
+	dbg_namelen = save_dbg_namelen - 12;
 
 	/*
-	  In the event that we collect multiple, consecutive pathname
-	  entries, we must mark the start of the path's string.
-	*/
-	KERNEL_DEBUG_CONSTANT((FSDBG_CODE(DBG_FSRW,36)) | DBG_FUNC_START,
-		(unsigned int)dp, dbg_parms[0], dbg_parms[1], dbg_parms[2], 0);
+	 * In the event that we collect multiple, consecutive pathname
+	 * entries, we must mark the start of the path's string and the end
+	 */
+	code = (FSDBG_CODE(DBG_FSRW,36)) | DBG_FUNC_START;
 
-	for (dbg_namelen = save_dbg_namelen-12, i=3;
-	     dbg_namelen > 0;
-	     dbg_namelen -=(4 * sizeof(long)), i+= 4)
-	  {
-	    KERNEL_DEBUG_CONSTANT((FSDBG_CODE(DBG_FSRW,36)) | DBG_FUNC_NONE,
-				  dbg_parms[i], dbg_parms[i+1], dbg_parms[i+2], dbg_parms[i+3], 0);
-	  }
+	if (dbg_namelen <= 0)
+	        code |= DBG_FUNC_END;
+
+	KERNEL_DEBUG_CONSTANT(code, (unsigned int)dp, dbg_parms[0], dbg_parms[1], dbg_parms[2], 0);
+
+	code &= ~DBG_FUNC_START;
+
+	for (i = 3; dbg_namelen > 0; i += 4) {
+
+	        dbg_namelen -= (4 * sizeof(long));
+	        if (dbg_namelen <= 0)
+		        code |= DBG_FUNC_END;
+
+	        KERNEL_DEBUG_CONSTANT(code, dbg_parms[i], dbg_parms[i+1], dbg_parms[i+2], dbg_parms[i+3], 0);
+	}
 }

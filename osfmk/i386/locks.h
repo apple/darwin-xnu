@@ -90,6 +90,12 @@ typedef struct _lck_mtx_ {
 #define	LCK_MTX_TAG_INDIRECT			0x00001007	/* lock marked as Indirect  */
 #define	LCK_MTX_TAG_DESTROYED			0x00002007	/* lock marked as Destroyed */
 
+/* Adaptive spin before blocking */
+extern unsigned int	MutexSpin;
+extern void		lck_mtx_lock_spin(lck_mtx_t *lck);
+
+extern void		lck_mtx_interlock_spin(lck_mtx_t *lck);
+
 typedef struct {
 	unsigned int		type;
 	vm_offset_t		pc;
@@ -111,9 +117,9 @@ typedef struct _lck_mtx_ext_ {
 } lck_mtx_ext_t;
 
 #define	LCK_MTX_ATTR_DEBUG	0x1
-#define	LCK_MTX_ATTR_DEBUGb	31
+#define	LCK_MTX_ATTR_DEBUGb	0
 #define	LCK_MTX_ATTR_STAT	0x2
-#define	LCK_MTX_ATTR_STATb	30
+#define	LCK_MTX_ATTR_STATb	1
 
 #else
 #ifdef	KERNEL_PRIVATE
@@ -131,11 +137,23 @@ typedef struct {
 	volatile unsigned int
 						read_count:16,	/* No. of accepted readers */
 						want_upgrade:1,	/* Read-to-write upgrade waiting */
-						want_write:1,	/* Writer is waiting, or locked for write */
+			want_write:1,	/* Writer waiting or locked for write */
 						waiting:1,		/* Someone is sleeping on lock */
-						can_sleep:1;	/* Can attempts to lock go to sleep? */
+			can_sleep:1,	/* Can attempts to lock go to sleep? */
+			read_priority:1;/* New read takes piority over write */
 	unsigned int		lck_rw_tag;
 } lck_rw_t;
+
+#define	LCK_RW_ATTR_DEBUG	0x1
+#define	LCK_RW_ATTR_DEBUGb	0
+#define	LCK_RW_ATTR_STAT	0x2
+#define	LCK_RW_ATTR_STATb	1
+#define LCK_RW_ATTR_READ_PRI	0x3
+#define LCK_RW_ATTR_READ_PRIb	2
+#define	LCK_RW_ATTR_DIS_THREAD	0x40000000
+#define	LCK_RW_ATTR_DIS_THREADb	30
+#define	LCK_RW_ATTR_DIS_MYLOCK	0x10000000
+#define	LCK_RW_ATTR_DIS_MYLOCKb	28
 
 #define	LCK_RW_TAG_DESTROYED		0x00002007	/* lock marked as Destroyed */
 

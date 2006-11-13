@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -73,7 +73,7 @@
  * compile time; you *cannot* set it higher than the hard limit!!
  */
 #define	ARG_MAX		   (256 * 1024)	/* max bytes for an exec function */
-#define	CHILD_MAX		   100	/* max simultaneous processes */
+#define	CHILD_MAX		   266	/* max simultaneous processes */
 #define	GID_MAX		   2147483647U	/* max value for a gid_t (2^31-2) */
 #define	LINK_MAX		32767	/* max file link count */
 #define	MAX_CANON		  255	/* max bytes in term canon input line */

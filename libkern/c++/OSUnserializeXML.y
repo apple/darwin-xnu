@@ -68,7 +68,7 @@
 
 #define YYSTYPE object_t *
 #define YYPARSE_PARAM	state
-#define YYLEX_PARAM	state
+#define YYLEX_PARAM	(parser_state_t *)state
 
 // this is the internal struct used to hold objects on parser stack
 // it represents objects both before and after they have been created
@@ -134,7 +134,7 @@ extern unsigned long	strtoul(const char *, char **, int);
 
 #define malloc(s) kern_os_malloc(s)
 #define realloc(a, s) kern_os_realloc(a, s)
-#define free(a) kern_os_free(a)
+#define free(a) kern_os_free((void *)a)
 
 %}
 %token ARRAY
@@ -198,7 +198,7 @@ pairs:	  pair
 	;
 
 pair:	  key object		{ $$ = $1;
-				  $$->key = $$->object;
+				  $$->key = (OSString *)$$->object;
 				  $$->object = $2->object;
 				  $$->next = NULL; 
 				  $2->object = 0;

@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -48,6 +48,7 @@
 #include <sys/time.h>
 #include <dev/kmreg_com.h>
 #include <pexpert/pexpert.h>
+#include <pexpert/i386/boot.h>
 
 extern int hz;
 
@@ -143,7 +144,10 @@ kmopen(
 
 		bzero(&video, sizeof(video));
 		PE_current_console(&video);
-		if( video.v_width != 0 && video.v_height != 0 ) {
+                if( video.v_display == VGA_TEXT_MODE ) {
+                        wp->ws_col = video.v_width;
+                        wp->ws_row = video.v_height;
+                } else if( video.v_width != 0 && video.v_height != 0 ) {
 			wp->ws_col = video.v_width / wp->ws_xpixel;
 			wp->ws_row = video.v_height / wp->ws_ypixel;
 		} else {

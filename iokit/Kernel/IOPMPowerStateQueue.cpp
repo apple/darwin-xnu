@@ -29,9 +29,45 @@
  */
  
 #include "IOPMPowerStateQueue.h"
+#include "IOKit/IOLocks.h"
 #undef super
 #define super IOEventSource
 OSDefineMetaClassAndStructors(IOPMPowerStateQueue, IOEventSource);
+
+#ifdef __i386__ /* ppc does this right and doesn't need these routines */
+static
+void *	OSDequeueAtomic(void ** inList, SInt32 inOffset)
+{
+	void *	oldListHead;
+	void *	newListHead;
+
+	do {
+		oldListHead = *inList;
+		if (oldListHead == NULL) {
+			break;
+		}
+		
+		newListHead = *(void **) (((char *) oldListHead) + inOffset);
+	} while (! OSCompareAndSwap((UInt32)oldListHead,
+					(UInt32)newListHead, (UInt32 *)inList));
+	return oldListHead;
+}
+
+static
+void	OSEnqueueAtomic(void ** inList, void * inNewLink, SInt32 inOffset)
+{
+	void *	oldListHead;
+	void *	newListHead = inNewLink;
+	void **	newLinkNextPtr = (void **) (((char *) inNewLink) + inOffset);
+
+	do {
+		oldListHead = *inList;
+		*newLinkNextPtr = oldListHead;
+	} while (! OSCompareAndSwap((UInt32)oldListHead, (UInt32)newListHead,
+					(UInt32 *)inList));
+}
+#endif /* __i386__ */
+
 
 IOPMPowerStateQueue *IOPMPowerStateQueue::PMPowerStateQueue(OSObject *inOwner)
 {
@@ -52,7 +88,9 @@ bool IOPMPowerStateQueue::init(OSObject *owner, Action action)
 
     // Queue of powerstate changes
     changes = NULL;
-
+#ifdef __i386__
+    if (!(tmpLock = IOLockAlloc()))  panic("IOPMPowerStateQueue::init can't alloc lock");
+#endif
     return true;
 }
 
@@ -69,8 +107,13 @@ bool IOPMPowerStateQueue::unIdleOccurred(IOService *inTarget, unsigned long inSt
     new_one->target = inTarget;
     
     // Change to queue
+#ifdef __i386__
+    IOLockLock(tmpLock);
+#endif
     OSEnqueueAtomic((void **)&changes, (void *)new_one, 0);
-    
+#ifdef __i386__
+    IOLockUnlock(tmpLock);
+#endif
     signalWorkAvailable();
 
     return true;
@@ -85,8 +128,14 @@ bool IOPMPowerStateQueue::checkForWork()
     UInt16                      theAction;
     
     // Dequeue and process the state change request
+#ifdef __i386__
+    IOLockLock(tmpLock);
+#endif
     if((theNode = (PowerChangeEntry *)OSDequeueAtomic((void **)&changes, 0)))
     {
+#ifdef __i386__
+      IOLockUnlock(tmpLock);
+#endif
         theState = theNode->state;
         theTarget = theNode->target;
         theAction = theNode->actionType;
@@ -95,11 +144,15 @@ bool IOPMPowerStateQueue::checkForWork()
         switch (theAction)
         {
             case kUnIdle:
-                theTarget->command_received(theState, 0, 0, 0);
+                theTarget->command_received((void *)theState, 0, 0, 0);
                 break;
         }
     }
-
+#ifdef __i386__
+    else {
+      IOLockUnlock(tmpLock);
+    }
+#endif
     // Return true if there's more work to be done
     if(changes) return true;
     else return false;

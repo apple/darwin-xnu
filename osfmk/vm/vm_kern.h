@@ -85,6 +85,7 @@ extern kern_return_t	kernel_memory_allocate(
 #define KMA_HERE	0x01
 #define KMA_NOPAGEWAIT	0x02
 #define KMA_KOBJECT	0x04
+#define KMA_LOMEM	0x08
 
 extern kern_return_t kmem_alloc_contig(
 				vm_map_t	map,

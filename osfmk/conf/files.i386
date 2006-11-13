@@ -16,10 +16,11 @@ OPTIONS/dynamic_num_nodes	optional dynamic_num_nodes
 OPTIONS/vtoc_compat	optional vtoc_compat
 OPTIONS/fddi		optional fddi
 
+osfmk/vm/vm_apple_protect.c	 standard
+
 osfmk/i386/hi_res_clock_map.c 	optional hi_res_clock
 
 osfmk/i386/pmap.c		standard
-osfmk/i386/read_fault.c	standard
 
 
 osfmk/ddb/db_aout.c		optional mach_kdb
@@ -53,6 +54,7 @@ osfmk/i386/loose_ends.c	standard
 osfmk/i386/locks_i386.c	standard
 osfmk/i386/locore.s	standard
 osfmk/i386/start.s	standard
+osfmk/i386/lowmem_vectors.s	standard
 osfmk/i386/cswitch.s	standard
 osfmk/i386/machine_routines.c		standard
 osfmk/i386/machine_routines_asm.s	standard
@@ -65,8 +67,13 @@ osfmk/i386/phys.c		standard
 osfmk/i386/rtclock.c		standard
 osfmk/i386/trap.c		standard
 osfmk/i386/user_ldt.c		standard
+osfmk/i386/Diagnostics.c	standard
+osfmk/i386/pmCPU.c		standard
+osfmk/i386/hpet.c		standard
+osfmk/i386/tsc.c		standard
 
 osfmk/i386/commpage/commpage.c	standard
+osfmk/i386/commpage/commpage_asm.s	standard
 osfmk/i386/commpage/atomic.s	standard
 osfmk/i386/commpage/commpage_mach_absolute_time.s	standard
 osfmk/i386/commpage/spinlocks.s	standard
@@ -74,12 +81,20 @@ osfmk/i386/commpage/pthreads.s	standard
 osfmk/i386/commpage/cacheflush.s	standard
 osfmk/i386/commpage/commpage_gettimeofday.s	standard
 osfmk/i386/commpage/bcopy_scalar.s	standard
+osfmk/i386/commpage/bcopy_sse3.s	standard
+osfmk/i386/commpage/bcopy_sse4.s	standard
+osfmk/i386/commpage/bcopy_sse4_64.s	standard
 osfmk/i386/commpage/bzero_scalar.s	standard
+osfmk/i386/commpage/bzero_sse3.s	standard
+osfmk/i386/commpage/bzero_sse3_64.s	standard
+osfmk/i386/commpage/memset_pattern_sse3.s	standard
+osfmk/i386/commpage/memset_pattern_sse3_64.s	standard
+osfmk/i386/commpage/longcopy_sse4.s	standard
+osfmk/i386/commpage/longcopy_sse4_64.s	standard
+osfmk/i386/commpage/commpage_sigs.c	standard
 
 osfmk/i386/AT386/autoconf.c	standard
-osfmk/i386/AT386/bbclock.c	standard
 osfmk/i386/AT386/conf.c		standard
-osfmk/i386/AT386/himem.c	optional himem
 osfmk/i386/AT386/model_dep.c	standard
 osfmk/i386/AT386/physmem.c	optional physmem device-driver
 
@@ -114,6 +129,10 @@ osfmk/kdp/ml/i386/kdp_vm.c	optional	mach_kdp
 osfmk/i386/hibernate_i386.c		standard
 osfmk/i386/hibernate_restore.s		standard
 
+osfmk/chud/i386/chud_osfmk_callback_i386.c	standard
+osfmk/chud/i386/chud_cpu_i386.c			standard
+osfmk/chud/i386/chud_thread_i386.c		standard
+
 # DUMMIES TO FORCE GENERATION OF .h FILES
 osfmk/OPTIONS/ln		optional ln
 osfmk/OPTIONS/eisa		optional eisa
@@ -121,3 +140,7 @@ osfmk/OPTIONS/himem		optional himem
 osfmk/OPTIONS/ec		optional ec
 osfmk/OPTIONS/hi_res_clock	optional hi_res_clock
 
+
+osfmk/i386/startup64.c			optional x86_64
+osfmk/i386/start64.s			optional x86_64
+osfmk/i386/idt64.s			optional x86_64

@@ -74,6 +74,7 @@
 
 #define	CX(addr, reg)	addr(,reg,4)
 
+	.text
 /*
  * Context switch routines for i386.
  */
@@ -94,23 +95,27 @@ Entry(Load_context)
 	call	EXT(thread_continue)
 
 /*
- *	This really only has to save registers
+ *	This has to save registers only
  *	when there is no explicit continuation.
  */
 
 Entry(Switch_context)
-	movl	%gs:CPU_ACTIVE_STACK,%ecx /* get old kernel stack */
+	popl	%eax				/* pop return PC */
 
+	/* Test for a continuation and skip all state saving if so... */
+	cmpl	$0,4(%esp)
+	jne 	5f
+	movl	%gs:CPU_ACTIVE_STACK,%ecx	/* get old kernel stack */
 	movl	%ebx,KSS_EBX(%ecx)		/* save registers */
 	movl	%ebp,KSS_EBP(%ecx)
 	movl	%edi,KSS_EDI(%ecx)
 	movl	%esi,KSS_ESI(%ecx)
-	popl	KSS_EIP(%ecx)			/* save return PC */
+	movl	%eax,KSS_EIP(%ecx)		/* save return PC */
 	movl	%esp,KSS_ESP(%ecx)		/* save SP */
-
+5:
 	movl	0(%esp),%eax			/* return old thread */
 	movl	8(%esp),%ebx			/* get new thread */
-	movl    %ebx,%gs:CPU_ACTIVE_THREAD                /* new thread is active */
+	movl    %ebx,%gs:CPU_ACTIVE_THREAD      /* new thread is active */
 	movl	TH_KERNEL_STACK(%ebx),%ecx	/* get its kernel stack */
 	lea	KERNEL_STACK_SIZE-IKS_SIZE-IEL_SIZE(%ecx),%ebx
 						/* point to stack top */
@@ -118,9 +123,7 @@ Entry(Switch_context)
 	movl	%ecx,%gs:CPU_ACTIVE_STACK	/* set current stack */
 	movl	%ebx,%gs:CPU_KERNEL_STACK	/* set stack top */
 
-
-	movl	$0,%gs:CPU_ACTIVE_KLOADED
-
+	
 	movl	KSS_ESP(%ecx),%esp		/* switch stacks */
 	movl	KSS_ESI(%ecx),%esi		/* restore registers */
 	movl	KSS_EDI(%ecx),%edi
@@ -134,19 +137,17 @@ Entry(Thread_continue)
 	call	*%ebx				/* call real continuation */
 
 /*
- * void machine_processor_shutdown(thread_t thread,
- *				   void (*routine)(processor_t),
- *				   processor_t processor)
+ * thread_t Shutdown_context(thread_t thread,
+ *			 void (*routine)(processor_t),
+ *			 processor_t processor)
  *
  * saves the kernel context of the thread,
  * switches to the interrupt stack,
  * continues the thread (with thread_continue),
  * then runs routine on the interrupt stack.
  *
- * Assumes that the thread is a kernel thread (thus
- * has no FPU state)
  */
-Entry(machine_processor_shutdown)
+Entry(Shutdown_context)
 	movl	%gs:CPU_ACTIVE_STACK,%ecx /* get old kernel stack */
 	movl	%ebx,KSS_EBX(%ecx)		/* save registers */
 	movl	%ebp,KSS_EBP(%ecx)
@@ -165,10 +166,3 @@ Entry(machine_processor_shutdown)
 	pushl	%esi				/* push argument */
 	call	*%ebx				/* call routine to run */
 	hlt					/* (should never return) */
-
-
-        .text
-
-	.globl	EXT(locore_end)
-LEXT(locore_end)
-

@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -118,4 +118,4 @@ extern int badport_bandlim(int);
 #define BANDLIM_RST_OPENPORT 4   /* No connection, listener */
 #define BANDLIM_MAX 4
 #endif KERNEL_PRIVATE
-#endif _NETINET_ICMP_VAR_H_
+#endif /* _NETINET_ICMP_VAR_H_ */

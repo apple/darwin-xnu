@@ -51,9 +51,7 @@ typedef void* kmod_args_t;
 
 #define KMOD_MAX_NAME	64
 
-#if __DARWIN_ALIGN_POWER
-#pragma options align=power
-#endif
+#pragma pack(4)
 
 /* LP64todo - not 64-bit safe */
 typedef struct kmod_reference {
@@ -61,9 +59,7 @@ typedef struct kmod_reference {
 	struct kmod_info	*info;
 } kmod_reference_t;
 
-#if __DARWIN_ALIGN_POWER
-#pragma options align=reset
-#endif
+#pragma pack()
 
 /**************************************************************************************/
 /*	 warning any changes to this structure affect the following macros.	      */	
@@ -75,9 +71,7 @@ typedef struct kmod_reference {
 typedef kern_return_t kmod_start_func_t(struct kmod_info *ki, void *data);
 typedef kern_return_t kmod_stop_func_t(struct kmod_info *ki, void *data);
 
-#if __DARWIN_ALIGN_POWER
-#pragma options align=power
-#endif
+#pragma pack(4)
 
 /* LP64todo - not 64-bit safe */
 
@@ -96,9 +90,7 @@ typedef struct kmod_info {
         kmod_stop_func_t	*stop;
 } kmod_info_t;
 
-#if __DARWIN_ALIGN_POWER
-#pragma options align=reset
-#endif
+#pragma pack()
 
 typedef kmod_info_t *kmod_info_array_t;
 

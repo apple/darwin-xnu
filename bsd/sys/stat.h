@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -130,6 +130,7 @@ typedef __darwin_off_t		off_t;
 typedef	__darwin_time_t		time_t;
 #endif
 
+
 /* [XSI] The timespec structure may be defined as described in <time.h> */
 #ifndef _TIMESPEC
 #define _TIMESPEC
@@ -137,6 +138,7 @@ struct timespec {
 	time_t	tv_sec;		/* seconds */
 	long	tv_nsec;	/* and nanoseconds */
 };
+
 // LP64todo - should this move?
 #ifdef KERNEL
 /* LP64 version of struct timespec.  time_t is a long and must grow when 
@@ -145,7 +147,7 @@ struct timespec {
  */
 struct user_timespec {
 	user_time_t	tv_sec;		/* seconds */
-	__int64_t	tv_nsec;	/* and nanoseconds */
+	int32_t	tv_nsec __attribute((aligned(8)));	/* and nanoseconds */
 };
 #endif // KERNEL
 #endif	/* _TIMESPEC */
@@ -220,9 +222,6 @@ struct stat {
  * grow when we're dealing with a 64-bit process.
  * WARNING - keep in sync with struct stat
  */
-#if __DARWIN_ALIGN_NATURAL
-#pragma options align=natural
-#endif
 
 struct user_stat {
 	dev_t	 	st_dev;		/* [XSI] ID of device containing file */
@@ -252,10 +251,6 @@ struct user_stat {
 	__int32_t	st_lspare;	/* RESERVED: DO NOT USE! */
 	__int64_t	st_qspare[2];	/* RESERVED: DO NOT USE! */
 };
-
-#if __DARWIN_ALIGN_NATURAL
-#pragma options align=reset
-#endif
 
 extern void munge_stat(struct stat *sbp, struct user_stat *usbp);
 

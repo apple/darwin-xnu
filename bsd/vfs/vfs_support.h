@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -48,7 +48,6 @@
 #include <sys/cdefs.h>
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/resourcevar.h>
 #include <sys/kernel.h>
 #include <sys/file.h>
 #include <sys/stat.h>
@@ -59,7 +58,6 @@
 #include <sys/vnode_if.h>
 #include <sys/malloc.h>
 #include <sys/dirent.h>
-#include <vm/vm_pageout.h>
 
 __BEGIN_DECLS
 extern int nop_create(struct vnop_create_args *ap);
@@ -171,9 +169,6 @@ extern int err_pagein(struct vnop_pagein_args *ap);
 
 extern int nop_pageout(struct vnop_pageout_args *ap);
 extern int err_pageout(struct vnop_pageout_args *ap);
-
-extern int nop_devblocksize(struct vnop_devblocksize_args *ap);
-extern int err_devblocksize(struct vnop_devblocksize_args *ap);
 
 extern int nop_searchfs(struct vnop_searchfs_args *ap);
 extern int err_searchfs(struct vnop_searchfs_args *ap);

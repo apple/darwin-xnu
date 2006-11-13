@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -172,7 +172,6 @@ nfsrv_initcache()
 {
 	/* init nfs server request cache mutex */
 	nfsrv_reqcache_lck_grp_attr = lck_grp_attr_alloc_init();
-	lck_grp_attr_setstat(nfsrv_reqcache_lck_grp_attr);
 	nfsrv_reqcache_lck_grp = lck_grp_alloc_init("nfsrv_reqcache", nfsrv_reqcache_lck_grp_attr);
 	nfsrv_reqcache_lck_attr = lck_attr_alloc_init();
 	nfsrv_reqcache_mutex = lck_mtx_alloc_init(nfsrv_reqcache_lck_grp, nfsrv_reqcache_lck_attr);

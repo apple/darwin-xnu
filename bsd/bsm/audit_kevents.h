@@ -1,6 +1,4 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -331,6 +329,7 @@
 #define AUE_SWAPOFF	355
 #define AUE_INITPROCESS	356
 #define AUE_MAPFD	357
+#define AUE_TASKNAMEFORPID AUE_NULL
 #define AUE_TASKFORPID	358
 #define AUE_PIDFORTASK	359
 #define AUE_SYSCTL_NONADMIN	360

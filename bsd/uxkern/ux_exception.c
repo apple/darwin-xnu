@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -242,8 +242,12 @@ catch_exception_raise(
 	    /*
 	     *	Send signal.
 	     */
-	    if (ux_signal != 0)
-		threadsignal(th_act, ux_signal, ucode);
+	    if (ux_signal != 0) {
+			ut->uu_exception = exception;
+			//ut->uu_code = code[0]; // filled in by threadsignal
+			ut->uu_subcode = code[1];			
+			threadsignal(th_act, ux_signal, code[0]);
+		}
 
 	    thread_deallocate(th_act);
 	}

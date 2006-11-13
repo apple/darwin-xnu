@@ -1549,15 +1549,17 @@ memory_object_iopl_request(
 			vm_object_reference(object);
 			named_entry_unlock(named_entry);
 		}
-	} else  {
+	} else if (ip_kotype(port) == IKOT_MEM_OBJ_CONTROL) {
 		memory_object_control_t	control;
-		control = (memory_object_control_t)port->ip_kobject;
+		control = (memory_object_control_t) port;
 		if (control == NULL)
 			return (KERN_INVALID_ARGUMENT);
 		object = memory_object_control_to_vm_object(control);
 		if (object == VM_OBJECT_NULL)
 			return (KERN_INVALID_ARGUMENT);
 		vm_object_reference(object);
+	} else {
+		return KERN_INVALID_ARGUMENT;
 	}
 	if (object == VM_OBJECT_NULL)
 		return (KERN_INVALID_ARGUMENT);
@@ -1819,152 +1821,12 @@ memory_object_page_op(
 	int			*flags)
 {
 	vm_object_t		object;
-	vm_page_t		dst_page;
-
 
 	object = memory_object_control_to_vm_object(control);
 	if (object == VM_OBJECT_NULL)
 		return (KERN_INVALID_ARGUMENT);
 
-	vm_object_lock(object);
-
-	if(ops & UPL_POP_PHYSICAL) {
-		if(object->phys_contiguous) {
-			if (phys_entry) {
-				*phys_entry = (ppnum_t)
-					(object->shadow_offset >> 12);
-			}
-			vm_object_unlock(object);
-			return KERN_SUCCESS;
-		} else {
-			vm_object_unlock(object);
-			return KERN_INVALID_OBJECT;
-		}
-	}
-	if(object->phys_contiguous) {
-		vm_object_unlock(object);
-		return KERN_INVALID_OBJECT;
-	}
-
-	while(TRUE) {
-		if((dst_page = vm_page_lookup(object,offset)) == VM_PAGE_NULL) {
-			vm_object_unlock(object);
-			return KERN_FAILURE;
-		}
-
-		/* Sync up on getting the busy bit */
-		if((dst_page->busy || dst_page->cleaning) && 
-			   (((ops & UPL_POP_SET) && 
-			   (ops & UPL_POP_BUSY)) || (ops & UPL_POP_DUMP))) {
-			/* someone else is playing with the page, we will */
-			/* have to wait */
-			PAGE_SLEEP(object, dst_page, THREAD_UNINT);
-			continue;
-		}
-
-		if (ops & UPL_POP_DUMP) {
-		        vm_page_lock_queues();
-
-			if (dst_page->no_isync == FALSE)
-			        pmap_disconnect(dst_page->phys_page);
-			vm_page_free(dst_page);
-
-			vm_page_unlock_queues();
-			break;
-		}
-
-		if (flags) {
-		        *flags = 0;
-
-			/* Get the condition of flags before requested ops */
-			/* are undertaken */
-
-			if(dst_page->dirty) *flags |= UPL_POP_DIRTY;
-			if(dst_page->pageout) *flags |= UPL_POP_PAGEOUT;
-			if(dst_page->precious) *flags |= UPL_POP_PRECIOUS;
-			if(dst_page->absent) *flags |= UPL_POP_ABSENT;
-			if(dst_page->busy) *flags |= UPL_POP_BUSY;
-		}
-
-		/* The caller should have made a call either contingent with */
-		/* or prior to this call to set UPL_POP_BUSY */
-		if(ops & UPL_POP_SET) {
-			/* The protection granted with this assert will */
-			/* not be complete.  If the caller violates the */
-			/* convention and attempts to change page state */
-			/* without first setting busy we may not see it */
-			/* because the page may already be busy.  However */
-			/* if such violations occur we will assert sooner */
-			/* or later. */
-			assert(dst_page->busy || (ops & UPL_POP_BUSY));
-			if (ops & UPL_POP_DIRTY) dst_page->dirty = TRUE;
-			if (ops & UPL_POP_PAGEOUT) dst_page->pageout = TRUE;
-			if (ops & UPL_POP_PRECIOUS) dst_page->precious = TRUE;
-			if (ops & UPL_POP_ABSENT) dst_page->absent = TRUE;
-			if (ops & UPL_POP_BUSY) dst_page->busy = TRUE;
-		}
-
-		if(ops & UPL_POP_CLR) {
-			assert(dst_page->busy);
-			if (ops & UPL_POP_DIRTY) dst_page->dirty = FALSE;
-			if (ops & UPL_POP_PAGEOUT) dst_page->pageout = FALSE;
-			if (ops & UPL_POP_PRECIOUS) dst_page->precious = FALSE;
-			if (ops & UPL_POP_ABSENT) dst_page->absent = FALSE;
-			if (ops & UPL_POP_BUSY) {
-			        dst_page->busy = FALSE;
-				PAGE_WAKEUP(dst_page);
-			}
-		}
-
-		if (dst_page->encrypted) {
-			/*
-			 * ENCRYPTED SWAP:
-			 * We need to decrypt this encrypted page before the
-			 * caller can access its contents.
-			 * But if the caller really wants to access the page's
-			 * contents, they have to keep the page "busy".
-			 * Otherwise, the page could get recycled or re-encrypted
-			 * at any time.
-			 */
-			if ((ops & UPL_POP_SET) && (ops & UPL_POP_BUSY) &&
-			    dst_page->busy) {
-				/*
-				 * The page is stable enough to be accessed by
-				 * the caller, so make sure its contents are
-				 * not encrypted.
-				 */
-				vm_page_decrypt(dst_page, 0);
-			} else {
-				/*
-				 * The page is not busy, so don't bother
-				 * decrypting it, since anything could
-				 * happen to it between now and when the
-				 * caller wants to access it.
-				 * We should not give the caller access
-				 * to this page.
-				 */
-				assert(!phys_entry);
-			}
-		}
-
-		if (phys_entry) {
-			/*
-			 * The physical page number will remain valid
-			 * only if the page is kept busy.
-			 * ENCRYPTED SWAP: make sure we don't let the
-			 * caller access an encrypted page.
-			 */
-			assert(dst_page->busy);
-			assert(!dst_page->encrypted);
-			*phys_entry = dst_page->phys_page;
-		}
-
-		break;
-	}
-
-	vm_object_unlock(object);
-	return KERN_SUCCESS;
-				
+	return vm_object_page_op(object, offset, ops, phys_entry, flags);
 }
 
 /*
@@ -1985,71 +1847,17 @@ memory_object_range_op(
 	int                     ops,
 	int                     *range)
 {
-        memory_object_offset_t	offset;
 	vm_object_t		object;
-	vm_page_t		dst_page;
 
 	object = memory_object_control_to_vm_object(control);
 	if (object == VM_OBJECT_NULL)
 		return (KERN_INVALID_ARGUMENT);
 
-	if (object->resident_page_count == 0) {
-	        if (range) {
-		        if (ops & UPL_ROP_PRESENT)
-			        *range = 0;
-			else
-			        *range = offset_end - offset_beg;
-		}
-		return KERN_SUCCESS;
-	}
-	vm_object_lock(object);
-
-	if (object->phys_contiguous) {
-		vm_object_unlock(object);
-	        return KERN_INVALID_OBJECT;
-	}
-	
-	offset = offset_beg;
-
-	while (offset < offset_end) {
-		dst_page = vm_page_lookup(object, offset);
-		if (dst_page != VM_PAGE_NULL) {
-			if (ops & UPL_ROP_DUMP) {
-				if (dst_page->busy || dst_page->cleaning) {
-				        /*
-					 * someone else is playing with the 
-					 * page, we will have to wait
-					 */
-				        PAGE_SLEEP(object, 
-						dst_page, THREAD_UNINT);
-					/*
-					 * need to relook the page up since it's
-					 * state may have changed while we slept
-					 * it might even belong to a different object
-					 * at this point
-					 */
-					continue;
-				}
-				vm_page_lock_queues();
-
-				if (dst_page->no_isync == FALSE)
-				        pmap_disconnect(dst_page->phys_page);
-				vm_page_free(dst_page);
-
-				vm_page_unlock_queues();
-			} else if (ops & UPL_ROP_ABSENT)
-			        break;
-		} else if (ops & UPL_ROP_PRESENT)
-		        break;
-
-		offset += PAGE_SIZE;
-	}
-	vm_object_unlock(object);
-
-	if (range)
-	        *range = offset - offset_beg;
-
-	return KERN_SUCCESS;
+	return vm_object_range_op(object,
+				  offset_beg,
+				  offset_end,
+				  ops,
+				  range);
 }
 
 
@@ -2092,8 +1900,10 @@ memory_object_control_allocate(
 	memory_object_control_t control;
 
 	control = (memory_object_control_t)zalloc(mem_obj_control_zone);
-	if (control != MEMORY_OBJECT_CONTROL_NULL)
-		control->object = object;
+	if (control != MEMORY_OBJECT_CONTROL_NULL) {
+		control->moc_object = object;
+		control->moc_ikot = IKOT_MEM_OBJ_CONTROL; /* fake ip_kotype */
+	}
 	return (control);
 }
 
@@ -2102,19 +1912,20 @@ memory_object_control_collapse(
 	memory_object_control_t control,		       
 	vm_object_t		object)
 {		       
-	assert((control->object != VM_OBJECT_NULL) &&
-	       (control->object != object));
-	control->object = object;
+	assert((control->moc_object != VM_OBJECT_NULL) &&
+	       (control->moc_object != object));
+	control->moc_object = object;
 }
 
 __private_extern__ vm_object_t
 memory_object_control_to_vm_object(
 	memory_object_control_t	control)
 {
-	if (control == MEMORY_OBJECT_CONTROL_NULL)
+	if (control == MEMORY_OBJECT_CONTROL_NULL ||
+	    control->moc_ikot != IKOT_MEM_OBJ_CONTROL)
 		return VM_OBJECT_NULL;
 
-	return (control->object);
+	return (control->moc_object);
 }
 
 memory_object_control_t
@@ -2155,8 +1966,8 @@ void
 memory_object_control_disable(
 	memory_object_control_t	control)
 {
-	assert(control->object != VM_OBJECT_NULL);
-	control->object = VM_OBJECT_NULL;
+	assert(control->moc_object != VM_OBJECT_NULL);
+	control->moc_object = VM_OBJECT_NULL;
 }
 
 void
@@ -2193,30 +2004,16 @@ convert_memory_object_to_port(
 void memory_object_reference(
 	memory_object_t memory_object)
 {
-
-#ifdef	MACH_BSD
-	if (memory_object->pager == &vnode_pager_workaround) {
-		vnode_pager_reference(memory_object);
-	} else if (memory_object->pager == &device_pager_workaround) {
-		device_pager_reference(memory_object);
-	} else
-#endif
-		dp_memory_object_reference(memory_object);
+	(memory_object->mo_pager_ops->memory_object_reference)(
+		memory_object);
 }
 
 /* Routine memory_object_deallocate */
 void memory_object_deallocate(
 	memory_object_t memory_object)
 {
-
-#ifdef	MACH_BSD
-	if (memory_object->pager == &vnode_pager_workaround) {
-		vnode_pager_deallocate(memory_object);
-	} else if (memory_object->pager == &device_pager_workaround) {
-		device_pager_deallocate(memory_object);
-	} else
-#endif
-		dp_memory_object_deallocate(memory_object);
+	(memory_object->mo_pager_ops->memory_object_deallocate)(
+		 memory_object);
 }
 
 
@@ -2228,20 +2025,10 @@ kern_return_t memory_object_init
 	memory_object_cluster_size_t memory_object_page_size
 )
 {
-#ifdef	MACH_BSD
-	if (memory_object->pager == &vnode_pager_workaround) {
-		return vnode_pager_init(memory_object,
-					memory_control,
-					memory_object_page_size);
-	} else if (memory_object->pager == &device_pager_workaround) {
-		return device_pager_init(memory_object,
-					 memory_control,
-					 memory_object_page_size);
-	} else
-#endif
-		return dp_memory_object_init(memory_object,
-					     memory_control,
-					     memory_object_page_size);
+	return (memory_object->mo_pager_ops->memory_object_init)(
+		memory_object,
+		memory_control,
+		memory_object_page_size);
 }
 
 /* Routine memory_object_terminate */
@@ -2250,14 +2037,8 @@ kern_return_t memory_object_terminate
 	memory_object_t memory_object
 )
 {
-#ifdef	MACH_BSD
-	if (memory_object->pager == &vnode_pager_workaround) {
-		return vnode_pager_terminate(memory_object);
-	} else if (memory_object->pager == &device_pager_workaround) {
-		return device_pager_terminate(memory_object);
-	} else
-#endif
-		return dp_memory_object_terminate(memory_object);
+	return (memory_object->mo_pager_ops->memory_object_terminate)(
+		memory_object);
 }
 
 /* Routine memory_object_data_request */
@@ -2269,23 +2050,11 @@ kern_return_t memory_object_data_request
 	vm_prot_t desired_access
 )
 {
-#ifdef	MACH_BSD
-	if (memory_object->pager == &vnode_pager_workaround) {
-		return vnode_pager_data_request(memory_object, 
-						offset, 
-						length,
-						desired_access);
-	} else if (memory_object->pager == &device_pager_workaround) {
-		return device_pager_data_request(memory_object, 
-						 offset, 
-						 length,
-						 desired_access);
-	} else
-#endif
-		return dp_memory_object_data_request(memory_object, 
-						     offset, 
-						     length,
-						     desired_access);
+	return (memory_object->mo_pager_ops->memory_object_data_request)(
+		memory_object,
+		offset, 
+		length,
+		desired_access);
 }
 
 /* Routine memory_object_data_return */
@@ -2301,37 +2070,15 @@ kern_return_t memory_object_data_return
 	int	upl_flags
 )
 {
-#ifdef MACH_BSD
-	if (memory_object->pager == &vnode_pager_workaround) {
-		return vnode_pager_data_return(memory_object,
-					       offset,
-					       size,
-					       resid_offset,
-					       io_error,
-					       dirty,
-					       kernel_copy,
-					       upl_flags);
-	} else if (memory_object->pager == &device_pager_workaround) {
-
-		return device_pager_data_return(memory_object,
-						offset,
-						size,
-						dirty,
-						kernel_copy,
-						upl_flags);
-	}
-	else 
-#endif
-	{
-		return dp_memory_object_data_return(memory_object,
-						    offset,
-						    size,
-						    NULL,
-						    NULL,
-						    dirty,
-						    kernel_copy,
-						    upl_flags);
-	}
+	return (memory_object->mo_pager_ops->memory_object_data_return)(
+		memory_object,
+		offset,
+		size,
+		resid_offset,
+		io_error,
+		dirty,
+		kernel_copy,
+		upl_flags);
 }
 
 /* Routine memory_object_data_initialize */
@@ -2342,20 +2089,10 @@ kern_return_t memory_object_data_initialize
 	vm_size_t size
 )
 {
-#ifdef MACH_BSD
-	if (memory_object->pager == &vnode_pager_workaround) {
-		return vnode_pager_data_initialize(memory_object,
-						   offset,
-						   size);
-	} else if (memory_object->pager == &device_pager_workaround) {
-		return device_pager_data_initialize(memory_object,
-						    offset,
-						    size);
-	} else
-#endif
-		return dp_memory_object_data_initialize(memory_object,
-							offset,
-							size);
+	return (memory_object->mo_pager_ops->memory_object_data_initialize)(
+		memory_object,
+		offset,
+		size);
 }
 
 /* Routine memory_object_data_unlock */
@@ -2367,23 +2104,11 @@ kern_return_t memory_object_data_unlock
 	vm_prot_t desired_access
 )
 {
-#ifdef MACH_BSD
-	if (memory_object->pager == &vnode_pager_workaround) {
-		return vnode_pager_data_unlock(memory_object,
-					       offset,
-					       size,
-					       desired_access);
-	} else if (memory_object->pager == &device_pager_workaround) {
-		return device_pager_data_unlock(memory_object,
-						offset,
-						size,
-						desired_access);
-	} else
-#endif
-		return dp_memory_object_data_unlock(memory_object,
-						    offset,
-						    size,
-						    desired_access);
+	return (memory_object->mo_pager_ops->memory_object_data_unlock)(
+		memory_object,
+		offset,
+		size,
+		desired_access);
 }
 
 /* Routine memory_object_synchronize */
@@ -2395,23 +2120,11 @@ kern_return_t memory_object_synchronize
 	vm_sync_t sync_flags
 )
 {
-#ifdef MACH_BSD
-	if (memory_object->pager == &vnode_pager_workaround) {
-		return vnode_pager_synchronize(memory_object,
-					       offset,
-					       size,
-					       sync_flags);
-	} else if (memory_object->pager == &device_pager_workaround) {
-		return device_pager_synchronize(memory_object,
-						offset,
-						size,
-						sync_flags);
-	} else
-#endif
-		return dp_memory_object_synchronize(memory_object,
-						    offset,
-						    size,
-						    sync_flags);
+	return (memory_object->mo_pager_ops->memory_object_synchronize)(
+		memory_object,
+		offset,
+		size,
+		sync_flags);
 }
 
 /* Routine memory_object_unmap */
@@ -2420,14 +2133,8 @@ kern_return_t memory_object_unmap
 	memory_object_t memory_object
 )
 {
-#ifdef MACH_BSD
-	if (memory_object->pager == &vnode_pager_workaround) {
-		return vnode_pager_unmap(memory_object);
-	} else if (memory_object->pager == &device_pager_workaround) {
-		return device_pager_unmap(memory_object);
-	} else
-#endif
-		return dp_memory_object_unmap(memory_object);
+	return (memory_object->mo_pager_ops->memory_object_unmap)(
+		memory_object);
 }
 
 /* Routine memory_object_create */

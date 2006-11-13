@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -493,23 +493,16 @@ struct msghdr {
  * grow when we're dealing with a 64-bit process.
  * WARNING - keep in sync with struct msghdr
  */
-#if __DARWIN_ALIGN_NATURAL
-#pragma options align=natural
-#endif
 
 struct user_msghdr {
 	user_addr_t	msg_name;		/* optional address */
 	socklen_t	msg_namelen;		/* size of address */
-	user_addr_t	msg_iov;		/* scatter/gather array */
+	user_addr_t	msg_iov __attribute((aligned(8)));		/* scatter/gather array */
 	int		msg_iovlen;		/* # elements in msg_iov */
-	user_addr_t	msg_control;		/* ancillary data, see below */
+	user_addr_t	msg_control __attribute((aligned(8)));		/* ancillary data, see below */
 	socklen_t	msg_controllen;		/* ancillary data buffer len */
 	int		msg_flags;		/* flags on received message */
 };
-
-#if __DARWIN_ALIGN_NATURAL
-#pragma options align=reset
-#endif
 
 #endif // KERNEL
 

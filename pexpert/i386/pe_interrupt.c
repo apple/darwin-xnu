@@ -34,7 +34,7 @@
 #include <sys/kdebug.h>
 
 
-void PE_incoming_interrupt(int, void *);
+void PE_incoming_interrupt(x86_saved_state_t *);
 
 
 struct i386_interrupt_handler {
@@ -51,21 +51,43 @@ i386_interrupt_handler_t	PE_interrupt_handler;
 
 
 void
-PE_incoming_interrupt(int interrupt, void *state)
+PE_incoming_interrupt(x86_saved_state_t *state)
 {
 	i386_interrupt_handler_t	*vector;
+	uint64_t			rip;
+	int				interrupt;
+	boolean_t			user_mode = FALSE;
 
-	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_INTR, 0) | DBG_FUNC_START,
-			      0, ((unsigned int *)state)[7], 0, 0, 0);
+        if (is_saved_state64(state) == TRUE) {
+	        x86_saved_state64_t	*state64;
+
+	        state64 = saved_state64(state);
+		rip = state64->isf.rip;
+		interrupt = state64->isf.trapno;
+		user_mode = TRUE;
+	} else {
+	        x86_saved_state32_t	*state32;
+
+	        state32 = saved_state32(state);
+		if (state32->cs & 0x03)
+		        user_mode = TRUE;
+		rip = state32->eip;
+		interrupt = state32->trapno;
+	}
+
+	KERNEL_DEBUG_CONSTANT(
+		MACHDBG_CODE(DBG_MACH_EXCP_INTR, 0) | DBG_FUNC_START,
+		interrupt, (unsigned int)rip, user_mode, 0, 0);
 
 	vector = &PE_interrupt_handler;
 
 	if (!lapic_interrupt(interrupt, state)) {
-		vector->handler(vector->target, state, vector->nub, interrupt);
+		vector->handler(vector->target, NULL, vector->nub, interrupt);
 	}
 
-	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_INTR, 0) | DBG_FUNC_END,
-	   0, 0, 0, 0, 0);
+	KERNEL_DEBUG_CONSTANT(
+		MACHDBG_CODE(DBG_MACH_EXCP_INTR, 0) | DBG_FUNC_END,
+		0, 0, 0, 0, 0);
 }
 
 void PE_install_interrupt_handler(void *nub,

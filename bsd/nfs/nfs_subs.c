@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -1222,7 +1222,6 @@ nfs_init(struct vfsconf *vfsp)
 	}
 	/* init nfsiod mutex */
 	nfs_iod_lck_grp_attr = lck_grp_attr_alloc_init();
-	lck_grp_attr_setstat(nfs_iod_lck_grp_attr);
 	nfs_iod_lck_grp = lck_grp_alloc_init("nfs_iod", nfs_iod_lck_grp_attr);
 	nfs_iod_lck_attr = lck_attr_alloc_init();
 	nfs_iod_mutex = lck_mtx_alloc_init(nfs_iod_lck_grp, nfs_iod_lck_attr);
@@ -1234,7 +1233,6 @@ nfs_init(struct vfsconf *vfsp)
 #ifndef NFS_NOSERVER
 	/* init nfsd mutex */
 	nfsd_lck_grp_attr = lck_grp_attr_alloc_init();
-	lck_grp_attr_setstat(nfsd_lck_grp_attr);
 	nfsd_lck_grp = lck_grp_alloc_init("nfsd", nfsd_lck_grp_attr);
 	nfsd_lck_attr = lck_attr_alloc_init();
 	nfsd_mutex = lck_mtx_alloc_init(nfsd_lck_grp, nfsd_lck_attr);
@@ -2544,9 +2542,9 @@ nfsrv_export(struct user_nfs_export_args *unxa, struct vfs_context *ctx)
 			}
 
 			/* grab file handle */
-			nx->nx_fh.nfh_xh.nxh_version = NFS_FH_VERSION;
-			nx->nx_fh.nfh_xh.nxh_fsid = nx->nx_fs->nxfs_id;
-			nx->nx_fh.nfh_xh.nxh_expid = nx->nx_id;
+			nx->nx_fh.nfh_xh.nxh_version = htonl(NFS_FH_VERSION);
+			nx->nx_fh.nfh_xh.nxh_fsid = htonl(nx->nx_fs->nxfs_id);
+			nx->nx_fh.nfh_xh.nxh_expid = htonl(nx->nx_id);
 			nx->nx_fh.nfh_xh.nxh_flags = 0;
 			nx->nx_fh.nfh_xh.nxh_reserved = 0;
 			nx->nx_fh.nfh_len = NFS_MAX_FID_SIZE;
@@ -2658,11 +2656,15 @@ static struct nfs_export *
 nfsrv_fhtoexport(struct nfs_filehandle *nfhp)
 {
 	struct nfs_export *nx;
-	nx = NFSEXPHASH(nfhp->nfh_xh.nxh_fsid, nfhp->nfh_xh.nxh_expid)->lh_first;
+	uint32_t fsid, expid;
+
+	fsid = ntohl(nfhp->nfh_xh.nxh_fsid);
+	expid = ntohl(nfhp->nfh_xh.nxh_expid);
+	nx = NFSEXPHASH(fsid, expid)->lh_first;
 	for (; nx; nx = LIST_NEXT(nx, nx_hash)) {
-		if (nx->nx_fs->nxfs_id != nfhp->nfh_xh.nxh_fsid)
+		if (nx->nx_fs->nxfs_id != fsid)
 			continue;
-		if (nx->nx_id != nfhp->nfh_xh.nxh_expid)
+		if (nx->nx_id != expid)
 			continue;
 		break;
 	}
@@ -2683,12 +2685,14 @@ nfsrv_fhtovp(
 {
 	int error;
 	struct mount *mp;
+	uint32_t v;
 
 	*vpp = NULL;
 	*nxp = NULL;
 	*nxop = NULL;
 
-	if (nfhp->nfh_xh.nxh_version != NFS_FH_VERSION) {
+	v = ntohl(nfhp->nfh_xh.nxh_version);
+	if (v != NFS_FH_VERSION) {
 		/* file handle format not supported */
 		return (ESTALE);
 	}
@@ -2696,7 +2700,8 @@ nfsrv_fhtovp(
 		return (EBADRPC);
 	if (nfhp->nfh_len < (int)sizeof(nfhp->nfh_xh))
 		return (ESTALE);
-	if (nfhp->nfh_xh.nxh_flags & NXHF_INVALIDFH)
+	v = ntohs(nfhp->nfh_xh.nxh_flags);
+	if (v & NXHF_INVALIDFH)
 		return (ESTALE);
 
 /* XXX Revisit when enabling WebNFS */
@@ -2792,9 +2797,9 @@ nfsrv_vptofh(
 {
 	int error;
 
-	nfhp->nfh_xh.nxh_version = NFS_FH_VERSION;
-	nfhp->nfh_xh.nxh_fsid = nx->nx_fs->nxfs_id;
-	nfhp->nfh_xh.nxh_expid = nx->nx_id;
+	nfhp->nfh_xh.nxh_version = htonl(NFS_FH_VERSION);
+	nfhp->nfh_xh.nxh_fsid = htonl(nx->nx_fs->nxfs_id);
+	nfhp->nfh_xh.nxh_expid = htonl(nx->nx_id);
 	nfhp->nfh_xh.nxh_flags = 0;
 	nfhp->nfh_xh.nxh_reserved = 0;
 
@@ -2805,7 +2810,7 @@ nfsrv_vptofh(
 	if (dnfhp && nfsrv_fhmatch(dnfhp, &nx->nx_fh)) {
 		nfhp->nfh_len = v2 ? NFSX_V2FH : sizeof(nfhp->nfh_xh);
 		nfhp->nfh_xh.nxh_fidlen = 0;
-		nfhp->nfh_xh.nxh_flags = NXHF_INVALIDFH;
+		nfhp->nfh_xh.nxh_flags = htons(NXHF_INVALIDFH);
 		return (0);
 	}
 

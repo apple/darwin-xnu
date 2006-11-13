@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -559,7 +559,6 @@ dlil_init(void)
 	
 	/* Setup the lock groups we will use */
 	grp_attributes = lck_grp_attr_alloc_init();
-	lck_grp_attr_setdefault(grp_attributes);
 
 	dlil_lock_group = lck_grp_alloc_init("dlil internal locks", grp_attributes);
 #if IFNET_RW_LOCK
@@ -574,10 +573,8 @@ dlil_init(void)
 	
 	/* Setup the lock attributes we will use */
 	lck_attributes = lck_attr_alloc_init();
-	lck_attr_setdefault(lck_attributes);
 	
 	ifnet_lock_attr = lck_attr_alloc_init();
-	lck_attr_setdefault(ifnet_lock_attr);
 	
 	dlil_input_lock = lck_spin_alloc_init(input_lock_grp, lck_attributes);
 	input_lock_grp = 0;

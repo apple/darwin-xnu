@@ -85,6 +85,8 @@ extern unsigned int DebugWork;						/* (BRINGUP) */
 void mapping_verify(void);
 void mapping_phys_unused(ppnum_t pa);
 
+int nx_enabled = 0;			/* enable no-execute protection */
+
 /*
  *  ppc_prot translates Mach's representation of protections to that of the PPC hardware.
  *  For Virtual Machines (VMM), we also provide translation entries where the output is
@@ -93,14 +95,24 @@ void mapping_phys_unused(ppnum_t pa);
  *	8 table entries; direct translations are placed in the range 8..16, so they fall into
  *  the second half of the table.
  *
- *  ***NOTE*** I've commented out the Mach->PPC translations that would set page-level
- *             no-execute, pending updates to the VM layer that will properly enable its
- *             use.  Bob Abeles 08.02.04
  */
  
-//unsigned char ppc_prot[16] = { 4, 7, 6, 6, 3, 3, 2, 2,		/* Mach -> PPC translations */
-unsigned char ppc_prot[16] = { 0, 3, 2, 2, 3, 3, 2, 2,		/* Mach -> PPC translations */
+unsigned char ppc_prot[16] = { 4, 7, 6, 6, 3, 3, 2, 2,		/* Mach -> PPC translations */
                                0, 1, 2, 3, 4, 5, 6, 7 };	/* VMM direct  translations */
+
+
+
+vm_prot_t getProtPPC(int key, boolean_t disable_NX) {
+        vm_prot_t prot;
+
+	prot = ppc_prot[key & 0xF];
+
+	if (key <= 7 && disable_NX == TRUE)
+	        prot &= ~mpN;
+
+	return (prot);
+}
+
 
 /*
  *			About PPC VSID generation:
@@ -304,6 +316,7 @@ addr64_t mapping_make(pmap_t pmap, addr64_t va, ppnum_t pa, unsigned int flags, 
 	unsigned int pindex, mflags, pattr, wimg, rc;
 	phys_entry_t *physent;
 	int nlists, pcf;
+	boolean_t disable_NX = FALSE;
 
 	pindex = 0;
 	
@@ -374,10 +387,12 @@ addr64_t mapping_make(pmap_t pmap, addr64_t va, ppnum_t pa, unsigned int flags, 
 	mp->u.mpBSize = size;										/* Set the size */
 	mp->mpPte = 0;												/* Set the PTE invalid */
 	mp->mpPAddr = pa;											/* Set the physical page number */
-	mp->mpVAddr = (va & ~mpHWFlags) | (wimg << 3)				/* Add the protection and attributes to the field */
-		| ((PerProcTable[0].ppe_vaddr->pf.Available & pf64Bit)?
-			getProtPPC(prot) : (getProtPPC(prot) & 0x3));		/* Mask off no-execute control for 32-bit machines */			
-	
+
+	if ( !nx_enabled || (pmap->pmapFlags & pmapNXdisabled) )
+	        disable_NX = TRUE;
+
+	mp->mpVAddr = (va & ~mpHWFlags) | (wimg << 3) | getProtPPC(prot, disable_NX);			/* Add the protection and attributes to the field */
+	  
 	while(1) {													/* Keep trying... */
 		colladdr = hw_add_map(pmap, mp);						/* Go add the mapping to the pmap */
 		rc = colladdr & mapRetCode;								/* Separate return code */
@@ -484,8 +499,12 @@ void
 mapping_protect(pmap_t pmap, addr64_t va, vm_prot_t prot, addr64_t *nextva) {	/* Change protection of a virtual page */
 
 	int	ret;
-	
-	ret = hw_protect(pmap, va, getProtPPC(prot), nextva);	/* Try to change the protect here */
+	boolean_t disable_NX = FALSE;
+
+	if ( !nx_enabled || (pmap->pmapFlags & pmapNXdisabled) )
+	        disable_NX = TRUE;
+
+	ret = hw_protect(pmap, va, getProtPPC(prot, disable_NX), nextva);		/* Try to change the protect here */
 
 	switch (ret) {								/* Decode return code */
 	
@@ -507,8 +526,8 @@ mapping_protect(pmap_t pmap, addr64_t va, vm_prot_t prot, addr64_t *nextva) {	/*
  *
  *		This routine takes a physical entry and runs through all mappings attached to it and changes
  *		the protection.  If there are PTEs associated with the mappings, they will be invalidated before
- *		the protection is changed.  There is no limitation on changes, e.g., 
- *		higher to lower, lower to higher.
+ *		the protection is changed.  There is no limitation on changes, e.g., higher to lower, lower to
+ *		higher; however, changes to execute protection are ignored.
  *
  *		Any mapping that is marked permanent is not changed
  *
@@ -519,16 +538,16 @@ void mapping_protect_phys(ppnum_t pa, vm_prot_t prot) {	/* Change protection of 
 	
 	unsigned int pindex;
 	phys_entry_t *physent;
-	
+
 	physent = mapping_phys_lookup(pa, &pindex);					/* Get physical entry */
 	if(!physent) {												/* Did we find the physical page? */
 		panic("mapping_protect_phys: invalid physical page %08X\n", pa);
 	}
 
 	hw_walk_phys(physent, hwpNoop, hwpSPrtMap, hwpNoop,
-	             getProtPPC(prot), hwpPurgePTE);				/* Set the new protection for page and mappings */
+		     getProtPPC(prot, FALSE), hwpPurgePTE);			/* Set the new protection for page and mappings */
 
-	return;														/* Leave... */
+	return;									/* Leave... */
 }
 
 
@@ -1501,50 +1520,16 @@ addr64_t	mapping_p2v(pmap_t pmap, ppnum_t pa) {				/* Finds first virtual mappin
 	
 }
 
-/*
- *	phystokv(addr)
- *
- *	Convert a physical address to a kernel virtual address if
- *	there is a mapping, otherwise return NULL
- */
-
-vm_offset_t phystokv(vm_offset_t pa) {
-
-	addr64_t	va;
-	ppnum_t pp;
-
-	pp = pa >> 12;											/* Convert to a page number */
-	
-	if(!(va = mapping_p2v(kernel_pmap, pp))) {
-		return 0;											/* Can't find it, return 0... */
-	}
-	
-	return (va | (pa & (PAGE_SIZE - 1)));					/* Build and return VADDR... */
-
-}
 
 /*
  *	kvtophys(addr)
  *
  *	Convert a kernel virtual address to a physical address
  */
-vm_offset_t kvtophys(vm_offset_t va) {
+addr64_t kvtophys(vm_offset_t va) {
 
 	return pmap_extract(kernel_pmap, va);					/* Find mapping and lock the physical entry for this mapping */
 
-}
-
-/*
- *	kvtophys64(addr)
- *
- *	Convert a kernel virtual address to a 64-bit physical address
- */
-vm_map_offset_t kvtophys64(vm_map_offset_t va) {
-	ppnum_t pa = pmap_find_phys(kernel_pmap, (addr64_t)va);
-
-	if (!pa)
-		return (vm_map_offset_t)0;
-	return (((vm_map_offset_t)pa) << 12) | (va & 0xfff);
 }
 
 /*
@@ -1562,6 +1547,13 @@ void ignore_zero_fault(boolean_t type) {				/* Sets up to ignore or honor any fa
 	else     current_thread()->machine.specFlags &= ~ignoreZeroFault;	/* Honor faults on page 0 */
 	
 	return;												/* Return the result or 0... */
+}
+
+/*
+ * nop in current ppc implementation
+ */
+void inval_copy_windows(__unused thread_t t)
+{
 }
 
 

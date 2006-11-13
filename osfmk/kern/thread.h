@@ -523,6 +523,9 @@ extern void				machine_thread_init(void);
 extern kern_return_t	machine_thread_create(
 							thread_t		thread,
 							task_t			task);
+extern void		machine_thread_switch_addrmode(
+						       thread_t			thread,
+						       int			oldmode_is64bit);
 
 extern void 		    machine_thread_destroy(
 							thread_t		thread);
@@ -648,6 +651,10 @@ extern void			thread_setentrypoint(
 						thread_t		thread,
 						mach_vm_offset_t	entry);
 
+extern void		thread_setsinglestep(
+						thread_t		thread,
+						int			on);
+
 extern kern_return_t	thread_wire_internal(
 							host_priv_t		host_priv,
 							thread_t		thread,
@@ -661,6 +668,9 @@ extern boolean_t	is_thread_idle(thread_t); /* True is TH_IDLE */
 extern kern_return_t	thread_dup(thread_t);
 
 extern task_t	get_threadtask(thread_t);
+#define thread_is_64bit(thd)	\
+	task_has_64BitAddr(get_threadtask(thd))
+
 
 extern void		*get_bsdthread_info(thread_t);
 extern void		set_bsdthread_info(thread_t, void *);

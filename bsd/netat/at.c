@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -79,8 +79,7 @@ struct  etalk_addr      ttalk_multicast_addr = {
   {0xC0, 0x00, 0x40, 0x00, 0x00, 0x00}};
 
 /* called only in router mode */
-static int set_zones(ifz)
-	zone_usage_t *ifz;
+static int set_zones(zone_usage_t *ifz)
 
 /* 1. adds zone to table
    2. looks up each route entry from zone list
@@ -149,7 +148,6 @@ at_control(so, cmd, data, ifp)
 
     if ((cmd & 0xffff) == 0xff99) {
 		u_long 	fixed_command;
-		char ioctl_buffer[32];
 		/* *** this is a temporary hack to get at_send_to_dev() to
 		   work with BSD-style sockets instead of the special purpose 
 		   system calls, ATsocket() and ATioctl().
@@ -394,13 +392,11 @@ at_control(so, cmd, data, ifp)
 		/* Normal case; no tuple found for this name, so insert
 		 * this tuple in the registry and return ok response.
 		 */
-		ATDISABLE(nve_lock, NVE_LOCK);
 		if ((error2 = nbp_new_nve_entry(&nve, ifID)) == 0) {
 			nbpP->addr.net = ifID->ifThisNode.s_net;
 			nbpP->addr.node = ifID->ifThisNode.s_node;
 			nbpP->unique_nbp_id = nve.unique_nbp_id;
 		}
-		ATENABLE(nve_lock, NVE_LOCK);
 
 		return(error2);
 		break;
@@ -416,16 +412,13 @@ at_control(so, cmd, data, ifp)
 
 		/* delete by id */
 		if (nbpP->unique_nbp_id) {
-			ATDISABLE(nve_lock, NVE_LOCK);
 			TAILQ_FOREACH(nve_entry, &name_registry, nve_link) {
 				if (nve_entry->unique_nbp_id == nbpP->unique_nbp_id) {
 					/* Found a match! */
 					nbp_delete_entry(nve_entry);
-					ATENABLE(nve_lock, NVE_LOCK);
 					return(0);
 				}
 			}
-			ATENABLE(nve_lock, NVE_LOCK);
 			return(EADDRNOTAVAIL);
 		}
 
@@ -445,9 +438,7 @@ at_control(so, cmd, data, ifp)
 				if ((nve_entry = nbp_find_nve(&nve)) == NULL) 
 					continue;
 
-				ATDISABLE(nve_lock, NVE_LOCK);
 				nbp_delete_entry(nve_entry);
-				ATENABLE(nve_lock, NVE_LOCK);
 				found = TRUE;
 			}
 			if (found) 
@@ -463,9 +454,7 @@ at_control(so, cmd, data, ifp)
 		/* Normal case; tuple found for this name, so delete
 		 * the entry from the registry and return ok response.
 		 */
-		ATDISABLE(nve_lock, NVE_LOCK);
 		nbp_delete_entry(nve_entry);
-		ATENABLE(nve_lock, NVE_LOCK);
 		return(0);
 
 		break;
@@ -673,21 +662,17 @@ at_control(so, cmd, data, ifp)
 #endif
 
     case SIOCSETOT: {
-        int				s;
         struct atpcb	*at_pcb, *clonedat_pcb;
         int				cloned_fd = *(int *)data;
 
-        s = splnet();		/* XXX */
         at_pcb = sotoatpcb(so);
         
         /* let's make sure it's either -1 or a valid file descriptor */
         if (cloned_fd != -1) {
             struct socket	*cloned_so;
 			error = file_socket(cloned_fd, &cloned_so);
-            if (error){
-                splx(s);	/* XXX */
+            if (error)
                 break;
-            }
             clonedat_pcb = sotoatpcb(cloned_so);
         } else {
             clonedat_pcb = NULL;
@@ -698,7 +683,6 @@ at_control(so, cmd, data, ifp)
         } else {
             at_pcb->ddp_flags = clonedat_pcb->ddp_flags;
         }
-        splx(s);		/* XXX */
 		file_drop(cloned_fd);
         break;
     }

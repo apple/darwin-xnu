@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -98,18 +98,11 @@ struct union_mount {
  */
 /* LP64todo - should this move? */
 
-#if __DARWIN_ALIGN_NATURAL
-#pragma options align=natural
-#endif
-
 struct user_union_args {
 	user_addr_t	target;		/* Target of loopback  */
 	int			mntflags;	/* Options on the mount */
+	char		_pad[4];
 };
-
-#if __DARWIN_ALIGN_NATURAL
-#pragma options align=reset
-#endif
 
 /*
  * DEFDIRMODE is the mode bits used to create a shadow directory.

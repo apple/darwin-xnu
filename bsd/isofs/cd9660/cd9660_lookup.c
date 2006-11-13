@@ -199,9 +199,6 @@ cd9660_lookup(struct vnop_lookup_args *ap)
 	    !((len == 1 && *name == '.') || (flags & ISDOTDOT))) {
 		int flags1 = UTF_PRECOMPOSED;
 
-		if (BYTE_ORDER != BIG_ENDIAN)
-			flags1 |= UTF_REVERSE_ENDIAN;
-
 		(void) utf8_decodestr(name, len, (u_int16_t*) altname, &altlen,
 					sizeof(altname), 0, flags1);
 		name = altname;

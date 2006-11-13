@@ -165,6 +165,9 @@ typedef struct cnode cnode_t;
 #define C_FORCEUPDATE      0x00100  /* force the catalog entry update */
 #define C_HASXATTRS        0x00200  /* cnode has extended attributes */
 
+#define C_NEED_DATA_SETSIZE  0x01000  /* Do a ubc_setsize(0) on c_rsrc_vp after the unlock */
+#define C_NEED_RSRC_SETSIZE  0x02000  /* Do a ubc_setsize(0) on c_vp after the unlock */
+
 
 #define ZFTIMELIMIT	(5 * 60)
 

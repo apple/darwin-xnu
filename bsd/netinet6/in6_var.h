@@ -648,6 +648,6 @@ int in6_embedscope __P((struct in6_addr *, const struct sockaddr_in6 *,
 int in6_recoverscope __P((struct sockaddr_in6 *, const struct in6_addr *,
 	struct ifnet *));
 void in6_clearscope __P((struct in6_addr *));
-#endif KERNEL_PRIVATE
+#endif /* KERNEL_PRIVATE */
 
-#endif _NETINET6_IN6_VAR_H_
+#endif /* _NETINET6_IN6_VAR_H_ */

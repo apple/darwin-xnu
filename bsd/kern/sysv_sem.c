@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -130,12 +130,10 @@ sysv_sem_lock_init( void )
 {
 
     sysv_sem_subsys_lck_grp_attr = lck_grp_attr_alloc_init();
-    lck_grp_attr_setstat(sysv_sem_subsys_lck_grp_attr);
 
-    sysv_sem_subsys_lck_grp = lck_grp_alloc_init("sysv_shm_subsys_lock", sysv_sem_subsys_lck_grp_attr);
+    sysv_sem_subsys_lck_grp = lck_grp_alloc_init("sysv_sem_subsys_lock", sysv_sem_subsys_lck_grp_attr);
 
     sysv_sem_subsys_lck_attr = lck_attr_alloc_init();
-    lck_attr_setdebug(sysv_sem_subsys_lck_attr); 
     lck_mtx_init(&sysv_sem_subsys_mutex, sysv_sem_subsys_lck_grp, sysv_sem_subsys_lck_attr);
 }
 

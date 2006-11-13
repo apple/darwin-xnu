@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -172,7 +172,6 @@ div_init(void)
 	 * allocate the lock attribute for divert pcb mutexes
 	 */
 	pcbinfo->mtx_attr = lck_attr_alloc_init();
-	lck_attr_setdefault(pcbinfo->mtx_attr);
 
 	if ((pcbinfo->mtx = lck_rw_alloc_init(pcbinfo->mtx_grp, pcbinfo->mtx_attr)) == NULL)
 		return;	/* pretty much dead if this fails... */
@@ -642,12 +641,9 @@ __private_extern__ int
 div_lock(struct socket *so, int refcount, int lr)
  {
 	int lr_saved;
-#ifdef __ppc__
-	if (lr == 0) {
-			__asm__ volatile("mflr %0" : "=r" (lr_saved));
-	}
+	if (lr == 0) 
+		lr_saved = (unsigned int) __builtin_return_address(0);
 	else lr_saved = lr;
-#endif
 	
 #ifdef MORE_DICVLOCK_DEBUG
 	printf("div_lock: so=%x sopcb=%x lock=%x ref=%x lr=%x\n",
@@ -670,7 +666,8 @@ div_lock(struct socket *so, int refcount, int lr)
 	
 	if (refcount)
 		so->so_usecount++;
-	so->reserved3 = (void *)lr_saved;
+	so->lock_lr[so->next_lock_lr] = (u_int32_t *)lr_saved;
+	so->next_lock_lr = (so->next_lock_lr+1) % SO_LCKDBG_MAX;
 
 	return (0);
 }
@@ -681,12 +678,11 @@ div_unlock(struct socket *so, int refcount, int lr)
 	int lr_saved;
 	lck_mtx_t * mutex_held;
 	struct inpcb *inp = sotoinpcb(so);	
-#ifdef __ppc__
-	if (lr == 0) {
-		__asm__ volatile("mflr %0" : "=r" (lr_saved));
-	}
+
+	if (lr == 0) 
+		lr_saved = (unsigned int) __builtin_return_address(0);
 	else lr_saved = lr;
-#endif
+
 	
 #ifdef MORE_DICVLOCK_DEBUG
 	printf("div_unlock: so=%x sopcb=%x lock=%x ref=%x lr=%x\n",
@@ -715,8 +711,9 @@ div_unlock(struct socket *so, int refcount, int lr)
 		return (0);
 	}
 	lck_mtx_assert(mutex_held, LCK_MTX_ASSERT_OWNED);
+	so->unlock_lr[so->next_unlock_lr] = (u_int *)lr_saved;
+	so->next_unlock_lr = (so->next_unlock_lr+1) % SO_LCKDBG_MAX;
 	lck_mtx_unlock(mutex_held);
-	so->reserved4 = (void *)lr_saved;
 	return (0);
 }
 

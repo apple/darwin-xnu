@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -244,5 +244,5 @@ void	ip_rsvp_force_done(struct socket *);
 
 void	in_delayed_cksum(struct mbuf *m);
 
-#endif KERNEL_PRIVATE
-#endif !_NETINET_IP_VAR_H_
+#endif /* KERNEL_PRIVATE */
+#endif /* !_NETINET_IP_VAR_H_ */

@@ -86,7 +86,7 @@
 
 #if REV_ENDIAN_FS
 #include <ufs/ufs/ufs_byte_order.h>
-#include <architecture/byte_order.h>
+#include <libkern/OSByteOrder.h>
 #endif /* REV_ENDIAN_FS */
 
 extern u_long nextgennumber;
@@ -601,7 +601,7 @@ ffs_blkpref(ip, lbn, indx, bap)
 	if (indx && bap) {
 	if (rev_endian) {
 		if (bap != &ip->i_db[0])
-			prev = NXSwapLong(bap[indx - 1]);
+			prev = OSSwapInt32(bap[indx - 1]);
 		else
 			prev = bap[indx - 1];
 	} else prev = bap[indx - 1];
@@ -659,7 +659,7 @@ ffs_blkpref(ip, lbn, indx, bap)
 			return (nextblk);
 		}
 		if (bap != &ip->i_db[0])
-			prev = NXSwapLong(bap[indx - fs->fs_maxcontig]);
+			prev = OSSwapInt32(bap[indx - fs->fs_maxcontig]);
 		else
 			prev = bap[indx - fs->fs_maxcontig];
 		if (prev + blkstofrags(fs, fs->fs_maxcontig) != nextblk)

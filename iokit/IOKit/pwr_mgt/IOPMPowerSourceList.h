@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
@@ -34,27 +34,23 @@ class IOPMPowerSource;
 
 class IOPMPowerSourceList : public OSObject
 {
-OSDeclareDefaultStructors(IOPMPowerSourceList)
+    OSDeclareDefaultStructors(IOPMPowerSourceList)
+ private:
+    // pointer to first power source in list
+    IOPMPowerSource         *firstItem;
 
-private:
+    // how many power sources are in the list
+    unsigned long           length;
 
-IOPMPowerSource * firstItem;		// pointer to first power source in list
-unsigned long	length;			// how many power sources are in the list
+  public:
+    void initialize(void);
+    void free(void);
 
-
-public:
-void initialize ( void );
-
-IOReturn addToList ( IOPMPowerSource *   newPowerSource );
-
-IOPMPowerSource * firstInList ( void );
-
-IOPMPowerSource * nextInList ( IOPMPowerSource * currentItem );
-
-unsigned long numberOfItems ( void );
-
-IOReturn removeFromList ( IOPMPowerSource * theItem );
-
-void free ( void );
+    unsigned long numberOfItems(void);
+    IOReturn addToList(IOPMPowerSource *newPowerSource);
+    IOReturn removeFromList(IOPMPowerSource *theItem);
+    
+    IOPMPowerSource *firstInList(void);
+    IOPMPowerSource *nextInList(IOPMPowerSource *currentItem);
 };
 

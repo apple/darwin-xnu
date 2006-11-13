@@ -571,7 +571,7 @@ default_pager_backing_store_create(
 				kalloc(sizeof (struct vstruct_alias));
 	if(alias_struct != NULL) {
 		alias_struct->vs = (struct vstruct *)bs;
-		alias_struct->name = ISVS;
+		alias_struct->name = &default_pager_ops;
 		port->alias = (int) alias_struct;
 	}
 	else {
@@ -722,7 +722,7 @@ ps_delete(
 			error = KERN_FAILURE;
 		else {
 			vm_object_t	transfer_object;
-			int		count;
+			unsigned int	count;
 			upl_t		upl;
 
 			transfer_object = vm_object_allocate((vm_object_size_t)VM_SUPER_CLUSTER);
@@ -1129,7 +1129,7 @@ vs_alloc_async(void)
 				kalloc(sizeof (struct vstruct_alias));
 			if(alias_struct != NULL) {
 				alias_struct->vs = (struct vstruct *)vsa;
-				alias_struct->name = ISVS;
+				alias_struct->name = &default_pager_ops;
 				reply_port->alias = (int) alias_struct;
 				vsa->reply_port = reply_port;
 				vs_alloc_async_count++;
@@ -1181,7 +1181,7 @@ vs_alloc_async(void)
 				kalloc(sizeof (struct vstruct_alias));
 			if(alias_struct != NULL) {
 				alias_struct->vs = reply_port;
-				alias_struct->name = ISVS;
+				alias_struct->name = &default_pager_ops;
 				reply_port->alias = (int) vsa;
 				vsa->reply_port = reply_port;
 				vs_alloc_async_count++;
@@ -1237,7 +1237,7 @@ ps_vstruct_create(
 	/*
 	 * The following fields will be provided later.
 	 */
-	vs->vs_mem_obj = NULL;
+	vs->vs_pager_ops = NULL;
 	vs->vs_control = MEMORY_OBJECT_CONTROL_NULL;
 	vs->vs_references = 1;
 	vs->vs_seqno = 0;
@@ -2477,6 +2477,7 @@ ps_read_device(
 	__unused int 				flags)
 {
   panic("ps_read_device not supported");
+  return KERN_FAILURE;
 }
 
 kern_return_t
@@ -2488,6 +2489,7 @@ ps_write_device(
 	__unused struct vs_async	*vsa)
 {
   panic("ps_write_device not supported");
+  return KERN_FAILURE;
 }
 
 #endif /* DEVICE_PAGING */
@@ -2524,7 +2526,7 @@ pvs_cluster_read(
 	upl_t			upl;
 	kern_return_t		error = KERN_SUCCESS;
 	int					size;
-	int			residual;
+	unsigned int		residual;
 	unsigned int		request_flags;
 	int					seg_index;
 	int					pages_in_cl;
@@ -2572,8 +2574,8 @@ pvs_cluster_read(
 	}
 
 	while (cnt && (error == KERN_SUCCESS)) {
-	        int     ps_info_valid;
-		int	page_list_count;
+	        int     	ps_info_valid;
+		unsigned int	page_list_count;
 
 		if((vs_offset & cl_mask) && 
 			(cnt > (VM_SUPER_CLUSTER - 
@@ -2791,7 +2793,7 @@ pvs_cluster_read(
 			        failed_size = xfer_size;
 
 				if (error == KERN_SUCCESS) {
-				        if (residual == xfer_size) {
+				        if ((signed) residual == xfer_size) {
 				        /*
 					 * If a read operation returns no error
 					 * and no data moved, we turn it into
@@ -2880,7 +2882,7 @@ vs_cluster_write(
 	cl_size = pages_in_cl * vm_page_size;
 	
 	if (!dp_internal) {
-		int	     page_list_count;
+		unsigned int page_list_count;
 		int	     request_flags;
 		unsigned int super_size;
 		int          first_dirty;
@@ -3433,7 +3435,7 @@ vs_cluster_transfer(
 	kern_return_t		error = KERN_SUCCESS;
 	unsigned int		size, size_wanted;
 	int			i;
-	unsigned int		residual;
+	unsigned int		residual = 0;
 	unsigned int		unavail_size;
 //	default_pager_thread_t	*dpt;
 //	boolean_t		dealloc;
@@ -3544,6 +3546,10 @@ vs_cluster_transfer(
 			original_read_vsmap = *vsmap_ptr;
 
 		if(ps->ps_segtype == PS_PARTITION) {
+			panic("swap partition not supported\n");
+			/*NOTREACHED*/
+			error = KERN_FAILURE;
+			residual = size;
 /*
 			NEED TO ISSUE WITH SYNC & NO COMMIT
 			error = ps_read_device(ps, actual_offset, &buffer,

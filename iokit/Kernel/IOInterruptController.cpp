@@ -435,6 +435,8 @@ IOReturn IOSharedInterruptController::initInterruptController(IOInterruptControl
   _numInterruptSources = 1;
   
   // Set up the IOInterruptSource to point at this.
+  parentController->retain();
+  parentSource->retain();
   _interruptSources[0].interruptController = parentController;
   _interruptSources[0].vectorData = parentSource;
   
@@ -674,7 +676,8 @@ IOReturn IOSharedInterruptController::disableInterrupt(IOService *nub,
 
 IOInterruptAction IOSharedInterruptController::getInterruptHandlerAddress(void)
 {
-    return (IOInterruptAction)&IOSharedInterruptController::handleInterrupt;
+    return OSMemberFunctionCast(IOInterruptAction,
+			this, &IOSharedInterruptController::handleInterrupt);
 }
 
 IOReturn IOSharedInterruptController::handleInterrupt(void * /*refCon*/,

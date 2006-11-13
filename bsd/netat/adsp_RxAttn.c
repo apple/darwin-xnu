@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -112,7 +112,7 @@ CCBPtr FindSender(f, a)		/* (ADSP_FRAMEPtr f, AddrUnion a) */
     MATCH_SENDER m;
 
     m.addr = a;
-    m.srcCID = UAS_VALUE(f->CID);
+    m.srcCID = UAS_VALUE_NTOH(f->CID);
     return (CCBPtr)qfind_m(AT_ADSP_STREAMS, &m, (ProcPtr)MatchSender);
 }
 
@@ -149,7 +149,7 @@ int RXAttention(sp, mp, f, len)	/* (CCBPtr sp, ADSP_FRAMEPtr f, word len) */
 	 (char)(ADSP_ATTENTION_BIT | ADSP_ACK_REQ_BIT)) && /* Attention Data */
 	((sp->userFlags & eAttention) == 0)) /* & he read the previous */
     {
-	diff = netdw(UAL_VALUE(f->pktFirstByteSeq)) - sp->attnRecvSeq;
+	diff = UAL_VALUE_NTOH(f->pktFirstByteSeq) - sp->attnRecvSeq;
 	if (diff > 0)		/* Hey, he missed one */
 	    return 1;
 
@@ -185,7 +185,7 @@ int RXAttention(sp, mp, f, len)	/* (CCBPtr sp, ADSP_FRAMEPtr f, word len) */
      * Interrupts are OFF here, otherwise we have to do this atomically
      */
     /* Check to see if this acknowledges anything */
-    if ((sp->attnSendSeq + 1) == netdw(UAL_VALUE(f->pktNextRecvSeq))) {
+    if ((sp->attnSendSeq + 1) == UAL_VALUE_NTOH(f->pktNextRecvSeq)) {
 	sp->attnSendSeq++;
 	if ((pb = sp->sapb) == 0) { /* We never sent data ? !!! */
 	    if (mp)

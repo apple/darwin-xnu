@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -88,6 +88,7 @@
 #define RB_DFLTROOT	0x20	/* use compiled-in rootdev */
 #define RB_ALTBOOT	0x40	/* use /boot.old vs /boot */
 #define RB_UNIPROC	0x80	/* don't start slaves */
+#define RB_UPSDELAY 0x200   /* Delays restart by 5 minutes */
 #define RB_PANIC	0	/* reboot due to panic */
 #define RB_BOOT		1	/* reboot due to boot() */
 

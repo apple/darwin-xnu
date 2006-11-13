@@ -42,10 +42,11 @@
 #ifndef _PPC_RTCLOCK_H_
 #define _PPC_RTCLOCK_H_
 
+#include <kern/etimer.h>
+
 #define EndOfAllTime	0xFFFFFFFFFFFFFFFFULL
 
 extern void rtclock_intr(struct savearea *ssp);
-extern int setTimerReq(void);
 
 #pragma pack(push,4)
 struct rtclock_timer_t  {

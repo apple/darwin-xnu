@@ -545,7 +545,7 @@ struct clmap {
 	(clm)->cl_alloc.clb_map >>= (VSCLSIZE(vs) - (clm)->cl_numpages)
 
 typedef struct vstruct_alias {
-	int *name;
+	memory_object_pager_ops_t name;
 	struct vstruct *vs;
 } vstruct_alias_t;
 
@@ -582,9 +582,11 @@ typedef struct vstruct_alias {
  * VM Object Structure:  This is the structure used to manage
  * default pager object associations with their control counter-
  * parts (VM objects).
+ *
+ * The start of this structure MUST match a "struct memory_object".
  */
 typedef struct vstruct {
-	int		 	*vs_mem_obj;	/* our memory obj - temp */
+	memory_object_pager_ops_t vs_pager_ops; /* == &default_pager_ops */
 	int			vs_mem_obj_ikot;/* JMM:fake ip_kotype() */
 	memory_object_control_t vs_control;	/* our mem obj control ref */
 	VS_LOCK_TYPE		vs_lock;	/* data for the lock */
@@ -735,9 +737,11 @@ __private_extern__ zone_t	vstruct_zone;
  */
 #ifdef MACH_KERNEL
 
-#define ISVS ((int *)123456)
+extern const struct memory_object_pager_ops default_pager_ops;
+
 #define mem_obj_is_vs(_mem_obj_)					\
-	(((_mem_obj_) != NULL) && ((_mem_obj_)->pager == ISVS))
+	(((_mem_obj_) != NULL) &&					\
+	 ((_mem_obj_)->mo_pager_ops == &default_pager_ops))
 #define mem_obj_to_vs(_mem_obj_)					\
 	((vstruct_t)(_mem_obj_))
 #define vs_to_mem_obj(_vs_) ((memory_object_t)(_vs_))

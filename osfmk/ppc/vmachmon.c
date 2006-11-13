@@ -624,7 +624,7 @@ int vmm_init_context(struct savearea *save)
 	hw_atomic_add((int *)&saveanchor.savetarget, 2);	/* Account for the number of extra saveareas we think we might "need" */
 
 	pmap_t hpmap = act->map->pmap;						/* Get host pmap */
-	pmap_t gpmap = pmap_create(0);						/* Make a fresh guest pmap */
+	pmap_t gpmap = pmap_create(0, FALSE);					/* Make a fresh guest pmap */
 	if (gpmap) {										/* Did we succeed ? */
 		CTable->vmmAdsp[cvi] = gpmap;					/* Remember guest pmap for new context */
 		if (lowGlo.lgVMMforcedFeats & vmmGSA) {			/* Forcing on guest shadow assist ? */
@@ -983,7 +983,7 @@ kern_return_t vmm_map_page(
 	map = current_thread()->map;				/* Get the host's map */
 
 	if (pmap->pmapFlags & pmapVMgsaa) {			/* Guest shadow assist active ? */
-		ret = hw_res_map_gv(map->pmap, pmap, cva, ava, getProtPPC(prot));
+		ret = hw_res_map_gv(map->pmap, pmap, cva, ava, getProtPPC(prot, TRUE));
 												/* Attempt to resume an existing gv->phys mapping */
 		if (mapRtOK != ret) {					/* Nothing to resume, construct a new mapping */
 			
@@ -1025,7 +1025,7 @@ kern_return_t vmm_map_page(
 			if (pattr & mmFlgCInhib)  wimg |= 0x4;
 			if (pattr & mmFlgGuarded) wimg |= 0x1;
 			unsigned int mflags = (pindex << 16) | mpGuest;
-			addr64_t	 gva = ((ava & ~mpHWFlags) | (wimg << 3) | getProtPPC(prot));
+			addr64_t	 gva = ((ava & ~mpHWFlags) | (wimg << 3) | getProtPPC(prot, TRUE));
 			
 			hw_add_map_gv(map->pmap, pmap, gva, mflags, mp->mpPAddr);
 												/* Construct new guest->phys mapping */

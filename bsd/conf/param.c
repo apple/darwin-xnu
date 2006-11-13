@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -87,8 +87,9 @@
 struct	timezone tz = { TIMEZONE, PST };
 
 #define	NPROC (20 + 16 * MAXUSERS)
-#define HNPROC (20 + 64 * MAXUSERS)
+#define HNPROC 2500	/* based on thread_max */
 int	maxproc = NPROC;
+int	maxprocperuid = NPROC/2;
 __private_extern__ int hard_maxproc = HNPROC;	/* hardcoded limit */
 int nprocs = 0; /* XXX */
 

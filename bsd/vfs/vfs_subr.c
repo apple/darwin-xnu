@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -2396,6 +2396,7 @@ vfs_unmountall()
 	struct mount *mp;
 	struct proc *p = current_proc();
 	int error;
+	int skip_listremove;
 
 	/*
 	 * Since this only runs when rebooting, it is not interlocked.
@@ -2404,11 +2405,15 @@ vfs_unmountall()
 	while(!TAILQ_EMPTY(&mountlist)) {
 		mp = TAILQ_LAST(&mountlist, mntlist);
 		mount_list_unlock();
-		error = dounmount(mp, MNT_FORCE, p);
+		skip_listremove = 0;
+		error = dounmount(mp, MNT_FORCE, &skip_listremove, p);
 		if (error) {
 			mount_list_lock();
-			TAILQ_REMOVE(&mountlist, mp, mnt_list);
-			printf("unmount of %s failed (", mp->mnt_vfsstat.f_mntonname);
+			if (skip_listremove == 0) {
+				TAILQ_REMOVE(&mountlist, mp, mnt_list);
+				printf("unmount of %s failed (", mp->mnt_vfsstat.f_mntonname);
+			}
+				
 			if (error == EBUSY)
 				printf("BUSY)\n");
 			else
@@ -3998,6 +4003,47 @@ vnode_setsize(vnode_t vp, off_t size, int ioflag, vfs_context_t ctx)
 	return(vnode_setattr(vp, &va, ctx));
 }
 
+/*
+ * Create a filesystem object of arbitrary type with arbitrary attributes in
+ * the spevied directory with the specified name.
+ *
+ * Parameters:	dvp			Pointer to the vnode of the directory
+ *					in which to create the object.
+ *		vpp			Pointer to the area into which to
+ *					return the vnode of the created object.
+ *		cnp			Component name pointer from the namei
+ *					data structure, containing the name to
+ *					use for the create object.
+ *		vap			Pointer to the vnode_attr structure
+ *					describing the object to be created,
+ *					including the type of object.
+ *		flags			VN_* flags controlling ACL inheritance
+ *					and whether or not authorization is to
+ *					be required for the operation.
+ *		
+ * Returns:	0			Success
+ *		!0			errno value
+ *
+ * Implicit:	*vpp			Contains the vnode of the object that
+ *					was created, if successful.
+ *		*cnp			May be modified by the underlying VFS.
+ *		*vap			May be modified by the underlying VFS.
+ *					modified by either ACL inheritance or
+ *		
+ *		
+ *					be modified, even if the operation is
+ *					
+ *
+ * Notes:	The kauth_filesec_t in 'vap', if any, is in host byte order.
+ *
+ *		Modification of '*cnp' and '*vap' by the underlying VFS is
+ *		strongly discouraged.
+ *
+ * XXX:		This function is a 'vn_*' function; it belongs in vfs_vnops.c
+ *
+ * XXX:		We should enummerate the possible errno values here, and where
+ *		in the code they originated.
+ */
 errno_t
 vn_create(vnode_t dvp, vnode_t *vpp, struct componentname *cnp, struct vnode_attr *vap, int flags, vfs_context_t ctx)
 {

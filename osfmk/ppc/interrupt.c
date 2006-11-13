@@ -37,6 +37,8 @@
 #include <kern/assert.h>
 #include <kern/thread.h>
 #include <kern/counters.h>
+#include <kern/etimer.h>
+#include <kern/pms.h>
 #include <ppc/misc_protos.h>
 #include <ppc/trap.h>
 #include <ppc/proc_reg.h>
@@ -111,7 +113,7 @@ struct savearea * interrupt(
 				}
 			}
 
-			rtclock_intr(ssp);
+			etimer_intr(USER_MODE(ssp->save_srr1), ssp->save_srr0);	/* Handle event timer */
 			break;
 	
 		case T_INTERRUPT:

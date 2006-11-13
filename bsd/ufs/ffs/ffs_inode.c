@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -92,7 +92,7 @@
 
 #if REV_ENDIAN_FS
 #include <ufs/ufs/ufs_byte_order.h>
-#include <architecture/byte_order.h>
+#include <libkern/OSByteOrder.h>
 #endif /* REV_ENDIAN_FS */
 
 static int ffs_indirtrunc(struct inode *, ufs_daddr_t, ufs_daddr_t,
@@ -551,7 +551,7 @@ ffs_indirtrunc(ip, lbn, dbn, lastbn, level, countp)
 	    i--, nlbn += factor) {
 #if	REV_ENDIAN_FS
 		if (rev_endian)
-			nb = NXSwapLong(bap[i]);
+			nb = OSSwapInt32(bap[i]);
 		else {
 #endif	/* REV_ENDIAN_FS */
 			nb = bap[i];
@@ -577,7 +577,7 @@ ffs_indirtrunc(ip, lbn, dbn, lastbn, level, countp)
 		last = lastbn % factor;
 #if	REV_ENDIAN_FS
 		if (rev_endian)
-			nb = NXSwapLong(bap[i]);
+			nb = OSSwapInt32(bap[i]);
 		else {
 #endif	/* REV_ENDIAN_FS */
 			nb = bap[i];

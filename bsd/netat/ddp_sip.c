@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -122,7 +122,7 @@ void sip_input(mp, ifID)
 	/* assuming that the whole packet is in one contiguous buffer */
 	atp = (at_atp_t	*)ddp->data;
 	
-	switch(UAL_VALUE(atp->user_bytes)) {
+	switch(UAL_VALUE_NTOH(atp->user_bytes)) {
 	case SIP_SYSINFO_CMD :
 		/* Sending a response with "AppleTalk driver version" (u_short)
 		 * followed by 14 zeros will pacify the interpoll.
@@ -140,11 +140,11 @@ void sip_input(mp, ifID)
 		else
 			resp = (u_char *)gbuf_rptr(tmp);
 		bzero(resp, 16);
-		*(u_short *)resp = SIP_DRIVER_VERSION;
+		*(u_short *)resp = htons(SIP_DRIVER_VERSION);
 
 		ubytes.response = SIP_GOOD_RESPONSE;
 		ubytes.unused = 0;
-		ubytes.responder_version = SIP_RESPONDER_VERSION;
+		ubytes.responder_version = htons(SIP_RESPONDER_VERSION);
 		break;
 	case SIP_DATALINK_CMD :
 		/* In this case, the magic spell is to send 2 zeroes after
@@ -161,23 +161,23 @@ void sip_input(mp, ifID)
 		else
 			resp = (u_char *)gbuf_rptr(tmp);
 		bzero(resp, 16);
-		*(u_short *)resp = SIP_DRIVER_VERSION;
+		*(u_short *)resp = htons(SIP_DRIVER_VERSION);
 
 		ubytes.response = SIP_GOOD_RESPONSE;
 		ubytes.unused = 0;
-		ubytes.responder_version = SIP_RESPONDER_VERSION;
+		ubytes.responder_version = htons(SIP_RESPONDER_VERSION);
 		break;
 	default :
 		/* bad request, send a bad command response back */
 		ubytes.response = SIP_BAD_RESPONSE;
 		ubytes.unused = 0;
-		ubytes.responder_version = SIP_RESPONDER_VERSION;
+		ubytes.responder_version = htons(SIP_RESPONDER_VERSION);
 	}
 
 	NET_NET(ddp->dst_net, ddp->src_net);
 	ddp->dst_node = ddp->src_node;
 	ddp->dst_socket = ddp->src_socket;
-	bcopy((caddr_t) &ubytes, (caddr_t) atp->user_bytes, sizeof(ubytes));
+	UAL_ASSIGN_HTON(atp->user_bytes, &ubytes);
 	atp->cmd = ATP_CMD_TRESP;
 	atp->eom = 1;
 	atp->sts = 0;

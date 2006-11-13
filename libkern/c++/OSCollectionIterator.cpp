@@ -78,7 +78,7 @@ OSCollectionIterator::withCollection(const OSCollection *inColl)
 void OSCollectionIterator::free()
 {
     if (collIterator) {
-        kfree((vm_offset_t)collIterator, collection->iteratorSize());
+        kfree(collIterator, collection->iteratorSize());
 	ACCUMSIZE(-(collection->iteratorSize()));
         collIterator = 0;
     }

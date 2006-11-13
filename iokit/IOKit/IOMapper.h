@@ -46,6 +46,11 @@ void IOMapperInsertPPNPages(ppnum_t addr, unsigned offset,
                             ppnum_t *pageList, unsigned pageCount);
 void IOMapperInsertUPLPages(ppnum_t addr, unsigned offset,
                             upl_page_info_t *pageList, unsigned pageCount);
+
+mach_vm_address_t IOMallocPhysical(mach_vm_size_t size, mach_vm_address_t mask);
+
+void IOFreePhysical(mach_vm_address_t address, mach_vm_size_t size);
+
 __END_DECLS
 
 #if __cplusplus
@@ -76,8 +81,6 @@ protected:
     OSData *fTableHandle;
     bool fIsSystem;
 
-    virtual bool start(IOService *provider);
-    virtual void free();
 
     static void setMapperRequired(bool hasMapper);
     static void waitForSystemMapper();
@@ -87,6 +90,11 @@ protected:
     virtual bool allocTable(IOByteCount size);
 
 public:
+#if !(defined(__ppc__) && defined(KPI_10_4_0_PPC_COMPAT))
+    virtual bool start(IOService *provider);
+    virtual void free();
+#endif
+
     // Static routines capable of allocating tables that are physically
     // contiguous in real memory space.
     static OSData * NewARTTable(IOByteCount size,
@@ -112,8 +120,16 @@ public:
     // iovm mapping.
     virtual addr64_t mapAddr(IOPhysicalAddress addr) = 0;
 
+#if !(defined(__ppc__) && defined(KPI_10_4_0_PPC_COMPAT))
+    // Get the address mask to or into an address to bypass this mapper
+    virtual bool getBypassMask(addr64_t *maskP) const
+    OSMetaClassDeclareReservedUsed(IOMapper, 0);
+#endif
+
 private:
+#if (defined(__ppc__) && defined(KPI_10_4_0_PPC_COMPAT))
     OSMetaClassDeclareReservedUnused(IOMapper, 0);
+#endif
     OSMetaClassDeclareReservedUnused(IOMapper, 1);
     OSMetaClassDeclareReservedUnused(IOMapper, 2);
     OSMetaClassDeclareReservedUnused(IOMapper, 3);

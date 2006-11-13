@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -43,8 +43,7 @@
 #include	<mach/boolean.h>
 #include	<mach/vm_param.h>
 #include	<kern/cpu_number.h>
-
-int grade_binary(cpu_type_t exectype, cpu_subtype_t execsubtype);
+#include	<machine/exec.h>
 
 /*
  * Routine: grade_binary()
@@ -229,8 +228,6 @@ grade_binary(cpu_type_t exectype, cpu_subtype_t execsubtype)
 	/* NOTREACHED */
 }
 
-extern vm_map_offset_t kvtophys64(vm_map_offset_t);
-
 boolean_t
 kernacc(
     off_t 	start,
@@ -244,7 +241,7 @@ kernacc(
 	end = start + len;
 	
 	while (base < end) {
-		if(kvtophys64((vm_map_offset_t)base) == (vm_map_offset_t)0)
+		if(kvtophys((vm_offset_t)base) == NULL)
 			return(FALSE);
 		base += page_size;
 	}   

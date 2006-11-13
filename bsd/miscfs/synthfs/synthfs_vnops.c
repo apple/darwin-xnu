@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -113,7 +113,6 @@ struct vnodeopv_entry_desc synthfs_vnodeop_entries[] = {
     {&vnop_allocate_desc, (VOPFUNC)err_allocate},		/* allocate		- not supported  */
 	{&vnop_pagein_desc, (VOPFUNC)err_pagein},		/* pagein		- not supported  */
 	{&vnop_pageout_desc, (VOPFUNC)err_pageout},		/* pageout		- not supported  */
-	{&vnop_devblocksize_desc, (VOPFUNC)err_devblocksize},	/* devblocksize - not supported  */
 	{&vnop_searchfs_desc, (VOPFUNC)err_searchfs},		/* searchfs		- not supported */
 	{&vnop_copyfile_desc, (VOPFUNC)err_copyfile},		/* copyfile - not supported */
  	{ &vnop_blktooff_desc, (VOPFUNC)err_blktooff },		/* blktooff not supported */

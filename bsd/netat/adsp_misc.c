@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -52,7 +52,6 @@
  *    Modified for MP, 1996 by Tuyen Nguyen
  *   Modified, April 9, 1997 by Tuyen Nguyen for MacOSX.
  */
-extern atlock_t adspgen_lock;
 
 
 struct qlink {
@@ -132,17 +131,14 @@ void* qfind_m(qhead, match, compare_fnx)
 	void  *match;
 	ProcPtr compare_fnx;
 {
-	int s;
 	CCBPtr queue_item = qhead;
 
-	ATDISABLE(s, adspgen_lock);
 	while (queue_item) { 
 		if ((*compare_fnx)(queue_item,match)) 
 			break;
 		
 		queue_item = queue_item->ccbLink;
 	}
-	ATENABLE(s, adspgen_lock);
 
 	return (queue_item);
 }

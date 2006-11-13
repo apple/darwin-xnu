@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All Rights Reserved.
- * 
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ *
  * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code 
@@ -82,7 +82,6 @@
 #include <sys/lock.h>
 
 
-extern lck_mtx_t    *buf_mtxp;
 #define NOLIST ((struct buf *)0x87654321)
 
 /*
@@ -197,6 +196,8 @@ struct buf {
 extern int niobuf;		/* The number of IO buffer headers for cluster IO */
 extern int nbuf;		/* The number of buffer headers */
 extern struct buf *buf;		/* The buffer headers. */
+extern int max_nbuf_headers;		/* The max number of buffer headers */
+extern int nbuf_hashelements;		/* The number of elements in bufhash */
 
 
 /*
