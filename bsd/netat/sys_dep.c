@@ -1,31 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  *	Copyright (c) 1995-1998 Apple Computer, Inc. 
@@ -59,6 +57,13 @@
 #include <netat/at_pcb.h>
 #include <netat/debug.h>
 
+int (*sys_ATsocket)() = 0;
+int (*sys_ATgetmsg)() = 0;
+int (*sys_ATputmsg)() = 0;
+int (*sys_ATPsndreq)() = 0;
+int (*sys_ATPsndrsp)() = 0;
+int (*sys_ATPgetreq)() = 0;
+int (*sys_ATPgetrsp)() = 0;
 
 extern at_state_t at_state;	/* global state of AT network */
 extern at_ifaddr_t *ifID_home;	/* default interface */
@@ -72,12 +77,6 @@ extern lck_mtx_t * atalk_mutex;
 #define f_offset f_fglob->fg_offset
 #define f_data f_fglob->fg_data
 
-extern int _ATsocket(int, int *, void *);
-extern int _ATgetmsg(int, strbuf_t *, strbuf_t *, int *, int *, void *);
-extern int _ATputmsg();
-extern int _ATPsndreq(), _ATPsndrsp(), _ATPgetreq(), _ATPgetrsp();
-
-
 int ATsocket(proc, uap, retval)
 	struct proc *proc;
 	struct ATsocket_args *uap;
@@ -85,13 +84,13 @@ int ATsocket(proc, uap, retval)
 {
 	int err;
 	atalk_lock();
-	if (_ATsocket) {
+	if (sys_ATsocket) {
 		/* required check for all AppleTalk system calls */
 		if (!(at_state.flags & AT_ST_STARTED) || !ifID_home) {
 			*retval = -1;
 			err = ENOTREADY;
 		} else {
-			*retval = _ATsocket((int)uap->proto, (int *)&err, (void *)proc);
+			*retval = (*sys_ATsocket)(uap->proto, &err, proc);
 		}
 	} else {
 		*retval = -1;
@@ -109,14 +108,14 @@ int ATgetmsg(proc, uap, retval)
 	int err;
 
 	atalk_lock();
-	if (_ATgetmsg) {
+	if (sys_ATgetmsg) {
 		/* required check for all AppleTalk system calls */
 		if (!(at_state.flags & AT_ST_STARTED) || !ifID_home) {
 			*retval = -1;
 			err = ENOTREADY;
 		} else {
 			*retval = 
-			  (*_ATgetmsg)(uap->fd, uap->ctlptr, uap->datptr, 
+			  (*sys_ATgetmsg)(uap->fd, uap->ctlptr, uap->datptr, 
 					  uap->flags, &err, proc);
 		}
 	} else {
@@ -135,14 +134,14 @@ int ATputmsg(proc, uap, retval)
 	int err;
 
 	atalk_lock();
-	if (_ATputmsg) {
+	if (sys_ATputmsg) {
 		/* required check for all AppleTalk system calls */
 		if (!(at_state.flags & AT_ST_STARTED) || !ifID_home) {
 			*retval = -1;
 			err = ENOTREADY;
 		} else {
 			*retval = 
-			  _ATputmsg(uap->fd, uap->ctlptr, uap->datptr, 
+			  (*sys_ATputmsg)(uap->fd, uap->ctlptr, uap->datptr, 
 					  uap->flags, &err, proc);
 		}
 	} else {
@@ -161,14 +160,14 @@ int ATPsndreq(proc, uap, retval)
 	int err;
 
 	atalk_lock();
-	if (_ATPsndreq) {
+	if (sys_ATPsndreq) {
 		/* required check for all AppleTalk system calls */
 		if (!(at_state.flags & AT_ST_STARTED) || !ifID_home) {
 			*retval = -1;
 			err = ENOTREADY;
 		} else {
 			*retval = 
-			  _ATPsndreq(uap->fd, uap->buf, uap->len, 
+			  (*sys_ATPsndreq)(uap->fd, uap->buf, uap->len, 
 					   uap->nowait, &err, proc);
 		}
 	} else {
@@ -187,14 +186,14 @@ int ATPsndrsp(proc, uap, retval)
 	int err;
 
 	atalk_lock();
-	if (_ATPsndrsp) {
+	if (sys_ATPsndrsp) {
 		/* required check for all AppleTalk system calls */
 		if (!(at_state.flags & AT_ST_STARTED) || !ifID_home) {
 			*retval = -1;
 			err = ENOTREADY;
 		} else { 
 			*retval = 
-			  _ATPsndrsp(uap->fd, uap->respbuff, 
+			  (*sys_ATPsndrsp)(uap->fd, uap->respbuff, 
 					   uap->resplen, uap->datalen, &err, proc);
 		}
 	} else {
@@ -213,14 +212,14 @@ int ATPgetreq(proc, uap, retval)
 	int err;
 
 	atalk_lock();
-	if (_ATPgetreq) {
+	if (sys_ATPgetreq) {
 		/* required check for all AppleTalk system calls */
 		if (!(at_state.flags & AT_ST_STARTED) || !ifID_home) {
 			*retval = -1;
 			err = ENOTREADY;
 		} else {
 			*retval = 
-			  _ATPgetreq(uap->fd, uap->buf, uap->buflen, 
+			  (*sys_ATPgetreq)(uap->fd, uap->buf, uap->buflen, 
 					   &err, proc);
 		}
 	} else {
@@ -239,14 +238,14 @@ int ATPgetrsp(proc, uap, retval)
 	int err = 0;
 
 	atalk_lock();
-	if (_ATPgetrsp) {
+	if (sys_ATPgetrsp) {
 		/* required check for all AppleTalk system calls */
 		if (!(at_state.flags & AT_ST_STARTED) || !ifID_home) {
 			*retval = -1;
 			err = ENOTREADY;
 		} else {
 			*retval = 
-			  _ATPgetrsp(uap->fd, uap->bdsp, &err, proc);
+			  (*sys_ATPgetrsp)(uap->fd, uap->bdsp, &err, proc);
 		}
 	} else {
 		*retval = -1;
@@ -344,7 +343,7 @@ int droponerr;
 		}
 	}
 	*grefp = (gref_t *)fp->f_data;
-	if (*grefp == 0 || *grefp == (gref_t *)(-1)) {
+	if (fp->f_type != (DTYPE_ATALK+1) || *grefp == 0 || *grefp == (gref_t *)(-1)) {
 		if (droponerr)
 			fp_drop(proc, fd, fp, 1);
 		printf("atalk_getref_locked EBADF f_data: %x\n", fp->f_data);

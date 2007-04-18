@@ -1,31 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  *
@@ -80,22 +78,10 @@ struct atalk_addr {
 #define	UAL_UAL(x,y)	*(unsigned long *) &(x[0]) = *(unsigned long *) &(y[0])
 #define	UAL_VALUE(x)	(*(unsigned long *) &(x[0]))
 
-/* Macros to assign unaligned fields with byte swapping */
-#define	UAS_ASSIGN_HTON(x,s)	*(unsigned short *) &(x[0]) = htons((unsigned short) (s))
-#define	UAS_ASSIGN_NTOH(x,s)	*(unsigned short *) &(x[0]) = ntohs((unsigned short) (s))
-#define	UAS_VALUE_HTON(x)		htons((*(unsigned short *) &(x[0])))
-#define	UAS_VALUE_NTOH(x)		ntohs((*(unsigned short *) &(x[0])))
-#define	UAL_ASSIGN_HTON(x,l)	*(unsigned long *) &(x[0]) = htonl((unsigned long) (l))
-#define	UAL_ASSIGN_NTOH(x,l)	*(unsigned long *) &(x[0]) = ntohl((unsigned long) (l))
-#define	UAL_VALUE_HTON(x)		htonl((*(unsigned long *) &(x[0])))
-#define	UAL_VALUE_NTOH(x)		ntohl((*(unsigned long *) &(x[0])))
-
 /* Macros to manipulate at_net variables */
-#define	NET_ASSIGN(x,s)		*(unsigned short *)&(x[0]) = htons((unsigned short)(s))
-#define	NET_ASSIGN_NOSWAP(x,s)		*(unsigned short *)&(x[0]) = (unsigned short)(s)
-#define	NET_NET(x, y)		*(unsigned short *)&(x[0]) = *(unsigned short *)&(y[0])
-#define	NET_VALUE(x)		ntohs((*(unsigned short *) &(x[0])))
-#define	NET_VALUE_NOSWAP(x)		(*(unsigned short *) &(x[0]))
+#define	NET_ASSIGN(x,s)	*(unsigned short *)&(x[0]) = (unsigned short)(s)
+#define	NET_NET(x, y)	*(unsigned short *)&(x[0]) = *(unsigned short *)&(y[0])
+#define	NET_VALUE(x)	(*(unsigned short *) &(x[0]))
 #define ATALK_ASSIGN(a, net, node, unused ) \
   a.atalk_unused = unused; a.atalk_node = node; NET_ASSIGN(a.atalk_net, net)
 
@@ -281,6 +267,7 @@ typedef struct {
 #define	IFID_HOME	1 		/* home port in ifID_table */
 
 #define	ATALK_VALUE(a)		((*(u_long *) &(a))&0x00ffffff)
+#define	ATALK_EQUAL(a, b)	(ATALK_VALUE(a) == ATALK_VALUE(b))
 
 #define VERSION_LENGTH		80	/* length of version string */
 

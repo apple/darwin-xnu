@@ -1,36 +1,38 @@
 /*
  * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
  */
 /*
+ *	File:		kern/clock.h
+ *	Purpose:	Data structures for the kernel alarm clock
+ *			facility. This file is used only by kernel
+ *			level clock facility routines.
  */
 
 #ifndef	_KERN_CLOCK_H_
@@ -49,8 +51,43 @@
 #ifdef	MACH_KERNEL_PRIVATE
 
 /*
+ * Actual clock alarm structure. Used for user clock_sleep() and
+ * clock_alarm() calls. Alarms are allocated from the alarm free
+ * list and entered in time priority order into the active alarm
+ * chain of the target clock.
+ */
+struct	alarm {
+	struct	alarm	*al_next;		/* next alarm in chain */
+	struct	alarm	*al_prev;		/* previous alarm in chain */
+	int				al_status;		/* alarm status */
+	mach_timespec_t	al_time;		/* alarm time */
+	struct {				/* message alarm data */
+		int				type;		/* alarm type */
+		ipc_port_t		port;		/* alarm port */
+		mach_msg_type_name_t
+						port_type;	/* alarm port type */
+		struct	clock	*clock;		/* alarm clock */
+		void			*data;		/* alarm data */
+	} al_alrm;
+#define al_type		al_alrm.type
+#define al_port		al_alrm.port
+#define al_port_type	al_alrm.port_type
+#define al_clock	al_alrm.clock
+#define al_data		al_alrm.data
+	long			al_seqno;		/* alarm sequence number */
+};
+typedef struct alarm	alarm_data_t;
+
+/* alarm status */
+#define ALARM_FREE	0		/* alarm is on free list */
+#define	ALARM_SLEEP	1		/* active clock_sleep() */
+#define ALARM_CLOCK	2		/* active clock_alarm() */
+#define ALARM_DONE	4		/* alarm has expired */
+
+/*
  * Clock operations list structure. Contains vectors to machine
- * dependent clock routines.
+ * dependent clock routines. The routines c_config, c_init, and
+ * c_gettime must be implemented for every clock device.
  */
 struct	clock_ops {
 	int		(*c_config)(void);		/* configuration */
@@ -60,22 +97,37 @@ struct	clock_ops {
 	kern_return_t	(*c_gettime)(	/* get time */
 				mach_timespec_t			*cur_time);
 
+	kern_return_t	(*c_settime)(	/* set time */
+				mach_timespec_t			*clock_time);
+
 	kern_return_t	(*c_getattr)(	/* get attributes */
 				clock_flavor_t			flavor,
 				clock_attr_t			attr,
 				mach_msg_type_number_t	*count);
+
+	kern_return_t	(*c_setattr)(	/* set attributes */
+				clock_flavor_t			flavor,
+				clock_attr_t			attr,
+				mach_msg_type_number_t	count);
+
+	void		(*c_setalrm)(		/* set next alarm */
+				mach_timespec_t			*alarm_time);
 };
 typedef struct clock_ops	*clock_ops_t;
 typedef struct clock_ops	clock_ops_data_t;
 
 /*
  * Actual clock object data structure. Contains the machine
- * dependent operations list and clock operation ports.
+ * dependent operations list, clock operations ports, and a
+ * chain of pending alarms.
  */
 struct	clock {
 	clock_ops_t			cl_ops;			/* operations list */
 	struct ipc_port		*cl_service;	/* service port */
 	struct ipc_port		*cl_control;	/* control port */
+	struct	{							/* alarm chain head */
+		struct alarm 	*al_next;
+	} cl_alarm;
 };
 typedef struct clock		clock_data_t;
 
@@ -83,13 +135,11 @@ typedef struct clock		clock_data_t;
  * Configure the clock system.
  */
 extern void		clock_config(void);
-extern void		clock_oldconfig(void);
 
 /*
  * Initialize the clock system.
  */
 extern void		clock_init(void);
-extern void		clock_oldinit(void);
 
 extern void		clock_timebase_init(void);
 
@@ -97,6 +147,20 @@ extern void		clock_timebase_init(void);
  * Initialize the clock ipc service facility.
  */
 extern void		clock_service_create(void);
+
+/*
+ * Service clock alarm interrupts. Called from machine dependent
+ * layer at splclock(). The clock_id argument specifies the clock,
+ * and the clock_time argument gives that clock's current time.
+ */
+extern void		clock_alarm_intr(
+					clock_id_t		clock_id,
+					mach_timespec_t	*clock_time);
+
+extern kern_return_t	clock_sleep_internal(
+							clock_t			clock,
+							sleep_type_t	sleep_type,
+							mach_timespec_t	*sleep_time);
 
 typedef void		(*clock_timer_func_t)(
 						uint64_t			timestamp);
@@ -107,12 +171,11 @@ extern void			clock_set_timer_func(
 extern void			clock_set_timer_deadline(
 						uint64_t			deadline);
 
-extern void			clock_gettimeofday_set_commpage(
-						uint64_t				abstime,
-						uint64_t				epoch,
-						uint64_t				offset,
-						uint32_t				*secs,
-						uint32_t				*microsecs);
+extern uint32_t		clock_set_calendar_adjtime(
+						int32_t				*secs,
+						int32_t				*microsecs);
+
+extern uint32_t		clock_adjust_calendar(void);
 
 extern void			machine_delay_until(
 						uint64_t		deadline);
@@ -130,16 +193,6 @@ extern void		absolutetime_to_microtime(
 					uint64_t		abstime,
 					uint32_t		*secs,
 					uint32_t		*microsecs);
-
-extern void		absolutetime_to_nanotime(
-					uint64_t		abstime,
-					uint32_t		*secs,
-					uint32_t		*nanosecs);
-
-extern void		nanotime_to_absolutetime(
-				    uint32_t		secs,
-					uint32_t		nanosecs,
-					uint64_t		*result);
 
 #endif /* MACH_KERNEL_PRIVATE */
 

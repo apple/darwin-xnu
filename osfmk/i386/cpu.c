@@ -1,31 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  *	File:	i386/cpu.c
@@ -43,9 +41,8 @@
 #include <i386/pmap.h>
 #include <i386/misc_protos.h>
 #include <i386/cpu_threads.h>
-#include <i386/rtclock.h>
 #include <vm/vm_kern.h>
-#include "cpuid.h"
+
 
 struct processor	processor_master;
 
@@ -89,8 +86,6 @@ cpu_sleep(void)
 {
 	cpu_data_t	*proc_info = current_cpu_datap();
 
-	proc_info->cpu_running = FALSE;
-
 	PE_cpu_machine_quiesce(proc_info->cpu_id);
 
 	cpu_thread_halt();
@@ -101,13 +96,14 @@ cpu_init(void)
 {
 	cpu_data_t	*cdp = current_cpu_datap();
 
-	/* be sure cpuid is initialized */
-	cpuid_set_info();
-
-	/* and allow it to be authoritative */
-	cdp->cpu_type = cpuid_cputype();
-	cdp->cpu_subtype = cpuid_cpusubtype();
-
+#ifdef	MACH_BSD
+	/* FIXME */
+	cdp->cpu_type = CPU_TYPE_I386;
+	cdp->cpu_subtype = CPU_SUBTYPE_PENTPRO;
+#else
+	cdp->cpu_type = cpuid_cputype(0);
+	cdp->cpu_subtype = CPU_SUBTYPE_AT386;
+#endif
 	cdp->cpu_running = TRUE;
 }
 
@@ -140,11 +136,10 @@ void
 cpu_machine_init(
 	void)
 {
-	cpu_data_t	*cdp = current_cpu_datap();
+	int	cpu;
 
-	PE_cpu_machine_init(cdp->cpu_id, !cdp->cpu_boot_complete);
-	cdp->cpu_boot_complete = TRUE;
-	cdp->cpu_running = TRUE;
+	cpu = get_cpu_number();
+	PE_cpu_machine_init(cpu_datap(cpu)->cpu_id, TRUE);
 #if 0
 	if (cpu_datap(cpu)->hibernate)
 	{

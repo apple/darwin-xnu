@@ -1,31 +1,29 @@
 /*
  * Copyright (c) 2001 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * History:
@@ -39,7 +37,6 @@
 #include <mach-o/reloc.h>
 #if !KERNEL
 #include <mach-o/swap.h>
-#include <libkern/OSByteOrder.h>
 #endif
 
 #if KERNEL
@@ -633,13 +630,13 @@ kld_macho_swap(struct mach_header * mh)
             cmd < ncmds;
             cmd++, seg = (struct segment_command *)(((vm_offset_t)seg) + seg->cmdsize))
     {
-        if (OSSwapConstInt32(LC_SYMTAB) == seg->cmd) {
+        if (NXSwapLong(LC_SYMTAB) == seg->cmd) {
 	    swap_symtab_command((struct symtab_command *) seg, hostOrder);
 	    swap_nlist((struct nlist *) (((vm_offset_t) mh) + ((struct symtab_command *) seg)->symoff),
 		       ((struct symtab_command *) seg)->nsyms, hostOrder);
 	    continue;
 	}
-        if (OSSwapConstInt32(LC_SEGMENT) != seg->cmd) {
+        if (NXSwapLong(LC_SEGMENT) != seg->cmd) {
 	    swap_load_command((struct load_command *) seg, hostOrder);
             continue;
 	}
@@ -753,21 +750,21 @@ static Boolean findBestArch(struct fileRecord *file, const char *pathName)
 	unsigned long i;
 	struct fat_arch *arch;
 
-	fat->nfat_arch = OSSwapBigToHostInt32(fat->nfat_arch);
+	fat->nfat_arch = NXSwapBigLongToHost(fat->nfat_arch);
 	return_if(file->fMapSize < sizeof(struct fat_header)
 				    + fat->nfat_arch * sizeof(struct fat_arch),
 	    false, ("%s is too fat\n", file->fPath));
 
 	arch = (struct fat_arch *) &fat[1];
 	for (i = 0; i < fat->nfat_arch; i++) {
-	    arch[i].cputype    = OSSwapBigToHostInt32(arch[i].cputype);
-	    arch[i].cpusubtype = OSSwapBigToHostInt32(arch[i].cpusubtype);
-	    arch[i].offset     = OSSwapBigToHostInt32(arch[i].offset);
-	    arch[i].size       = OSSwapBigToHostInt32(arch[i].size);
-	    arch[i].align      = OSSwapBigToHostInt32(arch[i].align);
+	    arch[i].cputype    = NXSwapBigLongToHost(arch[i].cputype);
+	    arch[i].cpusubtype = NXSwapBigLongToHost(arch[i].cpusubtype);
+	    arch[i].offset     = NXSwapBigLongToHost(arch[i].offset);
+	    arch[i].size       = NXSwapBigLongToHost(arch[i].size);
+	    arch[i].align      = NXSwapBigLongToHost(arch[i].align);
 	}
 
-	magic = OSSwapBigToHostInt32(fat->magic);
+	magic = NXSwapBigLongToHost(fat->magic);
     }
 
     // Now see if we can find any valid architectures
@@ -1304,7 +1301,7 @@ relocateSection(const struct fileRecord *file, struct sectionRecord *sectionRec)
 	    void * addr = *entry;
 #if !KERNEL
 	    if (file->fSwapped)
-		addr = (void *) OSSwapInt32((uint32_t) addr);
+		addr = (void *) NXSwapLong((long) addr);
 #endif
 	    symbol = findSymbolByAddress(file, addr);
 	}
@@ -1335,7 +1332,7 @@ findSymbolRefAtLocation(const struct fileRecord *file,
 	    void * addr = *loc;
 #if !KERNEL
 	    if (file->fSwapped)
-		addr = (void *) OSSwapInt32((uint32_t) addr);
+		addr = (void *) NXSwapLong((long) addr);
 #endif
 	    result = findSymbolByAddress(file, addr);
 	    if (!result)
@@ -1735,7 +1732,7 @@ static Boolean resolveKernelVTable(struct metaClassRecord *metaClass)
 	void * addr = *curEntry;
 #if !KERNEL
 	if (file->fSwapped)
-	    addr = (void *) OSSwapInt32((uint32_t) addr);
+	    addr = (void *) NXSwapLong((long) addr);
 #endif
 	curPatch->fSymbol = (struct nlist *) 
 	    findSymbolByAddress(file, addr);

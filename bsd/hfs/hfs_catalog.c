@@ -1,31 +1,29 @@
 /*
  * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #include <sys/systm.h>
@@ -521,6 +519,18 @@ cat_idlookup(struct hfsmount *hfsmp, cnid_t cnid, struct cat_desc *outdescp,
 	}
 
 	result = cat_lookupbykey(hfsmp, keyp, 0, 0, outdescp, attrp, forkp, NULL);
+	if (!result && outdescp) {
+		cnid_t dcnid = outdescp->cd_cnid;
+		/*
+		 * Just for sanity's sake, let's make sure that
+		 * the key in the thread matches the key in the record.
+		 */
+		if (cnid != dcnid) {
+			printf("Requested cnid (%d / 0x%08lx) != dcnid (%d / 0x%08lx)\n", cnid, cnid, dcnid, dcnid);
+			result = ENOENT;
+		}
+	}
+
 exit:
 	FREE(recp, M_TEMP);
 	FREE(iterator, M_TEMP);
@@ -2207,6 +2217,20 @@ cat_getdirentries(struct hfsmount *hfsmp, int entrycnt, directoryhint_t *dirhint
 	 */
 	result = BTIterateRecords(fcb, op, iterator,
 	                          (IterateCallBackProcPtr)cat_packdirentry, &state);
+
+	/* If readdir is called for NFS and BTIterateRecords reaches the end of the
+	 * Catalog BTree, call cat_packdirentry() with dummy values to copy previous 
+	 * direntry stored in state to the user buffer.
+	 */
+	if (state.cbs_extended && (result == fsBTRecordNotFoundErr)) {
+		CatalogKey ckp;
+		CatalogRecord crp;
+
+		bzero(&ckp, sizeof(ckp));
+		bzero(&crp, sizeof(crp));
+
+		result = cat_packdirentry(&ckp, &crp, &state);
+	}
 
 	/* Note that state.cbs_index is still valid on errors */
 	*items = state.cbs_index - index;

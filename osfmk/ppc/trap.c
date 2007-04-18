@@ -1,31 +1,29 @@
 /*
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -90,7 +88,6 @@ extern int not_in_kdp;
 #define PROT_RO		(VM_PROT_READ)
 #define PROT_RW		(VM_PROT_READ|VM_PROT_WRITE)
 
-
 /* A useful macro to update the ppc_exception_state in the PCB
  * before calling doexception
  */
@@ -137,11 +134,11 @@ struct savearea *trap(int trapno,
 
 	myast = ast_pending();
 	if(perfASTHook) {
-		if(*myast & AST_CHUD_ALL) {
+		if(*myast & AST_PPC_CHUD_ALL) {
 			perfASTHook(trapno, ssp, dsisr, (unsigned int)dar);
 		}
 	} else {
-		*myast &= ~AST_CHUD_ALL;
+		*myast &= ~AST_PPC_CHUD_ALL;
 	}
 
 	if(perfTrapHook) {							/* Is there a hook? */
@@ -378,7 +375,7 @@ struct savearea *trap(int trapno,
 			map = kernel_map;
 			
 			code = vm_fault(map, vm_map_trunc_page(ssp->save_srr0),
-					(PROT_EXEC | PROT_RO), FALSE, THREAD_UNINT, NULL, vm_map_trunc_page(0));
+					PROT_EXEC, FALSE, THREAD_UNINT, NULL, vm_map_trunc_page(0));
 
 			if (code != KERN_SUCCESS) {
 				unresolved_kernel_trap(trapno, ssp, dsisr, dar, NULL);
@@ -607,7 +604,7 @@ struct savearea *trap(int trapno,
 			map = thread->map;
 			
 			code = vm_fault(map, vm_map_trunc_page(ssp->save_srr0),
-					(PROT_EXEC | PROT_RO), FALSE, THREAD_ABORTSAFE, NULL, vm_map_trunc_page(0));
+				PROT_EXEC, FALSE, THREAD_ABORTSAFE, NULL, vm_map_trunc_page(0));
 
 			if ((code != KERN_SUCCESS) && (code != KERN_ABORTED)) {
 				UPDATE_PPC_EXCEPTION_STATE;

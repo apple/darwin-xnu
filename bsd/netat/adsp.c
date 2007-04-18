@@ -1,31 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Change log:
@@ -58,6 +56,7 @@ struct adsp_debug adsp_dtable[1025];
 int ad_entry = 0;
 #endif
 
+extern atlock_t adspgen_lock;
 
 adspAllocateCCB(gref)
     register gref_t *gref;	/* READ queue */
@@ -76,6 +75,9 @@ adspAllocateCCB(gref)
     sp->pid = gref->pid; /* save the caller process pointer */
     sp->gref = gref;		/* save a back pointer to the WRITE queue */
     sp->sp_mp = ccb_mp;		/* and its message block */
+    ATLOCKINIT(sp->lock);
+    ATLOCKINIT(sp->lockClose);
+    ATLOCKINIT(sp->lockRemove);
     return 1;
 }
 
@@ -83,14 +85,19 @@ adspRelease(gref)
     register gref_t *gref;	/* READ queue */
 {
     register CCBPtr sp;
+    int s, l;
 
+    ATDISABLE(l, adspgen_lock);
     if (gref->info) {
 	sp = (CCBPtr)gbuf_rptr(((gbuf_t *)gref->info));
+	ATDISABLE(s, sp->lock);
+	ATENABLE(s, adspgen_lock);
 				/* Tells completion routine of close */
 				/* packet to remove us. */
 
 	if (sp->state == sPassive || sp->state == sClosed || 
 	    sp->state == sOpening || sp->state == sListening) {
+	    ATENABLE(l, sp->lock);
 	    if (sp->state == sListening)
 		CompleteQueue(&sp->opb, errAborted);
 	    sp->removing = 1;	/* Prevent allowing another dspClose. */
@@ -99,6 +106,7 @@ adspRelease(gref)
 	} else {			/* sClosing & sOpen */
 	    sp->state = sClosing;
 	}
+	ATENABLE(l, sp->lock);
 
 	if (CheckOkToClose(sp)) { /* going to close */
 	    sp->sendCtl = B_CTL_CLOSE; /* Send close advice */
@@ -108,10 +116,13 @@ adspRelease(gref)
 		    sp->sendCtl = B_CTL_CLOSE; /* Setup to send close advice */
 	}
 	CheckSend(sp);		/* and force out the close */
+	ATDISABLE(s, sp->lock);
 	    sp->removing = 1;	/* Prevent allowing another dspClose. */
 	    sp->state = sClosed;
+	ATENABLE(s, sp->lock);
 	    DoClose(sp, errAborted, 0);  /* to closed and remove CCB */
-    } 
+    } else
+	ATENABLE(l, adspgen_lock);
 }
 
 
@@ -354,11 +365,11 @@ adsp_sendddp(sp, mp, length, dstnetaddr, ddptype)
    /* Set up the DDP header */
 
    ddp = (DDPX_FRAME *) gbuf_rptr(mp);
-   UAS_ASSIGN_HTON(ddp->ddpx_length, (length + DDPL_FRAME_LEN));
+   UAS_ASSIGN(ddp->ddpx_length, (length + DDPL_FRAME_LEN));
    UAS_ASSIGN(ddp->ddpx_cksm, 0);
    if (sp) {
 	if (sp->useCheckSum)
-	   UAS_ASSIGN_HTON(ddp->ddpx_cksm, 1);
+	   UAS_ASSIGN(ddp->ddpx_cksm, 1);
    }
 
    NET_ASSIGN(ddp->ddpx_dnet, dstnetaddr->a.net);

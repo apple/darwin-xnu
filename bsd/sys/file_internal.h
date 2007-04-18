@@ -1,31 +1,29 @@
 /*
  * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995, 1997 Apple Computer, Inc. All Rights Reserved */
 /*
@@ -114,12 +112,31 @@ struct fileproc {
 #define CLOSEINT_WAITONCLOSE 2
 #define CLOSEINT_NOFDRELSE  4
 #define CLOSEINT_NOFDNOREF  8
+  
+/* file types */
+typedef enum {
+	DTYPE_VNODE     = 1,    /* file */
+	DTYPE_SOCKET,           /* communications endpoint */
+	DTYPE_PSXSHM,           /* POSIX Shared memory */
+	DTYPE_PSXSEM,           /* POSIX Semaphores */
+	DTYPE_KQUEUE,           /* kqueue */
+	DTYPE_PIPE,             /* pipe */
+	DTYPE_FSEVENTS          /* fsevents */
+} file_type_t;
+
+/* defines for fg_lflags */
+#define FG_TERM        0x01    /* the fileglob is terminating .. */
+#define FG_INSMSGQ     0x02    /* insert to msgqueue pending .. */
+#define FG_WINSMSGQ    0x04    /* wait for the fielglob is in msgque */
+#define FG_RMMSGQ      0x08    /* the fileglob is being removed from msgqueue */
+#define FG_WRMMSGQ     0x10    /* wait for the fileglob to  be removed from msgqueue */
+
 
 struct fileglob {
 	LIST_ENTRY(fileglob) f_list;/* list of active files */
 	LIST_ENTRY(fileglob) f_msglist;/* list of active files */
 	int32_t	fg_flag;		/* see fcntl.h */
-	int32_t	fg_type;		/* descriptor type */
+	file_type_t fg_type;		/* descriptor type */
 	int32_t	fg_count;	/* reference count */
 	int32_t	fg_msgcount;	/* references from message queue */
 	struct	ucred *fg_cred;	/* credentials associated with descriptor */
@@ -148,23 +165,6 @@ struct fileglob {
 	unsigned int fg_lockpc[4];
 	unsigned int fg_unlockpc[4];
 };
-
-/* file types */
-#define	DTYPE_VNODE	1	/* file */
-#define	DTYPE_SOCKET	2	/* communications endpoint */
-#define	DTYPE_PSXSHM	3	/* POSIX Shared memory */
-#define	DTYPE_PSXSEM	4	/* POSIX Semaphores */
-#define DTYPE_KQUEUE	5	/* kqueue */
-#define	DTYPE_PIPE	6	/* pipe */
-#define DTYPE_FSEVENTS	7	/* fsevents */
-
-/* defines for fg_lflags */
-#define FG_TERM 	0x01	/* the fileglob is terminating .. */
-#define FG_INSMSGQ 	0x02	/* insert to msgqueue pending .. */
-#define FG_WINSMSGQ	0x04 	/* wait for the fielglob is in msgque */
-#define FG_RMMSGQ	0x08 	/* the fileglob is being removed from msgqueue */
-#define FG_WRMMSGQ	0x10 	/* wait for the fileglob to  be removed from msgqueue */
-
 
 #ifdef __APPLE_API_PRIVATE
 LIST_HEAD(filelist, fileglob);
@@ -199,15 +199,8 @@ struct kqueue;
 int fp_getfkq(struct proc *p, int fd, struct fileproc **resultfp, struct kqueue  **resultkq);
 struct psemnode;
 int fp_getfpsem(struct proc *p, int fd, struct fileproc **resultfp, struct psemnode  **resultpsem);
-struct pshmnode;
-int fp_getfpshm(struct proc *p, int fd, struct fileproc **resultfp, struct pshmnode  **resultpshm);
-struct pipe;
-int fp_getfpipe(struct proc *p, int fd, struct fileproc **resultfp, struct pipe  **resultpipe);
-struct atalk;
-int fp_getfatalk(struct proc *p, int fd, struct fileproc **resultfp, struct atalk  **resultatalk);
 struct vnode;
 int fp_getfvp(struct proc *p, int fd, struct fileproc **resultfp, struct vnode  **resultvp);
-int fp_getfvpandvid(struct proc *p, int fd, struct fileproc **resultfp, struct vnode  **resultvp, uint32_t * vidp);
 struct socket;
 int fp_getfsock(struct proc *p, int fd, struct fileproc **resultfp, struct socket  **results);
 int fp_lookup(struct proc *p, int fd, struct fileproc **resultfp, int locked);

@@ -1,31 +1,29 @@
 /*
  * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -74,8 +72,6 @@
 
 #include <mach/port.h>
 #include <mach/message.h>
-#include <mach/vm_prot.h>
-#include <mach/vm_sync.h>
 #include <mach/vm_types.h>
 #include <mach/machine/vm_types.h>
 
@@ -85,8 +81,6 @@
 
 typedef unsigned long long	memory_object_offset_t;
 typedef unsigned long long	memory_object_size_t;
-typedef natural_t		memory_object_cluster_size_t;
-
 
 /*
  * Temporary until real EMMI version gets re-implemented
@@ -94,60 +88,13 @@ typedef natural_t		memory_object_cluster_size_t;
 
 #ifdef	KERNEL_PRIVATE
 
-struct memory_object_pager_ops;	/* forward declaration */
-
 typedef struct 		memory_object {
-	const struct memory_object_pager_ops	*mo_pager_ops;
+	int		*pager;
 } *memory_object_t;
 
 typedef struct		memory_object_control {
-	struct vm_object *moc_object;
-	unsigned int	moc_ikot; /* XXX fake ip_kotype */
+	struct vm_object *object;
 } *memory_object_control_t;
-
-typedef const struct memory_object_pager_ops {
-	void (*memory_object_reference)(
-		memory_object_t mem_obj);
-	void (*memory_object_deallocate)(
-		memory_object_t mem_obj);
-	kern_return_t (*memory_object_init)(
-		memory_object_t mem_obj,
-		memory_object_control_t mem_control,
-		memory_object_cluster_size_t size);
-	kern_return_t (*memory_object_terminate)(
-		memory_object_t mem_obj);
-	kern_return_t (*memory_object_data_request)(
-		memory_object_t mem_obj,
-		memory_object_offset_t offset,
-		memory_object_cluster_size_t length,
-		vm_prot_t desired_access);
-	kern_return_t (*memory_object_data_return)(
-		memory_object_t mem_obj,
-		memory_object_offset_t offset,
-		vm_size_t size,
-		memory_object_offset_t *resid_offset,
-		int *io_error,
-		boolean_t dirty,
-		boolean_t kernel_copy,
-		int upl_flags);
-	kern_return_t (*memory_object_data_initialize)(
-		memory_object_t mem_obj,
-		memory_object_offset_t offset,
-		vm_size_t size);
-	kern_return_t (*memory_object_data_unlock)(
-		memory_object_t mem_obj,
-		memory_object_offset_t offset,
-		vm_size_t size,
-		vm_prot_t desired_access);
-	kern_return_t (*memory_object_synchronize)(
-		memory_object_t mem_obj,
-		memory_object_offset_t offset,
-		vm_size_t size,
-		vm_sync_t sync_flags);
-	kern_return_t (*memory_object_unmap)(
-		memory_object_t mem_obj);
-	const char *memory_object_pager_name;
-} * memory_object_pager_ops_t;
 
 #else	/* KERNEL_PRIVATE */
 
@@ -292,6 +239,8 @@ __END_DECLS
 #endif  /* KERNEL */
 
 #endif	/* PRIVATE */
+
+typedef natural_t memory_object_cluster_size_t;
 
 struct memory_object_perf_info {
 	memory_object_cluster_size_t	cluster_size;
@@ -442,14 +391,12 @@ typedef uint32_t	upl_size_t;	/* page-aligned byte size */
 #define UPL_NOZEROFILL		0x00400000
 #define UPL_WILL_MODIFY		0x00800000 /* caller will modify the pages */
 
-#define UPL_NEED_32BIT_ADDR	0x01000000
-
 /* UPL flags known by this kernel */
-#define UPL_VALID_FLAGS		0x01FFFFFF
+#define UPL_VALID_FLAGS		0x00FFFFFF
 
 
 /* upl abort error flags */
-#define UPL_ABORT_RESTART	0x1
+#define UPL_ABORT_RESTART		0x1
 #define UPL_ABORT_UNAVAILABLE	0x2
 #define UPL_ABORT_ERROR		0x4
 #define UPL_ABORT_FREE_ON_EMPTY	0x8  /* only implemented in wrappers */
@@ -609,7 +556,8 @@ extern vm_size_t 	upl_get_internal_pagelist_offset(void);
 __BEGIN_DECLS
 
 extern ppnum_t	upl_phys_page(upl_page_info_t *upl, int index);
-extern void	upl_clear_dirty(upl_t upl, boolean_t value);
+extern void	   	upl_set_dirty(upl_t   upl);
+extern void		upl_clear_dirty(upl_t   upl);
 
 __END_DECLS
 

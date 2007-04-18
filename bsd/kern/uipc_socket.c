@@ -1,31 +1,29 @@
 /*
  * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1998, 1999 Apple Computer, Inc. All Rights Reserved */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
@@ -190,6 +188,7 @@ void socketinit()
 	 * allocate lock group attribute and group for socket cache mutex
 	 */
 	so_cache_mtx_grp_attr = lck_grp_attr_alloc_init();
+	lck_grp_attr_setdefault(so_cache_mtx_grp_attr);
 
 	so_cache_mtx_grp = lck_grp_alloc_init("so_cache", so_cache_mtx_grp_attr);
 		
@@ -197,6 +196,7 @@ void socketinit()
 	 * allocate the lock attribute for socket cache mutex
 	 */
 	so_cache_mtx_attr = lck_attr_alloc_init();
+	lck_attr_setdefault(so_cache_mtx_attr);
 
     so_cache_init_done = 1;
 
@@ -471,9 +471,6 @@ socreate(dom, aso, type, proto)
 	so->so_rcv.sb_flags |= SB_RECV;	/* XXX */
 	so->so_rcv.sb_so = so->so_snd.sb_so = so;
 #endif
-	so->next_lock_lr = 0;
-	so->next_unlock_lr = 0;
-	
 	
 //### Attachement will create the per pcb lock if necessary and increase refcount
 	so->so_usecount++;	/* for creation, make sure it's done before socket is inserted in lists */
@@ -976,16 +973,13 @@ soconnect2(so1, so2)
 	struct socket *so2;
 {
 	int error;
+//####### Assumes so1 is already locked /
 
-	socket_lock(so1, 1);
-	if (so2->so_proto->pr_lock) 
-		socket_lock(so2, 1);
+	socket_lock(so2, 1);
 
 	error = (*so1->so_proto->pr_usrreqs->pru_connect2)(so1, so2);
 	
-	socket_unlock(so1, 1);
-	if (so2->so_proto->pr_lock) 
-		socket_unlock(so2, 1);
+	socket_unlock(so2, 1);
 	return (error);
 }
 
@@ -2023,7 +2017,7 @@ static int sodelayed_copy(struct socket *so, struct uio *uio, struct mbuf **free
 int
 soshutdown(so, how)
 	register struct socket *so;
-	int how;
+	register int how;
 {
 	register struct protosw *pr = so->so_proto;
 	int ret;
@@ -2858,9 +2852,11 @@ socket_lock(so, refcount)
 	struct socket *so;
 	int refcount;
 {
-	int error = 0, lr_saved;
-
-	lr_saved = (unsigned int) __builtin_return_address(0);
+	int error = 0, lr, lr_saved;
+#ifdef __ppc__
+	__asm__ volatile("mflr %0" : "=r" (lr));
+        lr_saved = lr;
+#endif 
 
 	if (so->so_proto->pr_lock) {
 		error = (*so->so_proto->pr_lock)(so, refcount, lr_saved);
@@ -2872,8 +2868,7 @@ socket_lock(so, refcount)
 		lck_mtx_lock(so->so_proto->pr_domain->dom_mtx);
 		if (refcount)
 			so->so_usecount++;
-		so->lock_lr[so->next_lock_lr] = (void *)lr_saved;
-		so->next_lock_lr = (so->next_lock_lr+1) % SO_LCKDBG_MAX;
+		so->reserved3 = (void*)lr_saved; /* save caller for refcount going to zero */
 	}
 
 	return(error);
@@ -2885,10 +2880,15 @@ socket_unlock(so, refcount)
 	struct socket *so;
 	int refcount;
 {
-	int error = 0, lr_saved;
+	int error = 0, lr, lr_saved;
 	lck_mtx_t * mutex_held;
 
-	lr_saved = (unsigned int) __builtin_return_address(0);
+#ifdef __ppc__
+__asm__ volatile("mflr %0" : "=r" (lr));
+        lr_saved = lr;
+#endif
+
+
 
 	if (so->so_proto == NULL)
 		panic("socket_unlock null so_proto so=%x\n", so);
@@ -2900,9 +2900,6 @@ socket_unlock(so, refcount)
 #ifdef MORE_LOCKING_DEBUG
 		lck_mtx_assert(mutex_held, LCK_MTX_ASSERT_OWNED);
 #endif
-		so->unlock_lr[so->next_unlock_lr] = (void *)lr_saved;
-		so->next_unlock_lr = (so->next_unlock_lr+1) % SO_LCKDBG_MAX;
-
 		if (refcount) {
 			if (so->so_usecount <= 0)
 				panic("socket_unlock: bad refcount so=%x value=%d\n", so, so->so_usecount);
@@ -2910,6 +2907,8 @@ socket_unlock(so, refcount)
 			if (so->so_usecount == 0) {
 				sofreelastref(so, 1);
 			}
+			else 
+				so->reserved4 = (void*)lr_saved; /* save caller */
 		}
 		lck_mtx_unlock(mutex_held);
 	}
@@ -2922,7 +2921,12 @@ sofree(so)
 	struct socket *so;
 {
 
+	int lr, lr_saved;
 	lck_mtx_t * mutex_held;
+#ifdef __ppc__
+	__asm__ volatile("mflr %0" : "=r" (lr));
+	lr_saved = lr;
+#endif
 	if (so->so_proto->pr_getlock != NULL)  
 		mutex_held = (*so->so_proto->pr_getlock)(so, 0);
 	else  

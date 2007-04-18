@@ -1,31 +1,29 @@
 /*
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -115,7 +113,6 @@ ipc_task_init(
 {
 	ipc_space_t space;
 	ipc_port_t kport;
-	ipc_port_t nport;
 	kern_return_t kr;
 	int i;
 
@@ -129,13 +126,8 @@ ipc_task_init(
 	if (kport == IP_NULL)
 		panic("ipc_task_init");
 
-	nport = ipc_port_alloc_kernel();
-	if (nport == IP_NULL)
-		panic("ipc_task_init");
-
 	itk_lock_init(task);
 	task->itk_self = kport;
-	task->itk_nself = nport;
 	task->itk_sself = ipc_port_make_send(kport);
 	task->itk_space = space;
 	space->is_fast = FALSE;
@@ -200,15 +192,11 @@ ipc_task_enable(
 	task_t		task)
 {
 	ipc_port_t kport;
-	ipc_port_t nport;
 
 	itk_lock(task);
 	kport = task->itk_self;
 	if (kport != IP_NULL)
 		ipc_kobject_set(kport, (ipc_kobject_t) task, IKOT_TASK);
-	nport = task->itk_nself;
-	if (nport != IP_NULL)
-		ipc_kobject_set(nport, (ipc_kobject_t) task, IKOT_TASK_NAME);
 	itk_unlock(task);
 }
 
@@ -225,15 +213,11 @@ ipc_task_disable(
 	task_t		task)
 {
 	ipc_port_t kport;
-	ipc_port_t nport;
 
 	itk_lock(task);
 	kport = task->itk_self;
 	if (kport != IP_NULL)
 		ipc_kobject_set(kport, IKO_NULL, IKOT_NONE);
-	nport = task->itk_nself;
-	if (nport != IP_NULL)
-		ipc_kobject_set(nport, IKO_NULL, IKOT_NONE);
 	itk_unlock(task);
 }
 
@@ -251,7 +235,6 @@ ipc_task_terminate(
 	task_t		task)
 {
 	ipc_port_t kport;
-	ipc_port_t nport;
 	int i;
 
 	itk_lock(task);
@@ -262,12 +245,8 @@ ipc_task_terminate(
 		itk_unlock(task);
 		return;
 	}
+
 	task->itk_self = IP_NULL;
-
-	nport = task->itk_nself;
-	assert(nport != IP_NULL);
-	task->itk_nself = IP_NULL;
-
 	itk_unlock(task);
 
 	/* release the naked send rights */
@@ -294,18 +273,15 @@ ipc_task_terminate(
 	ipc_port_release_send(task->wired_ledger_port);
 	ipc_port_release_send(task->paged_ledger_port);
 
-	/* destroy the kernel ports */
+	/* destroy the kernel port */
 	ipc_port_dealloc_kernel(kport);
-	ipc_port_dealloc_kernel(nport);
 }
 
 /*
  *	Routine:	ipc_task_reset
  *	Purpose:
  *		Reset a task's IPC state to protect it when
- *		it enters an elevated security context. The
- *		task name port can remain the same - since
- *		it represents no specific privilege.
+ *		it enters an elevated security context.
  *	Conditions:
  *		Nothing locked.  The task must be suspended.
  *		(Or the current thread must be in the task.)
@@ -725,10 +701,36 @@ task_get_special_port(
 	int		which,
 	ipc_port_t	*portp)
 {
+	ipc_port_t *whichp;
 	ipc_port_t port;
 
 	if (task == TASK_NULL)
 		return KERN_INVALID_ARGUMENT;
+
+	switch (which) {
+	    case TASK_KERNEL_PORT:
+		whichp = &task->itk_sself;
+		break;
+
+	    case TASK_HOST_PORT:
+		whichp = &task->itk_host;
+		break;
+
+	    case TASK_BOOTSTRAP_PORT:
+		whichp = &task->itk_bootstrap;
+		break;
+
+            case TASK_WIRED_LEDGER_PORT:
+                whichp = &task->wired_ledger_port;
+                break;
+
+            case TASK_PAGED_LEDGER_PORT:
+                whichp = &task->paged_ledger_port;
+                break;
+                    
+	    default:
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	itk_lock(task);
 	if (task->itk_self == IP_NULL) {
@@ -736,34 +738,7 @@ task_get_special_port(
 		return KERN_FAILURE;
 	}
 
-	switch (which) {
-	    case TASK_KERNEL_PORT:
-		port = ipc_port_copy_send(task->itk_sself);
-		break;
-
-	    case TASK_NAME_PORT:
-		port = ipc_port_make_send(task->itk_nself);
-		break;
-
-	    case TASK_HOST_PORT:
-		port = ipc_port_copy_send(task->itk_host);
-		break;
-
-	    case TASK_BOOTSTRAP_PORT:
-		port = ipc_port_copy_send(task->itk_bootstrap);
-		break;
-
-            case TASK_WIRED_LEDGER_PORT:
-		port = ipc_port_copy_send(task->wired_ledger_port);
-                break;
-
-            case TASK_PAGED_LEDGER_PORT:
-		port = ipc_port_copy_send(task->paged_ledger_port);
-                break;
-                    
-	    default:
-		return KERN_INVALID_ARGUMENT;
-	}
+	port = ipc_port_copy_send(*whichp);
 	itk_unlock(task);
 
 	*portp = port;
@@ -1046,39 +1021,6 @@ convert_port_to_task(
 }
 
 /*
- *	Routine:	convert_port_to_task_name
- *	Purpose:
- *		Convert from a port to a task name.
- *		Doesn't consume the port ref; produces a task name ref,
- *		which may be null.
- *	Conditions:
- *		Nothing locked.
- */
-task_name_t
-convert_port_to_task_name(
-	ipc_port_t		port)
-{
-	task_name_t		task = TASK_NULL;
-
-	if (IP_VALID(port)) {
-		ip_lock(port);
-
-		if (	ip_active(port)					&&
-				(ip_kotype(port) == IKOT_TASK	||
-				 ip_kotype(port) == IKOT_TASK_NAME)) {
-			task = (task_name_t)port->ip_kobject;
-			assert(task != TASK_NAME_NULL);
-
-			task_reference_internal(task);
-		}
-
-		ip_unlock(port);
-	}
-
-	return (task);
-}
-
-/*
  *	Routine:	convert_port_to_space
  *	Purpose:
  *		Convert from a port to a space.
@@ -1254,33 +1196,6 @@ convert_task_to_port(
 	itk_unlock(task);
 
 	task_deallocate(task);
-	return port;
-}
-
-/*
- *	Routine:	convert_task_name_to_port
- *	Purpose:
- *		Convert from a task name ref to a port.
- *		Consumes a task name ref; produces a naked send right
- *		which may be invalid.  
- *	Conditions:
- *		Nothing locked.
- */
-
-ipc_port_t
-convert_task_name_to_port(
-	task_name_t		task_name)
-{
-	ipc_port_t port;
-
-	itk_lock(task_name);
-	if (task_name->itk_nself != IP_NULL)
-		port = ipc_port_make_send(task_name->itk_nself);
-	else
-		port = IP_NULL;
-	itk_unlock(task_name);
-
-	task_name_deallocate(task_name);
 	return port;
 }
 

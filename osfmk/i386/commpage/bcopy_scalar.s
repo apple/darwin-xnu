@@ -1,31 +1,29 @@
 /*
- * Copyright (c) 2003-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 /*-
@@ -76,12 +74,10 @@
 .text
 .align 5, 0x90
 Lbcopy_scalar:
-	pushl	%ebp		/* set up a frame for backtraces */
-	movl	%esp,%ebp
         pushl   %esi
         pushl   %edi
-        movl    8(%ebp),%esi
-        movl    12(%ebp),%edi
+        movl    12(%esp),%esi
+        movl    16(%esp),%edi
 	jmp	1f
 /*
 ** These need to be 32 bytes from Lbcopy_scalar
@@ -89,15 +85,13 @@ Lbcopy_scalar:
 .align 5, 0x90
 Lmemcpy_scalar:
 Lmemmove_scalar:
-	pushl	%ebp		/* set up a frame for backtraces */
-	movl	%esp,%ebp
         pushl   %esi
         pushl   %edi
-        movl    8(%ebp),%edi
-        movl    12(%ebp),%esi
+        movl    12(%esp),%edi
+        movl    16(%esp),%esi
         movl    %edi,%eax
 1:
-        movl    16(%ebp),%ecx
+        movl    20(%esp),%ecx
         movl    %edi,%edx
         subl    %esi,%edx
         cmpl    %ecx,%edx       /* overlapping? */
@@ -113,7 +107,6 @@ Lmemmove_scalar:
         movsb
         popl    %edi
         popl    %esi
-	popl	%ebp
         ret
 2:
         addl    %ecx,%edi       /* copy backwards. */
@@ -133,8 +126,7 @@ Lmemmove_scalar:
         movsl
         popl    %edi
         popl    %esi
-	popl	%ebp
         cld
         ret
 
-	COMMPAGE_DESCRIPTOR(bcopy_scalar,_COMM_PAGE_BCOPY,0,kHasSSE2+kHasSupplementalSSE3)
+	COMMPAGE_DESCRIPTOR(bcopy_scalar,_COMM_PAGE_BCOPY,0,0)

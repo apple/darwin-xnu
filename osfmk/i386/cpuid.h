@@ -1,31 +1,29 @@
 /*
  * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -57,66 +55,34 @@
 
 #define CPUID_STRING_UNKNOWN    "Unknown CPU Typ"
 
-#define _Bit(n)			(1ULL << n)
-#define _HBit(n)		(1ULL << ((n)+32))
-
-/*
- * The CPUID_FEATURE_XXX values define 64-bit values
- * returned in %ecx:%edx to a CPUID request with %eax of 1: 
- */
-#define	CPUID_FEATURE_FPU     _Bit(0)	/* Floating point unit on-chip */
-#define	CPUID_FEATURE_VME     _Bit(1)	/* Virtual Mode Extension */
-#define	CPUID_FEATURE_DE      _Bit(2)	/* Debugging Extension */
-#define	CPUID_FEATURE_PSE     _Bit(3)	/* Page Size Extension */
-#define	CPUID_FEATURE_TSC     _Bit(4)	/* Time Stamp Counter */
-#define	CPUID_FEATURE_MSR     _Bit(5)	/* Model Specific Registers */
-#define CPUID_FEATURE_PAE     _Bit(6)	/* Physical Address Extension */
-#define	CPUID_FEATURE_MCE     _Bit(7)	/* Machine Check Exception */
-#define	CPUID_FEATURE_CX8     _Bit(8)	/* CMPXCHG8B */
-#define	CPUID_FEATURE_APIC    _Bit(9)	/* On-chip APIC */
-#define CPUID_FEATURE_SEP     _Bit(11)	/* Fast System Call */
-#define	CPUID_FEATURE_MTRR    _Bit(12)	/* Memory Type Range Register */
-#define	CPUID_FEATURE_PGE     _Bit(13)	/* Page Global Enable */
-#define	CPUID_FEATURE_MCA     _Bit(14)	/* Machine Check Architecture */
-#define	CPUID_FEATURE_CMOV    _Bit(15)	/* Conditional Move Instruction */
-#define CPUID_FEATURE_PAT     _Bit(16)	/* Page Attribute Table */
-#define CPUID_FEATURE_PSE36   _Bit(17)	/* 36-bit Page Size Extension */
-#define CPUID_FEATURE_PSN     _Bit(18)	/* Processor Serial Number */
-#define CPUID_FEATURE_CLFSH   _Bit(19)	/* CLFLUSH Instruction supported */
-#define CPUID_FEATURE_DS      _Bit(21)	/* Debug Store */
-#define CPUID_FEATURE_ACPI    _Bit(22)	/* Thermal monitor and Clock Ctrl */
-#define CPUID_FEATURE_MMX     _Bit(23)	/* MMX supported */
-#define CPUID_FEATURE_FXSR    _Bit(24)	/* Fast floating pt save/restore */
-#define CPUID_FEATURE_SSE     _Bit(25)	/* Streaming SIMD extensions */
-#define CPUID_FEATURE_SSE2    _Bit(26)	/* Streaming SIMD extensions 2 */
-#define CPUID_FEATURE_SS      _Bit(27)	/* Self-Snoop */
-#define CPUID_FEATURE_HTT     _Bit(28)	/* Hyper-Threading Technology */
-#define CPUID_FEATURE_TM      _Bit(29)	/* Thermal Monitor (TM1) */
-#define CPUID_FEATURE_PBE     _Bit(31)	/* Pend Break Enable */
-
-#define CPUID_FEATURE_SSE3    _HBit(0)	/* Prescott New Inst. */
-#define CPUID_FEATURE_MONITOR _HBit(3)	/* Monitor/mwait */
-#define CPUID_FEATURE_DSCPL   _HBit(4)	/* Debug Store CPL */
-#define CPUID_FEATURE_VMX     _HBit(5)	/* VMX */
-#define CPUID_FEATURE_SMX     _HBit(6)	/* SMX */
-#define CPUID_FEATURE_EST     _HBit(7)	/* Enhanced SpeedsTep (GV3) */
-#define CPUID_FEATURE_TM2     _HBit(8)	/* Thermal Monitor 2 */
-#define CPUID_FEATURE_SSSE3   _HBit(9)	/* Supplemental SSE3 instructions */
-#define CPUID_FEATURE_MNI     CPUID_FEATURE_SSSE3
-#define CPUID_FEATURE_CID     _HBit(10)	/* L1 Context ID */
-#define CPUID_FEATURE_CX16    _HBit(13)	/* CmpXchg16b instruction */
-#define CPUID_FEATURE_xTPR    _HBit(14)	/* Send Task PRiority msgs */
-
-/*
- * The CPUID_EXTFEATURE_XXX values define 64-bit values
- * returned in %ecx:%edx to a CPUID request with %eax of 0x80000001: 
- */
-#define CPUID_EXTFEATURE_SYSCALL   _Bit(11)	/* SYSCALL/sysret */
-#define CPUID_EXTFEATURE_XD	   _Bit(20)	/* eXecute Disable */
-#define CPUID_EXTFEATURE_EM64T	   _Bit(29)	/* Extended Mem 64 Technology */
-
-#define CPUID_EXTFEATURE_LAHF	   _HBit(20)	/* LAFH/SAHF instructions */
-
+#define	CPUID_FEATURE_FPU    0x00000001	/* Floating point unit on-chip */
+#define	CPUID_FEATURE_VME    0x00000002	/* Virtual Mode Extension */
+#define	CPUID_FEATURE_DE     0x00000004	/* Debugging Extension */
+#define	CPUID_FEATURE_PSE    0x00000008	/* Page Size Extension */
+#define	CPUID_FEATURE_TSC    0x00000010	/* Time Stamp Counter */
+#define	CPUID_FEATURE_MSR    0x00000020	/* Model Specific Registers */
+#define CPUID_FEATURE_PAE    0x00000040 /* Physical Address Extension */
+#define	CPUID_FEATURE_MCE    0x00000080	/* Machine Check Exception */
+#define	CPUID_FEATURE_CX8    0x00000100	/* CMPXCHG8B */
+#define	CPUID_FEATURE_APIC   0x00000200	/* On-chip APIC */
+#define CPUID_FEATURE_SEP    0x00000800 /* Fast System Call */
+#define	CPUID_FEATURE_MTRR   0x00001000	/* Memory Type Range Register */
+#define	CPUID_FEATURE_PGE    0x00002000	/* Page Global Enable */
+#define	CPUID_FEATURE_MCA    0x00004000	/* Machine Check Architecture */
+#define	CPUID_FEATURE_CMOV   0x00008000	/* Conditional Move Instruction */
+#define CPUID_FEATURE_PAT    0x00010000 /* Page Attribute Table */
+#define CPUID_FEATURE_PSE36  0x00020000 /* 36-bit Page Size Extension */
+#define CPUID_FEATURE_PSN    0x00040000 /* Processor Serial Number */
+#define CPUID_FEATURE_CLFSH  0x00080000 /* CLFLUSH Instruction supported */
+#define CPUID_FEATURE_DS     0x00200000 /* Debug Store */
+#define CPUID_FEATURE_ACPI   0x00400000 /* Thermal Monitor, SW-controlled clock */
+#define CPUID_FEATURE_MMX    0x00800000 /* MMX supported */
+#define CPUID_FEATURE_FXSR   0x01000000 /* Fast floating point save/restore */
+#define CPUID_FEATURE_SSE    0x02000000 /* Streaming SIMD extensions */
+#define CPUID_FEATURE_SSE2   0x04000000 /* Streaming SIMD extensions 2 */
+#define CPUID_FEATURE_SS     0x08000000 /* Self-Snoop */
+#define CPUID_FEATURE_HTT    0x10000000 /* Hyper-Threading Technology */
+#define CPUID_FEATURE_TM     0x20000000 /* Thermal Monitor */
 
 #define	CPUID_TYPE_OEM		    0x0	/* Original processor */
 #define	CPUID_TYPE_OVERDRIVE	    0x1	/* Overdrive processor */
@@ -186,8 +152,6 @@
 #define CPUID_MODEL_P6A             0xA /* Intel PIII Xeon model A */
 #define CPUID_MODEL_P6B             0xB /* Intel PIII model B */
 #define CPUID_MODEL_PMD             0xD /* Intel Pentium M model D */
-#define CPUID_MODEL_CORE            0xE /* Intel Core Solo & Duo */
-#define CPUID_MODEL_CORE2	    0xF /* Intel Core2 Duo */
 
 #define CPUID_MODEL_ATHLON_M1       0x1 /* AMD Athlon Model 1 */
 #define CPUID_MODEL_ATHLON_M2       0x2 /* AMD Athlon Model 2 */
@@ -279,7 +243,6 @@
 #define	CPUID_CACHE_UCACHE_512K	   0x43	/* 2nd-level cache, 512K */
 #define	CPUID_CACHE_UCACHE_1M	   0x44	/* 2nd-level cache, 1M */
 #define	CPUID_CACHE_UCACHE_2M	   0x45	/* 2nd-level cache, 2M */
-#define CPUID_CACHE_UCACHE_4M      0x49 /* 2nd-level cache, 4M */
 #define CPUID_CACHE_ITLB_64        0x50 /* Instruction TLB, 64 entries */
 #define CPUID_CACHE_ITLB_128       0x51 /* Instruction TLB, 128 entries */
 #define CPUID_CACHE_ITLB_256       0x52 /* Instruction TLB, 256 entries */
@@ -318,20 +281,6 @@
 #include <mach/machine.h>
 
 
-typedef enum { eax, ebx, ecx, edx } cpuid_register_t;
-static inline void
-cpuid(uint32_t *data)
-{
-	asm("cpuid"
-		: "=a" (data[eax]),
-		  "=b" (data[ebx]),
-		  "=c" (data[ecx]),
-		  "=d" (data[edx])
-		: "a"  (data[eax]),
-		  "b"  (data[ebx]),
-		  "c"  (data[ecx]),
-		  "d"  (data[edx]));
-}
 static inline void
 do_cpuid(uint32_t selector, uint32_t *data)
 {
@@ -366,20 +315,20 @@ typedef struct {
 	{ value, type, size, linesize }
 #endif /* KERNEL */
 
-/* Physical CPU info - this is exported out of the kernel (kexts), so be wary of changes */
+/* Physical CPU info */
 typedef struct {
 	char		cpuid_vendor[16];
 	char		cpuid_brand_string[48];
 	const char	*cpuid_model_string;
 
-	cpu_type_t	cpuid_type;					/* this is *not* a cpu_type_t in our <mach/machine.h> */
+	uint32_t	cpuid_value;
+	cpu_type_t	cpuid_type;
 	uint8_t		cpuid_family;
 	uint8_t		cpuid_model;
 	uint8_t		cpuid_extmodel;
 	uint8_t		cpuid_extfamily;
 	uint8_t		cpuid_stepping;
-	uint64_t	cpuid_features;
-	uint64_t	cpuid_extfeatures;
+	uint32_t	cpuid_features;
 	uint32_t	cpuid_signature;
 	uint8_t   	cpuid_brand; 
 	
@@ -388,12 +337,6 @@ typedef struct {
 
 	uint8_t		cache_info[64];    /* list of cache descriptors */
 
-	uint32_t	cpuid_cores_per_package;
-	uint32_t	cpuid_logical_per_package;
-	uint32_t	cache_sharing[LCACHE_MAX];
-
-	cpu_type_t		cpuid_cpu_type;			/* <mach/machine.h> */
-	cpu_subtype_t	cpuid_cpu_subtype;		/* <mach/machine.h> */	
 } i386_cpu_info_t;
 
 #ifdef __cplusplus
@@ -403,22 +346,20 @@ extern "C" {
 /*
  * External declarations
  */
-extern cpu_type_t	cpuid_cputype(void);
-extern cpu_subtype_t	cpuid_cpusubtype(void);
-extern void		cpuid_cpu_display(const char *);
-extern void		cpuid_feature_display(const char *);
-extern void		cpuid_extfeature_display(const char *);
-extern char *		cpuid_get_feature_names(uint64_t, char *, unsigned);
-extern char *		cpuid_get_extfeature_names(uint64_t, char *, unsigned);
+extern cpu_type_t	cpuid_cputype(int);
+extern void		cpuid_cpu_display(const char *, __unused int);
+extern void		cpuid_feature_display(const char *, __unused int);
+extern char *		cpuid_get_feature_names(uint32_t, char *, unsigned);
 
-extern uint64_t		cpuid_features(void);
-extern uint64_t		cpuid_extfeatures(void);
+extern uint32_t		cpuid_features(void);
 extern uint32_t		cpuid_family(void);
 	
 extern void		cpuid_get_info(i386_cpu_info_t *info_p);
 extern i386_cpu_info_t	*cpuid_info(void);
 
-extern void		cpuid_set_info(void);
+/* XXX obsolescent: */
+extern uint32_t		cpuid_feature;
+extern void		set_cpu_model(void);
 
 #ifdef __cplusplus
 }

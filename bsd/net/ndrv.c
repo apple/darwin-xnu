@@ -1,31 +1,29 @@
 /*
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1997, 1998 Apple Computer, Inc. All Rights Reserved */
 /*
@@ -297,10 +295,7 @@ ndrv_event(struct ifnet *ifp, struct kev_msg *event)
 		event->kev_class == KEV_NETWORK_CLASS &&
 		event->kev_subclass == KEV_DL_SUBCLASS &&
 		event->event_code == KEV_DL_IF_DETACHING) {
-		lck_mtx_assert(ndrvdomain.dom_mtx, LCK_MTX_ASSERT_NOTOWNED);
-		lck_mtx_lock(ndrvdomain.dom_mtx);
 		ndrv_handle_ifp_detach(ifp->if_family, ifp->if_unit);
-		lck_mtx_unlock(ndrvdomain.dom_mtx);
 	}
 }
 
@@ -369,9 +364,7 @@ ndrv_bind(struct socket *so, struct sockaddr *nam, __unused struct proc *p)
 		ndrv_proto.event = ndrv_event;
 		
 		/* We aren't worried about double attaching, that should just return an error */
-		socket_unlock(so, 0);
 		result = dlil_attach_protocol(&ndrv_proto);
-		socket_lock(so, 0);
 		if (result && result != EEXIST) {
 			return result;
 		}
@@ -537,23 +530,20 @@ ndrv_do_detach(struct ndrv_cb *np)
     struct ndrv_cb*	cur_np = NULL;
     struct socket *so = np->nd_socket;
     int error = 0;
-    struct ifnet * ifp;
 
 #if NDRV_DEBUG
 	kprintf("NDRV detach: %x, %x\n", so, np);
 #endif
     ndrv_remove_all_multicast(np);
-    ifp = np->nd_if;
-    /* Remove from the linked list of control blocks */
-    TAILQ_REMOVE(&ndrvl, np, nd_next);
-    if (ifp != NULL) {
-		u_long proto_family = np->nd_proto_family;
-
-		if (proto_family != PF_NDRV && proto_family != 0) {
-			socket_unlock(so, 0);
-			dlil_detach_protocol(ifp, proto_family);
-			socket_lock(so, 0);
+    
+    if (np->nd_if) {
+		if (np->nd_proto_family != PF_NDRV &&
+			np->nd_proto_family != 0) {
+			dlil_detach_protocol(np->nd_if, np->nd_proto_family);
 		}
+		
+		/* Remove from the linked list of control blocks */
+		TAILQ_REMOVE(&ndrvl, np, nd_next);
 		
 		/* Check if this is the last socket attached to this interface */
 		TAILQ_FOREACH(cur_np, &ndrvl, nd_next) {
@@ -565,16 +555,13 @@ ndrv_do_detach(struct ndrv_cb *np)
 		
 		/* If there are no other interfaces, detach PF_NDRV from the interface */
 		if (cur_np == NULL) {
-			socket_unlock(so, 0);
-			dlil_detach_protocol(ifp, PF_NDRV);
-			socket_lock(so, 0);
+			dlil_detach_protocol(np->nd_if, PF_NDRV);
 		}
+	} else {
+		/* Remove from the linked list of control blocks */
+		TAILQ_REMOVE(&ndrvl, np, nd_next);
 	}
     
-    	if (np->nd_laddr != NULL) {
-		FREE((caddr_t)np->nd_laddr, M_IFADDR);
-		np->nd_laddr = NULL;
-	}
 	FREE((caddr_t)np, M_PCB);
 	so->so_pcb = 0;
 	so->so_flags |= SOF_PCBCLEARING;
@@ -585,7 +572,6 @@ ndrv_do_detach(struct ndrv_cb *np)
 static int
 ndrv_do_disconnect(struct ndrv_cb *np)
 {
-	struct socket * so = np->nd_socket;
 #if NDRV_DEBUG
 	kprintf("NDRV disconnect: %x\n", np);
 #endif
@@ -594,9 +580,9 @@ ndrv_do_disconnect(struct ndrv_cb *np)
         FREE(np->nd_faddr, M_IFADDR);
 		np->nd_faddr = 0;
 	}
-	if (so->so_state & SS_NOFDREF)
+	if (np->nd_socket->so_state & SS_NOFDREF)
 		ndrv_do_detach(np);
-	soisdisconnected(so);
+	soisdisconnected(np->nd_socket);
 	return(0);
 }
 
@@ -665,7 +651,6 @@ ndrv_setspec(struct ndrv_cb *np, struct sockopt *sopt)
     struct dlil_demux_desc*		dlilDemux = NULL;
     struct ndrv_demux_desc*		ndrvDemux = NULL;
     int							error = 0;
-    struct socket *so = np->nd_socket; 
     
     /* Sanity checking */
     if (np->nd_proto_family != PF_NDRV)
@@ -735,9 +720,7 @@ ndrv_setspec(struct ndrv_cb *np, struct sockopt *sopt)
     if (error == 0)
     {
         /* We've got all our ducks lined up...lets attach! */
-	socket_unlock(so, 0);
         error = dlil_attach_protocol(&dlilSpec);
-	socket_lock(so, 0);
         if (error == 0)
         	np->nd_proto_family = dlilSpec.protocol_family;
     }

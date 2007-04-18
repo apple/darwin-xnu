@@ -1,31 +1,29 @@
 /*
  * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #ifndef _IOMEMORYCURSOR_H
 #define _IOMEMORYCURSOR_H
@@ -214,7 +212,7 @@ public:
     @param fromPosition Starting location of the I/O within a memory descriptor. 
     @param segments Pointer to an array of IOMemoryCursor::PhysicalSegments for the output physical scatter/gather list.
     @param maxSegments Maximum number of segments that can be written to segments array.
-    @param inMaxTransferSize Maximum transfer size is limited to that many bytes, otherwise it defaults to the maximum transfer size specified when the memory cursor was initialized.
+    @param maxTransferSize Maximum transfer size is limited to that many bytes, otherwise it defaults to the maximum transfer size specified when the memory cursor was initialized.
     @param transferSize Pointer to an IOByteCount variable that can contain the total size of the transfer being described.  Defaults to 0 indicating that no transfer size need be returned. 
     @result If the descriptor is exhausted of memory, a zero is returned, otherwise the number of segments that were filled in is returned.
 */
@@ -222,11 +220,11 @@ public:
 				       IOByteCount	   fromPosition,
 				       PhysicalSegment	  *segments,
 				       UInt32		   maxSegments,
-				       UInt32		   inMaxTransferSize = 0,
+				       UInt32		   maxTransferSize = 0,
 				       IOByteCount	  *transferSize = 0)
     {
 	return genPhysicalSegments(descriptor, fromPosition, segments,
-				maxSegments, inMaxTransferSize, transferSize);
+				maxSegments, maxTransferSize, transferSize);
     }
 };
 
@@ -290,7 +288,7 @@ successfully.
     @param fromPosition Starting location of the I/O within a memory descriptor. 
     @param segments Pointer to an array of IOMemoryCursor::PhysicalSegments for the output physical scatter/gather list.
     @param maxSegments Maximum number of segments that can be written to segments array.
-    @param inMaxTransferSize Maximum transfer size is limited to that many bytes, otherwise it defaults to the maximum transfer size specified when the memory cursor was initialized.
+    @param maxTransferSize Maximum transfer size is limited to that many bytes, otherwise it defaults to the maximum transfer size specified when the memory cursor was initialized.
     @param transferSize Pointer to an IOByteCount variable that can contain the total size of the transfer being described.  Defaults to 0 indicating that no transfer size need be returned. 
     @result If the descriptor is exhausted of memory, a zero is returned, otherwise the number of segments that were filled in is returned.
 */
@@ -298,11 +296,11 @@ successfully.
 				       IOByteCount	    fromPosition,
 				       PhysicalSegment *    segments,
 				       UInt32		    maxSegments,
-				       UInt32		    inMaxTransferSize = 0,
+				       UInt32		    maxTransferSize = 0,
 				       IOByteCount	 *  transferSize = 0)
     {
 	return genPhysicalSegments(descriptor, fromPosition, segments,
-				maxSegments, inMaxTransferSize, transferSize);
+				maxSegments, maxTransferSize, transferSize);
     }
 };
 
@@ -364,7 +362,7 @@ public:
     @param fromPosition Starting location of the I/O within a memory descriptor. 
     @param segments Pointer to an array of IOMemoryCursor::PhysicalSegments for the output physical scatter/gather list.
     @param maxSegments Maximum number of segments that can be written to segments array.
-    @param inMaxTransferSize Maximum transfer size is limited to that many bytes, otherwise it defaults to the maximum transfer size specified when the memory cursor was initialized.
+    @param maxTransferSize Maximum transfer size is limited to that many bytes, otherwise it defaults to the maximum transfer size specified when the memory cursor was initialized.
     @param transferSize Pointer to an IOByteCount variable that can contain the total size of the transfer being described.  Defaults to 0 indicating that no transfer size need be returned. 
     @result If the descriptor is exhausted of memory, a zero is returned, otherwise the number of segments that were filled in is returned.
 */
@@ -372,11 +370,11 @@ public:
 				       IOByteCount	    fromPosition,
 				       PhysicalSegment *    segments,
 				       UInt32		    maxSegments,
-				       UInt32		    inMaxTransferSize = 0,
+				       UInt32		    maxTransferSize = 0,
 				       IOByteCount	 *  transferSize = 0)
     {
 	return genPhysicalSegments(descriptor, fromPosition, segments,
-				maxSegments, inMaxTransferSize, transferSize);
+				maxSegments, maxTransferSize, transferSize);
     }
 };
 
@@ -442,7 +440,7 @@ public:
     @param fromPosition Starting location of the I/O within a memory descriptor. 
     @param segments Pointer to an array of DBDMA descriptors for the output physical scatter/gather list.  Be warned no room is left for a preamble in the output array.  'segments' should point to the first memory description slot in a DBDMA command.
     @param maxSegments Maximum number of segments that can be written to the DBDMA descriptor table.
-    @param inMaxTransferSize Maximum transfer size is limited to that many bytes, otherwise it defaults to the maximum transfer size specified when the memory cursor was initialized.
+    @param maxTransferSize Maximum transfer size is limited to that many bytes, otherwise it defaults to the maximum transfer size specified when the memory cursor was initialized.
     @param transferSize Pointer to an IOByteCount variable that can contain the total size of the transfer being described.  Defaults to 0 indicating that no transfer size need be returned. 
     @result If the descriptor is exhausted of memory, a zero is returned, otherwise the number of segments that were filled in is returned.
 */
@@ -450,11 +448,11 @@ public:
 				       IOByteCount	    fromPosition,
 				       IODBDMADescriptor *  segments,
 				       UInt32		    maxSegments,
-				       UInt32		    inMaxTransferSize = 0,
+				       UInt32		    maxTransferSize = 0,
 				       IOByteCount	 *  transferSize = 0)
     {
 	return genPhysicalSegments(descriptor, fromPosition, segments,
-				maxSegments, inMaxTransferSize, transferSize);
+				maxSegments, maxTransferSize, transferSize);
     }
 };
 

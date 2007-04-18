@@ -1,31 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1982, 1986, 1988, 1990, 1993, 1995
@@ -325,12 +323,14 @@ tcp_init()
 	 * allocate lock group attribute and group for tcp pcb mutexes
 	 */
      pcbinfo->mtx_grp_attr = lck_grp_attr_alloc_init();
+	lck_grp_attr_setdefault(pcbinfo->mtx_grp_attr);
 	pcbinfo->mtx_grp = lck_grp_alloc_init("tcppcb", pcbinfo->mtx_grp_attr);
 		
 	/*
 	 * allocate the lock attribute for tcp pcb mutexes
 	 */
 	pcbinfo->mtx_attr = lck_attr_alloc_init();
+	lck_attr_setdefault(pcbinfo->mtx_attr);
 
 	if ((pcbinfo->mtx = lck_rw_alloc_init(pcbinfo->mtx_grp, pcbinfo->mtx_attr)) == NULL) {
 		printf("tcp_init: mutex not alloced!\n");
@@ -1675,9 +1675,12 @@ tcp_lock(so, refcount, lr)
 	int lr;
 {
 	int lr_saved;
-	if (lr == 0) 
-		lr_saved = (unsigned int) __builtin_return_address(0);
+#ifdef __ppc__
+	if (lr == 0) {
+		__asm__ volatile("mflr %0" : "=r" (lr_saved));
+	}
 	else lr_saved = lr;
+#endif
 
 	if (so->so_pcb) {
 		lck_mtx_lock(((struct inpcb *)so->so_pcb)->inpcb_mtx);
@@ -1693,8 +1696,7 @@ tcp_lock(so, refcount, lr)
 
 	if (refcount)
 		so->so_usecount++;
-	so->lock_lr[so->next_lock_lr] = (u_int32_t *)lr_saved;
-	so->next_lock_lr = (so->next_lock_lr+1) % SO_LCKDBG_MAX;
+	so->reserved3 = (void *)lr_saved;
 	return (0);
 }
 
@@ -1705,9 +1707,12 @@ tcp_unlock(so, refcount, lr)
 	int lr;
 {
 	int lr_saved;
-	if (lr == 0) 
-		lr_saved = (unsigned int) __builtin_return_address(0);
+#ifdef __ppc__
+	if (lr == 0) {
+		__asm__ volatile("mflr %0" : "=r" (lr_saved));
+	}
 	else lr_saved = lr;
+#endif
 
 #ifdef MORE_TCPLOCK_DEBUG
 	printf("tcp_unlock: so=%x sopcb=%x lock=%x ref=%x lr=%x\n", 
@@ -1718,14 +1723,15 @@ tcp_unlock(so, refcount, lr)
 
 	if (so->so_usecount < 0)
 		panic("tcp_unlock: so=%x usecount=%x\n", so, so->so_usecount);	
-	if (so->so_pcb == NULL) 
+	if (so->so_pcb == NULL) {
 		panic("tcp_unlock: so=%x NO PCB usecount=%x lr=%x\n", so, so->so_usecount, lr_saved);
+		lck_mtx_unlock(so->so_proto->pr_domain->dom_mtx);
+	}
 	else {
 		lck_mtx_assert(((struct inpcb *)so->so_pcb)->inpcb_mtx, LCK_MTX_ASSERT_OWNED);
-		so->unlock_lr[so->next_unlock_lr] = (u_int *)lr_saved;
-		so->next_unlock_lr = (so->next_unlock_lr+1) % SO_LCKDBG_MAX;
 		lck_mtx_unlock(((struct inpcb *)so->so_pcb)->inpcb_mtx);
 	}
+	so->reserved4 = (void *)lr_saved;
 	return (0);
 }
 

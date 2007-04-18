@@ -1,31 +1,29 @@
 /*
  * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
 Copyright (c) 1998 Apple Computer, Inc.  All rights reserved.
@@ -46,8 +44,8 @@ OSDefineMetaClassAndStructors(IOWorkLoop, OSObject);
 
 // Block of unused functions intended for future use
 OSMetaClassDefineReservedUsed(IOWorkLoop, 0);
-OSMetaClassDefineReservedUsed(IOWorkLoop, 1);
 
+OSMetaClassDefineReservedUnused(IOWorkLoop, 1);
 OSMetaClassDefineReservedUnused(IOWorkLoop, 2);
 OSMetaClassDefineReservedUnused(IOWorkLoop, 3);
 OSMetaClassDefineReservedUnused(IOWorkLoop, 4);
@@ -78,8 +76,7 @@ bool IOWorkLoop::init()
         return false;
 
     controlG = IOCommandGate::
-	commandGate(this, OSMemberFunctionCast(IOCommandGate::Action,
-					this, &IOWorkLoop::_maintRequest));
+	commandGate(this, (IOCommandGate::Action) &IOWorkLoop::_maintRequest);
     if ( !controlG )
         return false;
 
@@ -93,9 +90,7 @@ bool IOWorkLoop::init()
     if (addEventSource(controlG) != kIOReturnSuccess)
         return false;
 
-    IOThreadFunc cptr =
-	OSMemberFunctionCast(IOThreadFunc, this, &IOWorkLoop::threadMain);
-    workThread = IOCreateThread(cptr, this);
+    workThread = IOCreateThread((thread_continue_t)threadMainContinuation, this);
     if (!workThread)
         return false;
 
@@ -251,55 +246,52 @@ do {									\
 
 #endif /* KDEBUG */
 
-/* virtual */ bool IOWorkLoop::runEventSources()
+void IOWorkLoop::threadMainContinuation(IOWorkLoop *self)
 {
-    bool res = false;
-    closeGate();
-    if (ISSETP(&fFlags, kLoopTerminate))
-	goto abort;
-
-    IOTimeWorkS();
-    bool more;
-    do {
-	CLRP(&fFlags, kLoopRestart);
-	workToDo = more = false;
-	for (IOEventSource *evnt = eventChain; evnt; evnt = evnt->getNext()) {
-
-	    IOTimeClientS();
-	    more |= evnt->checkForWork();
-	    IOTimeClientE();
-
-	    if (ISSETP(&fFlags, kLoopTerminate))
-		goto abort;
-	    else if (fFlags & kLoopRestart) {
-		more = true;
-		break;
-	    }
-	}
-    } while (more);
-
-    res = true;
-    IOTimeWorkE();
-
-abort:
-    openGate();
-    return res;
+	self->threadMain();
 }
 
-/* virtual */ void IOWorkLoop::threadMain()
+void IOWorkLoop::threadMain()
 {
-    do {
-	if ( !runEventSources() )
+    CLRP(&fFlags, kLoopRestart);
+
+    for (;;) {
+        bool more;
+	IOInterruptState is;
+
+    IOTimeWorkS();
+
+        closeGate();
+        if (ISSETP(&fFlags, kLoopTerminate))
 	    goto exitThread;
 
-	IOInterruptState is = IOSimpleLockLockDisableInterrupt(workToDoLock);
+        do {
+            workToDo = more = false;
+            for (IOEventSource *event = eventChain; event; event = event->getNext()) {
+
+            IOTimeClientS();
+                more |= event->checkForWork();
+            IOTimeClientE();
+
+		if (ISSETP(&fFlags, kLoopTerminate))
+		    goto exitThread;
+                else if (fFlags & kLoopRestart) {
+		    CLRP(&fFlags, kLoopRestart);
+                    continue;
+                }
+            }
+        } while (more);
+
+    IOTimeWorkE();
+
+        openGate();
+
+	is = IOSimpleLockLockDisableInterrupt(workToDoLock);
         if ( !ISSETP(&fFlags, kLoopTerminate) && !workToDo) {
 	    assert_wait((void *) &workToDo, false);
 	    IOSimpleLockUnlockEnableInterrupt(workToDoLock, is);
 
-	    thread_continue_t cptr = OSMemberFunctionCast(
-		    thread_continue_t, this, &IOWorkLoop::threadMain);
-	    thread_block_parameter(cptr, this);
+	    thread_block_parameter((thread_continue_t)threadMainContinuation, this);
 	    /* NOTREACHED */
 	}
 
@@ -307,7 +299,11 @@ abort:
 	// to commit suicide.  But no matter 
 	// Clear the simple lock and retore the interrupt state
 	IOSimpleLockUnlockEnableInterrupt(workToDoLock, is);
-    } while(workToDo);
+	if (workToDo)
+	    continue;
+	else
+	    break;
+    }
 
 exitThread:
     workThread = 0;	// Say we don't have a loop and free ourselves

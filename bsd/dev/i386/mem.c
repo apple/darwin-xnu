@@ -1,31 +1,29 @@
 /*
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*-
  * Copyright (c) 1988 University of Utah.
@@ -87,9 +85,8 @@
 #include <mach/vm_param.h>
 #include <vm/vm_kern.h>		/* for kernel_map */
 
-extern addr64_t  kvtophys(vm_offset_t va); 
+extern vm_offset_t kvtophys(vm_offset_t va); 
 extern boolean_t kernacc(off_t, size_t );
-extern int setup_kmem;
 
 static caddr_t devzerobuf;
 
@@ -113,14 +110,9 @@ mmwrite(dev_t dev, struct uio *uio)
 }
 
 int
-mmioctl(dev_t dev, u_long cmd, __unused caddr_t data, 
+mmioctl(__unused dev_t dev, u_long cmd, __unused caddr_t data, 
 		__unused int flag, __unused struct proc *p)
 {
-	int minnum = minor(dev);
-
-	if ((setup_kmem == 0) && ((minnum == 0) || (minnum == 1)))
-		return(EINVAL);
-
 	switch (cmd) {
 	case FIONBIO:
 	case FIOASYNC:
@@ -142,7 +134,6 @@ mmrw(dev_t dev, struct uio *uio, enum uio_rw rw)
 	vm_offset_t	where;
 	vm_size_t size;
 
-
 	while (uio_resid(uio) > 0 && error == 0) {
 		if (uio_iov_len(uio) == 0) {
 			uio_next_iov(uio);
@@ -155,9 +146,6 @@ mmrw(dev_t dev, struct uio *uio, enum uio_rw rw)
 
 		/* minor device 0 is physical memory */
 		case 0:
-			if (setup_kmem == 0)
-				return(ENODEV);
-
 			v = trunc_page(uio->uio_offset);
 			if (uio->uio_offset >= mem_size)
 				goto fault;
@@ -176,8 +164,6 @@ mmrw(dev_t dev, struct uio *uio, enum uio_rw rw)
 
 		/* minor device 1 is kernel memory */
 		case 1:
-			if (setup_kmem == 0)
-				return(ENODEV);
 			/* Do some sanity checking */
 			if (((vm_address_t)uio->uio_offset >= VM_MAX_KERNEL_ADDRESS) ||
 				((vm_address_t)uio->uio_offset <= VM_MIN_KERNEL_ADDRESS))

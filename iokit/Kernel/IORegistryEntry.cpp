@@ -1,31 +1,29 @@
 /*
  * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1998 Apple Computer, Inc.  All rights reserved. 
@@ -95,9 +93,9 @@ OSDefineMetaClassAndStructors(IORegistryPlane, OSObject)
 static IORecursiveLock *	gPropertiesLock;
 static SInt32			gIORegistryGenerationCount;
 
-#define UNLOCK	lck_rw_done( &gIORegistryLock )
-#define RLOCK	lck_rw_lock_shared( &gIORegistryLock )
-#define WLOCK	lck_rw_lock_exclusive( &gIORegistryLock );	\
+#define UNLOCK	s_lock_done( &gIORegistryLock )
+#define RLOCK	s_lock_read( &gIORegistryLock )
+#define WLOCK	s_lock_write( &gIORegistryLock );	\
 		gIORegistryGenerationCount++
 		// make atomic
 
@@ -116,11 +114,170 @@ static SInt32			gIORegistryGenerationCount;
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-lck_rw_t	gIORegistryLock;
-lck_grp_t       *gIORegistryLockGrp;
-lck_grp_attr_t  *gIORegistryLockGrpAttr;
-lck_attr_t      *gIORegistryLockAttr;
+struct s_lock_t {
+	lck_spin_t interlock;	/* "hardware" interlock field */
+	volatile unsigned int
+		read_count:16,	/* No. of accepted readers */
+		want_upgrade:1,	/* Read-to-write upgrade waiting */
+		want_write:1,	/* Writer is waiting, or
+				   locked for write */
+		waiting:1,	/* Someone is sleeping on lock */
+		can_sleep:1;	/* Can attempts to lock go to sleep? */
+};
 
+static struct s_lock_t	gIORegistryLock;
+
+/* Time we loop without holding the interlock. 
+ * The former is for when we cannot sleep, the latter
+ * for when our thread can go to sleep (loop less)
+ * we shouldn't retake the interlock at all frequently
+ * if we cannot go to sleep, since it interferes with
+ * any other processors. In particular, 100 is too small
+ * a number for powerpc MP systems because of cache
+ * coherency issues and differing lock fetch times between
+ * the processors
+ */
+static unsigned int lock_wait_time[2] = { (unsigned int)-1, 100 } ;
+	  
+static void
+s_lock_init(
+	s_lock_t	*l,
+	boolean_t	can_sleep)
+{
+	(void) memset((void *) l, 0, sizeof(s_lock_t));
+
+	lck_spin_init(&l->interlock, IOLockGroup, LCK_ATTR_NULL);
+	l->want_write = FALSE;
+	l->want_upgrade = FALSE;
+	l->read_count = 0;
+	l->can_sleep = can_sleep;
+}
+
+static void
+s_lock_write(
+	register s_lock_t	* l)
+{
+        register int	   i;
+
+	lck_spin_lock(&l->interlock);
+
+	/*
+	 *	Try to acquire the want_write bit.
+	 */
+	while (l->want_write) {
+
+		i = lock_wait_time[l->can_sleep ? 1 : 0];
+		if (i != 0) {
+			lck_spin_unlock(&l->interlock);
+			while (--i != 0 && l->want_write)
+				continue;
+			lck_spin_lock(&l->interlock);
+		}
+
+		if (l->can_sleep && l->want_write) {
+			l->waiting = TRUE;
+			lck_spin_sleep( &l->interlock, LCK_SLEEP_DEFAULT,
+					(event_t) l, THREAD_UNINT);
+			/* interlock relocked */
+		}
+	}
+	l->want_write = TRUE;
+
+	/* Wait for readers (and upgrades) to finish */
+
+	while ((l->read_count != 0) || l->want_upgrade) {
+
+		i = lock_wait_time[l->can_sleep ? 1 : 0];
+		if (i != 0) {
+			lck_spin_unlock(&l->interlock);
+			while (--i != 0 && (l->read_count != 0 ||
+					    l->want_upgrade))
+				continue;
+			lck_spin_lock(&l->interlock);
+		}
+
+		if (l->can_sleep && (l->read_count != 0 || l->want_upgrade)) {
+			l->waiting = TRUE;
+			lck_spin_sleep( &l->interlock, LCK_SLEEP_DEFAULT,
+					(event_t) l, THREAD_UNINT);
+			/* interlock relocked */
+		}
+	}
+
+	lck_spin_unlock(&l->interlock);
+}
+
+static void
+s_lock_done(
+	register s_lock_t	* l)
+{
+	boolean_t	  do_wakeup = FALSE;
+
+	lck_spin_lock(&l->interlock);
+
+	if (l->read_count != 0) {
+		l->read_count -= 1;
+	}
+	else	{
+		if (l->want_upgrade) {
+			l->want_upgrade = FALSE;
+		}
+                else {
+                        l->want_write = FALSE;
+                }
+        }
+
+	/*
+	 *	There is no reason to wakeup a waiting thread
+	 *	if the read-count is non-zero.  Consider:
+	 *		we must be dropping a read lock
+	 *		threads are waiting only if one wants a write lock
+	 *		if there are still readers, they can't proceed
+	 */
+	if (l->waiting && (l->read_count == 0)) {
+		l->waiting = FALSE;
+		do_wakeup = TRUE;
+	}
+
+	lck_spin_unlock(&l->interlock);
+
+	if (do_wakeup)
+		thread_wakeup((event_t) l);
+}
+
+static void
+s_lock_read(
+	register s_lock_t	* l)
+{
+	register int	    i;
+
+	lck_spin_lock(&l->interlock);
+
+	while ( l->want_upgrade || ((0 == l->read_count) && l->want_write )) {
+
+		i = lock_wait_time[l->can_sleep ? 1 : 0];
+
+		if (i != 0) {
+			lck_spin_unlock(&l->interlock);
+			while (--i != 0 && 
+                            (l->want_upgrade || ((0 == l->read_count) && l->want_write )))
+				continue;
+			lck_spin_lock(&l->interlock);
+		}
+
+		if (l->can_sleep &&
+                    (l->want_upgrade || ((0 == l->read_count) && l->want_write ))) {
+			l->waiting = TRUE;
+			lck_spin_sleep( &l->interlock, LCK_SLEEP_DEFAULT,
+					(event_t) l, THREAD_UNINT);
+			/* interlock relocked */
+		}
+	}
+
+	l->read_count += 1;
+	lck_spin_unlock(&l->interlock);
+
+}
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
@@ -130,15 +287,7 @@ IORegistryEntry * IORegistryEntry::initialize( void )
 
     if( !gRegistryRoot) {
 
-
-	gIORegistryLockGrpAttr = lck_grp_attr_alloc_init();
-	//lck_grp_attr_setstat(gIORegistryLockGrpAttr);
-	gIORegistryLockGrp = lck_grp_alloc_init("IORegistryLock",  gIORegistryLockGrpAttr);
-	gIORegistryLockAttr = lck_attr_alloc_init();
-	lck_attr_rw_shared_priority(gIORegistryLockAttr);
-	//lck_attr_setdebug(gIORegistryLockAttr);
-	lck_rw_init( &gIORegistryLock, gIORegistryLockGrp, gIORegistryLockAttr);
-
+        s_lock_init( &gIORegistryLock, true );
 	gRegistryRoot = new IORegistryEntry;
 	gPropertiesLock = IORecursiveLockAlloc();
 	gIORegistryPlanes = OSDictionary::withCapacity( 1 );

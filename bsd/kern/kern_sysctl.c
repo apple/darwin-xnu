@@ -1,31 +1,29 @@
 /*
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*-
@@ -110,13 +108,8 @@ extern vm_map_t bsd_pageable_map;
 #include <pexpert/pexpert.h>
 
 #include <machine/machine_routines.h>
-#include <machine/exec.h>
 
 #include <vm/vm_protos.h>
-
-#ifdef __i386__
-#include <i386/cpuid.h>
-#endif
 
 sysctlfn kern_sysctl;
 #ifdef DEBUG
@@ -129,10 +122,10 @@ extern sysctlfn cpu_sysctl;
 extern int aio_max_requests;  				
 extern int aio_max_requests_per_process;	
 extern int aio_worker_threads;				
+extern int maxprocperuid;
 extern int maxfilesperproc;
 extern int lowpri_IO_window_msecs;
 extern int lowpri_IO_delay_msecs;
-extern int nx_enabled;
 
 static void
 fill_eproc(struct proc *p, struct eproc *ep);
@@ -326,7 +319,7 @@ __sysctl(struct proc *p, struct __sysctl_args *uap, __unused register_t *retval)
 	if (uap->new != USER_ADDR_NULL
 	    && ((name[0] == CTL_KERN
 		&& !(name[1] == KERN_IPC || name[1] == KERN_PANICINFO || name[1] == KERN_PROCDELAYTERM || 
-		     name[1] == KERN_PROC_LOW_PRI_IO || name[1] == KERN_PROCNAME || name[1] == KERN_THALTSTACK))
+		     name[1] == KERN_PROC_LOW_PRI_IO))
 	    || (name[0] == CTL_HW)
 	    || (name[0] == CTL_VM)
 		|| (name[0] == CTL_VFS))
@@ -440,6 +433,9 @@ __sysctl(struct proc *p, struct __sysctl_args *uap, __unused register_t *retval)
 /*
  * Attributes stored in the kernel.
  */
+extern char classichandler[32];
+extern uint32_t classichandler_fsid;
+extern long classichandler_fileid;
 __private_extern__ char corefilename[MAXPATHLEN+1];
 __private_extern__ int do_coredump;
 __private_extern__ int sugid_coredump;
@@ -478,9 +474,8 @@ sysctl_affinity(
 	return (ENOTSUP);
 }
 
-
 static int
-sysctl_translate(
+sysctl_classic(
 	int *name,
 	u_int namelen,
 	user_addr_t oldBuf,
@@ -503,60 +498,11 @@ sysctl_translate(
 		return (EPERM);
 
 	return sysctl_rdint(oldBuf, oldSize, newBuf,
-		                (p->p_flag & P_TRANSLATED) ? 1 : 0);
-}
-
-int
-set_archhandler(struct proc *p, int arch)
-{
-	int error;
-	struct nameidata nd;
-	struct vnode_attr va;
-	struct vfs_context context;
-	char *archhandler;
-
-	switch(arch) {
-	case CPU_TYPE_POWERPC:
-		archhandler = exec_archhandler_ppc.path;
-		break;
-	default:
-		return (EBADARCH);
-	}
-
-	context.vc_proc = p;
-	context.vc_ucred = kauth_cred_get();
-	
-	NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF, UIO_SYSSPACE32,
-		   CAST_USER_ADDR_T(archhandler), &context);
-	error = namei(&nd);
-	if (error)
-		return (error);
-	nameidone(&nd);
-	
-	/* Check mount point */
-	if ((nd.ni_vp->v_mount->mnt_flag & MNT_NOEXEC) ||
-		(nd.ni_vp->v_type != VREG)) {
-		vnode_put(nd.ni_vp);
-		return (EACCES);
-	}
-	
-	VATTR_INIT(&va);
-	VATTR_WANTED(&va, va_fsid);
-	VATTR_WANTED(&va, va_fileid);
-	error = vnode_getattr(nd.ni_vp, &va, &context);
-	if (error) {
-		vnode_put(nd.ni_vp);
-		return (error);
-	}
-	vnode_put(nd.ni_vp);
-	
-	exec_archhandler_ppc.fsid = va.va_fsid;
-	exec_archhandler_ppc.fileid = (u_long)va.va_fileid;
-	return 0;
+		                (p->p_flag & P_CLASSIC) ? 1 : 0);
 }
 
 static int
-sysctl_exec_archhandler_ppc(
+sysctl_classichandler(
 	__unused int *name,
 	__unused u_int namelen,
 	user_addr_t oldBuf,
@@ -569,18 +515,18 @@ sysctl_exec_archhandler_ppc(
 	size_t len;
 	struct nameidata nd;
 	struct vnode_attr va;
-	char handler[sizeof(exec_archhandler_ppc.path)];
+	char handler[sizeof(classichandler)];
 	struct vfs_context context;
 
 	context.vc_proc = p;
 	context.vc_ucred = kauth_cred_get();
 
 	if (oldSize) {
-		len = strlen(exec_archhandler_ppc.path) + 1;
+		len = strlen(classichandler) + 1;
 		if (oldBuf) {
 			if (*oldSize < len)
 				return (ENOMEM);
-			error = copyout(exec_archhandler_ppc.path, oldBuf, len);
+			error = copyout(classichandler, oldBuf, len);
 			if (error)
 				return (error);
 		}
@@ -590,26 +536,44 @@ sysctl_exec_archhandler_ppc(
 		error = suser(context.vc_ucred, &p->p_acflag);
 		if (error)
 			return (error);
-		if (newSize >= sizeof(exec_archhandler_ppc.path))
+		if (newSize >= sizeof(classichandler))
 			return (ENAMETOOLONG);
 		error = copyin(newBuf, handler, newSize);
 		if (error)
 			return (error);
 		handler[newSize] = 0;
-		strcpy(exec_archhandler_ppc.path, handler);
-		error = set_archhandler(p, CPU_TYPE_POWERPC);
+
+		NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF, UIO_SYSSPACE32,
+				CAST_USER_ADDR_T(handler), &context);
+		error = namei(&nd);
 		if (error)
 			return (error);
+		nameidone(&nd);
+
+		/* Check mount point */
+		if ((nd.ni_vp->v_mount->mnt_flag & MNT_NOEXEC) ||
+			(nd.ni_vp->v_type != VREG)) {
+			vnode_put(nd.ni_vp);
+			return (EACCES);
+		}
+
+		VATTR_INIT(&va);
+		VATTR_WANTED(&va, va_fsid);
+		VATTR_WANTED(&va, va_fileid);
+		error = vnode_getattr(nd.ni_vp, &va, &context);
+		if (error) {
+			vnode_put(nd.ni_vp);
+			return (error);
+		}
+		vnode_put(nd.ni_vp);
+
+		classichandler_fsid = va.va_fsid;
+		classichandler_fileid = (u_long)va.va_fileid;
+		strcpy(classichandler, handler);
 	}
 	return 0;
 }
 
-SYSCTL_NODE(_kern, KERN_EXEC, exec, CTLFLAG_RD, 0, "");
-
-SYSCTL_NODE(_kern_exec, OID_AUTO, archhandler, CTLFLAG_RD, 0, "");
-
-SYSCTL_STRING(_kern_exec_archhandler, OID_AUTO, powerpc, CTLFLAG_RD,
-		exec_archhandler_ppc.path, 0, "");
 
 extern int get_kernel_symfile( struct proc *, char **);
 __private_extern__ int 
@@ -637,11 +601,9 @@ kern_sysctl(int *name, u_int namelen, user_addr_t oldp, size_t *oldlenp,
 			|| name[0] == KERN_IPC
 			|| name[0] == KERN_SYSV
 			|| name[0] == KERN_AFFINITY
-			|| name[0] == KERN_TRANSLATE
-			|| name[0] == KERN_EXEC
+			|| name[0] == KERN_CLASSIC
 			|| name[0] == KERN_PANICINFO
-			|| name[0] == KERN_POSIX
-			|| name[0] == KERN_TFP)
+			|| name[0] == KERN_POSIX)
 		)
 		return (ENOTDIR);		/* overloaded */
 
@@ -757,12 +719,12 @@ kern_sysctl(int *name, u_int namelen, user_addr_t oldp, size_t *oldlenp,
 	case KERN_AFFINITY:
 		return sysctl_affinity(name+1, namelen-1, oldp, oldlenp,
 									newp, newlen, p);
-	case KERN_TRANSLATE:
-		return sysctl_translate(name+1, namelen-1, oldp, oldlenp, newp,
-				      newlen, p);
+	case KERN_CLASSIC:
+		return sysctl_classic(name+1, namelen-1, oldp, oldlenp,
+								newp, newlen, p);
 	case KERN_CLASSICHANDLER:
-		return sysctl_exec_archhandler_ppc(name+1, namelen-1, oldp,
-						   oldlenp, newp, newlen, p);
+		return sysctl_classichandler(name+1, namelen-1, oldp, oldlenp,
+										newp, newlen, p);
 	case KERN_AIOMAX:
 		return( sysctl_aiomax( oldp, oldlenp, newp, newlen ) );
 	case KERN_AIOPROCMAX:
@@ -889,76 +851,9 @@ kern_sysctl(int *name, u_int namelen, user_addr_t oldp, size_t *oldlenp,
         	}
 		return(error);
 	}
-	case KERN_NX_PROTECTION:
-	{
-		int	 old_value, new_value;
-
-		error = 0;
-		if (oldp && *oldlenp < sizeof(old_value) )
-			return (ENOMEM);
-		if ( newp && newlen != sizeof(new_value) )
-			return(EINVAL);
-		*oldlenp = sizeof(old_value);
-
-		old_value = nx_enabled;
-
-		if (oldp && (error = copyout( &old_value, oldp, *oldlenp)))
-			return(error);
-#ifdef __i386__
-		/*
-		 * Only allow setting if NX is supported on the chip
-		 */
-		if (cpuid_extfeatures() & CPUID_EXTFEATURE_XD) {
-#endif
-        		if (error == 0 && newp)
-                		error = copyin(newp, &new_value,
-					       sizeof(newlen));
-        		if (error == 0 && newp)
-		        	nx_enabled = new_value;
-#ifdef __i386__
-        	} else if (newp) {
-			error = ENOTSUP;
-		}
-#endif
-		return(error);
-	}
 	case KERN_SHREG_PRIVATIZABLE:
 		/* this kernel does implement shared_region_make_private_np() */
 		return (sysctl_rdint(oldp, oldlenp, newp, 1));
-	case KERN_PROCNAME:
-		error = sysctl_trstring(oldp, oldlenp, newp, newlen,
-		    &p->p_name[0], (2*MAXCOMLEN+1));
-		return (error);
-	case KERN_THALTSTACK:
-	{
-		int	 old_value, new_value;
-
-		error = 0;
-		if (oldp && *oldlenp < sizeof(int))
-			return (ENOMEM);
-		if ( newp && newlen != sizeof(int) )
-			return(EINVAL);
-		*oldlenp = sizeof(int);
-		old_value = (p->p_lflag & P_LTHSIGSTACK)? 1: 0;
-		if (oldp && (error = copyout( &old_value, oldp, sizeof(int))))
-			return(error);
-        	if (error == 0 && newp )
-                	error = copyin( newp, &new_value, sizeof(int) );
-        	if (error == 0 && newp) {
-                	if (new_value) {
-							/* we cannot swich midstream if inuse */
-							if ((p->p_sigacts->ps_flags & SAS_ALTSTACK) == SAS_ALTSTACK)
-								return(EPERM);
-                        	p->p_lflag |=  P_LTHSIGSTACK;
-                	} else {
-							/* we cannot swich midstream */
-							if ((p->p_lflag & P_LTHSIGSTACK) == P_LTHSIGSTACK)
-								return(EPERM);
-							p->p_lflag &=  ~P_LTHSIGSTACK;
-					}
-        	}
-		return(error);
-	}
 	default:
 		return (ENOTSUP);
 	}
@@ -2200,98 +2095,3 @@ sysctl_maxproc(user_addr_t oldp, size_t *oldlenp,
 	return( error );
 	
 } /* sysctl_maxproc */
-
-#if __i386__
-static int
-sysctl_sysctl_exec_affinity SYSCTL_HANDLER_ARGS
-{
-	struct proc *cur_proc = req->p;
-	int error;
-	
-	if (req->oldptr != USER_ADDR_NULL) {
-		cpu_type_t oldcputype = (cur_proc->p_flag & P_AFFINITY) ? CPU_TYPE_POWERPC : CPU_TYPE_I386;
-		if ((error = SYSCTL_OUT(req, &oldcputype, sizeof(oldcputype))))
-			return error;
-	}
-
-	if (req->newptr != USER_ADDR_NULL) {
-		cpu_type_t newcputype;
-		if ((error = SYSCTL_IN(req, &newcputype, sizeof(newcputype))))
-			return error;
-		if (newcputype == CPU_TYPE_I386)
-			cur_proc->p_flag &= ~P_AFFINITY;
-		else if (newcputype == CPU_TYPE_POWERPC)
-			cur_proc->p_flag |= P_AFFINITY;
-		else
-			return (EINVAL);
-	}
-	
-	return 0;
-}
-SYSCTL_PROC(_sysctl, OID_AUTO, proc_exec_affinity, CTLTYPE_INT|CTLFLAG_RW|CTLFLAG_ANYBODY, 0, 0, sysctl_sysctl_exec_affinity ,"I","proc_exec_affinity");
-#endif
-
-static int
-fetch_process_cputype(
-	struct proc *cur_proc,
-	int *name,
-	u_int namelen,
-	cpu_type_t *cputype)
-{
-	struct proc *p = NULL;
-	cpu_type_t ret = 0;
-	
-	if (namelen == 0)
-		p = cur_proc;
-	else if (namelen == 1) {
-		p = pfind(name[0]);
-		if (p == NULL)
-			return (EINVAL);
-		if ((kauth_cred_getuid(p->p_ucred) != kauth_cred_getuid(kauth_cred_get())) 
-			&& suser(kauth_cred_get(), &cur_proc->p_acflag))
-			return (EPERM);
-	} else {
-		return EINVAL;
-	}
-
-#if __i386__
-	if (p->p_flag & P_TRANSLATED) {
-		ret = CPU_TYPE_POWERPC;
-	}
-	else
-#endif
-	{
-		ret = cpu_type();
-		if (IS_64BIT_PROCESS(p))
-			ret |= CPU_ARCH_ABI64;
-	}
-	*cputype = ret;
-	
-	return 0;
-}
-
-static int
-sysctl_sysctl_native SYSCTL_HANDLER_ARGS
-{
-	int error;
-	cpu_type_t proc_cputype = 0;
-	if ((error = fetch_process_cputype(req->p, (int *)arg1, arg2, &proc_cputype)) != 0)
-		return error;
-	int res = 1;
-	if ((proc_cputype & ~CPU_ARCH_MASK) != (cpu_type() & ~CPU_ARCH_MASK))
-		res = 0;
-	return SYSCTL_OUT(req, &res, sizeof(res));
-}	
-SYSCTL_PROC(_sysctl, OID_AUTO, proc_native, CTLTYPE_NODE|CTLFLAG_RD, 0, 0, sysctl_sysctl_native ,"I","proc_native");
-
-static int
-sysctl_sysctl_cputype SYSCTL_HANDLER_ARGS
-{
-	int error;
-	cpu_type_t proc_cputype = 0;
-	if ((error = fetch_process_cputype(req->p, (int *)arg1, arg2, &proc_cputype)) != 0)
-		return error;
-	return SYSCTL_OUT(req, &proc_cputype, sizeof(proc_cputype));
-}
-SYSCTL_PROC(_sysctl, OID_AUTO, proc_cputype, CTLTYPE_NODE|CTLFLAG_RD, 0, 0, sysctl_sysctl_cputype ,"I","proc_cputype");
-

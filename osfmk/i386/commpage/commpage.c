@@ -1,48 +1,46 @@
 /*
- * Copyright (c) 2003-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 /*
  *	Here's what to do if you want to add a new routine to the comm page:
  *
- *		1. Add a definition for it's address in osfmk/i386/cpu_capabilities.h,
+ *		1. Add a definition for it's address in osfmk/ppc/cpu_capabilities.h,
  *		   being careful to reserve room for future expansion.
  *
  *		2. Write one or more versions of the routine, each with it's own
  *		   commpage_descriptor.  The tricky part is getting the "special",
  *		   "musthave", and "canthave" fields right, so that exactly one
  *		   version of the routine is selected for every machine.
- *		   The source files should be in osfmk/i386/commpage/.
+ *		   The source files should be in osfmk/ppc/commpage/.
  *
  *		3. Add a ptr to your new commpage_descriptor(s) in the "routines"
- *		   array in osfmk/i386/commpage/commpage_asm.s.  There are two
- *		   arrays, one for the 32-bit and one for the 64-bit commpage.
+ *		   array in commpage_populate().  Of course, you'll also have to
+ *		   declare them "extern" in commpage_populate().
  *
  *		4. Write the code in Libc to use the new routine.
  */
@@ -51,7 +49,6 @@
 #include <mach/machine.h>
 #include <mach/vm_map.h>
 #include <i386/machine_routines.h>
-#include <i386/misc_protos.h>
 #include <machine/cpu_capabilities.h>
 #include <machine/commpage.h>
 #include <machine/pmap.h>
@@ -59,34 +56,16 @@
 #include <vm/vm_map.h>
 #include <ipc/ipc_port.h>
 
-#include <kern/page_decrypt.h>
-
-/* the lists of commpage routines are in commpage_asm.s  */
-extern	commpage_descriptor*	commpage_32_routines[];
-extern	commpage_descriptor*	commpage_64_routines[];
-
-/* translated commpage descriptors from commpage_sigs.c  */
-extern	commpage_descriptor sigdata_descriptor;
-extern	commpage_descriptor *ba_descriptors[];
 
 extern vm_map_t	com_region_map32;	// the shared submap, set up in vm init
-extern vm_map_t	com_region_map64;	// the shared submap, set up in vm init
 
-char	*commPagePtr32 = NULL;		// virtual addr in kernel map of 32-bit commpage
-char	*commPagePtr64 = NULL;		// ...and of 64-bit commpage
-int     _cpu_capabilities = 0;          // define the capability vector
-
-int	noVMX = 0;		/* if true, do not set kHasAltivec in ppc _cpu_capabilities */
-
-void*	dsmos_blobs[3];         /* ptrs to the system integrity data in each commpage */
-int	dsmos_blob_count = 0;
-
-static uintptr_t next;			// next available byte in comm page
-static int     	cur_routine;		// comm page address of "current" routine
+static uintptr_t next = 0;		// next available byte in comm page
+static int     	cur_routine = 0;	// comm page address of "current" routine
 static int     	matched;		// true if we've found a match for "current" routine
 
-static char    *commPagePtr;		// virtual addr in kernel map of commpage we are working on
-static size_t	commPageBaseOffset;	// add to 32-bit runtime address to get offset in commpage
+int     _cpu_capabilities = 0;          // define the capability vector
+
+char    *commPagePtr = NULL;            // virtual address of comm page in kernel map
 
 /* Allocate the commpage and add to the shared submap created by vm:
  * 	1. allocate a page in the kernel map (RW)
@@ -96,61 +75,59 @@ static size_t	commPageBaseOffset;	// add to 32-bit runtime address to get offset
  */
 
 static  void*
-commpage_allocate( 
-	vm_map_t	submap,			// com_region_map32 or com_region_map64
-	size_t		area_used )		// _COMM_PAGE32_AREA_USED or _COMM_PAGE64_AREA_USED
+commpage_allocate( void )
 {
-	vm_offset_t	kernel_addr;		// address of commpage in kernel map
-	vm_offset_t	zero = 0;
-	vm_size_t	size = area_used;	// size actually populated
-	vm_map_entry_t	entry;
-	ipc_port_t	handle;
+    vm_offset_t         kernel_addr;                // address of commpage in kernel map
+    vm_offset_t         zero = 0;
+    vm_size_t           size = _COMM_PAGE_AREA_LENGTH;
+    vm_map_entry_t	entry;
+    ipc_port_t          handle;
 
-	if (submap == NULL)
-		panic("commpage submap is null");
+    if (com_region_map32 == NULL)
+        panic("commpage map is null");
 
-	if (vm_allocate(kernel_map,&kernel_addr,area_used,VM_FLAGS_ANYWHERE))
-		panic("cannot allocate commpage");
+    if (vm_allocate(kernel_map,&kernel_addr,_COMM_PAGE_AREA_LENGTH,VM_FLAGS_ANYWHERE))
+        panic("cannot allocate commpage");
 
-	if (vm_map_wire(kernel_map,kernel_addr,kernel_addr+area_used,VM_PROT_DEFAULT,FALSE))
-		panic("cannot wire commpage");
+    if (vm_map_wire(kernel_map,kernel_addr,kernel_addr+_COMM_PAGE_AREA_LENGTH,VM_PROT_DEFAULT,FALSE))
+        panic("cannot wire commpage");
 
-	/* 
-	 * Now that the object is created and wired into the kernel map, mark it so that no delay
-	 * copy-on-write will ever be performed on it as a result of mapping it into user-space.
-	 * If such a delayed copy ever occurred, we could remove the kernel's wired mapping - and
-	 * that would be a real disaster.
-	 *
-	 * JMM - What we really need is a way to create it like this in the first place.
-	 */
-	if (!vm_map_lookup_entry( kernel_map, vm_map_trunc_page(kernel_addr), &entry) || entry->is_sub_map)
-		panic("cannot find commpage entry");
-	entry->object.vm_object->copy_strategy = MEMORY_OBJECT_COPY_NONE;
+    /* 
+     * Now that the object is created and wired into the kernel map, mark it so that no delay
+     * copy-on-write will ever be performed on it as a result of mapping it into user-space.
+     * If such a delayed copy ever occurred, we could remove the kernel's wired mapping - and
+     * that would be a real disaster.
+     *
+     * JMM - What we really need is a way to create it like this in the first place.
+     */
+    if (!vm_map_lookup_entry( kernel_map, vm_map_trunc_page(kernel_addr), &entry) || entry->is_sub_map)
+	panic("cannot find commpage entry");
+    entry->object.vm_object->copy_strategy = MEMORY_OBJECT_COPY_NONE;
 
-	if (mach_make_memory_entry( kernel_map,		// target map
-				    &size,		// size 
-				    kernel_addr,	// offset (address in kernel map)
-				    VM_PROT_DEFAULT,	// map it RW
-				    &handle,		// this is the object handle we get
-				    NULL ))		// parent_entry (what is this?)
-		panic("cannot make entry for commpage");
+    if (mach_make_memory_entry( kernel_map,         // target map
+                                &size,              // size 
+                                kernel_addr,        // offset (address in kernel map)
+                                VM_PROT_DEFAULT,    // map it RW
+                                &handle,            // this is the object handle we get
+                                NULL ))             // parent_entry (what is this?)
+        panic("cannot make entry for commpage");
 
-	if (vm_map_64(	submap,				// target map (shared submap)
-			&zero,				// address (map into 1st page in submap)
-			area_used,			// size
-			0,				// mask
-			VM_FLAGS_FIXED,			// flags (it must be 1st page in submap)
-			handle,				// port is the memory entry we just made
-			0,                              // offset (map 1st page in memory entry)
-			FALSE,                          // copy
-			VM_PROT_READ,                   // cur_protection (R-only in user map)
-			VM_PROT_READ,                   // max_protection
-			VM_INHERIT_SHARE ))             // inheritance
-		panic("cannot map commpage");
+    if (vm_map_64(  com_region_map32,               // target map (shared submap)
+                    &zero,                          // address (map into 1st page in submap)
+                    _COMM_PAGE_AREA_LENGTH,         // size
+                    0,                              // mask
+                    VM_FLAGS_FIXED,                 // flags (it must be 1st page in submap)
+                    handle,                         // port is the memory entry we just made
+                    0,                              // offset (map 1st page in memory entry)
+                    FALSE,                          // copy
+                    VM_PROT_READ,                   // cur_protection (R-only in user map)
+                    VM_PROT_READ,                   // max_protection
+                    VM_INHERIT_SHARE ))             // inheritance
+        panic("cannot map commpage");
 
-	ipc_port_release(handle);
+    ipc_port_release(handle);
 
-	return (void*) kernel_addr;                     // return address in kernel map
+    return (void*) kernel_addr;                     // return address in kernel map
 }
 
 /* Get address (in kernel map) of a commpage field. */
@@ -159,7 +136,7 @@ static void*
 commpage_addr_of(
     int     addr_at_runtime )
 {
-    return  (void*) ((uintptr_t)commPagePtr + addr_at_runtime - commPageBaseOffset);
+    return  (void*) ((uintptr_t)commPagePtr + addr_at_runtime - _COMM_PAGE_BASE_ADDRESS);
 }
 
 /* Determine number of CPUs on this system.  We cannot rely on
@@ -193,9 +170,6 @@ commpage_init_cpu_capabilities( void )
 	ml_cpu_get_info(&cpu_info);
 	
 	switch (cpu_info.vector_unit) {
-		case 6:
-			bits |= kHasSupplementalSSE3;
-			/* fall thru */
 		case 5:
 			bits |= kHasSSE3;
 			/* fall thru */
@@ -232,16 +206,7 @@ commpage_init_cpu_capabilities( void )
 
 	bits |= kFastThreadLocalStorage;	// we use %gs for TLS
 
-	if (cpu_mode_is64bit())			// k64Bit means processor is 64-bit capable
-		bits |= k64Bit;
-
 	_cpu_capabilities = bits;		// set kernel version for use by drivers etc
-}
-
-int
-_get_cpu_capabilities()
-{
-	return _cpu_capabilities;
 }
 
 /* Copy data into commpage. */
@@ -249,7 +214,7 @@ _get_cpu_capabilities()
 static void
 commpage_stuff(
     int 	address,
-    const void 	*source,
+    void 	*source,
     int 	length	)
 {    
     void	*dest = commpage_addr_of(address);
@@ -262,38 +227,13 @@ commpage_stuff(
     next = ((uintptr_t)dest + length);
 }
 
-static void
-commpage_stuff_swap(
-	int	address,
-	void	*source,
-	int	length,
-	int	legacy )
-{
-	if ( legacy ) {
-		void *dest = commpage_addr_of(address);
-		dest = (void *)((uintptr_t) dest + _COMM_PAGE_SIGS_OFFSET);
-		switch (length) {
-			case 2:
-				OSWriteSwapInt16(dest, 0, *(uint16_t *)source);
-				break;
-			case 4:
-				OSWriteSwapInt32(dest, 0, *(uint32_t *)source);
-				break;
-			case 8:
-				OSWriteSwapInt64(dest, 0, *(uint64_t *)source);
-				break;
-		}
-	}
-}
 
 static void
 commpage_stuff2(
-	int	address,
-	void	*source,
-	int	length,
-	int	legacy )
+	int address,
+	void *source,
+	int length )
 {
-	commpage_stuff_swap(address, source, length, legacy);
 	commpage_stuff(address, source, length);
 }
 
@@ -307,7 +247,7 @@ commpage_stuff_routine(
     
     if (rd->commpage_address != cur_routine) {
         if ((cur_routine!=0) && (matched==0))
-            panic("commpage no match for last, next address %08x", rd->commpage_address);
+            panic("commpage no match");
         cur_routine = rd->commpage_address;
         matched = 0;
     }
@@ -317,60 +257,100 @@ commpage_stuff_routine(
     
     if ((must == rd->musthave) && (cant == 0)) {
         if (matched)
-            panic("commpage multiple matches for address %08x", rd->commpage_address);
+            panic("commpage duplicate matches");
         matched = 1;
         
         commpage_stuff(rd->commpage_address,rd->code_address,rd->code_length);
 	}
 }
 
-/* Fill in the 32- or 64-bit commpage.  Called once for each.
- * The 32-bit ("legacy") commpage has a bunch of stuff added to it
- * for translated processes, some of which is byte-swapped.
+ 
+#define COMMPAGE_DESC(name)	commpage_ ## name
+#define EXTERN_COMMPAGE_DESC(name)				\
+	extern commpage_descriptor COMMPAGE_DESC(name)
+
+EXTERN_COMMPAGE_DESC(compare_and_swap32_mp);
+EXTERN_COMMPAGE_DESC(compare_and_swap32_up);
+EXTERN_COMMPAGE_DESC(compare_and_swap64_mp);
+EXTERN_COMMPAGE_DESC(compare_and_swap64_up);
+EXTERN_COMMPAGE_DESC(atomic_add32_mp);
+EXTERN_COMMPAGE_DESC(atomic_add32_up);
+EXTERN_COMMPAGE_DESC(mach_absolute_time);
+EXTERN_COMMPAGE_DESC(spin_lock_try_mp);
+EXTERN_COMMPAGE_DESC(spin_lock_try_up);
+EXTERN_COMMPAGE_DESC(spin_lock_mp);
+EXTERN_COMMPAGE_DESC(spin_lock_up);
+EXTERN_COMMPAGE_DESC(spin_unlock);
+EXTERN_COMMPAGE_DESC(pthread_getspecific);
+EXTERN_COMMPAGE_DESC(gettimeofday);
+EXTERN_COMMPAGE_DESC(sys_flush_dcache);
+EXTERN_COMMPAGE_DESC(sys_icache_invalidate);
+EXTERN_COMMPAGE_DESC(pthread_self);
+EXTERN_COMMPAGE_DESC(relinquish);
+EXTERN_COMMPAGE_DESC(bit_test_and_set_mp);
+EXTERN_COMMPAGE_DESC(bit_test_and_set_up);
+EXTERN_COMMPAGE_DESC(bit_test_and_clear_mp);
+EXTERN_COMMPAGE_DESC(bit_test_and_clear_up);
+EXTERN_COMMPAGE_DESC(bzero_scalar);
+EXTERN_COMMPAGE_DESC(bcopy_scalar);
+EXTERN_COMMPAGE_DESC(nanotime);
+
+static  commpage_descriptor *routines[] = {
+	&COMMPAGE_DESC(compare_and_swap32_mp),
+	&COMMPAGE_DESC(compare_and_swap32_up),
+	&COMMPAGE_DESC(compare_and_swap64_mp),
+	&COMMPAGE_DESC(compare_and_swap64_up),
+	&COMMPAGE_DESC(atomic_add32_mp),
+	&COMMPAGE_DESC(atomic_add32_up),
+	&COMMPAGE_DESC(mach_absolute_time),
+	&COMMPAGE_DESC(spin_lock_try_mp),
+	&COMMPAGE_DESC(spin_lock_try_up),
+	&COMMPAGE_DESC(spin_lock_mp),
+	&COMMPAGE_DESC(spin_lock_up),
+	&COMMPAGE_DESC(spin_unlock),
+	&COMMPAGE_DESC(pthread_getspecific),
+	&COMMPAGE_DESC(gettimeofday),
+	&COMMPAGE_DESC(sys_flush_dcache),
+	&COMMPAGE_DESC(sys_icache_invalidate),
+	&COMMPAGE_DESC(pthread_self),
+	&COMMPAGE_DESC(relinquish),
+	&COMMPAGE_DESC(bit_test_and_set_mp),
+	&COMMPAGE_DESC(bit_test_and_set_up),
+	&COMMPAGE_DESC(bit_test_and_clear_mp),
+	&COMMPAGE_DESC(bit_test_and_clear_up),
+	&COMMPAGE_DESC(bzero_scalar),
+	&COMMPAGE_DESC(bcopy_scalar),
+	&COMMPAGE_DESC(nanotime),
+	NULL
+};
+
+
+/* Fill in commpage: called once, during kernel initialization, from the
+ * startup thread before user-mode code is running.
+ * See the top of this file for a list of what you have to do to add
+ * a new routine to the commpage.
  */
 
-static void
-commpage_populate_one( 
-	vm_map_t	submap,		// com_region_map32 or com_region_map64
-	char **		kernAddressPtr,	// &commPagePtr32 or &commPagePtr64
-	size_t		area_used,	// _COMM_PAGE32_AREA_USED or _COMM_PAGE64_AREA_USED
-	size_t		base_offset,	// will become commPageBaseOffset
-	commpage_descriptor** commpage_routines, // list of routine ptrs for this commpage
-	boolean_t	legacy,		// true if 32-bit commpage
-	const char*	signature )	// "commpage 32-bit" or "commpage 64-bit"
+void
+commpage_populate( void )
 {
    	short   c2;
 	static double   two52 = 1048576.0 * 1048576.0 * 4096.0; // 2**52
 	static double   ten6 = 1000000.0;                       // 10**6
 	commpage_descriptor **rd;
 	short   version = _COMM_PAGE_THIS_VERSION;
-	int		swapcaps;
 
-	next = (uintptr_t) NULL;
-	cur_routine = 0;
-	commPagePtr = (char *)commpage_allocate( submap, (vm_size_t) area_used );
-	*kernAddressPtr = commPagePtr;				// save address either in commPagePtr32 or 64
-	commPageBaseOffset = base_offset;
+	commPagePtr = (char *)commpage_allocate();
+
+	commpage_init_cpu_capabilities();
 
 	/* Stuff in the constants.  We move things into the comm page in strictly
 	* ascending order, so we can check for overlap and panic if so.
 	*/
-	commpage_stuff(_COMM_PAGE_SIGNATURE,signature,strlen(signature));
-	commpage_stuff2(_COMM_PAGE_VERSION,&version,sizeof(short),legacy);
-	commpage_stuff(_COMM_PAGE_CPU_CAPABILITIES,&_cpu_capabilities,sizeof(int));
 
-	/* excuse our magic constants, we cannot include ppc/cpu_capabilities.h */
-	/* always set kCache32 and kDcbaAvailable */
-	swapcaps =  0x44;
-	if ( _cpu_capabilities & kUP )
-		swapcaps |= (kUP + (1 << kNumCPUsShift));
-	else
-		swapcaps |= 2 << kNumCPUsShift;	/* limit #cpus to 2 */
-	if ( ! noVMX )		/* if rosetta will be emulating altivec... */
-		swapcaps |= 0x101;	/* ...then set kHasAltivec and kDataStreamsAvailable too */
-	commpage_stuff_swap(_COMM_PAGE_CPU_CAPABILITIES, &swapcaps, sizeof(int), legacy);
-	c2 = 32;
-	commpage_stuff_swap(_COMM_PAGE_CACHE_LINESIZE,&c2,2,legacy);
+	commpage_stuff2(_COMM_PAGE_VERSION,&version,sizeof(short));
+	commpage_stuff(_COMM_PAGE_CPU_CAPABILITIES,&_cpu_capabilities,
+		sizeof(int));
 
 	if (_cpu_capabilities & kCache32)
 		c2 = 32;
@@ -380,12 +360,13 @@ commpage_populate_one(
 		c2 = 128;
 	commpage_stuff(_COMM_PAGE_CACHE_LINESIZE,&c2,2);
 
-	if ( legacy ) {
-		commpage_stuff2(_COMM_PAGE_2_TO_52,&two52,8,legacy);
-		commpage_stuff2(_COMM_PAGE_10_TO_6,&ten6,8,legacy);
-	}
+	c2 = 32;
 
-	for( rd = commpage_routines; *rd != NULL ; rd++ )
+	commpage_stuff2(_COMM_PAGE_2_TO_52,&two52,8);
+
+	commpage_stuff2(_COMM_PAGE_10_TO_6,&ten6,8);
+
+	for( rd = routines; *rd != NULL ; rd++ )
 		commpage_stuff_routine(*rd);
 
 	if (!matched)
@@ -394,54 +375,35 @@ commpage_populate_one(
 	if (next > (uintptr_t)_COMM_PAGE_END)
 		panic("commpage overflow: next = 0x%08x, commPagePtr = 0x%08x", next, (uintptr_t)commPagePtr);
 
-	if ( legacy ) {
-		next = (uintptr_t) NULL;
-		for( rd = ba_descriptors; *rd != NULL ; rd++ )
-			commpage_stuff_routine(*rd);
 
-		next = (uintptr_t) NULL;
-		commpage_stuff_routine(&sigdata_descriptor);
-	}	
-
-	/* salt away a ptr to the system integrity data in this commpage */
-	dsmos_blobs[dsmos_blob_count++] = 
-		commpage_addr_of( _COMM_PAGE_SYSTEM_INTEGRITY );
+	pmap_commpage_init((vm_offset_t) commPagePtr, _COMM_PAGE_BASE_ADDRESS, 
+			   _COMM_PAGE_AREA_LENGTH/INTEL_PGBYTES);
 }
 
-
-/* Fill in commpages: called once, during kernel initialization, from the
- * startup thread before user-mode code is running.
- *
- * See the top of this file for a list of what you have to do to add
- * a new routine to the commpage.
- */  
+/*
+ * This macro prevents compiler instruction scheduling:
+ */
+#define NO_REORDERING	asm volatile("" : : : "memory")
 
 void
-commpage_populate( void )
+commpage_set_nanotime(commpage_nanotime_t *newp)
 {
-	commpage_init_cpu_capabilities();
-	
-	commpage_populate_one(	com_region_map32, 
-				&commPagePtr32,
-				_COMM_PAGE32_AREA_USED,
-				_COMM_PAGE32_BASE_ADDRESS,
-				commpage_32_routines, 
-				TRUE,			/* legacy (32-bit) commpage */
-				"commpage 32-bit");
-	pmap_commpage32_init((vm_offset_t) commPagePtr32, _COMM_PAGE32_BASE_ADDRESS, 
-			   _COMM_PAGE32_AREA_USED/INTEL_PGBYTES);
+	commpage_nanotime_t	*cnp;
 
-	if (_cpu_capabilities & k64Bit) {
-		commpage_populate_one(	com_region_map64, 
-					&commPagePtr64,
-					_COMM_PAGE64_AREA_USED,
-					_COMM_PAGE32_START_ADDRESS, /* because kernel is built 32-bit */
-					commpage_64_routines, 
-					FALSE,		/* not a legacy commpage */
-					"commpage 64-bit");
-		pmap_commpage64_init((vm_offset_t) commPagePtr64, _COMM_PAGE64_BASE_ADDRESS, 
-				   _COMM_PAGE64_AREA_USED/INTEL_PGBYTES);
-	}
+	/* Nop if commpage not set up yet */
+	if (commPagePtr == NULL)
+		return;
 
-	rtc_nanotime_init_commpage();
+	cnp = (commpage_nanotime_t *)commpage_addr_of(_COMM_PAGE_NANOTIME_INFO);
+
+	/*
+	 * Update in reverse order:
+	 * check_tsc first - it's read and compared with base_tsc last.
+	 */
+	cnp->nt_check_tsc = newp->nt_base_tsc;	NO_REORDERING;
+	cnp->nt_shift     = newp->nt_shift;	NO_REORDERING;
+	cnp->nt_scale     = newp->nt_scale;	NO_REORDERING;
+	cnp->nt_base_ns   = newp->nt_base_ns;	NO_REORDERING;
+	cnp->nt_base_tsc  = newp->nt_base_tsc;
 }
+

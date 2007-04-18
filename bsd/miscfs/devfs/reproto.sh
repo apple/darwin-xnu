@@ -11,31 +11,23 @@ print PROTO "" .
 "/*\n" .
 " * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.\n" .
 " *\n" .
-" * \@APPLE_LICENSE_OSREFERENCE_HEADER_START\@\n" .
+" * \@APPLE_LICENSE_HEADER_START\@\n" .
 " *\n" .
-" * This file contains Original Code and/or Modifications of Original Code\n" .
-" * as defined in and that are subject to the Apple Public Source License\n" .
-" * Version 2.0 (the \"License\"). You may not use this file except in\n" .
-" * compliance with the License.  The rights granted to you under the\n" .
-" * License may not be used to create, or enable the creation or\n" .
-" * redistribution of, unlawful or unlicensed copies of an Apple operating\n" .
-" * system, or to circumvent, violate, or enable the circumvention or\n" .
-" * violation of, any terms of an Apple operating system software license\n" .
-" * agreement.\n" .
+" * The contents of this file constitute Original Code as defined in and\n" .
+" * are subject to the Apple Public Source License Version 1.1 (the\n" .
+" * \"License\").  You may not use this file except in compliance with the\n" .
+" * License.  Please obtain a copy of the License at\n" .
+" * http://www.apple.com/publicsource and read it before using this file.\n" .
 " *\n" .
-" * Please obtain a copy of the License at\n" .
-" * http://www.opensource.apple.com/apsl/ and read it before using this\n" .
-" * file.\n" .
-" *\n" .
-" * The Original Code and all software distributed under the License are\n" .
+" * This Original Code and all software distributed under the License are\n" .
 " * distributed on an \"AS IS\" basis, WITHOUT WARRANTY OF ANY KIND, EITHER\n" .
 " * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,\n" .
 " * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,\n" .
-" * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.\n" .
-" * Please see the License for the specific language governing rights and\n" .
-" * limitations under the License.\n" .
+" * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the\n" .
+" * License for the specific language governing rights and limitations\n" .
+" * under the License.\n" .
 " *\n" .
-" * \@APPLE_LICENSE_OSREFERENCE_HEADER_END\@\n" .
+" * \@APPLE_LICENSE_HEADER_END\@\n" .
 " */\n"; 
 
 print PROTO "/* THIS FILE HAS BEEN PRODUCED AUTOMATICALLY */\n";

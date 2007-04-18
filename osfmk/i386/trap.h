@@ -1,31 +1,29 @@
 /*
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -82,8 +80,6 @@
 /*				15 */
 #define	T_FLOATING_POINT_ERROR	16
 #define	T_WATCHPOINT		17
-#define T_MACHINE_CHECK		18
-#define T_SSE_FLOAT_ERROR       19
 #define T_PREEMPT		255
 
 #define TRAP_NAMES "divide error", "debug trap", "NMI", "breakpoint", \
@@ -91,7 +87,7 @@
 		   "no coprocessor", "double fault", "coprocessor overrun", \
 		   "invalid TSS", "segment not present", "stack bounds", \
 		   "general protection", "page fault", "(reserved)", \
-		   "coprocessor error", "watchpoint", "(reserved)", "SSE floating point"
+		   "coprocessor error", "watchpoint"
 
 /*
  * Page-fault trap codes.
@@ -99,12 +95,6 @@
 #define	T_PF_PROT		0x1		/* protection violation */
 #define	T_PF_WRITE		0x2		/* write access */
 #define	T_PF_USER		0x4		/* from user state */
-
-#ifdef PAE
-#define	T_PF_RSVD		0x8		/* reserved bit set to 1 */
-#define T_PF_EXECUTE		0x10		/* instruction fetch when NX */
-#endif
-
 
 #if !defined(ASSEMBLER) && defined(MACH_KERNEL)
 
@@ -115,42 +105,23 @@ extern void		i386_exception(
 				int		code,
 				int		subcode);
 
-extern void		sync_iss_to_iks(x86_saved_state32_t *regs);
+extern boolean_t	kernel_trap(
+				struct i386_saved_state	*regs);
 
-extern void		sync_iss_to_iks_unconditionally(x86_saved_state32_t *regs);
+extern void		panic_trap(
+				struct i386_saved_state	*regs);
 
-extern void		kernel_trap(x86_saved_state_t *regs);
-
-extern void		user_trap(x86_saved_state_t *regs);
-
-extern void		panic_double_fault(int code);
-
-extern void		panic_double_fault64(x86_saved_state_t *regs);
-
-extern void		panic_machine_check(int	code);
-
-extern void		panic_machine_check64(x86_saved_state_t *regs);
+extern void		user_trap(
+				struct i386_saved_state	*regs);
 
 extern void		i386_astintr(int preemption);
 
-
-typedef kern_return_t (*perfCallback)(
-				int			trapno,
-				void			*regs,
-				int			unused1,
-				int			unused2);
-
-extern perfCallback perfTrapHook;
-extern perfCallback perfASTHook;
-extern perfCallback perfIntHook;
-
-#if MACH_KDP
-extern boolean_t	kdp_i386_trap(
+#if defined(MACH_KDP)
+extern void		kdp_i386_trap(
 				unsigned int,
-				x86_saved_state32_t *,
+				struct i386_saved_state *,
 				kern_return_t,
 				vm_offset_t);
-extern void		panic_i386_backtrace(void *, int);
 #endif /* MACH_KDP */
 #endif	/* !ASSEMBLER && MACH_KERNEL */
 

@@ -1,31 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #include <mach/mach_types.h>
@@ -37,11 +35,6 @@
 #include <libsa/types.h>
 
 #include <string.h> /* bcopy */
-
-#include <kern/processor.h>
-#include <kern/thread.h>
-#include <vm/vm_map.h>
-#include <vm/vm_kern.h>
 
 int kdp_vm_read( caddr_t, caddr_t, unsigned int);
 int kdp_vm_write( caddr_t, caddr_t, unsigned int);
@@ -101,45 +94,6 @@ static unsigned int breakpoints_initialized = 0;
 
 int reattach_wait = 0;
 int noresume_on_disconnect = 0;
-
-#define MAXCOMLEN 16
-
-struct thread_snapshot {
-	uint32_t snapshot_magic;
-	thread_t thread_id;
-	int32_t state;
-	wait_queue_t wait_queue;
-	event64_t wait_event;
-	vm_offset_t kernel_stack;
-	vm_offset_t reserved_stack;
-	thread_continue_t continuation;
-	uint32_t nkern_frames;
-	char user64_p;
-	uint32_t nuser_frames;
-	int32_t pid;
-	char p_comm[MAXCOMLEN + 1];
-};
-
-typedef struct thread_snapshot *thread_snapshot_t;
-
-extern int
-machine_trace_thread(thread_t thread, uint32_t tracepos, uint32_t tracebound, int nframes, boolean_t user_p);
-extern int
-machine_trace_thread64(thread_t thread, uint32_t tracepos, uint32_t tracebound, int nframes, boolean_t user_p);
-extern int
-proc_pid(void *p);
-extern void
-proc_name(int pid, char *buf, int size);
-extern void
-kdp_snapshot_postflight(void);
-
-static int
-pid_from_task(task_t task);
-
-int
-kdp_stackshot(int pid, uint32_t tracebuf, uint32_t tracebuf_size, unsigned trace_options, uint32_t *pbytesTraced);
-
-extern char version[];
 
 boolean_t
 kdp_packet(
@@ -426,9 +380,7 @@ kdp_readmem(
     int			plen = *len;
     kdp_readmem_reply_t *rp = &pkt->readmem_reply;
     int			cnt;
-#if __i386__
-    void		*pversion = &version;
-#endif
+
     if (plen < sizeof (*rq))
 	return (FALSE);
 
@@ -441,17 +393,7 @@ kdp_readmem(
 	unsigned int	n = rq->nbytes;
 
 	dprintf(("kdp_readmem addr %x size %d\n", rq->address, rq->nbytes));
-#if __i386__
-	/* XXX This is a hack to facilitate the "showversion" macro
-	 * on i386, which is used to obtain the kernel version without
-	 * symbols - a pointer to the version string should eventually
-	 * be pinned at a fixed address when an equivalent of the
-	 * VECTORS segment (loaded at a fixed load address, and contains
-	 * a table) is implemented on x86, as with PPC.
-	 */
-	if (rq->address == (void *)0x501C)
-		rq->address = &pversion;
-#endif
+
 	cnt = kdp_vm_read((caddr_t)rq->address, (caddr_t)rp->data, rq->nbytes);
 	rp->error = KDPERR_NO_ERROR;
 
@@ -739,98 +681,4 @@ kdp_remove_all_breakpoints()
        printf("kdp_remove_all_breakpoints: found extant breakpoints, removing them.\n");
     }
   return breakpoint_found;
-}
-
-
-#define MAX_FRAMES 1000
-
-static int pid_from_task(task_t task)
-{
-	int pid = -1;
-
-	if (task->bsd_info)
-		pid = proc_pid(task->bsd_info);
-
-	return pid;
-}
-
-int
-kdp_stackshot(int pid, uint32_t tracebuf, uint32_t tracebuf_size, unsigned trace_options, uint32_t *pbytesTraced)
-{
-	uint32_t tracepos = (uint32_t) tracebuf;
-	uint32_t tracebound = tracepos + tracebuf_size;
-	uint32_t tracebytes = 0;
-	int error = 0;
-	
-	processor_set_t pset = &default_pset;
-	task_t task = TASK_NULL;
-	thread_t thread = THREAD_NULL;
-	int nframes = trace_options;
-	thread_snapshot_t tsnap = NULL;
-	unsigned framesize = 2 * sizeof(vm_offset_t);
-
-	if ((nframes <= 0) || nframes > MAX_FRAMES)
-		nframes = MAX_FRAMES;
-
-	queue_iterate(&pset->tasks, task, task_t, pset_tasks) {
-		/* Trace everything, unless a process was specified */
-		if ((pid == -1) || (pid == pid_from_task(task)))
-			queue_iterate(&task->threads, thread, thread_t, task_threads){
-				if ((tracepos + 4 * sizeof(struct thread_snapshot)) > tracebound) {
-					error = -1;
-					goto error_exit;
-				}
-/* Populate the thread snapshot header */
-				tsnap = (thread_snapshot_t) tracepos;
-				tsnap->thread_id = thread;
-				tsnap->state = thread->state;
-				tsnap->wait_queue = thread->wait_queue;
-				tsnap->wait_event = thread->wait_event;
-				tsnap->kernel_stack = thread->kernel_stack;
-				tsnap->reserved_stack = thread->reserved_stack;
-				tsnap->continuation = thread->continuation;
-/* Add the BSD process identifiers */
-				if ((tsnap->pid = pid_from_task(task)) != -1)
-					proc_name(tsnap->pid, tsnap->p_comm, MAXCOMLEN + 1);
-				else
-					tsnap->p_comm[0] = '\0';
-
-				tsnap->snapshot_magic = 0xfeedface;
-				tracepos += sizeof(struct thread_snapshot);
-
-/* Call through to the machine specific trace routines
- * Frames are added past the snapshot header.
- */
-				if (tsnap->kernel_stack != 0)
-					tracebytes = machine_trace_thread(thread, tracepos, tracebound, nframes, FALSE);
-				tsnap->nkern_frames = tracebytes/(2 * sizeof(vm_offset_t));
-				tracepos += tracebytes;
-				tracebytes = 0;
-				tsnap->user64_p = 0;
-/* Trace user stack, if any */
-				if (thread->task->map != kernel_map) {
-/* 64-bit task? */
-					if (task_has_64BitAddr(thread->task)) {
-						tracebytes = machine_trace_thread64(thread, tracepos, tracebound, nframes, TRUE);
-						tsnap->user64_p = 1;
-						framesize = 2 * sizeof(addr64_t);
-					}
-					else {
-						tracebytes = machine_trace_thread(thread, tracepos, tracebound, nframes, TRUE);
-						framesize = 2 * sizeof(vm_offset_t);
-					}
-				}
-				tsnap->nuser_frames = tracebytes/framesize;
-				tracepos += tracebytes;
-				tracebytes = 0;
-			}
-	}
-
-error_exit:
-	/* Release stack snapshot wait indicator */
-	kdp_snapshot_postflight();
-
-	*pbytesTraced = tracepos - tracebuf;
-
-	return error;
 }

@@ -182,7 +182,7 @@ options		NFSSERVER	# Be an NFS server		# <nfsclient>
 # AppleTalk Support
 #
 options		NETAT		# AppleTalk support		# <netat>
-#options		AURP_SUPPORT    # AppleTalk Update Routing      # <netat>
+options		AURP_SUPPORT    # AppleTalk Update Routing      # <netat>
 #
 # Machine Independent Apple Features
 #

@@ -1,31 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* dspWrite.c 
  * From Mike Shoemaker v01.13 06/21/90 mbs for MacOS
@@ -75,6 +73,7 @@ int FillSendQueue(sp, pb)		/* (CCBPtr sp) */
 	int eom;		/* True if should set eom in header */
 	int cnt;		/* # of bytes in this write */
 	int err = 0;
+	int s;
 
 	cnt = pb->u.ioParams.reqCount - pb->u.ioParams.actCount;
 	eom = pb->u.ioParams.eom ? F_EOM : 0;
@@ -103,6 +102,7 @@ int FillSendQueue(sp, pb)		/* (CCBPtr sp) */
 	}
 	gbuf_cont(mb) = 0;
 
+	ATDISABLE(s, sp->lock);
 	sp->sData = 1;		/* note that there is data to send */
 	if ((mb = sp->csbuf_mb)) {	/* add to the current message */
 	    gbuf_linkb(mb, nmb);
@@ -118,6 +118,7 @@ int FillSendQueue(sp, pb)		/* (CCBPtr sp) */
 	    sp->csbuf_mb = 0;	/* if its done, no current buffer */
 	}
 	pb->u.ioParams.actCount += cnt; /* Update count field in param blk */
+	ATENABLE(s, sp->lock);
 	
 	if (pb->u.ioParams.actCount == pb->u.ioParams.reqCount) {
 	    /* Write is complete */
@@ -155,20 +156,24 @@ int adspWrite(sp, pb)		/* (DSPPBPtr pb) */
     CCBPtr sp;
     struct adspcmd *pb;
 {
+    int	s;
 	
     if (sp == 0) {
 	pb->ioResult = errRefNum;
 	return EINVAL;		/* no stream, so drop the message */
     }
 	
+    ATDISABLE(s, sp->lock);
     if (sp->state != sOpen) {	/* Not allowed */
 	pb->ioResult = errState;
+	ATENABLE(s, sp->lock);
 	atalk_notify(sp->gref, ENOTCONN);
 	gbuf_freem(pb->mp);
 	return 0;
     }
 	
     pb->u.ioParams.actCount = 0; /* Set # of bytes so far to zero */
+    ATENABLE(s, sp->lock);
     
     FillSendQueue(sp, pb);	/* Copy from write param block to send queue */
 

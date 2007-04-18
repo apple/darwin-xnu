@@ -1,31 +1,29 @@
 /*
  * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -1556,7 +1554,7 @@ noPerfMonSave32:
 			lwz		r25,traceMask(0)				; Get the trace mask
 			li		r0,SAVgeneral					; Get the savearea type value
 			lhz		r19,PP_CPU_NUMBER(r2)			; Get the logical processor number											
-			rlwinm	r22,r11,30,0,31					; Divide interrupt code by 4
+			rlwinm	r22,r11,30,0,31					; Divide interrupt code by 2
 			stb		r0,SAVflags+2(r13)				; Mark valid context
 			addi	r22,r22,10						; Adjust code so we shift into CR5
 			li		r23,trcWork						; Get the trace work area address
@@ -3967,12 +3965,7 @@ EXT(killresv):
 			.long	0								; 5470 reserved			
 			.long	0								; 5474 reserved			
 			.long	0								; 5478 reserved			
-			.long	0								; 547C reserved
-			.long	EXT(kmod)							; 5480 Pointer to kmod, debugging aid
-			.long	EXT(kdp_trans_off)						; 5484 Pointer to kdp_trans_off, debugging aid
-			.long	EXT(kdp_read_io)						; 5488 Pointer to kdp_read_io, debugging aid
-			.long	0								; 548C Reserved for developer use
-			.long	0								; 5490 Reserved for developer use
+			.long	0								; 547C reserved	
 ;
 ;	The "shared page" is used for low-level debugging
 ;

@@ -1,31 +1,29 @@
 /*
  * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
@@ -212,6 +210,10 @@ struct sigevent {
 // LP64todo - should this move?
 #ifdef BSD_KERNEL_PRIVATE
 
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=natural
+#endif
+
 union user_sigval {
 	struct {
 		int		pad;	/* assumes Motorolla byte order */
@@ -227,6 +229,10 @@ struct user_sigevent {
 	user_addr_t	sigev_notify_function;	  	/* Notify function */
 	user_addr_t 	sigev_notify_attributes;	/* Notify attributes */
 };
+
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=reset
+#endif
 
 #endif	/* BSD_KERNEL_PRIVATE */
 
@@ -245,6 +251,10 @@ typedef struct __siginfo {
 
 #ifdef BSD_KERNEL_PRIVATE
 
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=natural
+#endif
+
 typedef struct __user_siginfo {
 	int		si_signo;	/* signal number */
 	int		si_errno;	/* errno association */
@@ -257,6 +267,10 @@ typedef struct __user_siginfo {
 	user_long_t	si_band;	/* band event for SIGPOLL */
 	user_ulong_t	pad[7];		/* Reserved for Future Use */
 } user_siginfo_t;
+
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=reset
+#endif
 
 #endif	/* BSD_KERNEL_PRIVATE */
 
@@ -363,6 +377,10 @@ struct	sigaction {
 #ifdef	BSD_KERNEL_PRIVATE
 #include <machine/types.h>
 
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=natural
+#endif
+
 union __user_sigaction_u {
 	user_addr_t	__sa_handler;
 	user_addr_t	__sa_sigaction;
@@ -380,6 +398,10 @@ struct	__user_sigaction {
 	sigset_t sa_mask;		/* signal mask to apply */
 	int	sa_flags;		/* see signal options below */
 };
+
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=reset
+#endif
 
 #undef SIG_DFL
 #undef SIG_IGN
@@ -432,11 +454,19 @@ typedef	void (*sig_t)(int);	/* type of signal function */
  */
 #ifdef	BSD_KERNEL_PRIVATE
 
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=natural
+#endif
+
 struct  user_sigaltstack {
 	user_addr_t	ss_sp;		/* signal stack base */
 	user_size_t	ss_size;	/* signal stack length */
-	int		ss_flags __attribute((aligned(8)));	/* SA_DISABLE and/or SA_ONSTACK */
+	int		ss_flags;	/* SA_DISABLE and/or SA_ONSTACK */
 };
+
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=reset
+#endif
 
 #endif	/* BSD_KERNEL_PRIVATE */
 

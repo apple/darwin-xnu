@@ -1,31 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1997 by Apple Computer, Inc., all rights reserved
@@ -45,13 +43,12 @@
 #include <kern/task.h>
 #include <kern/thread.h>
 #include <vm/vm_map.h>
-#include <machine/machine_routines.h>
 
 /* XXX should be elsewhere (cpeak) */
-extern struct proc *i386_current_proc(void);
+extern int	set_bsduthreadargs(thread_t, void *, void *);
 extern void	*get_bsduthreadarg(thread_t);
 extern int	*get_bsduthreadrval(thread_t);
-extern void	*find_user_regs(thread_t);
+extern int	*get_bsduthreadlowpridelay(thread_t);
 
 /* 
  * copy a null terminated string from the kernel address space into
@@ -120,62 +117,56 @@ copywithin(void *src, void *dst, size_t count)
 	return 0;
 }
 
-/*
- * This is just current_proc() from bsd/kern/bsd_stubs.c, but instead of
- * returning kernproc in the non-vfork() case, it can return NULL.  This is
- * needed because the system call entry point is in osfmk/i386/bsd_i386.c
- * instead of bsd/dev/i386, and therefore cannot see some BSD thread
- * internals.  We need to distinguish kernproc defaulting in the vfork and
- * non-vfork cases vs. actually being the real process context.
- */     
-struct proc *
-i386_current_proc(void)
-{       
+int
+set_bsduthreadargs(thread_t th, void * pcb, __unused void *ignored_arg)
+{
 	struct uthread * ut;
-	struct proc *p; 
-	thread_t thr_act = current_thread();
+	struct proc *p = current_proc();
 
-	ut = (struct uthread *)get_bsdthread_info(thr_act);
-	if (ut &&  (ut->uu_flag & UT_VFORK)) { 
-		if (ut->uu_proc) {
-			p = ut->uu_proc; 
-			if ((p->p_flag & P_INVFORK) == 0)
-				panic("returning child proc not under vfork");
-			if (p->p_vforkact != (void *)thr_act)
-				panic("returning child proc which is not cur_act");
-			return(p);
-		} else {
-			return (kernproc);
-		}
+	ut = get_bsdthread_info(th);
+	ut->uu_ar0 = (int *)pcb;
+
+	/*
+	 * Delayed binding of thread credential to process credential.
+	 *
+	 * XXX This doesn't really belong here, but the i386 code has a
+	 * XXX number of seemingly gratuitous structural differences that
+	 * XXX make this the most appropriate place to do the work.
+	 */
+	if (ut->uu_ucred != p->p_ucred &&
+	    (ut->uu_flag & UT_SETUID) == 0) {
+		kauth_cred_t old = ut->uu_ucred;
+		proc_lock(p);
+		ut->uu_ucred = p->p_ucred;
+		kauth_cred_ref(ut->uu_ucred);
+		proc_unlock(p);
+		if (old != NOCRED)
+			kauth_cred_rele(old);
 	}
 
-	/* Not in vfork - may return NULL */
-	p = (struct proc *)get_bsdtask_info(current_task());
-
-	return (p);
+	return(1);
 }
 
 void *
 get_bsduthreadarg(thread_t th)
 {
-        void	*arg_ptr;
-	struct uthread *ut;
-  
+struct uthread *ut;
 	ut = get_bsdthread_info(th);
-
-	if (ml_thread_is64bit(th) == TRUE)
-	        arg_ptr = (void *)saved_state64(find_user_regs(th));
-	else
-		arg_ptr = (void *)(ut->uu_arg);
-
-	return(arg_ptr);
+	return((void *)(ut->uu_arg));
 }
 
 int *
 get_bsduthreadrval(thread_t th)
 {
-        struct uthread *ut;
-
+struct uthread *ut;
 	ut = get_bsdthread_info(th);
 	return(&ut->uu_rval[0]);
+}
+
+int *
+get_bsduthreadlowpridelay(thread_t th)
+{
+struct uthread *ut;
+	ut = get_bsdthread_info(th);
+	return(&ut->uu_lowpri_delay);
 }

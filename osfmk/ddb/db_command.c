@@ -1,31 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -166,6 +164,8 @@ void db_command_list(
 	db_expr_t		*last_countp,	/* IN_OUT */
 	char			*last_modifp,	/* IN_OUT */
 	struct db_command	*cmd_table);
+
+
 
 /*
  * Search for command prefix.
@@ -510,33 +510,20 @@ struct db_command db_command_table[] = {
 	{ "dmacro",	(db_func) db_del_macro_cmd,	CS_OWN,			0 },
 	{ "show",	0,				0,			db_show_cmds },
 	{ "cpu",	(db_func) db_switch_cpu,	0,			0 },
-	{ "dr",		db_display_real,		CS_MORE|CS_SET_DOT,	0 },
-	{ "di",		db_display_iokit,		CS_MORE,			0 },
-	{ "dk",		db_display_kmod,		CS_MORE,			0 },
-
 	{ "reboot",	(db_func) db_reboot,		0,			0 },
-#if !defined(__ppc__)	
-	{ "pm",		db_pmgr,				CS_MORE,			0 },
-	{ "na",		db_nap,					CS_MORE,			0 },
-	{ "ms",		db_msr,					CS_MORE,			0 },
-	{ "cp",		db_cpuid,				CS_MORE,			0 },
-	{ "da",		db_apic,				CS_MORE,			0 },
-	{ "ts",		db_test,				CS_MORE,			0 },
-	{ "dn",		db_intcnt,				CS_MORE,			0 },
-	{ "hp",		db_hpet,				CS_MORE,			0 },
-	{ "cf",		db_cfg,					CS_MORE,			0 },
-	{ "dt",		db_dtimers,				CS_MORE,			0 },
-#endif
-#if defined(__ppc__)	
+#if defined(__ppc__)
 	{ "lt",		db_low_trace,			CS_MORE|CS_SET_DOT,	0 },
 	{ "dl",		db_display_long,		CS_MORE|CS_SET_DOT,	0 },
 	{ "dc",		db_display_char,		CS_MORE|CS_SET_DOT,	0 },
+	{ "dr",		db_display_real,		CS_MORE|CS_SET_DOT,	0 },
 	{ "dv",		db_display_virtual,		CS_MORE|CS_SET_DOT,	0 },
 	{ "dm",		db_display_mappings,	CS_MORE|CS_SET_DOT,	0 },
 	{ "dh",		db_display_hash,		CS_MORE|CS_SET_DOT,	0 },
 	{ "dp",		db_display_pmap,		CS_MORE,			0 },
+	{ "di",		db_display_iokit,		CS_MORE,			0 },
 	{ "ds",		db_display_save,		CS_MORE|CS_SET_DOT,	0 },
 	{ "dx",		db_display_xregs,		CS_MORE|CS_SET_DOT,	0 },
+	{ "dk",		db_display_kmod,		CS_MORE,			0 },
 	{ "gs",		db_gsnoop,				CS_MORE,			0 },
 	{ "cm",		db_check_mappings,		CS_MORE,			0 },
 	{ "cp",		db_check_pmaps,			CS_MORE,			0 },

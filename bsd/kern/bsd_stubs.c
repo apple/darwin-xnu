@@ -1,31 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #include <sys/time.h>
 #include <kern/task.h>
@@ -39,8 +37,6 @@
 #include <sys/proc_internal.h>
 #include <sys/buf.h>	/* for SET */
 #include <sys/user.h>
-#include <sys/sysent.h>
-#include <sys/sysproto.h>
 
 /* Just to satisfy pstat command */
 int     dmmin, dmmax, dmtext;
@@ -51,7 +47,7 @@ kmem_mb_alloc(vm_map_t  mbmap, int size)
         vm_offset_t addr;
 	if (kernel_memory_allocate(mbmap, &addr, size,
    		0,
-		KMA_NOPAGEWAIT|KMA_KOBJECT|KMA_LOMEM) == KERN_SUCCESS)
+		KMA_NOPAGEWAIT|KMA_KOBJECT) == KERN_SUCCESS)
    			return(addr);
 	else
 		return(0);
@@ -302,66 +298,3 @@ tbeproc(void *procp)
 	return;
 }
 
-
-/* 
- * WARNING - this is a temporary workaround for binary compatibility issues
- * with anti-piracy software that relies on patching ptrace (3928003).
- * This KPI will be removed in the system release after Tiger.
- */
-uintptr_t temp_patch_ptrace(uintptr_t new_ptrace)
-{
-	struct sysent *		callp;
-	sy_call_t *			old_ptrace;
-#ifndef __ppc__
-	boolean_t	funnel_state;
-#endif
-
-	if (new_ptrace == 0)
-		return(0);
-		
-#ifdef __ppc__
-	enter_funnel_section(kernel_flock);
-#else
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
-#endif
-	callp = &sysent[26];
-	old_ptrace = callp->sy_call;
-	
-	/* only allow one patcher of ptrace */
-	if (old_ptrace == (sy_call_t *) ptrace) {
-		callp->sy_call = (sy_call_t *) new_ptrace;
-	}
-	else {
-		old_ptrace = NULL;
-	}
-#ifdef __ppc__
-	exit_funnel_section( );
-#else
-	(void)thread_funnel_set(kernel_flock, funnel_state);
-#endif
-	
-	return((uintptr_t)old_ptrace);
-}
-
-void temp_unpatch_ptrace(void)
-{
-	struct sysent *		callp;
-#ifndef __ppc__
-	boolean_t	funnel_state;
-#endif
-		
-#ifdef __ppc__
-	enter_funnel_section(kernel_flock);
-#else
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
-#endif
-	callp = &sysent[26];
-	callp->sy_call = (sy_call_t *) ptrace;
-#ifdef __ppc__
-	exit_funnel_section( );
-#else
-	(void)thread_funnel_set(kernel_flock, funnel_state);
-#endif
-	
-	return;
-}

@@ -1,31 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright 1994 Apple Computer, Inc.
@@ -84,12 +82,38 @@ struct ifqueue atalkintrq; 	/* appletalk and aarp packet input queue */
 
 short appletalk_inited = 0;
 
+extern atlock_t 
+	ddpall_lock, ddpinp_lock, arpinp_lock, refall_lock, nve_lock,
+  	aspall_lock, asptmo_lock, atpall_lock, atptmo_lock, atpgen_lock;
 
+extern int (*sys_ATsocket )(), (*sys_ATgetmsg)(), (*sys_ATputmsg)();
+extern int (*sys_ATPsndreq)(), (*sys_ATPsndrsp)();
+extern int (*sys_ATPgetreq)(), (*sys_ATPgetrsp)();
 
 void atalk_load()
 {
+	extern int _ATsocket(), _ATgetmsg(), _ATputmsg();
+	extern int _ATPsndreq(), _ATPsndrsp(), _ATPgetreq(), _ATPgetrsp();
 	extern lck_mtx_t *domain_proto_mtx;
 
+	sys_ATsocket  = _ATsocket;
+	sys_ATgetmsg  = _ATgetmsg;
+	sys_ATputmsg  = _ATputmsg;
+	sys_ATPsndreq = _ATPsndreq;
+	sys_ATPsndrsp = _ATPsndrsp;
+	sys_ATPgetreq = _ATPgetreq;
+	sys_ATPgetrsp = _ATPgetrsp;
+
+	ATLOCKINIT(ddpall_lock);
+	ATLOCKINIT(ddpinp_lock);
+	ATLOCKINIT(arpinp_lock);
+	ATLOCKINIT(refall_lock);
+	ATLOCKINIT(aspall_lock);
+	ATLOCKINIT(asptmo_lock);
+	ATLOCKINIT(atpall_lock);
+	ATLOCKINIT(atptmo_lock);
+	ATLOCKINIT(atpgen_lock);
+	ATLOCKINIT(nve_lock);
 
 	atp_init();
 	atp_link();
@@ -109,6 +133,14 @@ void atalk_unload()  /* not currently used */
 {
 	extern gbuf_t *scb_resource_m;
 	extern gbuf_t *atp_resource_m;
+
+	sys_ATsocket  = 0;
+	sys_ATgetmsg  = 0;
+	sys_ATputmsg  = 0;
+	sys_ATPsndreq = 0;
+	sys_ATPsndrsp = 0;
+	sys_ATPgetreq = 0;
+	sys_ATPgetrsp = 0;
 
 	atp_unlink();
 
@@ -141,7 +173,7 @@ void appletalk_hack_start()
 int pat_output(patp, mlist, dst_addr, type)
 	at_ifaddr_t *patp;
 	struct mbuf *mlist;			/* packet chain */
-	unsigned char *dst_addr;	/* for atalk addr - net # must be in network byte order */
+	unsigned char *dst_addr;
 	int 	type;
 {
 	struct mbuf *m, *m1;

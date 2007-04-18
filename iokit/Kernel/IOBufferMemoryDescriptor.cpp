@@ -1,41 +1,37 @@
 /*
  * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #include <IOKit/assert.h>
 #include <IOKit/system.h>
 
 #include <IOKit/IOLib.h>
-#include <IOKit/IOMapper.h>
 #include <IOKit/IOBufferMemoryDescriptor.h>
 
 #include "IOKitKernelInternal.h"
-#include "IOCopyMapper.h"
 
 __BEGIN_DECLS
 void ipc_port_release_send(ipc_port_t port);
@@ -43,12 +39,6 @@ void ipc_port_release_send(ipc_port_t port);
 
 vm_map_t IOPageableMapForAddress( vm_address_t address );
 __END_DECLS
-
-/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
-
-volatile ppnum_t gIOHighestAllocatedPage;
-
-/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 #define super IOGeneralMemoryDescriptor
 OSDefineMetaClassAndStructors(IOBufferMemoryDescriptor,
@@ -104,19 +94,7 @@ bool IOBufferMemoryDescriptor::initWithOptions(
                                vm_offset_t  alignment,
 			       task_t	    inTask)
 {
-    mach_vm_address_t physicalMask = 0;
-    return (initWithPhysicalMask(inTask, options, capacity, alignment, physicalMask));
-}
-
-bool IOBufferMemoryDescriptor::initWithPhysicalMask(
-				task_t		  inTask,
-				IOOptionBits      options,
-				mach_vm_size_t    capacity,
-				mach_vm_address_t alignment,
-				mach_vm_address_t physicalMask)
-{
     kern_return_t 	kr;
-    addr64_t            lastIOAddr;
     vm_map_t 		vmmap = 0;
     IOOptionBits	iomdOptions = kIOMemoryAsReference | kIOMemoryTypeVirtual;
 
@@ -137,12 +115,6 @@ bool IOBufferMemoryDescriptor::initWithPhysicalMask(
 
     if ((inTask != kernel_task) && !(options & kIOMemoryPageable))
         return false;
-
-    if (physicalMask && (alignment <= 1))
-	alignment = ((physicalMask ^ PAGE_MASK) & PAGE_MASK) + 1;
-
-    if ((options & kIOMemoryPhysicallyContiguous) && !physicalMask)
-	physicalMask = 0xFFFFFFFF;
 
     _alignment = alignment;
     if (options & kIOMemoryPageable)
@@ -202,7 +174,7 @@ bool IOBufferMemoryDescriptor::initWithPhysicalMask(
 #if IOALLOCDEBUG
        debug_iomallocpageable_size += size;
 #endif
-	if (NULL == inTask)
+	if ((NULL == inTask) && (options & kIOMemoryPageable))
 	    inTask = kernel_task;
 	else if (inTask == kernel_task)
 	{
@@ -210,6 +182,7 @@ bool IOBufferMemoryDescriptor::initWithPhysicalMask(
 	}
 	else
 	{
+
 	    if( !reserved) {
 		reserved = IONew( ExpansionData, 1 );
 		if( !reserved)
@@ -220,58 +193,23 @@ bool IOBufferMemoryDescriptor::initWithPhysicalMask(
 	    reserved->map = vmmap;
 	}
     }
-    else
+    else 
     {
-	if (IOMapper::gSystem)
-	    // assuming mapped space is 2G
-	    lastIOAddr = (1UL << 31) - PAGE_SIZE;
+        // @@@ gvdl: Need to remove this
+        // Buffer should never auto prepare they should be prepared explicitly
+        // But it never was enforced so what are you going to do?
+        iomdOptions |= kIOMemoryAutoPrepare;
+
+	/* Allocate a wired-down buffer inside kernel space. */
+	if (options & kIOMemoryPhysicallyContiguous)
+	    _buffer = IOMallocContiguous(capacity, alignment, 0);
+	else if (alignment > 1)
+	    _buffer = IOMallocAligned(capacity, alignment);
 	else
-	    lastIOAddr = ptoa_64(gIOHighestAllocatedPage);
+	    _buffer = IOMalloc(capacity);
 
-	if (physicalMask && (lastIOAddr != (lastIOAddr & physicalMask)))
-	{
-	    mach_vm_address_t address;
-	    iomdOptions &= ~kIOMemoryTypeVirtual;
-	    iomdOptions |= kIOMemoryTypePhysical;
-
-	    address = IOMallocPhysical(capacity, physicalMask);
-	    _buffer = (void *) address;
-	    if (!_buffer)
-		return false;
-
-	    if (inTask == kernel_task)
-	    {
-		vmmap = kernel_map;
-	    }
-	    else if (NULL != inTask)
-	    {
-		if( !reserved) {
-		    reserved = IONew( ExpansionData, 1 );
-		    if( !reserved)
-			return( false );
-		}
-		vmmap = get_task_map(inTask);
-		vm_map_reference(vmmap);
-		reserved->map = vmmap;
-	    }
-	    inTask = 0;
-	}
-	else
-	{
-	    // Buffer shouldn't auto prepare they should be prepared explicitly
-	    // But it never was enforced so what are you going to do?
-	    iomdOptions |= kIOMemoryAutoPrepare;
-
-	    /* Allocate a wired-down buffer inside kernel space. */
-	    if (options & kIOMemoryPhysicallyContiguous)
-		_buffer = (void *) IOKernelAllocateContiguous(capacity, alignment);
-	    else if (alignment > 1)
-		_buffer = IOMallocAligned(capacity, alignment);
-	    else
-		_buffer = IOMalloc(capacity);
-	    if (!_buffer)
-		return false;
-	}
+	if (!_buffer)
+	    return false;
     }
 
     _singleRange.v.address = (vm_address_t) _buffer;
@@ -281,53 +219,20 @@ bool IOBufferMemoryDescriptor::initWithPhysicalMask(
                                inTask, iomdOptions, /* System mapper */ 0))
 	return false;
 
-    if (physicalMask && !IOMapper::gSystem)
+    if (options & kIOMemoryPageable)
     {
-	IOMDDMACharacteristics mdSummary;
+        kern_return_t kr;
 
-	bzero(&mdSummary, sizeof(mdSummary));
-	IOReturn rtn = dmaCommandOperation(
-		kIOMDGetCharacteristics,
-		&mdSummary, sizeof(mdSummary));
-	if (rtn)
-	    return false;
-
-	if (mdSummary.fHighestPage)
+	if (vmmap)
 	{
-	    ppnum_t highest;
-	    while (mdSummary.fHighestPage > (highest = gIOHighestAllocatedPage))
+	    kr = doMap(vmmap, (IOVirtualAddress *) &_buffer, kIOMapAnywhere, 0, round_page_32(capacity));
+	    if (KERN_SUCCESS != kr)
 	    {
-		if (OSCompareAndSwap(highest, mdSummary.fHighestPage, 
-					(UInt32 *) &gIOHighestAllocatedPage))
-		    break;
+		_buffer = 0;
+		return( false );
 	    }
-	    lastIOAddr = ptoa_64(mdSummary.fHighestPage);
-	}
-	else
-	    lastIOAddr = ptoa_64(gIOLastPage);
-
-	if (lastIOAddr != (lastIOAddr & physicalMask))
-	{
-	    if (kIOMemoryTypePhysical != (_flags & kIOMemoryTypeMask))
-	    {
-		// flag a retry
-		_physSegCount = 1;
-	    }
-	    return false;
-	}
-    }
-
-    if (vmmap)
-    {
-	kr = doMap(vmmap, (IOVirtualAddress *) &_buffer, kIOMapAnywhere, 0, capacity);
-	if (KERN_SUCCESS != kr)
-	{
-	    _buffer = 0;
-	    return( false );
-	}
-
-	if (kIOMemoryTypeVirtual & iomdOptions)
 	    _singleRange.v.address = (vm_address_t) _buffer;
+	}
     }
 
     setLength(capacity);
@@ -344,44 +249,8 @@ IOBufferMemoryDescriptor * IOBufferMemoryDescriptor::inTaskWithOptions(
     IOBufferMemoryDescriptor *me = new IOBufferMemoryDescriptor;
     
     if (me && !me->initWithOptions(options, capacity, alignment, inTask)) {
-	bool retry = me->_physSegCount;
 	me->release();
 	me = 0;
-	if (retry)
-	{
-	    me = new IOBufferMemoryDescriptor;
-	    if (me && !me->initWithOptions(options, capacity, alignment, inTask))
-	    {
-		me->release();
-		me = 0;
-	    }
-	}
-    }
-    return me;
-}
-
-IOBufferMemoryDescriptor * IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
-					    task_t	      inTask,
-                                            IOOptionBits      options,
-                                            mach_vm_size_t    capacity,
-                                            mach_vm_address_t physicalMask)
-{
-    IOBufferMemoryDescriptor *me = new IOBufferMemoryDescriptor;
-    
-    if (me && !me->initWithPhysicalMask(inTask, options, capacity, 1, physicalMask))
-    {
-	bool retry = me->_physSegCount;
-	me->release();
-	me = 0;
-	if (retry)
-	{
-	    me = new IOBufferMemoryDescriptor;
-	    if (me && !me->initWithPhysicalMask(inTask, options, capacity, 1, physicalMask))
-	    {
-		me->release();
-		me = 0;
-	    }
-	}
     }
     return me;
 }
@@ -399,7 +268,13 @@ IOBufferMemoryDescriptor * IOBufferMemoryDescriptor::withOptions(
                                             vm_size_t    capacity,
                                             vm_offset_t  alignment)
 {
-    return(IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task, options, capacity, alignment));
+    IOBufferMemoryDescriptor *me = new IOBufferMemoryDescriptor;
+    
+    if (me && !me->initWithOptions(options, capacity, alignment, kernel_task)) {
+	me->release();
+	me = 0;
+    }
+    return me;
 }
 
 
@@ -460,21 +335,9 @@ IOBufferMemoryDescriptor::withBytes(const void * inBytes,
 {
     IOBufferMemoryDescriptor *me = new IOBufferMemoryDescriptor;
 
-    if (me && !me->initWithBytes(inBytes, inLength, inDirection, inContiguous))
-    {
-	bool retry = me->_physSegCount;
-	me->release();
-	me = 0;
-	if (retry)
-	{
-	    me = new IOBufferMemoryDescriptor;
-	    if (me && !me->initWithBytes(inBytes, inLength, inDirection, inContiguous))
-	    {
-		me->release();
-		me = 0;
-	    }
-	}
-
+    if (me && !me->initWithBytes(inBytes, inLength, inDirection, inContiguous)){
+        me->release();
+        me = 0;
     }
     return me;
 }
@@ -488,13 +351,11 @@ void IOBufferMemoryDescriptor::free()
 {
     // Cache all of the relevant information on the stack for use
     // after we call super::free()!
-    IOOptionBits     flags     = _flags;
-    IOOptionBits     options   = _options;
-    vm_size_t        size      = _capacity;
-    void *           buffer    = _buffer;
-    IOVirtualAddress source    = _singleRange.v.address;
-    vm_map_t	     vmmap     = 0;
-    vm_offset_t      alignment = _alignment;
+    IOOptionBits options   = _options;
+    vm_size_t    size	   = _capacity;
+    void *       buffer	   = _buffer;
+    vm_map_t	 vmmap	   = 0;
+    vm_offset_t  alignment = _alignment;
 
     if (reserved)
     {
@@ -521,14 +382,8 @@ void IOBufferMemoryDescriptor::free()
     }
     else if (buffer)
     {
-	if (kIOMemoryTypePhysical == (flags & kIOMemoryTypeMask))
-	{
-            if (vmmap)
-                vm_deallocate(vmmap, (vm_address_t) buffer, round_page_32(size));
-	    IOFreePhysical((mach_vm_address_t) source, size);
-	}
-        else if (options & kIOMemoryPhysicallyContiguous)
-            IOKernelFreeContiguous((mach_vm_address_t) buffer, size);
+        if (options & kIOMemoryPhysicallyContiguous)
+            IOFreeContiguous(buffer, size);
         else if (alignment > 1)
             IOFreeAligned(buffer, size);
         else
@@ -588,20 +443,13 @@ void IOBufferMemoryDescriptor::setDirection(IODirection direction)
 bool
 IOBufferMemoryDescriptor::appendBytes(const void * bytes, vm_size_t withLength)
 {
-    vm_size_t   actualBytesToCopy = min(withLength, _capacity - _length);
-    IOByteCount offset;
+    vm_size_t actualBytesToCopy = min(withLength, _capacity - _length);
 
     assert(_length <= _capacity);
-
-    offset = _length;
+    bcopy(/* from */ bytes, (void *)(_singleRange.v.address + _length),
+          actualBytesToCopy);
     _length += actualBytesToCopy;
     _singleRange.v.length += actualBytesToCopy;
-
-    if (_task == kernel_task)
-	bcopy(/* from */ bytes, (void *)(_singleRange.v.address + offset),
-	      actualBytesToCopy);
-    else
-	writeBytes(offset, bytes, actualBytesToCopy);
 
     return true;
 }
@@ -613,12 +461,8 @@ IOBufferMemoryDescriptor::appendBytes(const void * bytes, vm_size_t withLength)
  */
 void * IOBufferMemoryDescriptor::getBytesNoCopy()
 {
-    if (kIOMemoryTypePhysical == (_flags & kIOMemoryTypeMask))
-	return _buffer;
-    else
-	return (void *)_singleRange.v.address;
+    return (void *)_singleRange.v.address;
 }
-
 
 /*
  * getBytesNoCopy:
@@ -628,30 +472,13 @@ void * IOBufferMemoryDescriptor::getBytesNoCopy()
 void *
 IOBufferMemoryDescriptor::getBytesNoCopy(vm_size_t start, vm_size_t withLength)
 {
-    IOVirtualAddress address;
-    if (kIOMemoryTypePhysical == (_flags & kIOMemoryTypeMask))
-	address = (IOVirtualAddress) _buffer;
-    else
-	address = _singleRange.v.address;
-
-   if (start < _length && (start + withLength) <= _length)
-        return (void *)(address + start);
+    if (start < _length && (start + withLength) <= _length)
+        return (void *)(_singleRange.v.address + start);
     return 0;
 }
 
-/* DEPRECATED */ void * IOBufferMemoryDescriptor::getVirtualSegment(IOByteCount offset,
-/* DEPRECATED */ 							IOByteCount * lengthOfSegment)
-{
-    void * bytes = getBytesNoCopy(offset, 0);
-    
-    if (bytes && lengthOfSegment)
-	*lengthOfSegment = _length - offset;
-
-    return bytes;
-}
-
 OSMetaClassDefineReservedUsed(IOBufferMemoryDescriptor, 0);
-OSMetaClassDefineReservedUsed(IOBufferMemoryDescriptor, 1);
+OSMetaClassDefineReservedUnused(IOBufferMemoryDescriptor, 1);
 OSMetaClassDefineReservedUnused(IOBufferMemoryDescriptor, 2);
 OSMetaClassDefineReservedUnused(IOBufferMemoryDescriptor, 3);
 OSMetaClassDefineReservedUnused(IOBufferMemoryDescriptor, 4);

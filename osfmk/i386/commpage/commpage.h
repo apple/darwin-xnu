@@ -1,31 +1,29 @@
 /*
- * Copyright (c) 2003-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #ifndef _I386_COMMPAGE_H
@@ -35,15 +33,8 @@
 #include <stdint.h>
 #endif /* __ASSEMBLER__ */
 
-/* The following macro is used to generate the 64-bit commpage address for a given
- * routine, based on its 32-bit address.  This is used in the kernel to compile
- * the 64-bit commpage.  Since the kernel is a 32-bit object, cpu_capabilities.h
- * only defines the 32-bit address.
- */
-#define	_COMM_PAGE_32_TO_64( ADDRESS )	( ADDRESS + _COMM_PAGE64_START_ADDRESS - _COMM_PAGE32_START_ADDRESS )
-
-
 #ifdef	__ASSEMBLER__
+#include <machine/asm.h>
 
 #define	COMMPAGE_DESCRIPTOR(label,address,must,cant)	\
 L ## label ## _end:					;\
@@ -74,15 +65,18 @@ typedef	struct	commpage_descriptor	{
 } commpage_descriptor;
 
 
-extern	char	*commPagePtr32;				// virt address of 32-bit commpage in kernel map
-extern	char	*commPagePtr64;				// ...and of 64-bit commpage
+extern	char	*commPagePtr;				// virt address of commpage in kernel map
 
-extern	void	_commpage_set_timestamp(uint64_t abstime, uint64_t secs);
-#define commpage_set_timestamp(x, y, z)		_commpage_set_timestamp((x), (y))
+extern	void	commpage_set_timestamp(uint64_t tbr,uint32_t secs,uint32_t usecs,uint32_t ticks_per_sec);
 
-extern  void	commpage_set_nanotime(uint64_t tsc_base, uint64_t ns_base, uint32_t scale, uint32_t shift);
-
-#include <kern/page_decrypt.h>
+typedef struct {
+	uint64_t	nt_base_tsc;
+	uint64_t	nt_base_ns; 
+	uint32_t	nt_scale;
+	uint32_t	nt_shift;
+	uint64_t	nt_check_tsc;
+} commpage_nanotime_t;
+extern  void	commpage_set_nanotime(commpage_nanotime_t *new_nanotime);
 
 #endif	/* __ASSEMBLER__ */
 

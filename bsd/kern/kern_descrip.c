@@ -1,31 +1,29 @@
 /*
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995, 1997 Apple Computer, Inc. All Rights Reserved */
 /*
@@ -114,6 +112,7 @@ int fdgetf_noref(struct proc *p, int fd, struct fileproc **resultfp);
 void fg_drop(struct fileproc * fp);
 void fg_free(struct fileglob *fg);
 void fg_ref(struct fileproc * fp);
+int fp_getfpshm(struct proc *p, int fd, struct fileproc **resultfp, struct pshmnode  **resultpshm);
 
 static int closef_finish(struct fileproc *fp, struct fileglob *fg, struct proc *p);
 
@@ -156,11 +155,13 @@ file_lock_init(void)
 
 	/* allocate file lock group attribute and group */
 	file_lck_grp_attr= lck_grp_attr_alloc_init();
+	lck_grp_attr_setstat(file_lck_grp_attr);
 
 	file_lck_grp = lck_grp_alloc_init("file",  file_lck_grp_attr);
 
 	/* Allocate file lock attribute */
 	file_lck_attr = lck_attr_alloc_init();
+	//lck_attr_setdebug(file_lck_attr);
 
 	uipc_lock = lck_mtx_alloc_init(file_lck_grp, file_lck_attr);
 	file_iterate_lcok = lck_mtx_alloc_init(file_lck_grp, file_lck_attr);
@@ -1097,7 +1098,7 @@ fstat1(struct proc *p, int fd, user_addr_t ub, user_addr_t xsecurity, user_addr_
 	struct user_stat user_sb;
 	int error, my_size;
 	int funnel_state;
-	short type;
+	file_type_t type;
 	caddr_t data;
 	kauth_filesec_t fsec;
 	ssize_t xsecurity_bufsize;
@@ -1231,7 +1232,7 @@ fpathconf(p, uap, retval)
 	struct vnode *vp;
 	struct vfs_context context;
 	int error = 0;
-	short type;
+	file_type_t type;
 	caddr_t data;
 
 
@@ -1273,12 +1274,12 @@ fpathconf(p, uap, retval)
 		goto out;
 
 	case DTYPE_PSXSHM:
+	case DTYPE_PSXSEM:
 	case DTYPE_KQUEUE:
+	case DTYPE_FSEVENTS:
 		error = EINVAL;
 		goto out;
 
-	default:
-		panic("fpathconf (unrecognized - %d)", type);
 	}
 	/*NOTREACHED*/
 out:
@@ -1507,42 +1508,6 @@ fp_getfvp(p, fd, resultfp, resultvp)
 }
 
 
-
-int
-fp_getfvpandvid(p, fd, resultfp, resultvp, vidp)
-	struct proc *p;
-	int fd;
-	struct fileproc **resultfp;
-	struct vnode  **resultvp;
-	uint32_t * vidp;
-{
-	struct filedesc *fdp = p->p_fd;
-	struct fileproc *fp;
-
-	proc_fdlock(p);
-	if (fd < 0 || fd >= fdp->fd_nfiles ||
-			(fp = fdp->fd_ofiles[fd]) == NULL ||
-			(fdp->fd_ofileflags[fd] & UF_RESERVED)) {
-		proc_fdunlock(p);
-		return (EBADF);
-	}
-	if (fp->f_type != DTYPE_VNODE) {
-		proc_fdunlock(p);
-		return(ENOTSUP);
-	}
-	fp->f_iocount++;
-
-	if (resultfp)
-		*resultfp = fp;
-	if (resultvp)
-		*resultvp = (struct vnode *)fp->f_data;
-	if (vidp)
-		*vidp = (uint32_t)vnode_vid((struct vnode *)fp->f_data);
-	proc_fdunlock(p);
-
-	return (0);
-}
-
 /*
  * Returns:	EBADF			The file descriptor is invalid
  *		EOPNOTSUPP		The file descriptor is not a socket
@@ -1681,74 +1646,6 @@ fp_getfpsem(p, fd, resultfp, resultpsem)
 
 	return (0);
 }
-
-
-int
-fp_getfpipe(p, fd, resultfp, resultpipe)
-	struct proc *p;
-	int fd;
-	struct fileproc **resultfp;
-	struct pipe  **resultpipe;
-{
-	struct filedesc *fdp = p->p_fd;
-	struct fileproc *fp;
-
-	proc_fdlock(p);
-	if (fd < 0 || fd >= fdp->fd_nfiles ||
-			(fp = fdp->fd_ofiles[fd]) == NULL ||
-			(fdp->fd_ofileflags[fd] & UF_RESERVED)) {
-		proc_fdunlock(p);
-		return (EBADF);
-	}
-	if (fp->f_type != DTYPE_PIPE) {
-		proc_fdunlock(p);
-		return(EBADF);
-	}
-	fp->f_iocount++;
-
-	if (resultfp)
-		*resultfp = fp;
-	if (resultpipe)
-		*resultpipe = (struct pipe *)fp->f_data;
-	proc_fdunlock(p);
-
-	return (0);
-}
-
-
-#define DTYPE_ATALK -1
-int
-fp_getfatalk(p, fd, resultfp, resultatalk)
-	struct proc *p;
-	int fd;
-	struct fileproc **resultfp;
-	struct atalk  **resultatalk;
-{
-	struct filedesc *fdp = p->p_fd;
-	struct fileproc *fp;
-
-	proc_fdlock(p);
-	if (fd < 0 || fd >= fdp->fd_nfiles ||
-			(fp = fdp->fd_ofiles[fd]) == NULL ||
-			(fdp->fd_ofileflags[fd] & UF_RESERVED)) {
-		proc_fdunlock(p);
-		return (EBADF);
-	}
-	if (fp->f_type != (DTYPE_ATALK+1)) {
-		proc_fdunlock(p);
-		return(EBADF);
-	}
-	fp->f_iocount++;
-
-	if (resultfp)
-		*resultfp = fp;
-	if (resultatalk)
-		*resultatalk = (struct atalk *)fp->f_data;
-	proc_fdunlock(p);
-
-	return (0);
-}
-
 int
 fp_lookup(p, fd, resultfp, locked)
 	struct proc *p;

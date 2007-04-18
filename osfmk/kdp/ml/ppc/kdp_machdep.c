@@ -1,31 +1,29 @@
 /*
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
  
 #include <mach/mach_types.h>
@@ -36,12 +34,6 @@
 #include <ppc/savearea.h>
 #include <kern/debug.h>
 #include <IOKit/IOPlatformExpert.h>
-
-
-#include <kern/thread.h>
-#include <ppc/thread.h>
-#include <vm/vm_map.h>
-#include <ppc/pmap.h>
 
 #define KDP_TEST_HARNESS 0
 #if KDP_TEST_HARNESS
@@ -55,21 +47,6 @@ void kdp_call(void);
 void kdp_trap( unsigned int, struct savearea	*saved_state);
 int kdp_getc(void);
 boolean_t kdp_call_kdb(void);
-
-extern pmap_t kdp_pmap;
-extern uint32_t kdp_src_high32;
-
-
-extern unsigned kdp_vm_read(caddr_t src, caddr_t dst, unsigned len);
-
-int
-machine_trace_thread(thread_t thread, uint32_t tracepos, uint32_t tracebound, int nframes, boolean_t user_p);
-
-int
-machine_trace_thread64(thread_t thread, uint32_t tracepos, uint32_t tracebound, int nframes, boolean_t user_p);
-
-unsigned
-machine_read64(addr64_t srcaddr, caddr_t dstaddr, uint32_t len);
 
 void
 kdp_exception(
@@ -656,152 +633,4 @@ kdp_print_backtrace(
 unsigned int kdp_ml_get_breakinsn(void)
 {
   return 0x7fe00008;
-}
-#define LR_OFFSET 8
-#define LR_OFFSET64 16
-
-int
-machine_trace_thread(thread_t thread, uint32_t tracepos, uint32_t tracebound, int nframes, boolean_t user_p)
-{
-	uint32_t *tracebuf = (uint32_t *)tracepos;
-	uint32_t fence = 0;
-	uint32_t stackptr = 0;
-	uint32_t stacklimit = 0xb0000000;
-	int framecount = 0;
-	uint32_t init_srr0 = 0;
-	uint32_t prevsp = 0;
-	uint32_t framesize = 2 * sizeof(vm_offset_t);
-	
-	if (user_p) {
-		/* Examine the user savearea */
-		init_srr0 = thread->machine.upcb->save_srr0;
-		stackptr = thread->machine.upcb->save_r1;
-		/* This bound isn't useful, but it doesn't hinder us */
-		stacklimit = 0xffffffff;
-		kdp_pmap = thread->task->map->pmap;
-	}
-	else {
-		stackptr = thread->machine.pcb->save_r1;
-		init_srr0 = thread->machine.pcb->save_srr0;
-	}
-	/* Fill in the "current" program counter */
-	*tracebuf++ = init_srr0;
-
-	for (framecount = 0; framecount < nframes; framecount++) {
-/* Bounds check */
-		if ((tracebound - ((uint32_t) tracebuf)) < (4 * framesize)) {
-			tracebuf--;
-			break;
-		}
-
-		*tracebuf++ = stackptr;
-/* Invalid frame, or hit fence */
-		if (!stackptr || (stackptr == fence)) {
-			break;
-		}
-/* Stack grows downward */		
-		if (stackptr < prevsp) {
-			break;
-		}
-/* Unaligned frame */		
-		if (stackptr & 0x000000F) {
-			break;
-		}
-		if (stackptr > stacklimit) {
-			break;
-		}
-/* Assume there's a saved link register, and read it */
-		if (kdp_vm_read((caddr_t) (stackptr + LR_OFFSET), (caddr_t) tracebuf, sizeof(caddr_t)) != sizeof(caddr_t)) {
-			break;
-		}
-
-		tracebuf++;
-		prevsp = stackptr;
-/* Next frame */
-		if (kdp_vm_read((caddr_t) stackptr, (caddr_t) &stackptr, sizeof(caddr_t)) != sizeof(caddr_t)) {
-			*tracebuf++ = 0;
-			break;
-		}
-	}
-/* Reset the target pmap */
-	kdp_pmap = 0;
-	return ((uint32_t) tracebuf - tracepos);
-}
-
-/* Routine to encapsulate the 64-bit address read hack*/
-unsigned
-machine_read64(addr64_t srcaddr, caddr_t dstaddr, uint32_t len)
-{
-	uint32_t kdp_vm_read_low32;
-	unsigned retval;
-	
-	kdp_src_high32 = srcaddr >> 32;
-	kdp_vm_read_low32 = srcaddr & 0x00000000FFFFFFFFUL;
-	retval = kdp_vm_read((caddr_t)kdp_vm_read_low32, dstaddr, len);
-	kdp_src_high32 = 0;
-	return retval;
-}
-
-int
-machine_trace_thread64(thread_t thread, uint32_t tracepos, uint32_t tracebound, int nframes, boolean_t user_p)
-{
-	uint64_t *tracebuf = (uint64_t *)tracepos;
-	uint32_t fence = 0;
-	addr64_t stackptr = 0;
-	uint64_t stacklimit = 0xb0000000;
-	int framecount = 0;
-	addr64_t init_srr0 = 0;
-	addr64_t prevsp = 0;
-	unsigned framesize = 2 * sizeof(addr64_t);
-	
-	if (user_p) {
-		init_srr0 = thread->machine.upcb->save_srr0;
-		stackptr = thread->machine.upcb->save_r1;
-		stacklimit = 0xffffffffffffffffULL;
-		kdp_pmap = thread->task->map->pmap;
-	}
-	else {
-		stackptr = thread->machine.pcb->save_r1;
-		init_srr0 = thread->machine.pcb->save_srr0;
-	}
-	
-	*tracebuf++ = init_srr0;
-
-	for (framecount = 0; framecount < nframes; framecount++) {
-
-		if ((tracebound - ((uint32_t) tracebuf)) < (4 * framesize)) {
-			tracebuf--;
-			break;
-		}
-
-		*tracebuf++ = stackptr;
-
-		if (!stackptr || (stackptr == fence)){
-			break;
-		}
-		if (stackptr < prevsp) {
-			break;
-		}
-		if (stackptr & 0x000000F) {
-			break;
-		}
-		if (stackptr > stacklimit) {
-			break;
-		}
-
-		if (machine_read64(stackptr+LR_OFFSET64, (caddr_t) tracebuf, sizeof(addr64_t)) != sizeof(addr64_t)) {
-			break;
-		}
-		tracebuf++;
-		
-		prevsp = stackptr;
-		if (machine_read64(stackptr, (caddr_t) &stackptr, sizeof(addr64_t)) != sizeof(addr64_t)) {
-			*tracebuf++ = 0;
-			break;
-		}
-	}
-
-	kdp_pmap = 0;
-
-	return ((uint32_t) tracebuf - tracepos);
 }

@@ -1,31 +1,29 @@
 /*
  * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
@@ -117,6 +115,7 @@ struct nfsbuf {
 	volatile long		nb_refs;	/* outstanding references. */
 	long			nb_bufsize;	/* buffer size */
 	daddr64_t		nb_lblkno;	/* logical block number. */
+	uint64_t		nb_verf;	/* V3 write verifier */
 	time_t			nb_timestamp;	/* buffer timestamp */
 	int			nb_error;	/* errno value. */
 	u_int32_t		nb_valid;	/* valid pages in buf */
@@ -132,8 +131,6 @@ struct nfsbuf {
 	struct ucred *		nb_wcred;	/* write credentials reference */
 	void *			nb_pagelist;	/* upl */
 };
-
-#define NFS_MAXBSIZE	(32 * PAGE_SIZE)	/* valid/dirty page masks limit buffer size */
 
 /*
  * These flags are kept in b_lflags... 
@@ -422,6 +419,7 @@ void nfs_buf_release(struct nfsbuf *, int);
 int nfs_buf_iowait(struct nfsbuf *);
 void nfs_buf_iodone(struct nfsbuf *);
 void nfs_buf_write_delayed(struct nfsbuf *, proc_t);
+void nfs_buf_check_write_verifier(struct nfsnode *, struct nfsbuf *);
 void nfs_buf_freeup(int);
 void nfs_buf_refget(struct nfsbuf *bp);
 void nfs_buf_refrele(struct nfsbuf *bp);

@@ -19,31 +19,29 @@
 /*
  * Copyright (c) 2003-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 /*
@@ -113,7 +111,6 @@
 #include <sys/signalvar.h>
 #include <sys/pipe.h>
 #include <sys/sysproto.h>
-#include <sys/proc_info.h>
 
 #include <bsm/audit_kernel.h>
 
@@ -269,12 +266,14 @@ pipeinit(void *dummy __unused)
 	 * allocate lock group attribute and group for pipe mutexes
 	 */
 	pipe_mtx_grp_attr = lck_grp_attr_alloc_init();
+	//lck_grp_attr_setstat(pipe_mtx_grp_attr);
 	pipe_mtx_grp = lck_grp_alloc_init("pipe", pipe_mtx_grp_attr);
 
 	/*
 	 * allocate the lock attribute for pipe mutexes
 	 */
 	pipe_mtx_attr = lck_attr_alloc_init();
+	//lck_attr_setdebug(pipe_mtx_attr);
 }
 
 
@@ -1417,7 +1416,7 @@ pipe_free_kmem(struct pipe *cpipe)
 	if (cpipe->pipe_buffer.buffer != NULL) {
 		if (cpipe->pipe_buffer.size > PIPE_SIZE)
 			OSAddAtomic(-1, (SInt32 *)&nbigpipe);
-		OSAddAtomic(-(cpipe->pipe_buffer.size), (SInt32 *)&amountpipekva);
+		OSAddAtomic(cpipe->pipe_buffer.size, (SInt32 *)&amountpipekva);
 		OSAddAtomic(-1, (SInt32 *)&amountpipes);
 
 		kmem_free(kernel_map, (vm_offset_t)cpipe->pipe_buffer.buffer,
@@ -1651,66 +1650,3 @@ filt_pipewrite(struct knote *kn, long hint)
 	return (kn->kn_data >= ((kn->kn_sfflags & NOTE_LOWAT) ?
 	                         kn->kn_sdata : PIPE_BUF));
 }
-
-int
-fill_pipeinfo(struct pipe * cpipe, struct pipe_info * pinfo)
-{
-#ifdef MAC
-        int error;
-#endif
-	struct timeval now;
-	struct stat * ub;
-
-	if (cpipe == NULL)
-	        return (EBADF);
-#ifdef MAC
-	PIPE_LOCK(cpipe);
-	error = mac_check_pipe_stat(active_cred, cpipe);
-	PIPE_UNLOCK(cpipe);
-	if (error)
-	        return (error);
-#endif
-	if (cpipe->pipe_buffer.buffer == 0) {
-	        /*
-		 * must be stat'ing the write fd
-		 */
-	        cpipe = cpipe->pipe_peer;
-
-		if (cpipe == NULL)
-		        return (EBADF);
-	}
-
-	ub = &pinfo->pipe_stat;
-
-	bzero(ub, sizeof(*ub));
-	ub->st_mode = S_IFIFO | S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP;
-	ub->st_blksize = cpipe->pipe_buffer.size;
-	ub->st_size = cpipe->pipe_buffer.cnt;
-	if (ub->st_blksize != 0);
-		ub->st_blocks = (ub->st_size + ub->st_blksize - 1) / ub->st_blksize;
-	ub->st_nlink = 1;
-
-	ub->st_uid = kauth_getuid();
-	ub->st_gid = kauth_getgid();
-
-	microtime(&now);
-	ub->st_atimespec.tv_sec  = now.tv_sec;
-	ub->st_atimespec.tv_nsec = now.tv_usec * 1000;
-
-	ub->st_mtimespec.tv_sec  = now.tv_sec;
-	ub->st_mtimespec.tv_nsec = now.tv_usec * 1000;
-
-	ub->st_ctimespec.tv_sec  = now.tv_sec;
-	ub->st_ctimespec.tv_nsec = now.tv_usec * 1000;
-
-	/*
-	 * Left as 0: st_dev, st_ino, st_nlink, st_rdev, st_flags, st_gen, st_uid, st_gid.
-	 * XXX (st_dev, st_ino) should be unique.
-	 */
-
-	pinfo->pipe_handle = (uint64_t)((uintptr_t)cpipe);
-	pinfo->pipe_peerhandle = (uint64_t)((uintptr_t)(cpipe->pipe_peer));
-	pinfo->pipe_status = cpipe->pipe_state;
-	return (0);
-}
-

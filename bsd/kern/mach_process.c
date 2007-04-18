@@ -1,31 +1,29 @@
 /*
  * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*-
@@ -89,6 +87,7 @@
 
 #include <kern/task.h>
 #include <kern/thread.h>
+#include <mach/machine/thread_status.h>
 
 
 /* Macros to clear/set/test flags. */
@@ -97,8 +96,12 @@
 #define	ISSET(t, f)	((t) & (f))
 
 extern thread_t	port_name_to_thread(mach_port_name_t port_name);
+extern kern_return_t thread_getstatus(thread_t thread, int flavor, thread_state_t tstate, mach_msg_type_number_t *count);
 extern thread_t get_firstthread(task_t);
 
+#if defined (ppc)
+extern kern_return_t thread_setstatus(thread_t thread, int flavor, thread_state_t tstate, mach_msg_type_number_t count);
+#endif
 
 /*
  * sys-trace system call.
@@ -114,6 +117,15 @@ ptrace(p, uap, retval)
 	task_t		task;
 	thread_t	th_act;
 	struct uthread 	*ut;
+	int		*locr0;
+#if defined(ppc)
+	struct ppc_thread_state64 statep;
+#elif	defined(i386)
+	struct i386_saved_state statep;
+#else
+#error architecture not supported
+#endif
+	unsigned long state_count;
 	int tr_sigexc = 0;
 
 	AUDIT_ARG(cmd, uap->req);
@@ -261,16 +273,39 @@ ptrace(p, uap, retval)
 		th_act = (thread_t)get_firstthread(task);
 		if (th_act == THREAD_NULL)
 			goto errorLabel;
-
-		if (uap->addr != (user_addr_t)1) {
-#if defined(ppc)
-#define ALIGNED(addr,size)	(((unsigned)(addr)&((size)-1))==0)
-		        if (!ALIGNED((int)uap->addr, sizeof(int)))
-			        return (ERESTART);
-#undef 	ALIGNED
+		ut = (uthread_t)get_bsdthread_info(th_act);
+		locr0 = ut->uu_ar0;
+#if defined(i386)
+		state_count = i386_NEW_THREAD_STATE_COUNT;
+		if (thread_getstatus(th_act, i386_NEW_THREAD_STATE, &statep, &state_count)  != KERN_SUCCESS) {
+			goto errorLabel;
+		}	
+#elif defined(ppc)
+		state_count = PPC_THREAD_STATE64_COUNT;
+		if (thread_getstatus(th_act, PPC_THREAD_STATE64, (thread_state_t)&statep, (mach_msg_type_number_t *)&state_count)  != KERN_SUCCESS) {
+			goto errorLabel;
+		}	
+#else
+#error architecture not supported
 #endif
-		        thread_setentrypoint(th_act, uap->addr);
-		}
+		if (uap->addr != (user_addr_t)1) {
+#if	defined(i386)
+			locr0[PC] = (int)uap->addr;
+#elif	defined(ppc)
+#define ALIGNED(addr,size)	(((unsigned)(addr)&((size)-1))==0)
+		if (!ALIGNED((int)uap->addr, sizeof(int)))
+			return (ERESTART);
+
+		statep.srr0 = uap->addr;
+		state_count = PPC_THREAD_STATE64_COUNT;
+		if (thread_setstatus(th_act, PPC_THREAD_STATE64, (thread_state_t)&statep, state_count)  != KERN_SUCCESS) {
+			goto errorLabel;
+		}	
+#undef 	ALIGNED
+#else
+#error architecture not implemented!
+#endif
+		} /* uap->addr != (user_addr_t)1 */
 
 		if ((unsigned)uap->data >= NSIG)
 			goto errorLabel;
@@ -278,18 +313,37 @@ ptrace(p, uap, retval)
 		if (uap->data != 0) {
 			psignal_lock(t, uap->data, 0);
                 }
+#if defined(ppc)
+		state_count = PPC_THREAD_STATE64_COUNT;
+		if (thread_getstatus(th_act, PPC_THREAD_STATE64, (thread_state_t)&statep, (mach_msg_type_number_t *)&state_count)  != KERN_SUCCESS) {
+			goto errorLabel;
+		}	
+#endif
+
+#define MSR_SE_BIT	21
 
 		if (uap->req == PT_STEP) {
-		        /*
-			 * set trace bit
-			 */
-		        thread_setsinglestep(th_act, 1);
-		} else {
-		        /*
-			 * clear trace bit if on
-			 */
-		        thread_setsinglestep(th_act, 0);
+#if	defined(i386)
+			locr0[PS] |= PSL_T;
+#elif 	defined(ppc)
+			statep.srr1 |= MASK(MSR_SE);
+#else
+#error architecture not implemented!
+#endif
+		} /* uap->req == PT_STEP */
+		else {  /* PT_CONTINUE - clear trace bit if set */
+#if defined(i386)
+			locr0[PS] &= ~PSL_T;
+#elif defined(ppc)
+			statep.srr1 &= ~MASK(MSR_SE);
+#endif
 		}
+#if defined (ppc)
+		state_count = PPC_THREAD_STATE64_COUNT;
+		if (thread_setstatus(th_act, PPC_THREAD_STATE64, (thread_state_t)&statep, state_count)  != KERN_SUCCESS) {
+			goto errorLabel;
+		}	
+#endif
 	resume:
 		t->p_xstat = uap->data;
 		t->p_stat = SRUN;

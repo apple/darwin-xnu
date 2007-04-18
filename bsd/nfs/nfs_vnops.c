@@ -1,31 +1,29 @@
 /*
  * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
@@ -1039,10 +1037,8 @@ nfs_setattr(ap)
 {
 	vnode_t vp = ap->a_vp;
 	struct nfsnode *np = VTONFS(vp);
-	struct nfsmount *nmp;
 	struct vnode_attr *vap = ap->a_vap;
 	int error = 0;
-	int biosize;
 	u_quad_t tsize;
 	kauth_cred_t cred;
 	proc_t p;
@@ -1050,10 +1046,6 @@ nfs_setattr(ap)
 #ifndef nolint
 	tsize = (u_quad_t)0;
 #endif
-	nmp = VFSTONFS(vnode_mount(vp));
-	if (!nmp)
-		return (ENXIO);
-	biosize = nmp->nm_biosize;
 
 	/* Setting of flags is not supported. */
 	if (VATTR_IS_ACTIVE(vap, va_flags))
@@ -1115,9 +1107,10 @@ nfs_setattr(ap)
 				}
 			} else if (np->n_size > vap->va_data_size) { /* shrinking? */
 				daddr64_t obn, bn;
-				int neweofoff, mustwrite;
+				int biosize, neweofoff, mustwrite;
 				struct nfsbuf *bp;
 
+				biosize = vfs_statfs(vnode_mount(vp))->f_iosize;
 				obn = (np->n_size - 1) / biosize;
 				bn = vap->va_data_size / biosize; 
 				for ( ; obn >= bn; obn--) {
@@ -1779,7 +1772,7 @@ nfs_writerpc(
 	kauth_cred_t cred,
 	proc_t p,
 	int *iomode,
-	int *must_commit)
+	uint64_t *wverfp)
 {
 	register u_long *tl;
 	register caddr_t cp;
@@ -1789,7 +1782,7 @@ nfs_writerpc(
 	struct nfsmount *nmp;
 	int error = 0, len, tsiz, updatemtime = 0, wccpostattr = 0, rlen, commit;
 	int v3, committed = NFSV3WRITE_FILESYNC;
-	u_int64_t xid;
+	u_int64_t xid, wverf;
 	mount_t mp;
 
 #if DIAGNOSTIC
@@ -1801,7 +1794,6 @@ nfs_writerpc(
 	if (!nmp)
 		return (ENXIO);
 	v3 = NFS_ISV3(vp);
-	*must_commit = 0;
 	// LP64todo - fix this
 	tsiz = uio_uio_resid(uiop);
         if (((u_int64_t)uiop->uio_offset + (unsigned int)tsiz > 0xffffffff) && !v3) {
@@ -1871,15 +1863,14 @@ nfs_writerpc(
 				else if (committed == NFSV3WRITE_DATASYNC &&
 					commit == NFSV3WRITE_UNSTABLE)
 					committed = commit;
+			        fxdr_hyper(tl, &wverf);
+				if (wverfp)
+					*wverfp = wverf;
 				if ((nmp->nm_state & NFSSTA_HASWRITEVERF) == 0) {
-				    bcopy((caddr_t)tl, (caddr_t)nmp->nm_verf,
-					NFSX_V3WRITEVERF);
+				    nmp->nm_verf = wverf;
 				    nmp->nm_state |= NFSSTA_HASWRITEVERF;
-				} else if (bcmp((caddr_t)tl,
-				    (caddr_t)nmp->nm_verf, NFSX_V3WRITEVERF)) {
-				    *must_commit = 1;
-				    bcopy((caddr_t)tl, (caddr_t)nmp->nm_verf,
-					NFSX_V3WRITEVERF);
+				} else if (wverf != nmp->nm_verf) {
+				    nmp->nm_verf = wverf;
 				}
 			}
 		} else {
@@ -3713,8 +3704,8 @@ nfs_commit(vp, offset, count, cred, procp)
 	int error = 0, wccpostattr = 0;
 	struct timespec premtime = { 0, 0 };
 	mbuf_t mreq, mrep, md, mb, mb2;
-	u_int64_t xid;
-	
+	u_int64_t xid, wverf;
+
 	FSDBG(521, vp, offset, count, nmp->nm_state);
 	if (!nmp)
 		return (ENXIO);
@@ -3736,10 +3727,9 @@ nfs_commit(vp, offset, count, cred, procp)
 	}
 	if (!error) {
 		nfsm_dissect(tl, u_long *, NFSX_V3WRITEVERF);
-		if (bcmp((caddr_t)nmp->nm_verf, (caddr_t)tl,
-			 NFSX_V3WRITEVERF)) {
-			bcopy((caddr_t)tl, (caddr_t)nmp->nm_verf,
-				NFSX_V3WRITEVERF);
+		fxdr_hyper(tl, &wverf);
+		if (wverf != nmp->nm_verf) {
+			nmp->nm_verf = wverf;
 			error = NFSERR_STALEWRITEVERF;
 		}
 	}
@@ -3854,6 +3844,8 @@ nfs_flushcommits(vnode_t vp, proc_t p, int nowait)
 			error = nfs_buf_acquire(bp, NBAC_NOWAIT, 0, 0);
 			if (error)
 				continue;
+			if (ISSET(bp->nb_flags, NB_NEEDCOMMIT))
+				nfs_buf_check_write_verifier(np, bp);
 			if (((bp->nb_flags & (NB_DELWRI | NB_NEEDCOMMIT))
 				!= (NB_DELWRI | NB_NEEDCOMMIT))) {
 				nfs_buf_drop(bp);
@@ -3962,8 +3954,6 @@ nfs_flushcommits(vnode_t vp, proc_t p, int nowait)
 				break;
 		}
 	}
-	if (retv == NFSERR_STALEWRITEVERF)
-		nfs_clearcommit(vnode_mount(vp));
 
 	/*
 	 * Now, either mark the blocks I/O done or mark the
@@ -4102,6 +4092,8 @@ again:
 				nfs_buf_drop(bp);
 				continue;
 			}
+			if (ISSET(bp->nb_flags, NB_NEEDCOMMIT))
+				nfs_buf_check_write_verifier(np, bp);
 			if (!ISSET(bp->nb_flags, NB_DELWRI))
 				panic("nfs_flush: not dirty");
 			FSDBG(525, bp, passone, bp->nb_lflags, bp->nb_flags);
@@ -4757,9 +4749,9 @@ nfs_pagein(ap)
 				UPL_ABORT_ERROR | UPL_ABORT_FREE_ON_EMPTY);
 		return (ENXIO);
 	}
-	biosize = nmp->nm_biosize;
 	if ((nmp->nm_flag & NFSMNT_NFSV3) && !(nmp->nm_state & NFSSTA_GOTFSINFO))
-		nfs_fsinfo(nmp, vp, cred, p);
+		(void)nfs_fsinfo(nmp, vp, cred, p);
+	biosize = vfs_statfs(vnode_mount(vp))->f_iosize;
 
 	plinfo = ubc_upl_pageinfo(pl);
 	ubc_upl_map(pl, &ioaddr);
@@ -4863,7 +4855,7 @@ nfs_pageout(ap)
 	struct nfsbuf *bp;
 	struct nfsmount *nmp = VFSTONFS(vnode_mount(vp));
 	daddr64_t lbn;
-	int error = 0, iomode, must_commit;
+	int error = 0, iomode;
 	off_t off;
 	vm_offset_t ioaddr;
 	struct uio	auio;
@@ -4896,7 +4888,7 @@ nfs_pageout(ap)
 			ubc_upl_abort(pl, UPL_ABORT_DUMP_PAGES|UPL_ABORT_FREE_ON_EMPTY);
 		return (ENXIO);
 	}
-	biosize = nmp->nm_biosize;
+	biosize = vfs_statfs(vnode_mount(vp))->f_iosize;
 
 	/*
 	 * Check to see whether the buffer is incore.
@@ -5062,9 +5054,7 @@ nfs_pageout(ap)
 
 		/* NMODIFIED would be set here if doing unstable writes */
 		iomode = NFSV3WRITE_FILESYNC;
-		error = nfs_writerpc(vp, &auio, cred, p, &iomode, &must_commit);
-		if (must_commit)
-			nfs_clearcommit(vnode_mount(vp));
+		error = nfs_writerpc(vp, &auio, cred, p, &iomode, NULL);
 		vnode_writedone(vp);
 		if (error)
 			goto cleanup;
@@ -5153,11 +5143,12 @@ nfs_blktooff(ap)
 {
 	int biosize;
 	vnode_t vp = ap->a_vp;
-	struct nfsmount *nmp = VFSTONFS(vnode_mount(vp));
+	mount_t mp = vnode_mount(vp);
 
-	if (!nmp)
+	if (!mp)
 		return (ENXIO);
-	biosize = nmp->nm_biosize;
+
+	biosize = vfs_statfs(mp)->f_iosize;
 
 	*ap->a_offset = (off_t)(ap->a_lblkno * biosize);
 
@@ -5175,11 +5166,12 @@ nfs_offtoblk(ap)
 {
 	int biosize;
 	vnode_t vp = ap->a_vp;
-	struct nfsmount *nmp = VFSTONFS(vnode_mount(vp));
+	mount_t mp = vnode_mount(vp);
 
-	if (!nmp)
+	if (!mp)
 		return (ENXIO);
-	biosize = nmp->nm_biosize;
+
+	biosize = vfs_statfs(mp)->f_iosize;
 
 	*ap->a_lblkno = (daddr64_t)(ap->a_offset / biosize);
 

@@ -1,31 +1,29 @@
 /*
  * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*	$NetBSD: cd9660_util.c,v 1.8 1994/12/13 22:33:25 mycroft Exp $	*/
 
@@ -93,6 +91,7 @@
 #include <sys/dir.h>
 #include <sys/attr.h>
 #include <kern/assert.h>
+#include <architecture/byte_order.h>
 
 #include <isofs/cd9660/iso.h>
 #include <isofs/cd9660/cd9660_node.h>
@@ -163,10 +162,6 @@ isofncmp(u_char *fn, int fnlen, u_char *isofn, int isolen)
 /*
  * translate and compare a UCS-2 filename
  * Note: Version number plus ';' may be omitted.
- *
- * The name pointed to by "fn" is the search name, whose characters are
- * in native endian order.  The name "ucsfn" is the on-disk name, whose
- * characters are in big endian order.
  */
 
 int
@@ -182,7 +177,7 @@ ucsfncmp(u_int16_t *fn, int fnlen, u_int16_t *ucsfn, int ucslen)
 	while (--fnlen >= 0) {
 		if (--ucslen < 0)
 			return *fn;
-		if ((c = OSSwapBigToHostInt16(*ucsfn++)) == UCS_SEPARATOR2) {
+		if ((c = *ucsfn++) == UCS_SEPARATOR2) {
 			switch (*fn++) {
 			default:
 				return *--fn;
@@ -196,7 +191,7 @@ ucsfncmp(u_int16_t *fn, int fnlen, u_int16_t *ucsfn, int ucslen)
 					return -1;
 				}
 			}
-			for (j = 0; --ucslen >= 0; j = j * 10 + OSSwapBigToHostInt16(*ucsfn++) - '0');
+			for (j = 0; --ucslen >= 0; j = j * 10 + *ucsfn++ - '0');
 			return i - j;
 		}
 		if (c != *fn)
@@ -207,10 +202,10 @@ ucsfncmp(u_int16_t *fn, int fnlen, u_int16_t *ucsfn, int ucslen)
 		switch (*ucsfn) {
 		default:
 			return -1;
-		case OSSwapHostToBigConstInt16(UCS_SEPARATOR1):
-			if (ucsfn[1] != OSSwapHostToBigConstInt16(UCS_SEPARATOR2))
+		case UCS_SEPARATOR1:
+			if (ucsfn[1] != UCS_SEPARATOR2)
 				return -1;
-		case OSSwapHostToBigConstInt16(UCS_SEPARATOR2):
+		case UCS_SEPARATOR2:
 			return 0;
 		}
 	}
@@ -297,9 +292,9 @@ ucsfntrans(u_int16_t *infn, int infnlen, u_char *outfn, u_short *outfnlen,
 			/* strip file version number */
 			for (fnidx--; fnidx > 0; fnidx--) {
 				/* stop when ';' is found */
-				if (infn[fnidx] == OSSwapHostToBigConstInt16(UCS_SEPARATOR2)) {
+				if (infn[fnidx] == UCS_SEPARATOR2) {
 					/* drop dangling dot */
-					if (fnidx > 0 && infn[fnidx-1] == OSSwapHostToBigConstInt16(UCS_SEPARATOR1))
+					if (fnidx > 0 && infn[fnidx-1] == UCS_SEPARATOR1)
 						fnidx--;
 					break;
 				}

@@ -1,31 +1,29 @@
 /*
  * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -593,7 +591,6 @@ mach_msg_overwrite_trap(
 	mach_port_name_t	notify = args->notify;
 	mach_vm_address_t	rcv_msg_addr = args->rcv_msg;
         mach_msg_size_t		scatter_list_size = 0; /* NOT INITIALIZED - but not used in pactice */
-	mach_port_seqno_t temp_seqno = 0;
 
 	register mach_msg_header_t *hdr;
 	mach_msg_return_t  mr = MACH_MSG_SUCCESS;
@@ -1500,6 +1497,7 @@ mach_msg_overwrite_trap(
 
 	    slow_copyin:
 	    {
+		mach_port_seqno_t temp_seqno = 0;
 		register mach_port_name_t reply_name =
 			        (mach_port_name_t)hdr->msgh_local_port;
 
@@ -1592,6 +1590,7 @@ mach_msg_overwrite_trap(
 
 	    {
 		register ipc_port_t	reply_port;
+		mach_port_seqno_t	local_seqno;
 		spl_t s;
 
 		/*
@@ -1668,7 +1667,7 @@ mach_msg_overwrite_trap(
 		 * no threads blocked waiting to send.
 		 */
 		dest_port = reply_port;
-		temp_seqno = rcv_mqueue->imq_seqno++;
+		local_seqno = rcv_mqueue->imq_seqno++;
 		imq_unlock(rcv_mqueue);
 		splx(s);
 
@@ -1680,7 +1679,7 @@ mach_msg_overwrite_trap(
 		ip_check_unlock(reply_port);
 
 		if (option & MACH_RCV_TRAILER_MASK) {
-			trailer->msgh_seqno = temp_seqno;	
+			trailer->msgh_seqno = local_seqno;	
 			trailer->msgh_trailer_size = REQUESTED_TRAILER_SIZE(option);
 		}
 		/* copy out the kernel reply */
@@ -1765,7 +1764,6 @@ mach_msg_overwrite_trap(
 		/* LP64support - have to compute real size as it would be received */
 		reply_size = ipc_kmsg_copyout_size(kmsg, current_map()) +
 		             REQUESTED_TRAILER_SIZE(option);
-		temp_seqno = trailer->msgh_seqno;
 		if (rcv_size < reply_size) {
 			if (msg_receive_error(kmsg, msg_addr, option, temp_seqno,
 				        space) == MACH_RCV_INVALID_DATA) {

@@ -1,31 +1,29 @@
 /*
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -88,12 +86,10 @@ vm_map_t kalloc_map;
 vm_size_t kalloc_map_size = 16 * 1024 * 1024;
 vm_size_t kalloc_max;
 vm_size_t kalloc_max_prerounded;
-vm_size_t kalloc_kernmap_size;	/* size of kallocs that can come from kernel map */
 
 unsigned int kalloc_large_inuse;
 vm_size_t    kalloc_large_total;
 vm_size_t    kalloc_large_max;
-vm_size_t    kalloc_largest_allocated = 0;
 
 /*
  *	All allocations of size less than kalloc_max are rounded to the
@@ -108,8 +104,6 @@ vm_size_t    kalloc_largest_allocated = 0;
  *	It represents the first power of two for which no zone exists.
  *	kalloc_max_prerounded is the smallest allocation size, before
  *	rounding, for which no zone exists.
- *  Also if the allocation size is more than kalloc_kernmap_size 
- *  then allocate from kernel map rather than kalloc_map.
  */
 
 int first_k_zone = -1;
@@ -201,8 +195,6 @@ kalloc_init(
 	else
 		kalloc_max = PAGE_SIZE;
 	kalloc_max_prerounded = kalloc_max / 2 + 1;
-	/* size it to be more than 16 times kalloc_max (256k) for allocations from kernel map */
-	kalloc_kernmap_size = (kalloc_max * 16) + 1;
 
 	/*
 	 *	Allocate a zone for each size we are going to handle.
@@ -229,7 +221,6 @@ kalloc_canblock(
 {
 	register int zindex;
 	register vm_size_t allocsize;
-	vm_map_t alloc_map = VM_MAP_NULL;
 
 	/*
 	 * If size is too large for a zone, then use kmem_alloc.
@@ -244,16 +235,7 @@ kalloc_canblock(
 		if (!canblock) {
 		  return(0);
 		}
-
-		if (size >=  kalloc_kernmap_size) {
-			alloc_map = kernel_map;
-
-			if (size > kalloc_largest_allocated)
-			        kalloc_largest_allocated = size;
-		} else
-			alloc_map = kalloc_map;
-
-		if (kmem_alloc(alloc_map, (vm_offset_t *)&addr, size) != KERN_SUCCESS) 
+		if (kmem_alloc(kalloc_map, (vm_offset_t *)&addr, size) != KERN_SUCCESS)
 			addr = 0;
 
 		if (addr) {
@@ -305,7 +287,6 @@ krealloc(
 	register int zindex;
 	register vm_size_t allocsize;
 	void *naddr;
-	vm_map_t alloc_map = VM_MAP_NULL;
 
 	/* can only be used for increasing allocation size */
 
@@ -324,16 +305,11 @@ krealloc(
 	/* if old block was kmem_alloc'd, then use kmem_realloc if necessary */
 
 	if (old_size >= kalloc_max_prerounded) {
-		if (old_size >=  kalloc_kernmap_size) 
-			alloc_map = kernel_map;
-		else
-			alloc_map = kalloc_map;
-
 		old_size = round_page(old_size);
 		new_size = round_page(new_size);
 		if (new_size > old_size) {
 
-			if (KERN_SUCCESS != kmem_realloc(alloc_map, 
+			if (KERN_SUCCESS != kmem_realloc(kalloc_map, 
 			    (vm_offset_t)*addrp, old_size,
 			    (vm_offset_t *)&naddr, new_size)) {
 				panic("krealloc: kmem_realloc");
@@ -344,7 +320,7 @@ krealloc(
 			*addrp = (void *) naddr;
 
 			/* kmem_realloc() doesn't free old page range. */
-			kmem_free(alloc_map, (vm_offset_t)*addrp, old_size);
+			kmem_free(kalloc_map, (vm_offset_t)*addrp, old_size);
 
 			kalloc_large_total += (new_size - old_size);
 
@@ -374,11 +350,7 @@ krealloc(
 
 	simple_unlock(lock);
 	if (new_size >= kalloc_max_prerounded) {
-		if (new_size >=  kalloc_kernmap_size) 
-			alloc_map = kernel_map;
-		else
-			alloc_map = kalloc_map;
-		if (KERN_SUCCESS != kmem_alloc(alloc_map, 
+		if (KERN_SUCCESS != kmem_alloc(kalloc_map, 
 		    (vm_offset_t *)&naddr, new_size)) {
 			panic("krealloc: kmem_alloc");
 			simple_lock(lock);
@@ -453,38 +425,11 @@ kfree(
 {
 	register int zindex;
 	register vm_size_t freesize;
-	vm_map_t alloc_map = VM_MAP_NULL;
 
 	/* if size was too large for a zone, then use kmem_free */
 
 	if (size >= kalloc_max_prerounded) {
-	        if (size >=  kalloc_kernmap_size) {
-			alloc_map = kernel_map;
-
-			if (size > kalloc_largest_allocated)
-			        /*
-				 * work around double FREEs of small MALLOCs
-				 * this used to end up being a nop
-				 * since the pointer being freed from an
-				 * alloc backed by the zalloc world could
-				 * never show up in the kalloc_map... however,
-				 * the kernel_map is a different issue... since it
-				 * was released back into the zalloc pool, a pointer
-				 * would have gotten written over the 'size' that 
-				 * the MALLOC was retaining in the first 4 bytes of
-				 * the underlying allocation... that pointer ends up 
-				 * looking like a really big size on the 2nd FREE and
-				 * pushes the kfree into the kernel_map...  we
-				 * end up removing a ton of virutal space before we panic
-				 * this check causes us to ignore the kfree for a size
-				 * that must be 'bogus'... note that it might not be due
-				 * to the above scenario, but it would still be wrong and
-				 * cause serious damage.
-				 */
-			        return;
-		} else
-			alloc_map = kalloc_map;
-		kmem_free(alloc_map, (vm_offset_t)data, size);
+		kmem_free(kalloc_map, (vm_offset_t)data, size);
 
 		kalloc_large_total -= size;
 		kalloc_large_inuse--;

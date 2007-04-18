@@ -1,31 +1,29 @@
 /*
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -103,7 +101,7 @@ typedef natural_t	ipc_kobject_type_t;
 #define IKOT_HOST_SECURITY		17
 #define	IKOT_LEDGER				18
 #define IKOT_MASTER_DEVICE		19
-#define IKOT_TASK_NAME			20
+/* (unused)						20	*/
 #define IKOT_SUBSYSTEM			21
 #define IKOT_IO_DONE_QUEUE		22
 #define IKOT_SEMAPHORE			23
@@ -115,14 +113,11 @@ typedef natural_t	ipc_kobject_type_t;
 #define IKOT_IOKIT_CONNECT		29
 #define IKOT_IOKIT_OBJECT		30
 #define IKOT_UPL				31
-#define IKOT_MEM_OBJ_CONTROL		32
-/*
- * Add new entries here and adjust IKOT_UNKNOWN.
- * Please keep ipc/ipc_object.c:ikot_print_array up to date.
- */
-#define	IKOT_UNKNOWN			33	/* magic catchall	*/
-#define	IKOT_MAX_TYPE	(IKOT_UNKNOWN+1)	/* # of IKOT_ types	*/
+								/* << new entries here	*/
+#define	IKOT_UNKNOWN			32	/* magic catchall	*/
+#define	IKOT_MAX_TYPE			33	/* # of IKOT_ types	*/
 
+/* Please keep ipc/ipc_object.c:ikot_print_array up to date	*/
 
 #define is_ipc_kobject(ikot)	((ikot) != IKOT_NONE)
 

@@ -1,31 +1,29 @@
 /*
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  *	Copyright (c) 1990, 1996-1998 Apple Computer, Inc.
@@ -60,7 +58,6 @@
 #include <sys/malloc.h>
 #include <sys/semaphore.h>
 #include <sys/sysproto.h>
-#include <sys/proc_info.h>
 
 #include <bsm/audit_kernel.h>
 
@@ -190,10 +187,12 @@ psem_lock_init( void )
 {
 
     psx_sem_subsys_lck_grp_attr = lck_grp_attr_alloc_init();
+    lck_grp_attr_setstat(psx_sem_subsys_lck_grp_attr);
 
     psx_sem_subsys_lck_grp = lck_grp_alloc_init("posix shared memory", psx_sem_subsys_lck_grp_attr);
 
     psx_sem_subsys_lck_attr = lck_attr_alloc_init();
+    /* lck_attr_setdebug(psx_sem_subsys_lck_attr); */
     lck_mtx_init(& psx_sem_subsys_mutex, psx_sem_subsys_lck_grp, psx_sem_subsys_lck_attr);
 }
 
@@ -476,8 +475,6 @@ sem_open(struct proc *p, struct sem_open_args *uap, user_addr_t *retval)
 		pinfo->psem_mode = cmode;
 		pinfo->psem_uid = kauth_cred_getuid(kauth_cred_get());
 		pinfo->psem_gid = kauth_cred_get()->cr_gid;
-		bcopy(pnbuf, &pinfo->psem_name[0], PSEMNAMLEN);
-		pinfo->psem_name[PSEMNAMLEN]= 0;
 		PSEM_SUBSYS_UNLOCK();
    		kret = semaphore_create(kernel_task, &pinfo->psem_semobject,
                             SYNC_POLICY_FIFO, value);
@@ -1034,37 +1031,5 @@ psem_kqfilter(__unused struct fileproc *fp, __unused struct knote *kn,
 				__unused struct proc *p)
 {
 	return (ENOTSUP);
-}
-
-int
-fill_pseminfo(struct psemnode *pnode, struct psem_info * info)
-{
-	register struct pseminfo *pinfo;
-	struct stat *sb;
-
-	PSEM_SUBSYS_LOCK();
-	if ((pinfo = pnode->pinfo) == PSEMINFO_NULL){
-		PSEM_SUBSYS_UNLOCK();
-		return(EINVAL);
-	}
-
-#if 0
-	if ((pinfo->psem_flags & PSEM_ALLOCATED) != PSEM_ALLOCATED) {
-		PSEM_SUBSYS_UNLOCK();
-		return(EINVAL);
-	}
-#endif
-
-	sb = &info->psem_stat;
-	bzero(sb, sizeof(struct stat));
-
-    	sb->st_mode = pinfo->psem_mode;
-    	sb->st_uid = pinfo->psem_uid;
-    	sb->st_gid = pinfo->psem_gid;
-    	sb->st_size = pinfo->psem_usecount;
-	bcopy(&pinfo->psem_name[0], &info->psem_name[0], PSEMNAMLEN+1);
-
-	PSEM_SUBSYS_UNLOCK();
-	return(0);
 }
 

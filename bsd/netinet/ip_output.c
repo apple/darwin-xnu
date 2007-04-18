@@ -1,31 +1,29 @@
 /*
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1982, 1986, 1988, 1990, 1993
@@ -98,6 +96,7 @@
 #define DBG_FNC_IP_OUTPUT	NETDBG_CODE(DBG_NETIP, (1 << 8) | 1)
 #define DBG_FNC_IPSEC4_OUTPUT	NETDBG_CODE(DBG_NETIP, (2 << 8) | 1)
 
+#define	SWAP16(v) ((((v) & 0xff) << 8) | ((v) >> 8))
 
 #if IPSEC
 #include <netinet6/ipsec.h>
@@ -484,11 +483,6 @@ loopit:
 				
 				lck_mtx_unlock(ip_mutex);
 				ipf_ref();
-				
-				/* 4135317 - always pass network byte order to filter */
-				HTONS(ip->ip_len);
-				HTONS(ip->ip_off);
-				
 				TAILQ_FOREACH(filter, &ipv4_filters, ipf_link) {
 					if (seen == 0) {
 						if ((struct ipfilter *)inject_filter_ref == filter)
@@ -507,11 +501,6 @@ loopit:
 						}
 					}
 				}
-				
-				/* set back to host byte order */
-				NTOHS(ip->ip_len);
-				NTOHS(ip->ip_off);
-				
 				lck_mtx_lock(ip_mutex);
 				ipf_unref();
 				didfilter = 1;
@@ -625,11 +614,6 @@ injectit:
 		
 		lck_mtx_unlock(ip_mutex);
 		ipf_ref();
-		
-		/* 4135317 - always pass network byte order to filter */
-		HTONS(ip->ip_len);
-		HTONS(ip->ip_off);
-		
 		TAILQ_FOREACH(filter, &ipv4_filters, ipf_link) {
 			if (seen == 0) {
 				if ((struct ipfilter *)inject_filter_ref == filter)
@@ -648,11 +632,6 @@ injectit:
 				}
 			}
 		}
-		
-		/* set back to host byte order */
-		NTOHS(ip->ip_len);
-		NTOHS(ip->ip_off);
-		
 		ipf_unref();
 		lck_mtx_lock(ip_mutex);
 	}
@@ -792,7 +771,7 @@ injectit:
 #endif
 	/* Check that there wasn't a route change and src is still valid */
 
-	if (ro->ro_rt->generation_id != route_generation) {
+	if (ro->ro_rt && ro->ro_rt->generation_id != route_generation) {
 		if (ifa_foraddr(ip->ip_src.s_addr) == 0 && ((flags & (IP_ROUTETOIF | IP_FORWARDING)) == 0)) {
 		 	error = EADDRNOTAVAIL;
 			KERNEL_DEBUG(DBG_FNC_IPSEC4_OUTPUT | DBG_FUNC_END, 5,0,0,0,0);
@@ -830,11 +809,6 @@ injectit:
 		
 		lck_mtx_unlock(ip_mutex);
 		ipf_ref();
-		
-		/* 4135317 - always pass network byte order to filter */
-		HTONS(ip->ip_len);
-		HTONS(ip->ip_off);
-		
 		TAILQ_FOREACH(filter, &ipv4_filters, ipf_link) {
 			if (filter->ipf_filter.ipf_output) {
 				errno_t result;
@@ -850,11 +824,6 @@ injectit:
 				}
 			}
 		}
-		
-		/* set back to host byte order */
-		NTOHS(ip->ip_len);
-		NTOHS(ip->ip_off);
-		
 		ipf_unref();
 		lck_mtx_lock(ip_mutex);
 	}
@@ -1238,7 +1207,7 @@ pass:
 		 * them, there is no way for one to update all its
 		 * routes when the MTU is changed.
 		 */
-		if ((ro->ro_rt->rt_flags & (RTF_UP | RTF_HOST))
+		if (ro->ro_rt && (ro->ro_rt->rt_flags & (RTF_UP | RTF_HOST))
 		    && !(ro->ro_rt->rt_rmx.rmx_locks & RTV_MTU)
 		    && (ro->ro_rt->rt_rmx.rmx_mtu > ifp->if_mtu)) {
 			ro->ro_rt->rt_rmx.rmx_mtu = ifp->if_mtu;
@@ -1406,28 +1375,33 @@ bad:
 }
 
 void
-in_delayed_cksum_offset(struct mbuf *m, int ip_offset)
+in_delayed_cksum_offset(struct mbuf *m0, int ip_offset)
 {
 	struct ip *ip;
-	u_short csum, offset;
+	unsigned char buf[sizeof(struct ip)];
+	u_short csum, offset, ip_len;
+	struct mbuf *m = m0;
 	
-	while (ip_offset > m->m_len) {
+	while (ip_offset >= m->m_len) {
 		ip_offset -= m->m_len;
 		m = m->m_next;
-		if (m) {
-			printf("in_delayed_cksum_withoffset failed - ip_offset wasn't in the packet\n");
+		if (m == NULL) {
+			printf("in_delayed_cksum_offset failed - ip_offset wasn't in the packet\n");
 			return;
 		}
 	}
 	
+	/* Sometimes the IP header is not contiguous, yes this can happen! */
 	if (ip_offset + sizeof(struct ip) > m->m_len) {
+#if DEBUG		
 		printf("delayed m_pullup, m->len: %d  off: %d\n",
 			m->m_len, ip_offset);
-		/*
-		 * XXX
-		 * this shouldn't happen
-		 */
-		m = m_pullup(m, ip_offset + sizeof(struct ip));
+#endif
+		m_copydata(m, ip_offset, sizeof(struct ip), buf);
+		
+		ip = (struct ip *)buf;
+	} else {
+		ip = (struct ip*)(m->m_data + ip_offset);
 	}
 	
 	/* Gross */
@@ -1436,36 +1410,57 @@ in_delayed_cksum_offset(struct mbuf *m, int ip_offset)
 		m->m_data += ip_offset;
 	}
 	
-	ip = mtod(m, struct ip*);
 	offset = IP_VHL_HL(ip->ip_vhl) << 2 ;
-	csum = in_cksum_skip(m, ip->ip_len, offset);
-	if (m->m_pkthdr.csum_flags & CSUM_UDP && csum == 0)
+
+	/*
+	 * We could be in the context of an IP or interface filter; in the
+	 * former case, ip_len would be in host (correct) order while for
+	 * the latter it would be in network order.  Because of this, we
+	 * attempt to interpret the length field by comparing it against
+	 * the actual packet length.  If the comparison fails, byte swap
+	 * the length and check again.  If it still fails, then the packet
+	 * is bogus and we give up.
+	 */
+	ip_len = ip->ip_len;
+	if (ip_len != (m0->m_pkthdr.len - ip_offset)) {
+		ip_len = SWAP16(ip_len);
+		if (ip_len != (m0->m_pkthdr.len - ip_offset)) {
+			printf("in_delayed_cksum_offset: ip_len %d (%d) "
+			    "doesn't match actual length %d\n", ip->ip_len,
+			    ip_len, (m0->m_pkthdr.len - ip_offset));
+			return;
+		}
+	}
+
+	csum = in_cksum_skip(m, ip_len, offset);
+
+	if (m0->m_pkthdr.csum_flags & CSUM_UDP && csum == 0)
 		csum = 0xffff;
-	offset += m->m_pkthdr.csum_data & 0xFFFF;        /* checksum offset */
-	
+	offset += m0->m_pkthdr.csum_data & 0xFFFF;        /* checksum offset */
+
 	/* Gross */
 	if (ip_offset) {
 		if (M_LEADINGSPACE(m) < ip_offset)
-			panic("in_delayed_cksum_withoffset - chain modified!\n");
+			panic("in_delayed_cksum_offset - chain modified!\n");
 		m->m_len += ip_offset;
 		m->m_data -= ip_offset;
 	}
 
-	if (offset > ip->ip_len) /* bogus offset */
+	if (offset > ip_len) /* bogus offset */
 		return;
 
+	/* Insert the checksum in the existing chain */
 	if (offset + ip_offset + sizeof(u_short) > m->m_len) {
-		printf("delayed m_pullup, m->len: %d  off: %d  p: %d\n",
+		char tmp[2];
+		
+#if DEBUG
+		printf("delayed m_copyback, m->len: %d  off: %d  p: %d\n",
 		    m->m_len, offset + ip_offset, ip->ip_p);
-		/*
-		 * XXX
-		 * this shouldn't happen, but if it does, the
-		 * correct behavior may be to insert the checksum
-		 * in the existing chain instead of rearranging it.
-		 */
-		m = m_pullup(m, offset + ip_offset + sizeof(u_short));
-	}
-	*(u_short *)(m->m_data + offset + ip_offset) = csum;
+#endif
+		*(u_short *)tmp = csum;
+		m_copyback(m, offset + ip_offset, 2, tmp);
+	} else
+		*(u_short *)(m->m_data + offset + ip_offset) = csum;
 }
 
 void
@@ -1479,24 +1474,33 @@ in_cksum_offset(struct mbuf* m, size_t ip_offset)
 {
 	struct ip* ip = NULL;
 	int hlen = 0;
+	unsigned char buf[sizeof(struct ip)];
+	int swapped = 0;
 	
-	while (ip_offset > m->m_len) {
+	while (ip_offset >= m->m_len) {
 		ip_offset -= m->m_len;
 		m = m->m_next;
-		if (m) {
+		if (m == NULL) {
 			printf("in_cksum_offset failed - ip_offset wasn't in the packet\n");
 			return;
 		}
 	}
 	
+	/* Sometimes the IP header is not contiguous, yes this can happen! */
 	if (ip_offset + sizeof(struct ip) > m->m_len) {
+
+#if DEBUG
 		printf("in_cksum_offset - delayed m_pullup, m->len: %d  off: %d\n",
 			m->m_len, ip_offset);
-		/*
-		 * XXX
-		 * this shouldn't happen
-		 */
-		m = m_pullup(m, ip_offset + sizeof(struct ip));
+#endif	
+		m_copydata(m, ip_offset, sizeof(struct ip), buf);
+
+		ip = (struct ip *)buf;
+		ip->ip_sum = 0;
+		m_copyback(m, ip_offset + offsetof(struct ip, ip_sum), 2, (caddr_t)&ip->ip_sum);
+	} else {
+		ip = (struct ip*)(m->m_data + ip_offset);
+		ip->ip_sum = 0;
 	}
 	
 	/* Gross */
@@ -1505,23 +1509,56 @@ in_cksum_offset(struct mbuf* m, size_t ip_offset)
 		m->m_data += ip_offset;
 	}
 
-	ip = mtod(m, struct ip*);
-
 #ifdef _IP_VHL
 	hlen = IP_VHL_HL(ip->ip_vhl) << 2;
 #else
 	hlen = ip->ip_hl << 2;
 #endif
-	
+	/*
+	 * We could be in the context of an IP or interface filter; in the
+	 * former case, ip_len would be in host order while for the latter
+	 * it would be in network (correct) order.  Because of this, we
+	 * attempt to interpret the length field by comparing it against
+	 * the actual packet length.  If the comparison fails, byte swap
+	 * the length and check again.  If it still fails, then the packet
+	 * is bogus and we give up.
+	 */
+	if (ntohs(ip->ip_len) != (m->m_pkthdr.len - ip_offset)) {
+		ip->ip_len = SWAP16(ip->ip_len);
+		swapped = 1;
+		if (ntohs(ip->ip_len) != (m->m_pkthdr.len - ip_offset)) {
+			ip->ip_len = SWAP16(ip->ip_len);
+			printf("in_cksum_offset: ip_len %d (%d) "
+			    "doesn't match actual length %d\n",
+			    ip->ip_len, SWAP16(ip->ip_len),
+			    (m->m_pkthdr.len - ip_offset));
+			return;
+		}
+	}
+
 	ip->ip_sum = 0;
 	ip->ip_sum = in_cksum(m, hlen);
-	
+	if (swapped)
+		ip->ip_len = SWAP16(ip->ip_len);
+
 	/* Gross */
 	if (ip_offset) {
 		if (M_LEADINGSPACE(m) < ip_offset)
 			panic("in_cksum_offset - chain modified!\n");
 		m->m_len += ip_offset;
 		m->m_data -= ip_offset;
+	}
+
+	/* Insert the checksum in the existing chain if IP header not contiguous */
+	if (ip_offset + sizeof(struct ip) > m->m_len) {
+		char tmp[2];
+
+#if DEBUG
+		printf("in_cksum_offset m_copyback, m->len: %d  off: %d  p: %d\n",
+		    m->m_len, ip_offset + offsetof(struct ip, ip_sum), ip->ip_p);
+#endif
+		*(u_short *)tmp = ip->ip_sum;
+		m_copyback(m, ip_offset + offsetof(struct ip, ip_sum), 2, tmp);
 	}
 }
 

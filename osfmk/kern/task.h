@@ -1,31 +1,29 @@
 /*
  * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_FREE_COPYRIGHT@
@@ -99,7 +97,6 @@
 #include <mach/mach_param.h>
 #include <mach/task_info.h>
 #include <mach/exception_types.h>
-#include <machine/task.h>
 
 #include <kern/cpu_data.h>
 #include <kern/queue.h>
@@ -157,7 +154,6 @@ struct task {
 	/* IPC structures */
 	decl_mutex_data(,itk_lock_data)
 	struct ipc_port *itk_self;	/* not a right, doesn't hold ref */
-	struct ipc_port *itk_nself;	/* not a right, doesn't hold ref */
 	struct ipc_port *itk_sself;	/* a send right */
 	struct exception_action exc_actions[EXC_TYPES_COUNT];
 		 			/* a send right each valid element  */
@@ -179,8 +175,6 @@ struct task {
 	struct ipc_port *paged_ledger_port;
 	unsigned int	priv_flags;			/* privilege resource flags */
 #define VM_BACKING_STORE_PRIV	0x1
-
-	MACHINE_TASK
         
 	integer_t faults;              /* faults counter */
         integer_t pageins;             /* pageins counter */
@@ -273,7 +267,6 @@ extern kern_return_t	task_terminate_internal(
 extern kern_return_t	task_create_internal(
 							task_t		parent_task,
 							boolean_t	inherit_memory,
-							boolean_t	is_64bit,
 							task_t		*child_task);	/* OUT */
 
 extern kern_return_t	task_importance(
@@ -289,7 +282,6 @@ extern void		task_backing_store_privileged(
 
 extern void		task_working_set_disable(
 					task_t		task);
-
 
 /* Get number of activations in a task */
 extern int		get_task_numacts(
@@ -318,8 +310,6 @@ extern task_t	kernel_task;
 extern void		task_deallocate(
 					task_t		task);
 
-extern void		task_name_deallocate(
-					task_name_t		task_name);
 __END_DECLS
 
 #endif	/* _KERN_TASK_H_ */

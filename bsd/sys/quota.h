@@ -1,31 +1,29 @@
 /*
  * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1982, 1986, 1993
@@ -180,6 +178,10 @@ struct dqblk {
  * WARNING - keep in sync with struct dqblk
  */
 
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=natural
+#endif
+
 struct user_dqblk {
 	u_int64_t dqb_bhardlimit;	/* absolute limit on disk bytes alloc */
 	u_int64_t dqb_bsoftlimit;	/* preferred limit on disk bytes */
@@ -187,11 +189,15 @@ struct user_dqblk {
 	u_int32_t dqb_ihardlimit;	/* maximum # allocated inodes + 1 */
 	u_int32_t dqb_isoftlimit;	/* preferred inode limit */
 	u_int32_t dqb_curinodes;	/* current # allocated inodes */
-	user_time_t	  dqb_btime __attribute((aligned(8)));		/* time limit for excessive disk use */
+	user_time_t	  dqb_btime;		/* time limit for excessive disk use */
 	user_time_t	  dqb_itime;		/* time limit for excessive files */
 	u_int32_t dqb_id;		/* identifier (0 for empty entries) */
 	u_int32_t dqb_spare[4];		/* pad struct to power of 2 */
 };
+
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=reset
+#endif
 #endif  /* KERNEL_PRIVATE */
 
 #define INITQMAGICS { \
@@ -291,8 +297,8 @@ struct quotafile {
 struct dquot {
 	LIST_ENTRY(dquot) dq_hash;	/* hash list */
 	TAILQ_ENTRY(dquot) dq_freelist;	/* free list */
-	uint32_t  dq_cnt;		/* count of active references */
 	u_int16_t dq_flags;		/* flags, see below */
+	u_int16_t dq_cnt;		/* count of active references */
         u_int16_t dq_lflags;		/* protected by the quota list lock */
 	u_int16_t dq_type;		/* quota type of this dquot */
 	u_int32_t dq_id;		/* identifier this applies to */

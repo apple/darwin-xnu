@@ -1,31 +1,29 @@
 /*
  * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*	@(#)hfs_readwrite.c	1.0
  *
@@ -48,6 +46,8 @@
 #include <sys/vnode.h>
 #include <sys/uio.h>
 #include <sys/vfs_context.h>
+#include <sys/disk.h>
+#include <sys/sysctl.h>
 
 #include <miscfs/specfs/specdev.h>
 
@@ -82,6 +82,10 @@ extern int  hfs_setextendedsecurity(struct hfsmount *, int);
 static int  hfs_clonelink(struct vnode *, int, kauth_cred_t, struct proc *);
 static int  hfs_clonefile(struct vnode *, int, int, int);
 static int  hfs_clonesysfile(struct vnode *, int, int, int, kauth_cred_t, struct proc *);
+
+
+int flush_cache_on_write = 0;
+SYSCTL_INT (_kern, OID_AUTO, flush_cache_on_write, CTLFLAG_RW, &flush_cache_on_write, 0, "always flush the drive cache on writes to uncached files");
 
 
 /*****************************************************************************
@@ -472,6 +476,13 @@ sizeok:
 			cp->c_touch_modtime = TRUE;
 		}
 	}
+
+	// XXXdbg - testing for vivek and paul lambert
+	{
+	    if (flush_cache_on_write && ((ioflag & IO_NOCACHE) || vnode_isnocache(vp))) {
+		VNOP_IOCTL(hfsmp->hfs_devvp, DKIOCSYNCHRONIZECACHE, NULL, FWRITE, NULL);
+	    }
+	}
 	HFS_KNOTE(vp, NOTE_WRITE);
 
 ioerr_exit:
@@ -860,18 +871,6 @@ hfs_vnop_ioctl( struct vnop_ioctl_args /* {
 
 	switch (ap->a_command) {
 
-	case HFS_RESIZE_PROGRESS: {
-
-		vfsp = vfs_statfs(HFSTOVFS(hfsmp));
-		if (suser(cred, NULL) &&
-			kauth_cred_getuid(cred) != vfsp->f_owner) {
-			return (EACCES); /* must be owner of file system */
-		}
-		if (!vnode_isvroot(vp)) {
-			return (EINVAL);
-		}
-		return hfs_resize_progress(hfsmp, (u_int32_t *)ap->a_data);
-	}
 	case HFS_RESIZE_VOLUME: {
 		u_int64_t newsize;
 		u_int64_t cursize;
@@ -1850,6 +1849,10 @@ do_hfs_truncate(struct vnode *vp, off_t length, int flags, int skipsetsize, vfs_
 	if (length < 0)
 		return (EINVAL);
 
+	/* This should only happen with a corrupt filesystem */
+	if ((off_t)fp->ff_size < 0)
+		return (EINVAL);
+
 	if ((!ISHFSPLUS(VTOVCB(vp))) && (length > (off_t)MAXHFSFILESIZE))
 		return (EFBIG);
 
@@ -2569,8 +2572,7 @@ hfs_vnop_bwrite(struct vnop_bwrite_args *ap)
 	/* Trap B-Tree writes */
 	if ((VTOC(vp)->c_fileid == kHFSExtentsFileID) ||
 	    (VTOC(vp)->c_fileid == kHFSCatalogFileID) ||
-	    (VTOC(vp)->c_fileid == kHFSAttributesFileID) ||
-	    (vp == VTOHFS(vp)->hfc_filevp)) {
+	    (VTOC(vp)->c_fileid == kHFSAttributesFileID)) {
 
 		/* 
 		 * Swap and validate the node if it is in native byte order.
@@ -2839,10 +2841,10 @@ out:
 		lockflags = 0;
 	}
 
-	/* Push cnode's new extent data to disk. */
-	if (retval == 0) {
-		(void) hfs_update(vp, MNT_WAIT);
-	}
+	// See comment up above about calls to hfs_fsync()
+	//
+	//if (retval == 0)
+	//	retval = hfs_fsync(vp, MNT_WAIT, 0, p);
 
 	if (hfsmp->jnl) {
 		if (cp->c_cnid < kHFSFirstUserCatalogNodeID)
@@ -2936,7 +2938,7 @@ hfs_clonefile(struct vnode *vp, int blkstart, int blkcnt, int blksize)
 	filesize = VTOF(vp)->ff_blocks * blksize;  /* virtual file size */
 	writebase = blkstart * blksize;
 	copysize = blkcnt * blksize;
-	iosize = bufsize = MIN(copysize, 128 * 1024);
+	iosize = bufsize = MIN(copysize, 4096 * 16);
 	offset = 0;
 
 	if (kmem_alloc(kernel_map, (vm_offset_t *)&bufp, bufsize)) {

@@ -1,31 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * This file is derived from various .h and .c files from the zlib-1.0.4
@@ -57,7 +55,7 @@
    subject to change. Applications should only use zlib.h.
  */
 
-/* @(#) $Id: zlib.c,v 1.10.874.1 2005/06/24 01:47:11 lindak Exp $ */
+/* @(#) $Id: zlib.c,v 1.10 2004/07/29 19:17:20 lindak Exp $ */
 
 #ifndef _Z_UTIL_H
 #define _Z_UTIL_H
@@ -303,7 +301,7 @@ void   zcfree  OF((voidpf opaque, voidpf ptr));
    subject to change. Applications should only use zlib.h.
  */
 
-/* @(#) $Id: zlib.c,v 1.10.874.1 2005/06/24 01:47:11 lindak Exp $ */
+/* @(#) $Id: zlib.c,v 1.10 2004/07/29 19:17:20 lindak Exp $ */
 
 #ifndef _DEFLATE_H
 #define _DEFLATE_H
@@ -663,7 +661,7 @@ void _tr_stored_block OF((deflate_state *s, charf *buf, ulg stored_len,
  *
  */
 
-/* @(#) $Id: zlib.c,v 1.10.874.1 2005/06/24 01:47:11 lindak Exp $ */
+/* @(#) $Id: zlib.c,v 1.10 2004/07/29 19:17:20 lindak Exp $ */
 
 /* #include "deflate.h" */
 
@@ -2005,7 +2003,7 @@ local block_state deflate_slow(s, flush)
  *          Addison-Wesley, 1983. ISBN 0-201-06672-6.
  */
 
-/* @(#) $Id: zlib.c,v 1.10.874.1 2005/06/24 01:47:11 lindak Exp $ */
+/* @(#) $Id: zlib.c,v 1.10 2004/07/29 19:17:20 lindak Exp $ */
 
 /* #define GEN_TREES_H */
 
@@ -5550,7 +5548,7 @@ z_streamp z;
  * For conditions of distribution and use, see copyright notice in zlib.h 
  */
 
-/* @(#) $Id: zlib.c,v 1.10.874.1 2005/06/24 01:47:11 lindak Exp $ */
+/* @(#) $Id: zlib.c,v 1.10 2004/07/29 19:17:20 lindak Exp $ */
 
 /* #include "zutil.h" */
 
@@ -5780,7 +5778,7 @@ void  zcfree (opaque, ptr)
  * For conditions of distribution and use, see copyright notice in zlib.h 
  */
 
-/* @(#) $Id: zlib.c,v 1.10.874.1 2005/06/24 01:47:11 lindak Exp $ */
+/* @(#) $Id: zlib.c,v 1.10 2004/07/29 19:17:20 lindak Exp $ */
 
 /* #include "zlib.h" */
 

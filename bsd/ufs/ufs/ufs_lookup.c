@@ -1,31 +1,29 @@
 /*
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
@@ -86,9 +84,10 @@
 #include <ufs/ffs/ffs_extern.h>
 #if REV_ENDIAN_FS
 #include <ufs/ufs/ufs_byte_order.h>
+#include <architecture/byte_order.h>
 #endif /* REV_ENDIAN_FS */
 
-struct	nchstats ufs_nchstats;
+extern struct	nchstats nchstats;
 #if DIAGNOSTIC
 int	dirchk = 1;
 #else
@@ -168,6 +167,9 @@ ufs_lookup(ap)
 #endif /* REV_ENDIAN_FS */
 
 
+	if (cnp->cn_namelen > MAXNAMLEN)
+		return (ENAMETOOLONG);
+
 	cred = vfs_context_ucred(context);
 	bp = NULL;
 	slotoffset = -1;
@@ -236,7 +238,7 @@ ufs_lookup(ap)
 		    (error = ffs_blkatoff(vdp, (off_t)dp->i_offset, NULL, &bp)))
 		    	goto out;
 		numdirpasses = 2;
-		ufs_nchstats.ncs_2passes++;
+		nchstats.ncs_2passes++;
 	}
 	prevoff = dp->i_offset;
 	endsearch = roundup(dp->i_size, DIRBLKSIZ);
@@ -270,14 +272,11 @@ searchloop:
 		}
 		/*
 		 * Get pointer to next entry.
-		 * Full validation checks are slow, so we only check
-		 * enough to insure forward progress through the
-		 * directory. Complete checks can be run by patching
-		 * "dirchk" to be true.
+		 * Full validation checks are slow, but necessary.
 		 */
 		ep = (struct direct *)((char *)buf_dataptr(bp) + entryoffsetinblock);
 		if (ep->d_reclen == 0 ||
-		    dirchk && ufs_dirbadentry(vdp, ep, entryoffsetinblock)) {
+		    ufs_dirbadentry(vdp, ep, entryoffsetinblock)) {
 			int i;
 
 			ufs_dirbad(dp, dp->i_offset, "mangled entry");
@@ -442,7 +441,7 @@ notfound:
 
 found:
 	if (numdirpasses == 2)
-		ufs_nchstats.ncs_pass2++;
+		nchstats.ncs_pass2++;
 	/*
 	 * Check that directory length properly reflects presence
 	 * of this entry.
@@ -563,8 +562,10 @@ ufs_dirbad(ip, offset, how)
 	mp = ITOV(ip)->v_mount;
 	(void)printf("%s: bad dir ino %d at offset %d: %s\n",
 	    mp->mnt_vfsstat.f_mntonname, ip->i_number, offset, how);
+#if 0
 	if ((mp->mnt_vfsstat.f_flags & MNT_RDONLY) == 0)
 		panic("bad dir");
+#endif
 }
 
 /*
@@ -583,6 +584,9 @@ ufs_dirbadentry(dp, ep, entryoffsetinblock)
 {
 	register int i;
 	int namlen;
+	ino_t maxino = 0;
+	struct fs *fs;
+	struct ufsmount *ump = VFSTOUFS(dp->v_mount);
 
 #	if (BYTE_ORDER == LITTLE_ENDIAN)
 		if (dp->v_mount->mnt_maxsymlinklen > 0)
@@ -609,6 +613,14 @@ ufs_dirbadentry(dp, ep, entryoffsetinblock)
 	}
 	if (ep->d_name[i])
 		goto bad;
+
+	fs = ump->um_fs;
+	maxino = fs->fs_ncg * fs->fs_ipg;
+	if (ep->d_ino > maxino) {
+		printf("Third bad\n");
+		goto bad;
+	}
+
 	return (0);
 bad:
 	return (1);

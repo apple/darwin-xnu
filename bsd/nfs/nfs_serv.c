@@ -1,31 +1,29 @@
 /*
  * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
@@ -1173,7 +1171,11 @@ nfsrv_write(nfsd, slp, procp, mrq)
 			*tl++ = txdr_unsigned(stable);
 		else
 			*tl++ = txdr_unsigned(NFSV3WRITE_FILESYNC);
-		/* write verifier */
+		/*
+		 * Actually, there is no need to txdr these fields,
+		 * but it may make the values more human readable,
+		 * for debugging purposes.
+		 */
 		*tl++ = txdr_unsigned(boottime_sec());
 		*tl = txdr_unsigned(0);
 	} else {
@@ -1473,7 +1475,11 @@ loop1:
 			    nfsm_build(tl, u_long *, 4 * NFSX_UNSIGNED);
 			    *tl++ = txdr_unsigned(nfsd->nd_len);
 			    *tl++ = txdr_unsigned(swp->nd_stable);
-			    /* write verifier */
+			    /*
+			     * Actually, there is no need to txdr these fields,
+			     * but it may make the values more human readable,
+			     * for debugging purposes.
+			     */
 			    *tl++ = txdr_unsigned(boottime_sec());
 			    *tl = txdr_unsigned(0);
 			} else {
@@ -3727,7 +3733,6 @@ nfsrv_readdirplus(nfsd, slp, procp, mrq)
 	vnode_t vp, nvp;
 	struct flrep fl;
 	struct nfs_filehandle dnfh, *nfhp = (struct nfs_filehandle *)&fl.fl_fhsize;
-	u_long fhsize;
 	struct nfs_export *nx;
 	struct nfs_export_options *nxo;
 	uio_t auio;
@@ -3939,8 +3944,7 @@ again:
 			 */
 			fp = (struct nfs_fattr *)&fl.fl_fattr;
 			nfsm_srvfillattr(vap, fp);
-			fhsize = nfhp->nfh_len;
-			fl.fl_fhsize = txdr_unsigned(fhsize);
+			fl.fl_fhsize = txdr_unsigned(nfhp->nfh_len);
 			fl.fl_fhok = nfs_true;
 			fl.fl_postopok = nfs_true;
 			if (vnopflag & VNODE_READDIR_SEEKOFF32)
@@ -3985,7 +3989,7 @@ again:
 			/*
 			 * Now copy the flrep structure out.
 			 */
-			xfer = sizeof(struct flrep) - sizeof(fl.fl_nfh) + fhsize;
+			xfer = sizeof(struct flrep) - sizeof(fl.fl_nfh) + fl.fl_fhsize;
 			cp = (caddr_t)&fl;
 			while (xfer > 0) {
 				nfsm_clget;

@@ -1,31 +1,29 @@
 /*
  * Copyright (c) 1995-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code 
- * as defined in and that are subject to the Apple Public Source License 
- * Version 2.0 (the 'License'). You may not use this file except in 
- * compliance with the License.  The rights granted to you under the 
- * License may not be used to create, or enable the creation or 
- * redistribution of, unlawful or unlicensed copies of an Apple operating 
- * system, or to circumvent, violate, or enable the circumvention or 
- * violation of, any terms of an Apple operating system software license 
- * agreement.
- *
- * Please obtain a copy of the License at 
- * http://www.opensource.apple.com/apsl/ and read it before using this 
- * file.
- *
- * The Original Code and all software distributed under the License are 
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. 
- * Please see the License for the specific language governing rights and 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
- * @APPLE_LICENSE_OSREFERENCE_HEADER_END@
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #include <sys/param.h>
@@ -389,6 +387,28 @@ getattrlist_setupvattr(struct attrlist *alp, struct vnode_attr *vap, ssize_t *si
 		return(error);
 
 	return(0);
+}
+
+static int
+setattrlist_setfinderinfo(vnode_t vp, char *fndrinfo, struct vfs_context *ctx)
+{
+	uio_t	auio;
+	char	uio_buf[UIO_SIZEOF(1)];
+	int	error;
+
+	if ((auio = uio_createwithbuffer(1, 0, UIO_SYSSPACE, UIO_WRITE, uio_buf, sizeof(uio_buf))) == NULL) {
+		error = ENOMEM;
+	} else {
+		uio_addiov(auio, CAST_USER_ADDR_T(fndrinfo), 32);
+		error = vn_setxattr(vp, XATTR_FINDERINFO_NAME, auio, XATTR_NOSECURITY, ctx);
+		uio_free(auio);
+	}
+
+	if (error == 0 && need_fsevent(FSE_FINDER_INFO_CHANGED, vp)) {
+	    add_fsevent(FSE_FINDER_INFO_CHANGED, ctx, FSE_ARG_VNODE, vp, FSE_ARG_DONE);
+	}
+
+	return (error);
 }
 
 
@@ -1565,6 +1585,24 @@ setattrlist(struct proc *p, register struct setattrlist_args *uap, __unused regi
 	}
 
 	/*
+	 * When we're setting both the access mask and the finder info, then
+	 * check if were about to remove write access for the owner.  Since
+	 * vnode_setattr and vn_setxattr invoke two separate vnops, we need
+	 * to consider their ordering.
+	 *
+	 * If were about to remove write access for the owner we'll set the
+	 * Finder Info here before vnode_setattr.  Otherwise we'll set it
+	 * after vnode_setattr since it may be adding owner write access.
+	 */
+	if ((fndrinfo != NULL) && !(al.volattr & ATTR_VOL_INFO) &&
+	    (al.commonattr & ATTR_CMN_ACCESSMASK) && !(va.va_mode & S_IWUSR)) {
+		if ((error = setattrlist_setfinderinfo(vp, fndrinfo, &context)) != 0) {
+			goto out;
+		}
+		fndrinfo = NULL;  /* it was set here so skip setting below */
+	}
+
+	/*
 	 * Write the attributes if we have any.
 	 */
 	if ((va.va_active != 0LL) && ((error = vnode_setattr(vp, &va, &context)) != 0)) {
@@ -1584,26 +1622,8 @@ setattrlist(struct proc *p, register struct setattrlist_args *uap, __unused regi
 			} else {
 				/* XXX should never get here */
 			}
-		} else {
-			/* write Finder Info EA */
-			uio_t	auio;
-			char	uio_buf[UIO_SIZEOF(1)];
-
-			if ((auio = uio_createwithbuffer(1, 0, UIO_SYSSPACE, UIO_WRITE, uio_buf, sizeof(uio_buf))) == NULL) {
-				error = ENOMEM;
-			} else {
-				uio_addiov(auio, CAST_USER_ADDR_T(fndrinfo), 32);
-				error = vn_setxattr(vp, XATTR_FINDERINFO_NAME, auio, XATTR_NOSECURITY, &context);
-				uio_free(auio);
-			}
-
-			if (error == 0 && need_fsevent(FSE_FINDER_INFO_CHANGED, vp)) {
-			    add_fsevent(FSE_FINDER_INFO_CHANGED, ctx, FSE_ARG_VNODE, vp, FSE_ARG_DONE);
-			}
-
-			if (error != 0) {
-				goto out;
-			}
+		} else if ((error = setattrlist_setfinderinfo(vp, fndrinfo, &context)) != 0) {
+			goto out;
 		}
 	}
 
