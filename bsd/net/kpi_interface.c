@@ -1030,7 +1030,10 @@ errno_t ifnet_get_multicast_list(ifnet_t interface, ifmultiaddr_t **addresses)
 	}
 	
 	MALLOC(*addresses, ifmultiaddr_t*, sizeof(ifmultiaddr_t) * (cmax + 1), M_TEMP, M_NOWAIT);
-	if (*addresses == NULL) return ENOMEM;
+	if (*addresses == NULL) {
+		if (lock) ifnet_lock_done(interface);
+		return ENOMEM;
+	}
 	
 	LIST_FOREACH(addr, &interface->if_multiaddrs, ifma_link)
 	{

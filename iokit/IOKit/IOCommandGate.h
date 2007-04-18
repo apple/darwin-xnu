@@ -54,7 +54,7 @@ check if the hardware is active, if so it will add the request to a pending
 queue internal to the device or the device's family.  Otherwise if the hardware
 is inactive then this request can be acted upon immediately.
 <br><br>
-	CAUTION: The runAction and runCommand functions can not be called from an interrupt context.
+    CAUTION: The runAction and runCommand functions can not be called from an interrupt context. But attemptCommand can, though it may return an error
 
 */
 class IOCommandGate : public IOEventSource
@@ -116,6 +116,12 @@ compiler warning.  Defaults to zero, see $link IOEventSource::setAction.
     @result True if inherited classes initialise successfully. */
     virtual bool init(OSObject *owner, Action action = 0);
 
+#if !(defined(__ppc__) && defined(KPI_10_4_0_PPC_COMPAT))
+    // Superclass overrides
+    virtual void free();
+    virtual void setWorkLoop(IOWorkLoop *inWorkLoop);
+#endif
+
 /*! @function runCommand
     @abstract Single thread a command with the target work-loop.
     @discussion Client function that causes the current action to be called in
@@ -123,13 +129,12 @@ a single threaded manner.  Beware the work-loop's gate is recursive and command
 gates can cause direct or indirect re-entrancy.	 When the executing on a
 client's thread runCommand will sleep until the work-loop's gate opens for
 execution of client actions, the action is single threaded against all other
-work-loop event sources.
+work-loop event sources.  If the command is disabled the attempt to run a command will be stalled until enable is called.
     @param arg0 Parameter for action of command gate, defaults to 0.
     @param arg1 Parameter for action of command gate, defaults to 0.
     @param arg2 Parameter for action of command gate, defaults to 0.
     @param arg3 Parameter for action of command gate, defaults to 0.
-    @result kIOReturnSuccess if successful. kIOReturnNotPermitted if this
-event source is currently disabled, kIOReturnNoResources if no action available.
+    @result kIOReturnSuccess if successful. kIOReturnAborted if a disabled command gate is free()ed before being reenabled, kIOReturnNoResources if no action available.
 */
     virtual IOReturn runCommand(void *arg0 = 0, void *arg1 = 0,
 				void *arg2 = 0, void *arg3 = 0);
@@ -141,13 +146,13 @@ a single threaded manner.  Beware the work-loop's gate is recursive and command
 gates can cause direct or indirect re-entrancy.	 When the executing on a
 client's thread runAction will sleep until the work-loop's gate opens for
 execution of client actions, the action is single threaded against all other
-work-loop event sources.
+work-loop event sources.  If the command is disabled the attempt to run a command will be stalled until enable is called.
     @param action Pointer to function to be executed in work-loop context.
     @param arg0 Parameter for action parameter, defaults to 0.
     @param arg1 Parameter for action parameter, defaults to 0.
     @param arg2 Parameter for action parameter, defaults to 0.
     @param arg3 Parameter for action parameter, defaults to 0.
-    @result kIOReturnSuccess if successful. kIOReturnBadArgument if action is not defined, kIOReturnNotPermitted if this event source is currently disabled.
+    @result kIOReturnSuccess if successful. kIOReturnBadArgument if action is not defined, kIOReturnAborted if a disabled command gate is free()ed before being reenabled.
 */
     virtual IOReturn runAction(Action action,
 			       void *arg0 = 0, void *arg1 = 0,
@@ -156,9 +161,7 @@ work-loop event sources.
 /*! @function attemptCommand
     @abstract Single thread a command with the target work-loop.
     @discussion Client function that causes the current action to be called in
-a single threaded manner.  Beware the work-loop's gate is recursive and command
-gates can cause direct or indirect re-entrancy.	 When the executing on a
-client's thread attemptCommand will fail if the work-loop's gate is open.
+a single threaded manner.  When the executing on a client's thread attemptCommand will fail if the work-loop's gate is closed.
     @param arg0 Parameter for action of command gate, defaults to 0.
     @param arg1 Parameter for action of command gate, defaults to 0.
     @param arg2 Parameter for action of command gate, defaults to 0.
@@ -173,7 +176,7 @@ client's thread attemptCommand will fail if the work-loop's gate is open.
     @discussion Client function that causes the given action to be called in
 a single threaded manner.  Beware the work-loop's gate is recursive and command
 gates can cause direct or indirect re-entrancy.	 When the executing on a
-client's thread attemptCommand will fail if the work-loop's gate is open.
+client's thread attemptCommand will fail if the work-loop's gate is closed.
     @param action Pointer to function to be executed in work-loop context.
     @param arg0 Parameter for action parameter, defaults to 0.
     @param arg1 Parameter for action parameter, defaults to 0.
@@ -200,6 +203,18 @@ client's thread attemptCommand will fail if the work-loop's gate is open.
     @param event Pointer to an address.
     @param onlyOneThread true to only wake up at most one thread, false otherwise. */
     virtual void commandWakeup(void *event, bool oneThread = false);
+
+#if !(defined(__ppc__) && defined(KPI_10_4_0_PPC_COMPAT))
+/*! @function disable
+    @abstract Disable the command gate
+    @discussion When a command gate is disabled all future calls to runAction and runCommand will stall until the gate is enable()d later.  This can be used to block client threads when a system sleep is requested.  The IOWorkLoop thread itself will never stall, even when making runAction/runCommand calls.  This call must be made from a gated context, to clear potential race conditions.  */
+    virtual void disable();
+
+/*! @function enable
+    @abstract Enable command gate, this will unblock any blocked Commands and Actions.
+    @discussion  Enable the command gate.  The attemptAction/attemptCommand calls will now be enabled and can succeeed.  Stalled runCommand/runAction calls will be woken up. */
+    virtual void enable();
+#endif
 
 private:
     OSMetaClassDeclareReservedUnused(IOCommandGate, 0);

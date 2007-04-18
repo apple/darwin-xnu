@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -74,10 +74,12 @@
 .text
 .align 5, 0x90
 Lbcopy_scalar:
+	pushl	%ebp		/* set up a frame for backtraces */
+	movl	%esp,%ebp
         pushl   %esi
         pushl   %edi
-        movl    12(%esp),%esi
-        movl    16(%esp),%edi
+        movl    8(%ebp),%esi
+        movl    12(%ebp),%edi
 	jmp	1f
 /*
 ** These need to be 32 bytes from Lbcopy_scalar
@@ -85,13 +87,15 @@ Lbcopy_scalar:
 .align 5, 0x90
 Lmemcpy_scalar:
 Lmemmove_scalar:
+	pushl	%ebp		/* set up a frame for backtraces */
+	movl	%esp,%ebp
         pushl   %esi
         pushl   %edi
-        movl    12(%esp),%edi
-        movl    16(%esp),%esi
+        movl    8(%ebp),%edi
+        movl    12(%ebp),%esi
         movl    %edi,%eax
 1:
-        movl    20(%esp),%ecx
+        movl    16(%ebp),%ecx
         movl    %edi,%edx
         subl    %esi,%edx
         cmpl    %ecx,%edx       /* overlapping? */
@@ -107,6 +111,7 @@ Lmemmove_scalar:
         movsb
         popl    %edi
         popl    %esi
+	popl	%ebp
         ret
 2:
         addl    %ecx,%edi       /* copy backwards. */
@@ -126,7 +131,8 @@ Lmemmove_scalar:
         movsl
         popl    %edi
         popl    %esi
+	popl	%ebp
         cld
         ret
 
-	COMMPAGE_DESCRIPTOR(bcopy_scalar,_COMM_PAGE_BCOPY,0,0)
+	COMMPAGE_DESCRIPTOR(bcopy_scalar,_COMM_PAGE_BCOPY,0,kHasSSE2+kHasSupplementalSSE3)

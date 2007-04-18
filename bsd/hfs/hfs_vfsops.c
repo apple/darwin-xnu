@@ -146,7 +146,9 @@ static int hfs_unmount(struct mount *mp, int mntflags, vfs_context_t context);
 static int hfs_vfs_vget(struct mount *mp, ino64_t ino, struct vnode **vpp, vfs_context_t context);
 static int hfs_vptofh(struct vnode *vp, int *fhlenp, unsigned char *fhp, vfs_context_t context);
 
-static int hfs_reclaimspace(struct hfsmount *hfsmp, u_long startblk);
+static int hfs_reclaimspace(struct hfsmount *hfsmp, u_long startblk, u_long reclaimblks);
+static int hfs_overlapped_overflow_extents(struct hfsmount *hfsmp, u_int32_t startblk,
+                                           u_int32_t catblks, u_int32_t fileID, int rsrcfork);
 
 
 /*
@@ -1567,9 +1569,9 @@ hfs_sync_metadata(void *arg)
 	priIDSector = (daddr64_t)((vcb->hfsPlusIOPosOffset / sectorsize) +
 				  HFS_PRI_SECTOR(sectorsize));
 	retval = (int)buf_meta_bread(hfsmp->hfs_devvp, priIDSector, sectorsize, NOCRED, &bp);
-	if (retval != 0) {
-		panic("hfs: sync_metadata: can't read super-block?! (retval 0x%x, priIDSector)\n",
-			  retval, priIDSector);
+	if ((retval != 0) && (retval != ENXIO)) {
+		printf("hfs_sync_metadata: can't read volume header at %d! (retval 0x%x)\n",
+			priIDSector, retval);
 	}
 
 	if (retval == 0 && ((buf_flags(bp) & (B_DELWRI | B_LOCKED)) == B_DELWRI)) {
@@ -1771,7 +1773,7 @@ hfs_fhtovp(struct mount *mp, int fhlen, unsigned char *fhp, struct vnode **vpp, 
 	if (fhlen < sizeof(struct hfsfid))
 		return (EINVAL);
 
-	result = hfs_vget(VFSTOHFS(mp), hfsfhp->hfsfid_cnid, &nvp, 0);
+	result = hfs_vget(VFSTOHFS(mp), ntohl(hfsfhp->hfsfid_cnid), &nvp, 0);
 	if (result) {
 		if (result == ENOENT)
 			result = ESTALE;
@@ -1789,7 +1791,7 @@ hfs_fhtovp(struct mount *mp, int fhlen, unsigned char *fhp, struct vnode **vpp, 
 	 * error prone. Future, would be change the "wrap bit" to a unique
 	 * wrap number and use that for generation number. For now do this.
 	 */  
-	if ((hfsfhp->hfsfid_gen < VTOC(nvp)->c_itime)) {
+	if ((ntohl(hfsfhp->hfsfid_gen) < VTOC(nvp)->c_itime)) {
 		hfs_unlock(VTOC(nvp));
 		vnode_put(nvp);
 		return (ESTALE);
@@ -1819,8 +1821,8 @@ hfs_vptofh(struct vnode *vp, int *fhlenp, unsigned char *fhp, vfs_context_t cont
 
 	cp = VTOC(vp);
 	hfsfhp = (struct hfsfid *)fhp;
-	hfsfhp->hfsfid_cnid = cp->c_fileid;
-	hfsfhp->hfsfid_gen = cp->c_itime;
+	hfsfhp->hfsfid_cnid = htonl(cp->c_fileid);
+	hfsfhp->hfsfid_gen = htonl(cp->c_itime);
 	*fhlenp = sizeof(struct hfsfid);
 	
 	return (0);
@@ -1851,10 +1853,7 @@ hfs_init(__unused struct vfsconf *vfsp)
 	hfs_group_attr   = lck_grp_attr_alloc_init();
 	hfs_mutex_group  = lck_grp_alloc_init("hfs-mutex", hfs_group_attr);
 	hfs_rwlock_group = lck_grp_alloc_init("hfs-rwlock", hfs_group_attr);
-
-	/* Turn on lock debugging */
-	//lck_attr_setdebug(hfs_lock_attr);
-
+	
 
 	return (0);
 }
@@ -2027,6 +2026,16 @@ hfs_sysctl(int *name, __unused u_int namelen, user_addr_t oldp, size_t *oldlenp,
 
 		hfs_global_exclusive_lock_acquire(hfsmp);
 		
+		/*
+		 * Flush all dirty metadata buffers.
+		 */
+		buf_flushdirtyblks(hfsmp->hfs_devvp, MNT_WAIT, 0, "hfs_sysctl");
+		buf_flushdirtyblks(hfsmp->hfs_extents_vp, MNT_WAIT, 0, "hfs_sysctl");
+		buf_flushdirtyblks(hfsmp->hfs_catalog_vp, MNT_WAIT, 0, "hfs_sysctl");
+		buf_flushdirtyblks(hfsmp->hfs_allocation_vp, MNT_WAIT, 0, "hfs_sysctl");
+		if (hfsmp->hfs_attribute_vp)
+			buf_flushdirtyblks(hfsmp->hfs_attribute_vp, MNT_WAIT, 0, "hfs_sysctl");
+
 		HFSTOVCB(hfsmp)->vcbJinfoBlock = name[1];
 		HFSTOVCB(hfsmp)->vcbAtrb |= kHFSVolumeJournaledMask;
 		hfsmp->jvp = jvp;
@@ -2227,11 +2236,6 @@ hfs_vget(struct hfsmount *hfsmp, cnid_t cnid, struct vnode **vpp, int skiplock)
 		    (bcmp(cndesc.cd_nameptr, HFS_INODE_PREFIX, HFS_INODE_PREFIX_LEN) == 0)) {
 			linkref = strtoul((const char*)&cndesc.cd_nameptr[HFS_INODE_PREFIX_LEN], NULL, 10);
 			cnattr.ca_rdev = linkref;
-
-			// patch up the parentcnid
-			if (cnattr.ca_attrblks != 0) {
-			    cndesc.cd_parentcnid = cnattr.ca_attrblks;
-			}
 		}
 	}
 
@@ -3018,7 +3022,6 @@ __private_extern__
 int
 hfs_truncatefs(struct hfsmount *hfsmp, u_int64_t newsize, __unused vfs_context_t context)
 {
-	struct vnode* rvp = NULL;
 	struct  buf *bp = NULL;
 	u_int64_t oldsize;
 	u_int32_t newblkcnt;
@@ -3027,20 +3030,22 @@ hfs_truncatefs(struct hfsmount *hfsmp, u_int64_t newsize, __unused vfs_context_t
 	int transaction_begun = 0;
 	int error;
 
-	/*
-	 * Grab the root vnode to serialize with another hfs_truncatefs call.
-	 */
-	error = hfs_vget(hfsmp, kHFSRootFolderID, &rvp, 0);
-	if (error) {
-		return (error);
+	
+	lck_mtx_lock(&hfsmp->hfs_mutex);
+	if (hfsmp->hfs_flags & HFS_RESIZE_IN_PROGRESS) {
+		lck_mtx_unlock(&hfsmp->hfs_mutex);
+		return (EALREADY);
 	}
+	hfsmp->hfs_flags |= HFS_RESIZE_IN_PROGRESS;
+	hfsmp->hfs_resize_filesmoved = 0;
+	hfsmp->hfs_resize_totalfiles = 0;
+	lck_mtx_unlock(&hfsmp->hfs_mutex);
+
 	/*
-	 * - HFS Plus file systems only. 
-	 * - Journaling must be enabled.
+	 * - Journaled HFS Plus volumes only.
 	 * - No embedded volumes.
 	 */
-	if ((hfsmp->hfs_flags & HFS_STANDARD) ||
-	    (hfsmp->jnl == NULL) ||
+	if ((hfsmp->jnl == NULL) ||
 	    (hfsmp->hfsPlusIOPosOffset != 0)) {
 		error = EPERM;
 		goto out;
@@ -3057,13 +3062,12 @@ hfs_truncatefs(struct hfsmount *hfsmp, u_int64_t newsize, __unused vfs_context_t
 		goto out;
 	}
 	/* Make sure there's enough space to work with. */
-	if (reclaimblks > (hfsmp->freeBlocks / 4)) {
+	if (reclaimblks >= hfs_freeblks(hfsmp, 1)) {
 		error = ENOSPC;
 		goto out;
 	}
-
-	printf("hfs_truncatefs: shrinking %s by %d blocks out of %d\n",
-	       hfsmp->vcbVN, reclaimblks, hfsmp->totalBlocks);
+	/* Start with a clean journal. */
+	journal_flush(hfsmp->jnl);
 
 	if (hfs_start_transaction(hfsmp) != 0) {
 		error = EINVAL;
@@ -3083,7 +3087,7 @@ hfs_truncatefs(struct hfsmount *hfsmp, u_int64_t newsize, __unused vfs_context_t
 		transaction_begun = 0;
 
 		/* Attempt to reclaim some space. */ 
-		if (hfs_reclaimspace(hfsmp, newblkcnt) != 0) {
+		if (hfs_reclaimspace(hfsmp, newblkcnt, reclaimblks) != 0) {
 			printf("hfs_truncatefs: couldn't reclaim space on %s\n", hfsmp->vcbVN);
 			error = ENOSPC;
 			goto out;
@@ -3097,7 +3101,7 @@ hfs_truncatefs(struct hfsmount *hfsmp, u_int64_t newsize, __unused vfs_context_t
 		/* Check if we're clear now. */
 		if (hfs_isallocated(hfsmp, newblkcnt, reclaimblks - 1)) {
 			printf("hfs_truncatefs: didn't reclaim enough space on %s\n", hfsmp->vcbVN);
-			error = ENOSPC;
+			error = EAGAIN;  /* tell client to try again */
 			goto out;
 		}
 	}
@@ -3126,20 +3130,25 @@ hfs_truncatefs(struct hfsmount *hfsmp, u_int64_t newsize, __unused vfs_context_t
 
 	/*
 	 * Invalidate the existing alternate volume header.
+	 *
+	 * Don't do this as a transaction (don't call journal_modify_block)
+	 * since this block will be outside of the truncated file system!
 	 */
 	if (hfsmp->hfs_alt_id_sector) {
 		if (buf_meta_bread(hfsmp->hfs_devvp, hfsmp->hfs_alt_id_sector,
 		                   hfsmp->hfs_phys_block_size, NOCRED, &bp) == 0) {
-			journal_modify_block_start(hfsmp->jnl, bp);
 	
 			bzero((void*)((char *)buf_dataptr(bp) + HFS_ALT_OFFSET(hfsmp->hfs_phys_block_size)), kMDBSize);
-	
-			journal_modify_block_end(hfsmp->jnl, bp);
+			(void) VNOP_BWRITE(bp);
 		} else if (bp) {
 			buf_brelse(bp);
 		}
 		bp = NULL;
 	}
+
+	/* Log successful shrinking. */
+	printf("hfs_truncatefs: shrank \"%s\" to %d blocks (was %d blocks)\n",
+	       hfsmp->vcbVN, newblkcnt, hfsmp->totalBlocks);
 
 	/*
 	 * Adjust file system variables and flush them to disk.
@@ -3158,54 +3167,90 @@ out:
 	}
 	if (transaction_begun) {
 		hfs_end_transaction(hfsmp);
+		journal_flush(hfsmp->jnl);
 	}
-	if (rvp) {
-		hfs_unlock(VTOC(rvp));
-		vnode_put(rvp);
-	}
+
+	lck_mtx_lock(&hfsmp->hfs_mutex);
+	hfsmp->hfs_flags &= ~HFS_RESIZE_IN_PROGRESS;
+	lck_mtx_unlock(&hfsmp->hfs_mutex);
+
 	return (error);
 }
+
 
 /*
  * Reclaim space at the end of a file system.
  */
 static int
-hfs_reclaimspace(struct hfsmount *hfsmp, u_long startblk)
+hfs_reclaimspace(struct hfsmount *hfsmp, u_long startblk, u_long reclaimblks)
 {
 	struct vnode *vp = NULL;
 	FCB *fcb;
 	struct BTreeIterator * iterator = NULL;
 	struct FSBufferDescriptor btdata;
 	struct HFSPlusCatalogFile filerec;
+	struct filefork *fp;
 	u_int32_t  saved_next_allocation;
 	cnid_t * cnidbufp;
 	size_t cnidbufsize;
-	int filecnt;
+	int filecnt = 0;
 	int maxfilecnt;
 	u_long block;
+	u_long datablks;
+	u_long rsrcblks;
+	u_long blkstomove = 0;
 	int lockflags;
 	int i;
 	int error;
+	int lastprogress = 0;
 
-	/* 
-	 * Check if Attributes file overlaps.
-	 */
+
+	/* Check if Attributes file overlaps reclaim area. */
 	if (hfsmp->hfs_attribute_vp) {
-		struct filefork *fp;
-	
 		fp = VTOF(hfsmp->hfs_attribute_vp);
+		datablks = 0;
 		for (i = 0; i < kHFSPlusExtentDensity; ++i) {
-			block = fp->ff_extents[i].startBlock +
-				fp->ff_extents[i].blockCount;
+			if (fp->ff_extents[i].blockCount == 0) {
+				break;
+			}
+			datablks += fp->ff_extents[i].blockCount;
+			block = fp->ff_extents[i].startBlock + fp->ff_extents[i].blockCount;
 			if (block >= startblk) {
 				printf("hfs_reclaimspace: Attributes file can't move\n");
 				return (EPERM);
 			}
 		}
+		if ((i == kHFSPlusExtentDensity) && (fp->ff_blocks > datablks)) {
+			if (hfs_overlapped_overflow_extents(hfsmp, startblk, datablks, kHFSAttributesFileID, 0)) {
+				printf("hfs_reclaimspace: Attributes file can't move\n");
+				return (EPERM);
+			}
+		}
+	}
+	/* Check if Catalog file overlaps reclaim area. */
+	fp = VTOF(hfsmp->hfs_catalog_vp);
+	datablks = 0;
+	for (i = 0; i < kHFSPlusExtentDensity; ++i) {
+		if (fp->ff_extents[i].blockCount == 0) {
+			break;
+		}
+		datablks += fp->ff_extents[i].blockCount;
+		block = fp->ff_extents[i].startBlock + fp->ff_extents[i].blockCount;
+		if (block >= startblk) {
+			printf("hfs_reclaimspace: Catalog file can't move\n");
+			return (EPERM);
+		}
+	}
+	if ((i == kHFSPlusExtentDensity) && (fp->ff_blocks > datablks)) {
+		if (hfs_overlapped_overflow_extents(hfsmp, startblk, datablks, kHFSCatalogFileID, 0)) {
+			printf("hfs_reclaimspace: Catalog file can't move\n");
+			return (EPERM);
+		}
 	}
 
-	/* For now we'll move a maximum of 16,384 files. */
-	maxfilecnt = MIN(hfsmp->hfs_filecount, 16384);
+	/* For now move a maximum of 250,000 files. */
+	maxfilecnt = MIN(hfsmp->hfs_filecount, 250000);
+	maxfilecnt = MIN((u_long)maxfilecnt, reclaimblks);
 	cnidbufsize = maxfilecnt * sizeof(cnid_t);
 	if (kmem_alloc(kernel_map, (vm_offset_t *)&cnidbufp, cnidbufsize)) {
 		return (ENOMEM);
@@ -3225,14 +3270,13 @@ hfs_reclaimspace(struct hfsmount *hfsmp, u_long startblk)
 	btdata.itemSize = sizeof(filerec);
 	btdata.itemCount = 1;
 
-	/* Keep the Catalog file locked during iteration. */
-	lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_SHARED_LOCK);
+	/* Keep the Catalog and extents files locked during iteration. */
+	lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG | SFL_EXTENTS, HFS_SHARED_LOCK);
+
 	error = BTIterateRecord(fcb, kBTreeFirstRecord, iterator, NULL, NULL);
 	if (error) {
-		hfs_systemfile_unlock(hfsmp, lockflags);
-		goto out;
+		goto end_iteration;
 	}
-
 	/*
 	 * Iterate over all the catalog records looking for files
 	 * that overlap into the space we're trying to free up.
@@ -3240,41 +3284,99 @@ hfs_reclaimspace(struct hfsmount *hfsmp, u_long startblk)
 	for (filecnt = 0; filecnt < maxfilecnt; ) {
 		error = BTIterateRecord(fcb, kBTreeNextRecord, iterator, &btdata, NULL);
 		if (error) {
-			if (error == btNotFound)
-				error = 0;
+			if (error == fsBTRecordNotFoundErr || error == fsBTEndOfIterationErr) {
+				error = 0;				
+			}
 			break;
 		}
-		if (filerec.recordType != kHFSPlusFileRecord ||
-		    filerec.fileID == hfsmp->hfs_jnlfileid)
+		if (filerec.recordType != kHFSPlusFileRecord) {
 			continue;
+		}
+		datablks = rsrcblks = 0;
 		/* 
 		 * Check if either fork overlaps target space.
 		 */
 		for (i = 0; i < kHFSPlusExtentDensity; ++i) {
-			block = filerec.dataFork.extents[i].startBlock +
-			        filerec.dataFork.extents[i].blockCount;
-			if (block >= startblk) {
-				if (filerec.fileID == hfsmp->hfs_jnlfileid) {
-					printf("hfs_reclaimspace: cannot move active journal\n");
-					error = EPERM;
+			if (filerec.dataFork.extents[i].blockCount != 0) {
+				datablks += filerec.dataFork.extents[i].blockCount;
+				block = filerec.dataFork.extents[i].startBlock +
+						filerec.dataFork.extents[i].blockCount;
+				if (block >= startblk) {
+					if ((filerec.fileID == hfsmp->hfs_jnlfileid) ||
+						(filerec.fileID == hfsmp->hfs_jnlinfoblkid)) {
+						printf("hfs_reclaimspace: cannot move active journal\n");
+						error = EPERM;
+						goto end_iteration;
+					}
+					cnidbufp[filecnt++] = filerec.fileID;
+					blkstomove += filerec.dataFork.totalBlocks;
 					break;
 				}
-				cnidbufp[filecnt++] = filerec.fileID;
-				break;
 			}
-			block = filerec.resourceFork.extents[i].startBlock +
-			        filerec.resourceFork.extents[i].blockCount;
-			if (block >= startblk) {
-				cnidbufp[filecnt++] = filerec.fileID;
-				break;
+			if (filerec.resourceFork.extents[i].blockCount != 0) {
+				rsrcblks += filerec.resourceFork.extents[i].blockCount;
+				block = filerec.resourceFork.extents[i].startBlock +
+						filerec.resourceFork.extents[i].blockCount;
+				if (block >= startblk) {
+					cnidbufp[filecnt++] = filerec.fileID;
+					blkstomove += filerec.resourceFork.totalBlocks;
+					break;
+				}
 			}
 		}
+		/*
+		 * Check for any overflow extents that overlap.
+		 */
+		if (i == kHFSPlusExtentDensity) {
+			if (filerec.dataFork.totalBlocks > datablks) {
+				if (hfs_overlapped_overflow_extents(hfsmp, startblk, datablks, filerec.fileID, 0)) {
+					cnidbufp[filecnt++] = filerec.fileID;
+					blkstomove += filerec.dataFork.totalBlocks;
+				}
+			} else if (filerec.resourceFork.totalBlocks > rsrcblks) {
+				if (hfs_overlapped_overflow_extents(hfsmp, startblk, rsrcblks, filerec.fileID, 1)) {
+					cnidbufp[filecnt++] = filerec.fileID;
+					blkstomove += filerec.resourceFork.totalBlocks;
+				}
+			}
+		}
+	}
+
+end_iteration:
+	if (filecnt == 0) {
+		error = ENOSPC;
 	}
 	/* All done with catalog. */
 	hfs_systemfile_unlock(hfsmp, lockflags);
 	if (error)
 		goto out;
 
+	/*
+	 * Double check space requirements to make sure
+	 * there is enough space to relocate any files
+	 * that reside in the reclaim area.
+	 *
+	 *                                          Blocks To Move --------------
+	 *                                                            |    |    |
+	 *                                                            V    V    V
+	 * ------------------------------------------------------------------------
+	 * |                                                        | /   ///  // |
+	 * |                                                        | /   ///  // |
+	 * |                                                        | /   ///  // |
+	 * ------------------------------------------------------------------------
+	 *
+	 * <------------------- New Total Blocks ------------------><-- Reclaim -->
+	 *
+	 * <------------------------ Original Total Blocks ----------------------->
+	 *
+	 */
+	if ((reclaimblks + blkstomove) >= hfs_freeblks(hfsmp, 1)) {
+		error = ENOSPC;
+		goto out;
+	}
+	hfsmp->hfs_resize_filesmoved = 0;
+	hfsmp->hfs_resize_totalfiles = filecnt;
+	
 	/* Now move any files that are in the way. */
 	for (i = 0; i < filecnt; ++i) {
 		struct vnode * rvp;
@@ -3302,25 +3404,124 @@ hfs_reclaimspace(struct hfsmount *hfsmp, u_long startblk)
 		hfs_unlock(VTOC(vp));
 		vnode_put(vp);
 		vp = NULL;
+
+		++hfsmp->hfs_resize_filesmoved;
+
+		/* Report intermediate progress. */
+		if (filecnt > 100) {
+			int progress;
+
+			progress = (i * 100) / filecnt;
+			if (progress > (lastprogress + 9)) {
+				printf("hfs_reclaimspace: %d%% done...\n", progress);
+				lastprogress = progress;
+			}
+		}
 	}
 	if (vp) {
 		hfs_unlock(VTOC(vp));
 		vnode_put(vp);
 		vp = NULL;
 	}
-
-	/*
-	 * Note: this implementation doesn't handle overflow extents.
-	 */
+	if (hfsmp->hfs_resize_filesmoved != 0) {
+		printf("hfs_reclaimspace: relocated %d files on \"%s\"\n",
+		       (int)hfsmp->hfs_resize_filesmoved, hfsmp->vcbVN);
+	}
 out:
 	kmem_free(kernel_map, (vm_offset_t)iterator, sizeof(*iterator));
 	kmem_free(kernel_map, (vm_offset_t)cnidbufp, cnidbufsize);
 
-	/* On errors restore the roving allocation pointer. */
-	if (error) {
+	/*
+	 * Restore the roving allocation pointer on errors.
+	 * (but only if we didn't move any files)
+	 */
+	if (error && hfsmp->hfs_resize_filesmoved == 0) {
 		hfsmp->nextAllocation = saved_next_allocation;
 	}
 	return (error);
+}
+
+
+/*
+ * Check if there are any overflow extents that overlap.
+ */
+static int
+hfs_overlapped_overflow_extents(struct hfsmount *hfsmp, u_int32_t startblk, u_int32_t catblks, u_int32_t fileID, int rsrcfork)
+{
+	struct BTreeIterator * iterator = NULL;
+	struct FSBufferDescriptor btdata;
+	HFSPlusExtentRecord extrec;
+	HFSPlusExtentKey *extkeyptr;
+	FCB *fcb;
+	u_int32_t block;
+	u_int8_t forktype;
+	int overlapped = 0;
+	int i;
+	int error;
+
+	forktype = rsrcfork ? 0xFF : 0;
+	if (kmem_alloc(kernel_map, (vm_offset_t *)&iterator, sizeof(*iterator))) {
+		return (0);
+	}	
+	bzero(iterator, sizeof(*iterator));
+	extkeyptr = (HFSPlusExtentKey *)&iterator->key;
+	extkeyptr->keyLength = kHFSPlusExtentKeyMaximumLength;
+	extkeyptr->forkType = forktype;
+	extkeyptr->fileID = fileID;
+	extkeyptr->startBlock = catblks;
+
+	btdata.bufferAddress = &extrec;
+	btdata.itemSize = sizeof(extrec);
+	btdata.itemCount = 1;
+	
+	fcb = VTOF(hfsmp->hfs_extents_vp);
+
+	error = BTSearchRecord(fcb, iterator, &btdata, NULL, iterator);
+	while (error == 0) {
+		/* Stop when we encounter a different file. */
+		if ((extkeyptr->fileID != fileID) ||
+		    (extkeyptr->forkType != forktype)) {
+			break;
+		}
+		/* 
+		 * Check if the file overlaps target space.
+		 */
+		for (i = 0; i < kHFSPlusExtentDensity; ++i) {
+			if (extrec[i].blockCount == 0) {
+				break;
+			}
+			block = extrec[i].startBlock + extrec[i].blockCount;
+			if (block >= startblk) {
+				overlapped = 1;
+				break;
+			}
+		}
+		/* Look for more records. */
+		error = BTIterateRecord(fcb, kBTreeNextRecord, iterator, &btdata, NULL);
+	}
+
+	kmem_free(kernel_map, (vm_offset_t)iterator, sizeof(*iterator));
+	return (overlapped);
+}
+
+
+/*
+ * Calculate the progress of a file system resize operation.
+ */
+__private_extern__
+int
+hfs_resize_progress(struct hfsmount *hfsmp, u_int32_t *progress)
+{
+	if ((hfsmp->hfs_flags & HFS_RESIZE_IN_PROGRESS) == 0) {
+		return (ENXIO);
+	}
+
+	if (hfsmp->hfs_resize_totalfiles > 0)
+		*progress = (hfsmp->hfs_resize_filesmoved * 100) / hfsmp->hfs_resize_totalfiles;
+	else
+		*progress = 0;
+
+	return (0);
 }
 
 

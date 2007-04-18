@@ -384,24 +384,22 @@ clean:
 #
 cscope.files:
 	@echo "Building file list for cscope and tags"
-	@find . -name '*.h' -type f > _cscope.files 2> /dev/null
-	@echo bsd/ufs/ufs/ufs_readwrite.c >> _cscope.files 2> /dev/null
-	@for i in `echo ${ALL_SUBDIRS}`; \
-	do \
-		cat ${SRCROOT}/$${i}/conf/files ${SRCROOT}/$${i}/conf/files.ppc; \
-		cat ${SRCROOT}/$${i}/conf/files.i386; \
-	done | \
-	sed -e '/^#/d' -e '/^[ 	]*$$/d' -e '/^OPTIONS\//d' | \
-	sed -e '1,$$s/^\([^ 	]*\)[ 	].*$$/\1/' >> _cscope.files 2> /dev/null
-	@sort < _cscope.files > cscope.files 2> /dev/null
-	@rm -f _cscope.files 2> /dev/null
+	@find . -name '*.h' -type f | grep -v ^..BUILD > _cscope.files 2> /dev/null
+	@find . -name '*.defs' -type f | grep -v ^..BUILD >> _cscope.files 2> /dev/null
+	@find . -name '*.c' -type f | grep -v ^..BUILD >> _cscope.files 2> /dev/null
+	@find . -name '*.cpp' -type f | grep -v ^..BUILD >> _cscope.files 2> /dev/null
+	@find . -name '*.s' -type f | grep -v ^..BUILD >> _cscope.files 2> /dev/null
+	@find . -name '*.h.template' -type f | grep -v ^..BUILD >> _cscope.files 2> /dev/null
+	@echo -k -q -c > cscope.files 2> /dev/null
+	@sort -u < _cscope.files >> cscope.files 2> /dev/null
+	@rm -f _cscope.files _cscope.files2 2> /dev/null
 
 #
 # Build cscope database
 #
 cscope: cscope.files
 	@echo "Building cscope database"
-	@cscope -b 2> /dev/null
+	@cscope -bvU 2> /dev/null
 
 #
 # Build tags

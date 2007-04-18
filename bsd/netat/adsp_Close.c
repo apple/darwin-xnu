@@ -62,7 +62,6 @@
 #include <netat/adsp.h>
 #include <netat/adsp_internal.h>
 
-extern atlock_t adspall_lock;
 
 static void qRemove(CCBPtr, CCBPtr);
 
@@ -128,7 +127,6 @@ int  CompleteQueue(qhead, code)	/* (DSPPBPtr FPTR qhead, OSErr code) */
     register gref_t *gref;
     register int    total = 0;
     CCBPtr sp = 0;
-    int s;
 
     n = *qhead;			/* Get first item */
     *qhead = 0;			/* Zero out the queue */
@@ -137,7 +135,6 @@ int  CompleteQueue(qhead, code)	/* (DSPPBPtr FPTR qhead, OSErr code) */
 	if (gref->info) {
 	    sp = (CCBPtr)gbuf_rptr(((gbuf_t *)gref->info));
 	    atalk_flush(sp->gref);
-	    ATDISABLE(s, sp->lock);
 	    }
     }
 
@@ -150,8 +147,6 @@ int  CompleteQueue(qhead, code)	/* (DSPPBPtr FPTR qhead, OSErr code) */
 	} else
 	    gbuf_freem(p->mp);
     }				/* while */
-    if (sp)
-	ATENABLE(s, sp->lock);
     return(total);
 }
 
@@ -358,7 +353,6 @@ int adspClose(sp, pb)		/* (DSPPBPtr pb) */
     register CCBPtr sp;
     register struct adspcmd *pb;
 {
-    int	s;
     register gbuf_t *mp;
 	
     /* Must execute nearly all of this with ints off because user could 
@@ -410,10 +404,8 @@ int adspClose(sp, pb)		/* (DSPPBPtr pb) */
      * is still pending.
      */
     if (pb->csCode == (short)dspClose) {
-	ATDISABLE(s, sp->lock);
 	if ((sp->state == (short)sPassive) || (sp->state == (short)sOpening)) {
 	    sp->state = sClosed;
-	    ATENABLE(s, sp->lock);
 	    DoClose(sp, errAborted, 0);
 	    pb->ioResult = 0;
 	    adspioc_ack(0, pb->ioc, pb->gref);
@@ -421,23 +413,19 @@ int adspClose(sp, pb)		/* (DSPPBPtr pb) */
 	}
 		
 	if (sp->state == (word)sClosed)	{ /* Ok to close a closed connection */
-	    ATENABLE(s, sp->lock);
 	    pb->ioResult = 0;
 	    adspioc_ack(0, pb->ioc, pb->gref);
 	    return 0;
 	}
 	if ((sp->state != (word)sOpen) && (sp->state != (word)sClosing)) {
-	    ATENABLE(s, sp->lock);
 	    pb->ioResult = errState;
 	    return EINVAL;
 	}
 		
 	sp->state = sClosing;	/* No matter what, we're closing */
-	ATENABLE(s, sp->lock);
     } 				/* dspClose */
     
     else {			/* dspRemove */
-	ATDISABLE(s, sp->lock);
 	sp->removing = 1;	/* Prevent allowing another dspClose. */
 				/* Tells completion routine of close */
 				/* packet to remove us. */
@@ -445,13 +433,10 @@ int adspClose(sp, pb)		/* (DSPPBPtr pb) */
 	if (sp->state == sPassive || sp->state == sClosed || 
 	    sp->state == sOpening) {
 	    sp->state = sClosed;
-	    ATENABLE(s, sp->lock);
 	    DoClose(sp, errAborted, 0); /* Will remove CCB! */
 	    return 0;
-	} else {			/* sClosing & sOpen */
+	} else			/* sClosing & sOpen */
 	    sp->state = sClosing;
-	    ATENABLE(s, sp->lock);
-	}
 	
     }				/* dspRemove */
 
@@ -467,9 +452,7 @@ int adspClose(sp, pb)		/* (DSPPBPtr pb) */
 	    pb = (struct adspcmd *)gbuf_rptr(mp); /* get new parameter block */
 	    pb->ioc = 0;
 	    pb->mp = mp;
-	    ATDISABLE(s, sp->lock);
 	    qAddToEnd(&sp->opb, pb);	/* and save it */
-	    ATENABLE(s, sp->lock);
     } else {
 	    pb->ioResult = 0;
 	    adspioc_ack(0, pb->ioc, pb->gref); /* release user, and keep no copy
@@ -485,19 +468,15 @@ static void qRemove(qptr, elem)
     register CCBPtr qptr;
     register CCBPtr elem;
 {
-	int s;
 
-	ATDISABLE(s, adspall_lock);
     while(qptr->ccbLink) {
 	if ((DSPPBPtr)(qptr->ccbLink) == (DSPPBPtr)elem) {
 	    qptr->ccbLink = elem->ccbLink;
 	    elem->ccbLink = 0;
-	    ATENABLE(s, adspall_lock);
 	    return;
 	}
 	qptr = qptr->ccbLink;
     }
-	ATENABLE(s, adspall_lock);
 }
 
 int RxClose(sp)
@@ -505,17 +484,11 @@ int RxClose(sp)
 {
     register gbuf_t *mp;
     register struct adspcmd *pb;
-	int s, l;
 
-	ATDISABLE(l, sp->lockClose);
-	ATDISABLE(s, sp->lock);
-	if ((sp->state == sClosing) || (sp->state == sClosed)) {
-		ATENABLE(s, sp->lock);
-		ATENABLE(l, sp->lockClose);
+	if ((sp->state == sClosing) || (sp->state == sClosed))
 		return 0;
-	}
+	
     sp->state = sClosed;
-	ATENABLE(s, sp->lock);
     CheckReadQueue(sp);		/* try to deliver all remaining data */
 
     if ( (mp = gbuf_alloc(sizeof(struct adspcmd), PRI_HI)) ) {
@@ -532,6 +505,5 @@ int RxClose(sp)
 if ((sp->userFlags & eClosed) == 0)
     DoClose(sp, errAborted, -1);	/* abort send requests and timers */
 
-	ATENABLE(l, sp->lockClose);
     return 0;
 }

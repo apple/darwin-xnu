@@ -52,7 +52,6 @@ struct pim6stat {
 	u_quad_t pim6s_snd_registers;	/* sent registers		*/
 };
 
-extern struct pim6stat pim6stat;
 
 
 /*

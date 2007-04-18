@@ -55,8 +55,7 @@
  */
 
 /*
- * No machine dependant task fields
+ * Machine dependant task fields
  */
 
-#define MACHINE_TASK
-
+#define MACHINE_TASK struct user_ldt *       i386_ldt;

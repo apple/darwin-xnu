@@ -59,6 +59,7 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/sysproto.h>
+#include <sys/proc_info.h>
 
 #include <bsm/audit_kernel.h>
 
@@ -86,6 +87,7 @@
 #define f_offset f_fglob->fg_offset
 #define f_data f_fglob->fg_data
 #define	PSHMNAMLEN	31	/* maximum name segment length we bother with */
+
 
 struct pshminfo {
 	unsigned int	pshm_flags;
@@ -196,12 +198,10 @@ pshm_lock_init( void )
 {
 
     psx_shm_subsys_lck_grp_attr = lck_grp_attr_alloc_init();
-    lck_grp_attr_setstat(psx_shm_subsys_lck_grp_attr);
 
     psx_shm_subsys_lck_grp = lck_grp_alloc_init("posix shared memory", psx_shm_subsys_lck_grp_attr);
 
     psx_shm_subsys_lck_attr = lck_attr_alloc_init();
-    /* lck_attr_setdebug(psx_shm_subsys_lck_attr); */
     lck_mtx_init(& psx_shm_subsys_mutex, psx_shm_subsys_lck_grp, psx_shm_subsys_lck_attr);
 }
 
@@ -485,6 +485,8 @@ shm_open(struct proc *p, struct shm_open_args *uap, register_t *retval)
                     pinfo->pshm_mode = cmode;
                     pinfo->pshm_uid = kauth_cred_getuid(kauth_cred_get());
                     pinfo->pshm_gid = kauth_cred_get()->cr_gid;
+			bcopy(pnbuf, &pinfo->pshm_name[0], PSHMNAMLEN);
+			pinfo->pshm_name[PSHMNAMLEN]=0;
                 } else {
                     /*  already exists */
                         if( pinfo->pshm_flags & PSHM_INDELETE) {
@@ -593,9 +595,9 @@ pshm_truncate(__unused struct proc *p, struct fileproc *fp, __unused int fd,
 	struct pshminfo * pinfo;
 	struct pshmnode * pnode ;
 	kern_return_t kret;
-	vm_offset_t user_addr;
+	mach_vm_offset_t user_addr;
 	mem_entry_name_port_t mem_object;
-	vm_size_t size;
+	mach_vm_size_t size;
 
 	if (fp->f_type != DTYPE_PSXSHM) {
 		return(EINVAL);
@@ -618,17 +620,17 @@ pshm_truncate(__unused struct proc *p, struct fileproc *fp, __unused int fd,
 
 	PSHM_SUBSYS_UNLOCK();
 	size = round_page_64(length);
-	kret = vm_allocate(current_map(), &user_addr, size, VM_FLAGS_ANYWHERE);
+	kret = mach_vm_allocate(current_map(), &user_addr, size, VM_FLAGS_ANYWHERE);
 	if (kret != KERN_SUCCESS) 
 		goto out;
 
-	kret = mach_make_memory_entry (current_map(), &size,
+	kret = mach_make_memory_entry_64 (current_map(), &size,
 			user_addr, VM_PROT_DEFAULT, &mem_object, 0);
 
 	if (kret != KERN_SUCCESS) 
 		goto out;
 	
-	vm_deallocate(current_map(), user_addr, size);
+	mach_vm_deallocate(current_map(), user_addr, size);
 
 	PSHM_SUBSYS_LOCK();
 	pinfo->pshm_flags &= ~PSHM_DEFINED;
@@ -1022,3 +1024,32 @@ pshm_kqfilter(__unused struct fileproc *fp, __unused struct knote *kn,
 {
 	return(ENOTSUP);
 }
+
+int
+fill_pshminfo(struct pshmnode * pshm, struct pshm_info * info)
+{
+	struct pshminfo *pinfo;
+	struct stat *sb;
+	
+	PSHM_SUBSYS_LOCK();
+	if ((pinfo = pshm->pinfo) == PSHMINFO_NULL){
+		PSHM_SUBSYS_UNLOCK();
+		return(EINVAL);
+	}
+
+	sb = &info->pshm_stat;
+
+	bzero(sb, sizeof(struct stat)); 
+	sb->st_mode = pinfo->pshm_mode;
+	sb->st_uid = pinfo->pshm_uid;
+	sb->st_gid = pinfo->pshm_gid;
+	sb->st_size = pinfo->pshm_length;
+
+	info->pshm_mappaddr = pshm->mapp_addr;
+	bcopy(&pinfo->pshm_name[0], &info->pshm_name[0], PSHMNAMLEN+1); 
+
+	PSHM_SUBSYS_UNLOCK();
+	return(0);
+}
+
+

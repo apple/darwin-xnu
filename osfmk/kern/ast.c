@@ -79,10 +79,7 @@
 #include <kern/spl.h>
 #include <kern/wait_queue.h>
 #include <mach/policy.h>
-
-#ifdef __ppc__
-#include <ppc/trap.h> // for CHUD AST hook
-#endif
+#include <machine/trap.h> // for CHUD AST hook
 
 void
 ast_init(void)
@@ -102,12 +99,11 @@ ast_taken(
 	ast_t			*myast = ast_pending();
 	thread_t		thread = current_thread();
 
-#ifdef __ppc__
 	/*
 	 * CHUD hook - all threads including idle processor threads
 	 */
 	if(perfASTHook) {
-		if(*myast & AST_PPC_CHUD_ALL) {
+		if(*myast & AST_CHUD_ALL) {
 			perfASTHook(0, NULL, 0, 0);
 			
 			if(*myast == AST_NONE) {
@@ -115,9 +111,8 @@ ast_taken(
 			}
 		}
 	} else {
-		*myast &= ~AST_PPC_CHUD_ALL;
+		*myast &= ~AST_CHUD_ALL;
 	}
-#endif
 
 	reasons &= *myast;
 	*myast &= ~reasons;

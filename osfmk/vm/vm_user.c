@@ -2350,6 +2350,11 @@ redo_lookup:
 				shadow_object = map_entry->object.vm_object;
 				vm_object_unlock(object);
 
+				prot = map_entry->protection & ~VM_PROT_WRITE;
+#ifdef STACK_ONLY_NX
+				if (map_entry->alias != VM_MEMORY_STACK && prot)
+				        prot |= VM_PROT_EXECUTE;
+#endif
 				vm_object_pmap_protect(
 					object, map_entry->offset,
 					total_size,
@@ -2358,7 +2363,7 @@ redo_lookup:
 							? PMAP_NULL :
 							target_map->pmap),
 					map_entry->vme_start,
-					map_entry->protection & ~VM_PROT_WRITE);
+					prot);
 				total_size -= (map_entry->vme_end 
 						- map_entry->vme_start);
 				next_entry = map_entry->vme_next;
@@ -2875,6 +2880,106 @@ mach_destroy_memory_entry(
 		mutex_unlock(&(named_entry)->Lock);
 }
 
+/* Allow manipulation of individual page state.  This is actually part of */
+/* the UPL regimen but takes place on the memory entry rather than on a UPL */
+
+kern_return_t
+mach_memory_entry_page_op(
+	ipc_port_t		entry_port,
+	vm_object_offset_t	offset,
+	int			ops,
+	ppnum_t			*phys_entry,
+	int			*flags)
+{
+	vm_named_entry_t	mem_entry;
+	vm_object_t		object;
+	kern_return_t		kr;
+
+	if (entry_port == IP_NULL ||
+	    ip_kotype(entry_port) != IKOT_NAMED_ENTRY) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	mem_entry = (vm_named_entry_t) entry_port->ip_kobject;
+
+	named_entry_lock(mem_entry);
+
+	if (mem_entry->is_sub_map || mem_entry->is_pager) {
+		named_entry_unlock(mem_entry);
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	object = mem_entry->backing.object;
+	if (object == VM_OBJECT_NULL) {
+		named_entry_unlock(mem_entry);
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	vm_object_reference(object);
+	named_entry_unlock(mem_entry);
+
+	kr = vm_object_page_op(object, offset, ops, phys_entry, flags);
+
+	vm_object_deallocate(object);	
+
+	return kr;
+}
+
+/*
+ * mach_memory_entry_range_op offers performance enhancement over 
+ * mach_memory_entry_page_op for page_op functions which do not require page 
+ * level state to be returned from the call.  Page_op was created to provide 
+ * a low-cost alternative to page manipulation via UPLs when only a single 
+ * page was involved.  The range_op call establishes the ability in the _op 
+ * family of functions to work on multiple pages where the lack of page level
+ * state handling allows the caller to avoid the overhead of the upl structures.
+ */
+
+kern_return_t
+mach_memory_entry_range_op(
+	ipc_port_t		entry_port,
+	vm_object_offset_t	offset_beg,
+	vm_object_offset_t	offset_end,
+	int                     ops,
+	int                     *range)
+{
+	vm_named_entry_t	mem_entry;
+	vm_object_t		object;
+	kern_return_t		kr;
+
+	if (entry_port == IP_NULL ||
+	    ip_kotype(entry_port) != IKOT_NAMED_ENTRY) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	mem_entry = (vm_named_entry_t) entry_port->ip_kobject;
+
+	named_entry_lock(mem_entry);
+
+	if (mem_entry->is_sub_map || mem_entry->is_pager) {
+		named_entry_unlock(mem_entry);
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	object = mem_entry->backing.object;
+	if (object == VM_OBJECT_NULL) {
+		named_entry_unlock(mem_entry);
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	vm_object_reference(object);
+	named_entry_unlock(mem_entry);
+
+	kr = vm_object_range_op(object,
+				offset_beg,
+				offset_end,
+				ops,
+				range);
+
+	vm_object_deallocate(object);
+
+	return kr;
+}
 
 
 kern_return_t

@@ -258,9 +258,9 @@ procdup(struct proc *child, struct proc *parent)
  	kern_return_t	result;
 
 	if (parent->task == kernel_task)
-		result = task_create_internal(TASK_NULL, FALSE, &task);
+		result = task_create_internal(TASK_NULL, FALSE, FALSE, &task);
 	else
-		result = task_create_internal(parent->task, TRUE, &task);
+		result = task_create_internal(parent->task, TRUE, (parent->p_flag & P_LP64), &task);
 	if (result != KERN_SUCCESS)
 	    printf("fork/procdup: task_create failed. Code: 0x%x\n", result);
 	child->task = task;
@@ -268,15 +268,25 @@ procdup(struct proc *child, struct proc *parent)
 	set_bsdtask_info(task, child);
 	if (parent->p_flag & P_LP64) {
 		task_set_64bit(task, TRUE);
+		vm_map_set_64bit(get_task_map(task));
 		child->p_flag |= P_LP64;
-#ifdef __PPC__
                 /* LP64todo - clean up this hacked mapping of commpage */
 		pmap_map_sharedpage(task, get_map_pmap(get_task_map(task)));
                 vm_map_commpage64(get_task_map(task));
-#endif	/* __PPC__ */
 	} else {
 		task_set_64bit(task, FALSE);
+		vm_map_set_32bit(get_task_map(task));
 		child->p_flag &= ~P_LP64;
+#ifdef __i386__
+		/*
+		 * On Intel, the comm page doesn't get mapped automatically
+		 * because it goes beyond the end of the VM map in the current
+		 * 3GB/1GB address space model.
+		 * XXX This explicit mapping will probably become unnecessary
+		 * when we switch to the new 4GB/4GB address space model.
+		 */
+		vm_map_commpage32(get_task_map(task));
+#endif	/* __i386__ */
 	}
 	if (child->p_nice != 0)
 		resetpriority(child);
@@ -500,7 +510,7 @@ again:
 	 * Increase reference counts on shared objects.
 	 * The p_stats and p_sigacts substructs are set in vm_fork.
 	 */
-	p2->p_flag = (p1->p_flag & (P_LP64 | P_CLASSIC | P_AFFINITY));
+	p2->p_flag = (p1->p_flag & (P_LP64 | P_TRANSLATED | P_AFFINITY));
 	if (p1->p_flag & P_PROFIL)
 		startprofclock(p2);
 	/*
@@ -654,9 +664,14 @@ uthread_alloc(task_t task, thread_t thr_act )
 	uth_parent = (struct uthread *)get_bsdthread_info(current_thread());
 	if ((task == current_task()) && 
 	    (uth_parent != NULL) &&
-	    (uth_parent->uu_ucred != NOCRED)) {
+	    (IS_VALID_CRED(uth_parent->uu_ucred))) {
+		/*
+		 * XXX The new thread is, in theory, being created in context
+		 * XXX of parent thread, so a direct reference to the parent
+		 * XXX is OK.
+		 */
+		kauth_cred_ref(uth_parent->uu_ucred);
 		uth->uu_ucred = uth_parent->uu_ucred;
-		kauth_cred_ref(uth->uu_ucred);
 		/* the credential we just inherited is an assumed credential */
 		if (uth_parent->uu_flag & UT_SETUID)
 			uth->uu_flag |= UT_SETUID;
@@ -717,8 +732,11 @@ uthread_free(task_t task, void *uthread, void * bsd_info)
 		sel->wql = 0;
 	}
 
-	if (uth->uu_ucred != NOCRED)
-		kauth_cred_rele(uth->uu_ucred);
+	if (IS_VALID_CRED(uth->uu_ucred)) {
+		kauth_cred_t oldcred = uth->uu_ucred;
+		uth->uu_ucred = NOCRED;
+		kauth_cred_unref(&oldcred);
+	}
 
 	if ((task != kernel_task) && p) {
 		funnel_state = thread_funnel_set(kernel_flock, TRUE);

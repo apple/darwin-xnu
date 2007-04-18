@@ -33,6 +33,9 @@
  *
  *	File: tx.c
  */
+ 
+#ifdef AURP_SUPPORT
+
 #include <sys/errno.h>
 #include <sys/types.h>
 #include <sys/param.h>
@@ -145,3 +148,5 @@ void AURPcmdx(code, mdata, param)
 		dPrintf(D_M_AURP, D_L_ERROR, ("AURPcmdx: bad code, %d\n", code));
 	}
 }
+
+#endif  /* AURP_SUPPORT */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -58,27 +58,30 @@
 #ifndef _LIBKERN_OSCROSSENDIAN_H
 #define _LIBKERN_OSCROSSENDIAN_H
 
+#include <sys/sysctl.h>
+
 #if __ppc__
 
-static __inline__ int _OSRosettaCheck(void)
+static __inline__ int
+_OSRosettaCheck(void)
 {
-    int isCrossEndian;
+	int isCrossEndian = 0;
+	int val = 0;
+	size_t size = sizeof val;
 
-    __asm__ (  "b 0f\n"
-	    "	.long 0x14400004\n"
-	    "	li %0,1\n"
-	    "0:"
-	: "=r" (isCrossEndian) : "0" (0)
-    );
+	if (sysctlbyname("sysctl.proc_native", &val, &size, NULL, 0) == -1)
+		isCrossEndian = 0;
+	else
+		isCrossEndian = val ? 0 : 1;
 
-    return isCrossEndian;
+	return isCrossEndian;
 }
 
-#else
+#else /* __ppc__ */
 
 static __inline__ int _OSRosettaCheck(void) { return 0; }
 
-#endif
+#endif /* __ppc__ */
 
 #define IF_ROSETTA() if (__builtin_expect(_OSRosettaCheck(), 0) )
 

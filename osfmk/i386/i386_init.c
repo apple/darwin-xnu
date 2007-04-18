@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -56,7 +56,6 @@
 
 #include <platforms.h>
 #include <mach_kdb.h>
-#include <himem.h>
 
 #include <mach/i386/vm_param.h>
 
@@ -71,119 +70,99 @@
 #include <kern/misc_protos.h>
 #include <kern/startup.h>
 #include <kern/clock.h>
+#include <kern/pms.h>
 #include <kern/xpr.h>
 #include <kern/cpu_data.h>
 #include <kern/processor.h>
+#include <console/serial_protos.h>
 #include <vm/vm_page.h>
 #include <vm/pmap.h>
 #include <vm/vm_kern.h>
 #include <i386/fpu.h>
 #include <i386/pmap.h>
 #include <i386/ipl.h>
-#include <i386/pio.h>
 #include <i386/misc_protos.h>
 #include <i386/cpuid.h>
 #include <i386/mp.h>
+#include <i386/mp_desc.h>
 #include <i386/machine_routines.h>
 #include <i386/postcode.h>
+#include <i386/Diagnostics.h>
+#include <i386/pmCPU.h>
+#include <i386/tsc.h>
+#include <i386/hpet.h>
 #if	MACH_KDB
 #include <ddb/db_aout.h>
 #endif /* MACH_KDB */
 #include <ddb/tr.h>
-#ifdef __MACHO__
-#include <mach/thread_status.h>
 
-static KernelBootArgs_t *kernelBootArgs;
-#endif
+static boot_args *kernelBootArgs;
 
-vm_offset_t	boot_args_start = 0;	/* pointer to kernel arguments, set in start.s */
-
-#ifdef __MACHO__
-#include	<mach-o/loader.h>
-vm_offset_t     edata, etext, end;
-
-/* operations only against currently loaded 32 bit mach kernel */
-extern struct segment_command *getsegbyname(const char *);
-extern struct section *firstsect(struct segment_command *);
-extern struct section *nextsect(struct segment_command *, struct section *);
-
-/*
- * Called first for a mach-o kernel before paging is set up.
- * Returns the first available physical address in memory.
- */
-
-void
-i386_preinit(void)
-{
-	struct segment_command	*sgp;
-	struct section		*sp;
-	struct KernelBootArgs *pp;
-	int i;
-
-	sgp = getsegbyname("__DATA");
-	if (sgp) {
-		sp = firstsect(sgp);
-		if (sp) {
-			do {
-				if ((sp->flags & S_ZEROFILL))
-					bzero((char *) sp->addr, sp->size);
-			} while ((sp = nextsect(sgp, sp)));
-		}
-	}
-
-	kernelBootArgs = (KernelBootArgs_t *)
-		ml_static_ptovirt(boot_args_start);
-	pp = (struct KernelBootArgs *) kernelBootArgs;
-	pp->configEnd = (char *)
-		ml_static_ptovirt((vm_offset_t) pp->configEnd);
-	for (i = 0; i < pp->numBootDrivers; i++) {
-		pp->driverConfig[i].address = (unsigned)
-			ml_static_ptovirt(pp->driverConfig[i].address);
-	}
-	return;
-}
-#endif
-
+extern int disableConsoleOutput;
 extern const char version[];
 extern const char version_variant[];
+extern int nx_enabled;
+
+extern int noVMX;	/* if set, rosetta should not emulate altivec */
+
+void cpu_stack_set(void);
+
 
 /*
  *	Cpu initialization.  Running virtual, but without MACH VM
- *	set up.  First C routine called, unless i386_preinit() was called first.
+ *	set up.  First C routine called.
  */
 void
-i386_init(void)
+i386_init(vm_offset_t boot_args_start)
 {
 	unsigned int	maxmem;
+	uint64_t	maxmemtouse;
 	unsigned int	cpus;
+	boolean_t	legacy_mode;
 
 	postcode(I386_INIT_ENTRY);
 
+	i386_macho_zerofill();
+
+	/*
+	 * Setup boot args given the physical start address.
+	 */
+	kernelBootArgs = (boot_args *)
+		ml_static_ptovirt(boot_args_start);
+        kernelBootArgs->MemoryMap = (uint32_t)
+		ml_static_ptovirt((vm_offset_t)kernelBootArgs->MemoryMap);
+        kernelBootArgs->deviceTreeP = (uint32_t)
+		ml_static_ptovirt((vm_offset_t)kernelBootArgs->deviceTreeP);
+
 	master_cpu = 0;
-	cpu_data_alloc(TRUE);
+	(void) cpu_data_alloc(TRUE);
 	cpu_init();
 	postcode(CPU_INIT_D);
 
-	/*
-	 * Setup some processor related structures to satisfy funnels.
-	 * Must be done before using unparallelized device drivers.
-	 */
-	processor_bootstrap();
-
+	/* init processor performance control */
+	pmsInit();
+	
 	PE_init_platform(FALSE, kernelBootArgs);
 	postcode(PE_INIT_PLATFORM_D);
-
-	/*
-	 * Set up initial thread so current_thread() works early on
-	 */
-	thread_bootstrap();
-	postcode(THREAD_BOOTSTRAP_D);
 
 	printf_init();			/* Init this in case we need debugger */
 	panic_init();			/* Init this in case we need debugger */
 
 	/* setup debugging output if one has been chosen */
 	PE_init_kprintf(FALSE);
+
+	if (!PE_parse_boot_arg("diag", &dgWork.dgFlags))
+		dgWork.dgFlags = 0;
+
+	serialmode = 0;
+	if(PE_parse_boot_arg("serial", &serialmode)) {
+		/* We want a serial keyboard and/or console */
+		kprintf("Serial mode specified: %08X\n", serialmode);
+	}
+	if(serialmode & 1) {
+		(void)switch_to_serial_console();
+		disableConsoleOutput = FALSE;	/* Allow printfs to happen */
+	}
 
 	/* setup console output */
 	PE_init_printf(FALSE);
@@ -196,21 +175,54 @@ i386_init(void)
 	 * The maximum number of cpus must be set beforehand.
 	 */
 	if (!PE_parse_boot_arg("maxmem", &maxmem))
-		maxmem=0;
+		maxmemtouse=0;
 	else
-		maxmem = maxmem * (1024 * 1024);
+	        maxmemtouse = ((uint64_t)maxmem) * (uint64_t)(1024 * 1024);
 
 	if (PE_parse_boot_arg("cpus", &cpus)) {
 		if ((0 < cpus) && (cpus < max_ncpus))
                         max_ncpus = cpus;
 	}
 
-	i386_vm_init(maxmem, kernelBootArgs);
+	/*
+	 * debug support for > 4G systems
+	 */
+	if (!PE_parse_boot_arg("himemory_mode", &vm_himemory_mode))
+	        vm_himemory_mode = 0;
+
+	/*
+	 * At this point we check whether we are a 64-bit processor
+	 * and that we're not restricted to legacy mode, 32-bit operation.
+	 */
+	boolean_t IA32e = FALSE;
+	if (cpuid_extfeatures() & CPUID_EXTFEATURE_EM64T) {
+		kprintf("EM64T supported");
+		if (PE_parse_boot_arg("-legacy", &legacy_mode)) {
+		 	kprintf(" but legacy mode forced\n");
+		} else {
+			IA32e = TRUE;
+			kprintf(" and will be enabled\n");
+		}
+	}
+	if (!(cpuid_extfeatures() & CPUID_EXTFEATURE_XD))
+		nx_enabled = 0;
+
+	i386_vm_init(maxmemtouse, IA32e, kernelBootArgs);
+
+	if ( ! PE_parse_boot_arg("novmx", &noVMX))
+		noVMX = 0;	/* OK to support Altivec in rosetta? */
+
+	tsc_init();
+	hpet_init();
+	power_management_init();
 
 	PE_init_platform(TRUE, kernelBootArgs);
 
 	/* create the console for verbose or pretty mode */
 	PE_create_console();
+
+	processor_bootstrap();
+	thread_bootstrap();
 
 	machine_startup();
 

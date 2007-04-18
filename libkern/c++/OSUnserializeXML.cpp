@@ -87,7 +87,7 @@
 
 #define YYSTYPE object_t *
 #define YYPARSE_PARAM	state
-#define YYLEX_PARAM	state
+#define YYLEX_PARAM	(parser_state_t *)state
 
 // this is the internal struct used to hold objects on parser stack
 // it represents objects both before and after they have been created
@@ -153,7 +153,7 @@ extern unsigned long	strtoul(const char *, char **, int);
 
 #define malloc(s) kern_os_malloc(s)
 #define realloc(a, s) kern_os_realloc(a, s)
-#define free(a) kern_os_free(a)
+#define free(a) kern_os_free((void *)a)
 
 #ifndef YYSTYPE
 #define YYSTYPE int
@@ -939,7 +939,7 @@ case 16:
 case 17:
 #line 192 "OSUnserializeXML.y"
 { yyval = yyvsp[-1];
-				  yyval->key = yyval->object;
+				  yyval->key = (OSString *)yyval->object;
 				  yyval->object = yyvsp[0]->object;
 				  yyval->next = NULL; 
 				  yyvsp[0]->object = 0;

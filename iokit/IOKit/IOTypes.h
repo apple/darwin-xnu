@@ -62,19 +62,8 @@ extern "C" {
 #ifndef __MACTYPES__	/* CF MacTypes.h */
 #ifndef __TYPES__	/* guess... Mac Types.h */
 
+#include <stdbool.h>
 #include <libkern/OSTypes.h>
-
-#ifndef __cplusplus
-#if !TYPE_BOOL
-#ifdef KERNEL
-typedef int	bool;
-enum {
-    false	= 0,
-    true	= 1
-};
-#endif
-#endif
-#endif
 
 #endif /* __TYPES__ */
 #endif /* __MACTYPES__ */
@@ -113,12 +102,23 @@ struct IOVirtualRange
     IOVirtualAddress	address;
     IOByteCount		length;
 };
+struct IOAddressRange
+{
+    mach_vm_address_t	address;
+    mach_vm_size_t	length;
+};
 #else
 typedef struct 
 {
     IOVirtualAddress	address;
     IOByteCount		length;
 } IOVirtualRange;
+
+struct IOAddressRange
+{
+    mach_vm_address_t	address;
+    mach_vm_size_t	length;
+};
 #endif
 
 /*

@@ -147,7 +147,6 @@ struct vnodeopv_entry_desc volfs_vnodeop_entries[] = {
     {&vnop_allocate_desc, (VOPFUNC)err_allocate},	/* allocate */
 	{&vnop_pagein_desc, (VOPFUNC)err_pagein},	/* pagein */
 	{&vnop_pageout_desc, (VOPFUNC)err_pageout},	/* pageout */
-	{&vnop_devblocksize_desc, (VOPFUNC)err_devblocksize},	/* devblocksize */
 	{&vnop_searchfs_desc, (VOPFUNC)err_searchfs},	/* searchfs */
 	{&vnop_copyfile_desc, (VOPFUNC)err_copyfile },	/* Copyfile */
 	{&vnop_blktooff_desc, (VOPFUNC)err_blktooff},	/* blktooff */

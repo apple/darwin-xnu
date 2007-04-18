@@ -363,11 +363,10 @@ strtoq(nptr, endptr, base)
  * Ignores `locale' stuff.  Assumes that the upper and lower case
  * alphabets and digits are each contiguous.
  */
-u_quad_t
-strtouq(nptr, endptr, base)
-	const char *nptr;
-	char **endptr;
-	register int base;
+uint64_t
+strtouq(const char *nptr,
+	char **endptr,
+	register int base)
 {
 	register const char *s = nptr;
 	register u_quad_t acc;

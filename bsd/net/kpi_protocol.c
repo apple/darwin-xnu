@@ -95,11 +95,9 @@ proto_kpi_init(void)
 	
 	/* Allocate a mtx lock */
 	grp_attrib = lck_grp_attr_alloc_init();
-	lck_grp_attr_setdefault(grp_attrib);
 	lck_group = lck_grp_alloc_init("protocol kpi", grp_attrib);
 	lck_grp_attr_free(grp_attrib);
 	lck_attrib = lck_attr_alloc_init();
-	lck_attr_setdefault(lck_attrib);
 	proto_input_lock = lck_mtx_alloc_init(lck_group, lck_attrib);
 	lck_grp_free(lck_group);
 	lck_attr_free(lck_attrib);

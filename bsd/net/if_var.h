@@ -91,7 +91,7 @@
 #define APPLE_IF_FAM_STF       12
 #define APPLE_IF_FAM_FIREWIRE  13
 #define APPLE_IF_FAM_BOND      14
-#endif __APPLE__
+#endif /* __APPLE__ */
 
 /*
  * 72 was chosen below because it is the size of a TCP/IP

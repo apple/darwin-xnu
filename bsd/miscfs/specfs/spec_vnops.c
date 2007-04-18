@@ -129,7 +129,6 @@ struct vnodeopv_entry_desc spec_vnodeop_entries[] = {
 	{ &vnop_pathconf_desc, (VOPFUNC)spec_pathconf },		/* pathconf */
 	{ &vnop_advlock_desc, (VOPFUNC)err_advlock },		/* advlock */
 	{ &vnop_bwrite_desc, (VOPFUNC)spec_bwrite },		/* bwrite */
-	{ &vnop_devblocksize_desc, (VOPFUNC)spec_devblocksize }, /* devblocksize */
 	{ &vnop_pagein_desc, (VOPFUNC)err_pagein },		/* Pagein */
 	{ &vnop_pageout_desc, (VOPFUNC)err_pageout },		/* Pageout */
         { &vnop_copyfile_desc, (VOPFUNC)err_copyfile },		/* Copyfile */
@@ -858,17 +857,6 @@ spec_pathconf(ap)
 		return (EINVAL);
 	}
 	/* NOTREACHED */
-}
-
-int
-spec_devblocksize(ap)
-        struct vnop_devblocksize_args /* {
-	        struct vnode *a_vp;
-	        int *a_retval;
-        } */ *ap;
-{
-        *ap->a_retval = (ap->a_vp->v_specsize);
-        return (0);
 }
 
 /*

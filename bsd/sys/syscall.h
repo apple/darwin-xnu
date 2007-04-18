@@ -144,11 +144,7 @@
 #define	SYS_getpriority    100
 			/* 101  old send */
 			/* 102  old recv */
-#ifdef __ppc__
 			/* 103  old sigreturn */
-#else
-#define	SYS_sigreturn      103
-#endif
 #define	SYS_bind           104
 #define	SYS_setsockopt     105
 #define	SYS_listen         106
@@ -161,12 +157,7 @@
 			/* 113  old recvmsg */
 			/* 114  old sendmsg */
 			/* 115  old vtrace */
-#ifdef __ppc__
-#define	SYS_ppc_gettimeofday 116
-#define	SYS_gettimeofday 116
-#else
 #define	SYS_gettimeofday   116
-#endif
 #define	SYS_getrusage      117
 #define	SYS_getsockopt     118
 			/* 119  old resuba */
@@ -242,12 +233,8 @@
 #define	SYS_setgid         181
 #define	SYS_setegid        182
 #define	SYS_seteuid        183
-#ifdef __ppc__
 #define	SYS_sigreturn      184
-#else
-			/* 184  */
-#endif
-			/* 185  */
+#define	SYS_chud           185
 			/* 186  */
 			/* 187  */
 #define	SYS_stat           188
@@ -272,7 +259,6 @@
 #define	SYS_mlock          203
 #define	SYS_munlock        204
 #define	SYS_undelete       205
-#ifdef __ppc__
 #define	SYS_ATsocket       206
 #define	SYS_ATgetmsg       207
 #define	SYS_ATputmsg       208
@@ -281,16 +267,6 @@
 #define	SYS_ATPgetreq      211
 #define	SYS_ATPgetrsp      212
 			/* 213  Reserved for AppleTalk */
-#else
-#define	SYS_ATsocket       206
-#define	SYS_ATgetmsg       207
-#define	SYS_ATputmsg       208
-#define	SYS_ATPsndreq      209
-#define	SYS_ATPsndrsp      210
-#define	SYS_ATPgetreq      211
-#define	SYS_ATPgetrsp      212
-			/* 213  Reserved for AppleTalk */
-#endif /* __ppc__ */
 #define	SYS_kqueue_from_portset_np 214
 #define	SYS_kqueue_portset_np 215
 #define	SYS_mkcomplex      216
@@ -422,7 +398,7 @@
 #define	SYS___pthread_canceled 333
 #define	SYS___semwait_signal 334
 #define	SYS_utrace         335
-			/* 336  */
+#define	SYS_proc_info      336
 			/* 337  */
 			/* 338  */
 			/* 339  */
@@ -451,7 +427,7 @@
 #define	SYS_kqueue         362
 #define	SYS_kevent         363
 #define	SYS_lchown         364
-			/* 365  */
+#define	SYS_stack_snapshot 365
 			/* 366  */
 			/* 367  */
 			/* 368  */

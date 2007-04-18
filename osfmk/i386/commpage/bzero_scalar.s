@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -71,10 +71,12 @@
 .text
 .align 5, 0x90
 Lbzero_scalar:
+	pushl	%ebp			/* set up a frame for backtraces */
+	movl	%esp,%ebp
         pushl   %edi
         pushl   %ebx
-        movl    12(%esp),%edi
-        movl    16(%esp),%ecx
+        movl    8(%ebp),%edi
+        movl    12(%ebp),%ecx
 
         cld                             /* set fill direction forward */
         xorl    %eax,%eax               /* set fill data to 0 */
@@ -85,7 +87,7 @@ Lbzero_scalar:
          * unaligned set.
          */
         cmpl    $0x0f,%ecx
-        jle     L1
+        jbe     L1
 
         movl    %edi,%edx               /* compute misalignment */
         negl    %edx
@@ -109,6 +111,7 @@ L1:     rep
 
         popl    %ebx
         popl    %edi
+	popl	%ebp
 	ret
 
-	COMMPAGE_DESCRIPTOR(bzero_scalar,_COMM_PAGE_BZERO,0,0)
+	COMMPAGE_DESCRIPTOR(bzero_scalar,_COMM_PAGE_BZERO,0,kHasSSE2)

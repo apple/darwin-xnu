@@ -85,7 +85,7 @@ struct image_params {
 	user_size_t 	ip_arch_size;		/* subfile length in ip_vp */
 	char		ip_interp_name[IMG_SHSIZE];	/* interpreter name */
 
-	/* Next two fields are for support of Classic... */
+	/* Next two fields are for support of architecture translation... */
 	char		*ip_p_comm;		/* optional alt p->p_comm */
 	char		*ip_tws_cache_name;	/* task working set cache */
 	struct vfs_context	*ip_vfs_context;	/* VFS context */
@@ -98,7 +98,11 @@ struct image_params {
  */
 #define	IMGPF_NONE	0x00000000		/* No flags */
 #define	IMGPF_INTERPRET	0x00000001		/* Interpreter invoked */
+#if defined (__i386__) || defined(__x86_64__)
+#define	IMGPF_POWERPC	0x00000002		/* ppc mode */
+#else
 #define	IMGPF_RESERVED1	0x00000002		/* reserved */
+#endif
 #define	IMGPF_WAS_64BIT	0x00000004		/* exec from a 64Bit binary */
 #define	IMGPF_IS_64BIT	0x00000008		/* exec to a 64Bit binary */
 

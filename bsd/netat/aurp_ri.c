@@ -33,6 +33,9 @@
  *
  *	File: ri.c
  */
+ 
+#ifdef AURP_SUPPORT
+
 #include <sys/errno.h>
 #include <sys/types.h>
 #include <sys/param.h>
@@ -158,14 +161,12 @@ void AURPsndRIRsp(state)
 	gbuf_t *m;
 	aurp_hdr_t *hdrp;
 	short len = 0;
-	int s, msize = 0;
+	int msize = 0;
 
-	ATDISABLE(s, aurpgen_lock);
 
 	/* make sure we're in a valid state to send RI response */
 	if ((state->snd_state == AURPSTATE_Unconnected) ||
 		(state->snd_state == AURPSTATE_WaitingForRIAck2)) {
-		ATENABLE(s, aurpgen_lock);
 		return;
 	}
 
@@ -173,7 +174,6 @@ void AURPsndRIRsp(state)
 	state->snd_state = AURPSTATE_WaitingForRIAck1;
 
 	if (state->rsp_m == 0) {
-		ATENABLE(s, aurpgen_lock);
 		msize = sizeof(aurp_hdr_t);
 		if ((m = (gbuf_t *)gbuf_alloc(msize+AURP_MaxPktSize, PRI_MED)) == 0) {
 			timeout(AURPsndRIRsp_locked, state, AURP_RetryInterval*HZ);
@@ -207,8 +207,6 @@ void AURPsndRIRsp(state)
 	timeout(AURPsndRIRsp_locked, state, AURP_RetryInterval*HZ);
 	state->snd_tmo = 1;
 
-	if (msize == 0)
-		ATENABLE(s, aurpgen_lock);
 
 	/* send the packet */
 	if (m) {
@@ -235,13 +233,11 @@ void AURPsndRIUpd(state)
 	short len = 0;
 	int s, msize = 0;
 
-	ATDISABLE(s, aurpgen_lock);
 
 	/* make sure we're in a valid state to send update */
 	if (state->snd_next_entry || (state->upd_m == 0) ||
 		(state->snd_state == AURPSTATE_Unconnected) ||
 			(state->snd_state == AURPSTATE_WaitingForRIAck1)) {
-		ATENABLE(s, aurpgen_lock);
 		return;
 	}
 
@@ -249,7 +245,6 @@ void AURPsndRIUpd(state)
 	state->snd_state = AURPSTATE_WaitingForRIAck2;
 
 	if (state->snd_tmo == 0) {
-		ATENABLE(s, aurpgen_lock);
 		msize = sizeof(aurp_hdr_t);
 		m = state->upd_m;
 		len = gbuf_len(m);
@@ -270,8 +265,6 @@ void AURPsndRIUpd(state)
 	timeout(AURPsndRIUpd_locked, state, AURP_RetryInterval*HZ);
 	state->snd_tmo = 1;
 
-	if (msize == 0)
-		ATENABLE(s, aurpgen_lock);
 
 	/* send the packet */
 	if (m) {
@@ -289,12 +282,10 @@ void AURPrcvRIReq(state, m)
 	aurp_hdr_t *hdrp = (aurp_hdr_t *)gbuf_rptr(m);
 	int s;
 
-	ATDISABLE(s, aurpgen_lock);
 
 	/* make sure we're in a valid state to accept it */
 	if ((state->snd_state == AURPSTATE_Unconnected) ||
 			(state->snd_state == AURPSTATE_WaitingForRIAck2)) {
-		ATENABLE(s, aurpgen_lock);
 		dPrintf(D_M_AURP, D_L_WARNING, ("AURPrcvRIReq: unexpected request\n"));
 		gbuf_freem(m);
 		return;
@@ -302,7 +293,6 @@ void AURPrcvRIReq(state, m)
 
 	/* check for the correct connection id */
 	if (hdrp->connection_id != state->snd_connection_id) {
-		ATENABLE(s, aurpgen_lock);
 		dPrintf(D_M_AURP, D_L_WARNING,
 			("AURPrcvRIReq: invalid connection id, r=%d, m=%d\n",
 			hdrp->connection_id, state->snd_connection_id));
@@ -316,10 +306,8 @@ void AURPrcvRIReq(state, m)
 			gbuf_freem(state->rsp_m);
 			state->rsp_m = 0;
 		}
-		ATENABLE(s, aurpgen_lock);
 		AURPsndRIRsp(state);
-	} else
-		ATENABLE(s, aurpgen_lock);
+	} 
 
 	gbuf_freem(m);
 }
@@ -330,13 +318,10 @@ void AURPrcvRIRsp(state, m)
 	gbuf_t *m;
 {
 	aurp_hdr_t *hdrp = (aurp_hdr_t *)gbuf_rptr(m);
-	int s;
 
-	ATDISABLE(s, aurpgen_lock);
 
 	/* make sure we're in a valid state to accept it */
 	if (state->rcv_state != AURPSTATE_WaitingForRIRsp) {
-		ATENABLE(s, aurpgen_lock);
 		dPrintf(D_M_AURP, D_L_WARNING, ("AURPrcvRIRsp: unexpected response\n"));
 		gbuf_freem(m);
 		return;
@@ -344,7 +329,6 @@ void AURPrcvRIRsp(state, m)
 
 	/* check for the correct connection id */
 	if (hdrp->connection_id != state->rcv_connection_id) {
-		ATENABLE(s, aurpgen_lock);
 		dPrintf(D_M_AURP, D_L_WARNING,
 			("AURPrcvRIRsp: invalid connection id, r=%d, m=%d\n",
 			hdrp->connection_id, state->rcv_connection_id));
@@ -354,7 +338,6 @@ void AURPrcvRIRsp(state, m)
 
 	/* check for the correct sequence number */
 	if (hdrp->sequence_number != state->rcv_sequence_number) {
-		ATENABLE(s, aurpgen_lock);
 		if ( ((state->rcv_sequence_number == AURP_FirstSeqNum) &&
 			(hdrp->sequence_number == AURP_LastSeqNum)) ||
 		(hdrp->sequence_number == (state->rcv_sequence_number-1)) ) {
@@ -370,7 +353,6 @@ void AURPrcvRIRsp(state, m)
 	gbuf_rinc(m,sizeof(*hdrp));
 	if (hdrp->flags & AURPFLG_LAST)
 		state->rcv_state = AURPSTATE_Connected;
-	ATENABLE(s, aurpgen_lock);
 
 	dPrintf(D_M_AURP, D_L_INFO, ("AURPrcvRIRsp: len=%ld\n", gbuf_len(m)));
 
@@ -463,12 +445,10 @@ void AURPrcvRIAck(state, m)
 	gbuf_t *dat_m;
 	aurp_hdr_t *hdrp = (aurp_hdr_t *)gbuf_rptr(m);
 	unsigned char snd_state;
-	int s;
 	int flag;
 
 	dPrintf(D_M_AURP, D_L_INFO, ("AURPrcvRIAck: state=%d\n",
 		state->snd_state));
-	ATDISABLE(s, aurpgen_lock);
 
 	/* make sure we're in a valid state to accept it */
 	snd_state = state->snd_state;
@@ -498,7 +478,6 @@ void AURPrcvRIAck(state, m)
 
 		/* update state info */
 		state->snd_state = AURPSTATE_Connected;
-		ATENABLE(s, aurpgen_lock);
 
 		if (state->snd_next_entry) /* more RI responses to send? */
 			AURPsndRIRsp(state);
@@ -508,8 +487,7 @@ void AURPrcvRIAck(state, m)
 			AURPsndZRsp(state, dat_m, flag);
 		else if (dat_m)
 			gbuf_freem(dat_m);
-	} else
-		ATENABLE(s, aurpgen_lock);
+	} 
 
 	gbuf_freem(m);
 }
@@ -837,17 +815,14 @@ void AURPrtupdate(entry, ev)
 				(!(state->snd_sui & AURPFLG_ND))) continue;
 		if ((ev == AURPEV_NetDistChange) &&
 				(!(state->snd_sui & AURPFLG_NDC))) continue;
-		ATDISABLE(s, aurpgen_lock);
 	  if ((state->snd_state != AURPSTATE_Unconnected) &&
 			(state->snd_state != AURPSTATE_WaitingForRIAck2)) {
 		if ((m = state->upd_m) == 0) {
 			/*
 			 * we don't have the RI update buffer yet, allocate one
 			 */
-			ATENABLE(s, aurpgen_lock);
 			if ((m = (gbuf_t *)gbuf_alloc(msize+AURP_MaxPktSize, PRI_HI)) == 0)
 				continue;
-			ATDISABLE(s, aurpgen_lock);
 			state->upd_m = m;
 			gbuf_rinc(m,msize);
 			gbuf_wset(m,0);
@@ -865,11 +840,11 @@ void AURPrtupdate(entry, ev)
 		 * if the RI update buffer is full, send the RI update now
 		 */
 		if (gbuf_len(m) > (AURP_MaxPktSize-6)) {
-			ATENABLE(s, aurpgen_lock);
 			AURPsndRIUpd(state);
 			continue;
 		}
 	  }
-		ATENABLE(s, aurpgen_lock);
 	}
 }
+
+#endif  /* AURP_SUPPORT */

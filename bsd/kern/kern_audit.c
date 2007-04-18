@@ -437,7 +437,7 @@ audit_worker(void)
 	AUDIT_PRINTF(("audit_worker starting\n"));
 
 	TAILQ_INIT(&ar_worklist);
-	audit_cred = NULL;
+	audit_cred = NOCRED;
 	audit_p = current_proc();
 	audit_vp = NULL;
 
@@ -466,7 +466,7 @@ audit_worker(void)
 			old_vp = audit_vp;
 			audit_cred = audit_replacement_cred;
 			audit_vp = audit_replacement_vp;
-			audit_replacement_cred = NULL;
+			audit_replacement_cred = NOCRED;
 			audit_replacement_vp = NULL;
 			audit_replacement_flag = 0;
 
@@ -485,8 +485,7 @@ audit_worker(void)
 				AUDIT_PRINTF(("Closing old audit file\n"));
 				vn_close(old_vp, audit_close_flags, old_cred,
 				    audit_p);
-				kauth_cred_rele(old_cred);
-				old_cred = NOCRED;
+				kauth_cred_unref(&old_cred);
 				old_vp = NULL;
 				AUDIT_PRINTF(("Audit file closed\n"));
 			}
@@ -994,8 +993,12 @@ auditon(struct proc *p, __unused struct auditon_args *uap, __unused register_t *
 			
 			my_cred = kauth_cred_proc_ref(tp);
 			/* 
-			 * set the credential with new info.  If there is no change we get back 
-			 * the same credential we passed in.
+			 * Set the credential with new info.  If there is no
+			 * change, we get back the same credential we passed
+			 * in; if there is a change, we drop the reference on
+			 * the credential we passed in.  The subsequent
+			 * compare is safe, because it is a pointer compare
+			 * rather than a contents compare.
 			 */
 			temp_auditinfo = my_cred->cr_au;
 			temp_auditinfo.ai_mask.am_success = 
@@ -1012,16 +1015,15 @@ auditon(struct proc *p, __unused struct auditon_args *uap, __unused register_t *
 				 */
 				if (tp->p_ucred != my_cred) {
 					proc_unlock(tp);
-					kauth_cred_rele(my_cred);
-					kauth_cred_rele(my_new_cred);
+					kauth_cred_unref(&my_new_cred);
 					/* try again */
 					continue;
 				}
 				tp->p_ucred = my_new_cred;
 				proc_unlock(tp);
 			}
-			/* drop our extra reference */
-			kauth_cred_rele(my_cred);
+			/* drop old proc reference or our extra reference */
+			kauth_cred_unref(&my_cred);
 			break;
 		}
 		break;
@@ -1116,8 +1118,11 @@ setauid(struct proc *p, struct setauid_args *uap, __unused register_t *retval)
 		
 		my_cred = kauth_cred_proc_ref(p);
 		/* 
-		 * set the credential with new info.  If there is no change we get back 
-		 * the same credential we passed in.
+		 * Set the credential with new info.  If there is no change,
+		 * we get back the same credential we passed in; if there is
+		 * a change, we drop the reference on the credential we
+		 * passed in.  The subsequent compare is safe, because it is
+		 * a pointer compare rather than a contents compare.
 		 */
 		temp_auditinfo = my_cred->cr_au;
 		temp_auditinfo.ai_auid = temp_au_id;
@@ -1131,16 +1136,15 @@ setauid(struct proc *p, struct setauid_args *uap, __unused register_t *retval)
 			 */
 			if (p->p_ucred != my_cred) {
 				proc_unlock(p);
-				kauth_cred_rele(my_cred);
-				kauth_cred_rele(my_new_cred);
+				kauth_cred_unref(&my_new_cred);
 				/* try again */
 				continue;
 			}
 			p->p_ucred = my_new_cred;
 			proc_unlock(p);
 		}
-		/* drop our extra reference */
-		kauth_cred_rele(my_cred);
+		/* drop old proc reference or our extra reference */
+		kauth_cred_unref(&my_cred);
 		break;
 	}
 
@@ -1187,6 +1191,7 @@ setaudit(struct proc *p, struct setaudit_args *uap, __unused register_t *retval)
 {
 	int error;
 	struct auditinfo temp_auditinfo;
+	kauth_cred_t safecred;
 
 	error = suser(kauth_cred_get(), &p->p_acflag);
 	if (error)
@@ -1210,8 +1215,11 @@ setaudit(struct proc *p, struct setaudit_args *uap, __unused register_t *retval)
 		
 		my_cred = kauth_cred_proc_ref(p);
 		/* 
-		 * set the credential with new info.  If there is no change we get back 
-		 * the same credential we passed in.
+		 * Set the credential with new info.  If there is no change,
+		 * we get back the same credential we passed in; if there is
+		 * a change, we drop the reference on the credential we
+		 * passed in.  The subsequent compare is safe, because it is
+		 * a pointer compare rather than a contents compare.
 		 */
 		my_new_cred = kauth_cred_setauditinfo(my_cred, &temp_auditinfo);
 	
@@ -1223,23 +1231,24 @@ setaudit(struct proc *p, struct setaudit_args *uap, __unused register_t *retval)
 			 */
 			if (p->p_ucred != my_cred) {
 				proc_unlock(p);
-				kauth_cred_rele(my_cred);
-				kauth_cred_rele(my_new_cred);
+				kauth_cred_unref(&my_new_cred);
 				/* try again */
 				continue;
 			}
 			p->p_ucred = my_new_cred;
 			proc_unlock(p);
 		}
-		/* drop our extra reference */
-		kauth_cred_rele(my_cred);
+		/* drop old proc reference or our extra reference */
+		kauth_cred_unref(&my_cred);
 		break;
 	}
 
 	/* propagate the change from the process to Mach task */
 	set_security_token(p);
 
-	audit_arg_auditinfo(&p->p_ucred->cr_au);
+	safecred = kauth_cred_proc_ref(p);
+	audit_arg_auditinfo(&safecred->cr_au);
+	kauth_cred_unref(&safecred);
 
 	return (0);
 }
@@ -1333,6 +1342,7 @@ audit_new(int event, struct proc *p, __unused struct uthread *uthread)
 {
 	struct kaudit_record *ar;
 	int no_record;
+	kauth_cred_t safecred;
 
 	/*
 	 * Eventually, there may be certain classes of events that
@@ -1375,16 +1385,20 @@ audit_new(int event, struct proc *p, __unused struct uthread *uthread)
 	ar->k_ar.ar_event = event;
 	nanotime(&ar->k_ar.ar_starttime);
 
+	safecred = kauth_cred_proc_ref(p);
 	/* Export the subject credential. */
-	cru2x(p->p_ucred, &ar->k_ar.ar_subj_cred);
-	ar->k_ar.ar_subj_ruid = p->p_ucred->cr_ruid;
-	ar->k_ar.ar_subj_rgid = p->p_ucred->cr_rgid;
-	ar->k_ar.ar_subj_egid = p->p_ucred->cr_groups[0];
-	ar->k_ar.ar_subj_auid = p->p_ucred->cr_au.ai_auid;
-	ar->k_ar.ar_subj_asid = p->p_ucred->cr_au.ai_asid;
+	cru2x(safecred, &ar->k_ar.ar_subj_cred);
+
+	ar->k_ar.ar_subj_ruid = safecred->cr_ruid;
+	ar->k_ar.ar_subj_rgid = safecred->cr_rgid;
+	ar->k_ar.ar_subj_egid = safecred->cr_groups[0];
+	ar->k_ar.ar_subj_auid = safecred->cr_au.ai_auid;
+	ar->k_ar.ar_subj_asid = safecred->cr_au.ai_asid;
+	ar->k_ar.ar_subj_amask = safecred->cr_au.ai_mask;
+	ar->k_ar.ar_subj_term = safecred->cr_au.ai_termid;
+	kauth_cred_unref(&safecred);
+
 	ar->k_ar.ar_subj_pid = p->p_pid;
-	ar->k_ar.ar_subj_amask = p->p_ucred->cr_au.ai_mask;
-	ar->k_ar.ar_subj_term = p->p_ucred->cr_au.ai_termid;
 	bcopy(p->p_comm, ar->k_ar.ar_subj_comm, MAXCOMLEN);
 
 	return (ar);

@@ -69,7 +69,7 @@ struct mach_header {
 
 /* Constant for the magic field of the mach_header */
 #define	MH_MAGIC	0xfeedface	/* the mach magic number */
-#define MH_CIGAM	NXSwapInt(MH_MAGIC)
+#define MH_CIGAM	0xcefaedfe
 
 /*
  * The layout of the file depends on the filetype.  For all but the MH_OBJECT

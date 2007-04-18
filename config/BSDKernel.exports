@@ -124,7 +124,6 @@ _err_bwrite
 _err_close
 _err_copyfile
 _err_create
-_err_devblocksize
 _err_exchange
 _err_fsync
 _err_getattr
@@ -304,6 +303,7 @@ _kauth_cred_ref
 _kauth_cred_rele
 _kauth_cred_uid2guid
 _kauth_cred_uid2ntsid
+_kauth_cred_unref
 _kauth_deregister_scope
 _kauth_getgid
 _kauth_getruid
@@ -408,7 +408,6 @@ _nop_bwrite
 _nop_close
 _nop_copyfile
 _nop_create
-_nop_devblocksize
 _nop_exchange
 _nop_fsync
 _nop_getattr

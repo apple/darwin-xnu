@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2006 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -37,89 +37,87 @@
         .align  2, 0x90
 
 Lmach_absolute_time:
-
 	int	$0x3
 	ret
 
-	COMMPAGE_DESCRIPTOR(mach_absolute_time,_COMM_PAGE_ABSOLUTE_TIME,1,0)
+	COMMPAGE_DESCRIPTOR(mach_absolute_time,_COMM_PAGE_ABSOLUTE_TIME,0,0)
 
-
+/* Nanotime is being moved out of the way of bcopy in the commpage.
+ * First we put it in both places, old and new.  Then, when all the build
+ * trains have rebuilt libSystem, we can remove the deprecated instance.
+ */
+ 
+/* return nanotime in %edx:%eax */
+Lold_nanotime:
 Lnanotime:
+	push	%ebp
+	mov	%esp,%ebp
+	push	%esi
+	push	%edi
+	push	%ebx
 
-	pushl	%ebx
-	pushl	%esi
-	pushl	%edi
-	pushl	%ebp
-	movl	$(_COMM_PAGE_NANOTIME_INFO), %esi
+0:
+	mov	_COMM_PAGE_NT_TSC_BASE,%esi
+	mov	_COMM_PAGE_NT_TSC_BASE+4,%edi
 
-	/*
-	 * The nanotime info consists of:
-	 *	- base_tsc	64-bit timestamp register value
-	 *	- base_ns	64-bit corresponding nanosecond uptime value
-	 *	- scale		32-bit current scale multiplier
-	 *	- shift		32-bit current shift divider
-	 *	- check_tsc	64-bit timestamp check value
-	 *
-	 * This enables an timestamp register's value, tsc, to be converted
-	 * into a nanosecond nanotime value, ns:
-	 *
-	 * 	ns = base_ns + ((tsc - base_tsc) * scale >> shift)
-	 *
-	 * The kernel updates this every tick or whenever a performance
-	 * speed-step changes the scaling. To avoid locking, a duplicated
-	 * sequence counting scheme is used. The base_tsc value is updated
-	 * whenever the info starts to be changed, and check_tsc is updated
-	 * to the same value at the end of the update. The regularity of
-	 * update ensures that (tsc - base_tsc) is a 32-bit quantity.
-	 * When a conversion is performed, we read base_tsc before we start
-	 * and check_tsc at the end -- if there's a mis-match we repeat.
-	 * It's sufficient to compare only the low-order 32-bits. 
-	 */
+	rdtsc
+	sub	%esi,%eax
+	sbb	%edi,%edx
 
-1:
-	//
-	//  Read nanotime info and stash in registers.
-	//
-	movl	NANOTIME_BASE_TSC(%esi), %ebx	// ebx := lo(base_tsc)
-	movl	NANOTIME_BASE_NS(%esi), %ebp
-	movl	NANOTIME_BASE_NS+4(%esi), %edi	// edi:ebp := base_ns
-	movl	NANOTIME_SHIFT(%esi), %ecx	// ecx := shift
-	//
-	// Read timestamp register (tsc) and calculate delta.
-	//
-	rdtsc					// edx:eax := tsc
-	subl	%ebx, %eax			// eax := (tsc - base_tsc)
-	movl	NANOTIME_SCALE(%esi), %edx	// edx := shift
-	//
-	// Check for consistency and re-read if necessary.
-	//
-	cmpl	NANOTIME_CHECK_TSC(%esi), %ebx
-	jne	1b
+	mov	_COMM_PAGE_NT_SCALE,%ecx
 
-	//
-	// edx:eax := ((tsc - base_tsc) * scale)
-	//
-	mull	%edx
+	mov	%edx,%ebx
+	mull	%ecx
+	mov	%ebx,%eax
+	mov	%edx,%ebx
+	mull	%ecx
+	add	%ebx,%eax
+	adc	$0,%edx
 
-	//
-	// eax := ((tsc - base_tsc) * scale >> shift)
-	//
-	shrdl	%cl, %edx, %eax
-	andb	$32, %cl
-	cmovnel	%edx, %eax		// %eax := %edx if shift == 32
-	xorl	%edx, %edx
+	add	_COMM_PAGE_NT_NS_BASE,%eax
+	adc	_COMM_PAGE_NT_NS_BASE+4,%edx
 
-	//
-	// Add base_ns: 
-	// edx:eax = (base_ns + ((tsc - base_tsc) * scale >> shift))
-	//
-	addl	%ebp, %eax
-	adcl	%edi, %edx
+	cmp	_COMM_PAGE_NT_TSC_BASE,%esi
+	jne	0b
+	cmp	_COMM_PAGE_NT_TSC_BASE+4,%edi
+	jne	0b
 
-	popl	%ebp
-	popl	%edi
-	popl	%esi
-	popl	%ebx
+	pop	%ebx
+	pop	%edi
+	pop	%esi
+	pop	%ebp
 	ret
 
-	COMMPAGE_DESCRIPTOR(nanotime,_COMM_PAGE_NANOTIME,1,0)
+	COMMPAGE_DESCRIPTOR(nanotime,_COMM_PAGE_NANOTIME,0,0)
+	COMMPAGE_DESCRIPTOR(old_nanotime,_COMM_PAGE_OLD_NANOTIME,0,0)
+
+
+/* The 64-bit version.  We return the 64-bit nanotime in %rax,
+ * and by convention we must preserve %r9, %r10, and %r11.
+ */
+	.text
+	.align	2
+	.code64
+Lold_nanotime_64:
+Lnanotime_64:				// NB: must preserve r9, r10, and r11
+	pushq	%rbp			// set up a frame for backtraces
+	movq	%rsp,%rbp
+	movq	$_COMM_PAGE_32_TO_64(_COMM_PAGE_NT_TSC_BASE),%rsi
+1:
+	movq	_NT_TSC_BASE(%rsi),%r8	// r8  := base_tsc
+	rdtsc				// edx:eax := tsc
+	shlq	$32,%rdx		// rax := ((edx << 32) | eax), ie 64-bit tsc
+	orq	%rdx,%rax
+	subq	%r8, %rax		// rax := (tsc - base_tsc)
+	movl	_NT_SCALE(%rsi),%ecx
+	mulq	%rcx			// rdx:rax := (tsc - base_tsc) * scale
+	shrdq	$32,%rdx,%rax		// _COMM_PAGE_NT_SHIFT is always 32
+	addq	_NT_NS_BASE(%rsi),%rax	// (((tsc - base_tsc) * scale) >> 32) + ns_base
+	
+	cmpq	_NT_TSC_BASE(%rsi),%r8	// did the data change during computation?
+	jne	1b
+	popq	%rbp
+	ret
+
+	COMMPAGE_DESCRIPTOR(nanotime_64,_COMM_PAGE_NANOTIME,0,0)
+	COMMPAGE_DESCRIPTOR(old_nanotime_64,_COMM_PAGE_OLD_NANOTIME,0,0)

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -53,10 +53,13 @@
 #include <vm/vm_kern.h>
 #include <vm/vm_map.h>
 #include <vm/vm_page.h>
+#include <vm/vm_protos.h>
 
 #include <mach/mach_vm.h>
 #include <mach/shared_memory_server.h>
 #include <vm/vm_shared_memory_server.h>
+
+int shared_region_trace_level = SHARED_REGION_TRACE_ERROR;
 
 #if DEBUG
 int lsf_debug = 0;
@@ -115,6 +118,7 @@ lsf_hash_lookup(
 
 static load_struct_t *
 lsf_hash_delete(
+	load_struct_t			*target_entry, /* optional */
         void            		*file_object,
 	vm_offset_t			base_offset,
 	shared_region_task_mappings_t	sm_info);
@@ -149,6 +153,7 @@ lsf_unload(
 
 static void
 lsf_deallocate(
+	load_struct_t			*target_entry,	/* optional */
         void     			*file_object,
 	vm_offset_t			base_offset,
 	shared_region_task_mappings_t	sm_info,
@@ -159,11 +164,6 @@ lsf_deallocate(
 		((((natural_t)file_object) & 0xffffff) % size)
 
 /* Implementation */
-vm_offset_t		shared_file_text_region;
-vm_offset_t		shared_file_data_region;
-
-ipc_port_t		shared_text_region_handle;
-ipc_port_t		shared_data_region_handle;
 vm_offset_t		shared_file_mapping_array = 0;
 
 shared_region_mapping_t default_environment_shared_regions = NULL;
@@ -187,7 +187,8 @@ ipc_port_t		com_region_handle32 = NULL;
 ipc_port_t		com_region_handle64 = NULL;
 vm_map_t		com_region_map32 = NULL;
 vm_map_t		com_region_map64 = NULL;
-vm_size_t		com_region_size = _COMM_PAGE_AREA_LENGTH;
+vm_size_t		com_region_size32 = _COMM_PAGE32_AREA_LENGTH;
+vm_size_t		com_region_size64 = _COMM_PAGE64_AREA_LENGTH;
 shared_region_mapping_t	com_mapping_resource = NULL;
 
 
@@ -215,12 +216,33 @@ vm_set_shared_region(
 	task_t	task,
 	shared_region_mapping_t	shared_region)
 {
+	shared_region_mapping_t old_region;
+
 	SHARED_REGION_DEBUG(("vm_set_shared_region(task=%p, "
-			     "shared_region=%p)\n",
-			     task, shared_region));
+			     "shared_region=%p[%x,%x,%x])\n",
+			     task, shared_region,
+			     shared_region ? shared_region->fs_base : 0,
+			     shared_region ? shared_region->system : 0,
+			     shared_region ? shared_region->flags : 0));
 	if (shared_region) {
 		assert(shared_region->ref_count > 0);
 	}
+
+	old_region = task->system_shared_region;
+	SHARED_REGION_TRACE(
+		SHARED_REGION_TRACE_INFO,
+		("shared_region: %p set_region(task=%p)"
+		 "old=%p[%x,%x,%x], new=%p[%x,%x,%x]\n",
+		 current_thread(), task,
+		 old_region,
+		 old_region ? old_region->fs_base : 0,
+		 old_region ? old_region->system : 0,
+		 old_region ? old_region->flags : 0,
+		 shared_region,
+		 shared_region ? shared_region->fs_base : 0,
+		 shared_region ? shared_region->system : 0,
+		 shared_region ? shared_region->flags : 0));
+
 	task->system_shared_region = shared_region;
 	return KERN_SUCCESS;
 }
@@ -293,7 +315,9 @@ shared_region_mapping_create(
 	vm_offset_t		client_base,
 	shared_region_mapping_t	*shared_region,
 	vm_offset_t		alt_base,
-	vm_offset_t		alt_next)
+	vm_offset_t		alt_next,
+	int			fs_base,
+	int			system)
 {
 	SHARED_REGION_DEBUG(("shared_region_mapping_create()\n"));
 	*shared_region = (shared_region_mapping_t) 
@@ -306,8 +330,8 @@ shared_region_mapping_create(
 	shared_region_mapping_lock_init((*shared_region));
 	(*shared_region)->text_region = text_region;
 	(*shared_region)->text_size = text_size;
-	(*shared_region)->fs_base = ENV_DEFAULT_ROOT;
-	(*shared_region)->system = cpu_type();
+	(*shared_region)->fs_base = fs_base;
+	(*shared_region)->system = system;
 	(*shared_region)->data_region = data_region;
 	(*shared_region)->data_size = data_size;
 	(*shared_region)->region_mappings = region_mappings;
@@ -362,6 +386,8 @@ shared_region_mapping_info(
 	*next = shared_region->next;
 
 	shared_region_mapping_unlock(shared_region);
+	
+	return KERN_SUCCESS;
 }
 
 kern_return_t
@@ -387,7 +413,7 @@ shared_region_mapping_dealloc_lock(
 {
 	struct shared_region_task_mappings sm_info;
 	shared_region_mapping_t next = NULL;
-	int ref_count;
+	unsigned int ref_count;
 
 	SHARED_REGION_DEBUG(("shared_region_mapping_dealloc_lock"
 			     "(shared_region=%p,%d,%d) ref_count=%d\n",
@@ -523,7 +549,7 @@ shared_region_object_create(
 
 	/* Create a named object based on a submap of specified size */
 
-	new_map = vm_map_create(pmap_create(0), 0, size, TRUE);
+	new_map = vm_map_create(pmap_create(0, FALSE), 0, size, TRUE);
 	user_entry->backing.map = new_map;
 	user_entry->internal = TRUE;
 	user_entry->is_sub_map = TRUE;
@@ -544,7 +570,9 @@ shared_region_object_create(
 /* relevant as the system default flag is not set */
 kern_return_t
 shared_file_create_system_region(
-		shared_region_mapping_t	*shared_region)
+	shared_region_mapping_t	*shared_region,
+	int			fs_base,
+	int			system)
 {
 	ipc_port_t		text_handle;
 	ipc_port_t		data_handle;
@@ -566,10 +594,15 @@ shared_file_create_system_region(
 				     kret));
 		return kret;
 	}
-	kret = shared_region_mapping_create(text_handle,
-			text_size, data_handle, data_size, mapping_array,
-			GLOBAL_SHARED_TEXT_SEGMENT, shared_region, 
-			SHARED_ALTERNATE_LOAD_BASE, SHARED_ALTERNATE_LOAD_BASE);
+	kret = shared_region_mapping_create(text_handle, text_size,
+					    data_handle, data_size,
+					    mapping_array,
+					    GLOBAL_SHARED_TEXT_SEGMENT,
+					    shared_region, 
+					    SHARED_ALTERNATE_LOAD_BASE,
+					    SHARED_ALTERNATE_LOAD_BASE,
+					    fs_base,
+					    system);
 	if(kret) {
 		SHARED_REGION_DEBUG(("shared_file_create_system_region: "
 				     "shared_region_mapping_create failed "
@@ -875,14 +908,14 @@ shared_com_boot_time_init(void)
 
 	/* create com page regions, 1 each for 32 and 64-bit code  */
 	if((kret = shared_region_object_create(
-			com_region_size, 
+			com_region_size32, 
 			&com_region_handle32))) {
 		panic("shared_com_boot_time_init: "
 				"unable to create 32-bit comm page\n");
 		return;
 	}
 	if((kret = shared_region_object_create(
-			com_region_size, 
+			com_region_size64, 
 			&com_region_handle64))) {
 		panic("shared_com_boot_time_init: "
 				"unable to create 64-bit comm page\n");
@@ -898,9 +931,12 @@ shared_com_boot_time_init(void)
 	/* wrap the com region in its own shared file mapping structure */
 	/* 64-bit todo: call "shared_region_mapping_create" on com_region_handle64 */
 	kret = shared_region_mapping_create(com_region_handle32,
-		com_region_size, NULL, 0, 0,
-		_COMM_PAGE_BASE_ADDRESS, &com_mapping_resource,
-		0, 0);
+					    com_region_size32,
+					    NULL, 0, 0,
+					    _COMM_PAGE_BASE_ADDRESS,
+					    &com_mapping_resource,
+					    0, 0,
+					    ENV_DEFAULT_ROOT, cpu_type());
 	if (kret) {
 	  panic("shared_region_mapping_create failed for commpage");
 	}
@@ -911,6 +947,8 @@ shared_file_boot_time_init(
 		unsigned int fs_base, 
 		unsigned int system)
 {
+	mach_port_t		text_region_handle;
+	mach_port_t		data_region_handle;
 	long			text_region_size;
 	long			data_region_size;
 	shared_region_mapping_t	new_system_region;
@@ -921,24 +959,23 @@ shared_file_boot_time_init(
 			     fs_base, system));
 	text_region_size = 0x10000000;
 	data_region_size = 0x10000000;
-	shared_file_init(&shared_text_region_handle,
+	shared_file_init(&text_region_handle,
 			 text_region_size,
-			 &shared_data_region_handle,
+			 &data_region_handle,
 			 data_region_size,
 			 &shared_file_mapping_array);
 	
-	shared_region_mapping_create(shared_text_region_handle,
+	shared_region_mapping_create(text_region_handle,
 				     text_region_size,
-				     shared_data_region_handle,
+				     data_region_handle,
 				     data_region_size,
 				     shared_file_mapping_array,
 				     GLOBAL_SHARED_TEXT_SEGMENT,
 				     &new_system_region,
 				     SHARED_ALTERNATE_LOAD_BASE,
-				     SHARED_ALTERNATE_LOAD_BASE);
+				     SHARED_ALTERNATE_LOAD_BASE,
+				     fs_base, system);
 
-	new_system_region->fs_base = fs_base;
-	new_system_region->system = system;
 	new_system_region->flags = SHARED_REGION_SYSTEM;
 
 	/* grab an extra reference for the caller */
@@ -976,8 +1013,7 @@ shared_file_init(
 	vm_offset_t	*file_mapping_array)
 {
 	shared_file_info_t	*sf_head;
-	vm_offset_t		table_mapping_address;
-	int			data_table_size;
+	vm_size_t		data_table_size;
 	int			hash_size;
 	kern_return_t		kret;
 
@@ -1005,14 +1041,13 @@ shared_file_init(
 
 	data_table_size = data_region_size >> 9;
 	hash_size = data_region_size >> 14;
-	table_mapping_address = data_region_size - data_table_size;
 
 	if(shared_file_mapping_array == 0) {
 		vm_map_address_t map_addr;
 		buf_object = vm_object_allocate(data_table_size);
 
 		if(vm_map_find_space(kernel_map, &map_addr,
-				     data_table_size, 0, &entry)
+				     data_table_size, 0, 0, &entry)
 		   != KERN_SUCCESS) {
 			panic("shared_file_init: no space");
 		}
@@ -1081,16 +1116,8 @@ shared_file_init(
 		*file_mapping_array = shared_file_mapping_array;
 	}
 
-	kret = vm_map(((vm_named_entry_t)
-		       (*data_region_handle)->ip_kobject)->backing.map,
-		      &table_mapping_address,
-		      data_table_size, 0,
-		      SHARED_LIB_ALIAS | VM_FLAGS_FIXED, 
-		      sfma_handle, 0, FALSE, 
-		      VM_PROT_READ, VM_PROT_READ, VM_INHERIT_NONE);
-
 	SHARED_REGION_DEBUG(("shared_file_init() done\n"));
-	return kret;
+	return KERN_SUCCESS;
 }
 
 static kern_return_t
@@ -1131,8 +1158,10 @@ shared_file_header_init(
 		if (vm_map_wire(kernel_map, hash_cram_address,
 				hash_cram_address + cram_size, 
 				VM_PROT_DEFAULT, FALSE) != KERN_SUCCESS) {
-			printf("shared_file_header_init: "
-			       "No memory for data table\n");
+			SHARED_REGION_TRACE(
+				SHARED_REGION_TRACE_ERROR,
+				("shared_region: shared_file_header_init: "
+				 "No memory for data table\n"));
 			return KERN_NO_SPACE;
 		}
 		allocable_hash_pages -= cram_pages;
@@ -1145,6 +1174,175 @@ shared_file_header_init(
 	return KERN_SUCCESS;
 }
 
+
+extern void shared_region_dump_file_entry(
+	int		trace_level,
+	load_struct_t	*entry);	/* forward */
+
+void shared_region_dump_file_entry(
+	int		trace_level,
+	load_struct_t	*entry)
+{
+	int			i;
+	loaded_mapping_t	*mapping;
+
+	if (trace_level > shared_region_trace_level) {
+		return;
+	}
+	printf("shared region: %p: "
+	       "file_entry %p  base_address=0x%x  file_offset=0x%x  "
+	       "%d mappings\n",
+	       current_thread(), entry,
+	       entry->base_address, entry->file_offset, entry->mapping_cnt);
+	mapping = entry->mappings;
+	for (i = 0; i < entry->mapping_cnt; i++) {
+		printf("shared region: %p:\t#%d: "
+		       "offset=0x%x size=0x%x file_offset=0x%x prot=%d\n",
+		       current_thread(),
+		       i,
+		       mapping->mapping_offset,
+		       mapping->size,
+		       mapping->file_offset,
+		       mapping->protection);
+		mapping = mapping->next;
+	}
+}
+
+extern void shared_region_dump_mappings(
+	int				trace_level,
+	struct shared_file_mapping_np	*mappings,
+	int				map_cnt,
+	mach_vm_offset_t		base_offset);	/* forward */
+
+void shared_region_dump_mappings(
+	int				trace_level,
+	struct shared_file_mapping_np	*mappings,
+	int				map_cnt,
+	mach_vm_offset_t		base_offset)
+{
+	int	i;
+
+	if (trace_level > shared_region_trace_level) {
+		return;
+	}
+
+	printf("shared region: %p: %d mappings  base_offset=0x%llx\n",
+	       current_thread(), map_cnt, (uint64_t) base_offset);
+	for (i = 0; i < map_cnt; i++) {
+		printf("shared region: %p:\t#%d: "
+		       "addr=0x%llx, size=0x%llx, file_offset=0x%llx, "
+		       "prot=(%d,%d)\n",
+		       current_thread(),
+		       i,
+		       (uint64_t) mappings[i].sfm_address,
+		       (uint64_t) mappings[i].sfm_size,
+		       (uint64_t) mappings[i].sfm_file_offset,
+		       mappings[i].sfm_max_prot,
+		       mappings[i].sfm_init_prot);
+	}
+}
+
+extern void shared_region_dump_conflict_info(
+	int		trace_level,
+	vm_map_t	map,
+	vm_map_offset_t	offset,
+	vm_map_size_t	size);	/* forward */
+
+void
+shared_region_dump_conflict_info(
+	int		trace_level,
+	vm_map_t	map,
+	vm_map_offset_t	offset,
+	vm_map_size_t	size)
+{
+	vm_map_entry_t	entry;
+	vm_object_t	object;
+	memory_object_t	mem_object;
+	kern_return_t	kr;
+	char		*filename;
+
+	if (trace_level > shared_region_trace_level) {
+		return;
+	}
+
+	object = VM_OBJECT_NULL;
+
+	vm_map_lock_read(map);
+	if (!vm_map_lookup_entry(map, offset, &entry)) {
+		entry = entry->vme_next;
+	}
+	
+	if (entry != vm_map_to_entry(map)) {
+		if (entry->is_sub_map) {
+			printf("shared region: %p: conflict with submap "
+			       "at 0x%llx size 0x%llx !?\n",
+			       current_thread(),
+			       (uint64_t) offset,
+			       (uint64_t) size);
+			goto done;
+		}
+
+		object = entry->object.vm_object;
+		if (object == VM_OBJECT_NULL) {
+			printf("shared region: %p: conflict with NULL object "
+			       "at 0x%llx size 0x%llx !?\n",
+			       current_thread(),
+			       (uint64_t) offset,
+			       (uint64_t) size);
+			object = VM_OBJECT_NULL;
+			goto done;
+		}
+
+		vm_object_lock(object);
+		while (object->shadow != VM_OBJECT_NULL) {
+			vm_object_t	shadow;
+
+			shadow = object->shadow;
+			vm_object_lock(shadow);
+			vm_object_unlock(object);
+			object = shadow;
+		}
+
+		if (object->internal) {
+			printf("shared region: %p: conflict with anonymous "
+			       "at 0x%llx size 0x%llx\n",
+			       current_thread(),
+			       (uint64_t) offset,
+			       (uint64_t) size);
+			goto done;
+		}
+		if (! object->pager_ready) {
+			printf("shared region: %p: conflict with uninitialized "
+			       "at 0x%llx size 0x%llx\n",
+			       current_thread(),
+			       (uint64_t) offset,
+			       (uint64_t) size);
+			goto done;
+		}
+
+		mem_object = object->pager;
+
+		/*
+		 * XXX FBDP: "!internal" doesn't mean it's a vnode pager...
+		 */
+		kr = vnode_pager_get_object_filename(mem_object,
+						     &filename);
+		if (kr != KERN_SUCCESS) {
+			filename = NULL;
+		}
+		printf("shared region: %p: conflict with '%s' "
+		       "at 0x%llx size 0x%llx\n",
+		       current_thread(),
+		       filename ? filename : "<unknown>",
+		       (uint64_t) offset,
+		       (uint64_t) size);
+	}
+done:
+	if (object != VM_OBJECT_NULL) {
+		vm_object_unlock(object);
+	}
+	vm_map_unlock_read(map);
+}
 
 /*
  * map_shared_file:
@@ -1183,6 +1381,11 @@ map_shared_file(
 	if(shared_file_header->hash_init == FALSE) {
 		ret = shared_file_header_init(shared_file_header);
 		if (ret != KERN_SUCCESS) {
+			SHARED_REGION_TRACE(
+				SHARED_REGION_TRACE_ERROR,
+				("shared_region: %p: map_shared_file: "
+				 "shared_file_header_init() failed kr=0x%x\n",
+				 current_thread(), ret));
 			mutex_unlock(&shared_file_header->lock);
 			return KERN_NO_SPACE;
 		}
@@ -1208,6 +1411,19 @@ map_shared_file(
 		file_mapping = file_entry->mappings;
 		while(file_mapping != NULL) {
 			if(i>=map_cnt) {
+				SHARED_REGION_TRACE(
+					SHARED_REGION_TRACE_CONFLICT,
+					("shared_region: %p: map_shared_file: "
+					 "already mapped with "
+					 "more than %d mappings\n",
+					 current_thread(), map_cnt));
+				shared_region_dump_file_entry(
+					SHARED_REGION_TRACE_INFO,
+					file_entry);
+				shared_region_dump_mappings(
+					SHARED_REGION_TRACE_INFO,
+					mappings, map_cnt, base_offset);
+
 				mutex_unlock(&shared_file_header->lock);
 				return KERN_INVALID_ARGUMENT;
 			}
@@ -1217,12 +1433,37 @@ map_shared_file(
 			   mappings[i].sfm_size != file_mapping->size ||	
 			   mappings[i].sfm_file_offset != file_mapping->file_offset ||	
 			   mappings[i].sfm_init_prot != file_mapping->protection) {
+				SHARED_REGION_TRACE(
+					SHARED_REGION_TRACE_CONFLICT,
+					("shared_region: %p: "
+					 "mapping #%d differs\n",
+					 current_thread(), i));
+				shared_region_dump_file_entry(
+					SHARED_REGION_TRACE_INFO,
+					file_entry);
+				shared_region_dump_mappings(
+					SHARED_REGION_TRACE_INFO,
+					mappings, map_cnt, base_offset);
+
 				break;
 			}
 			file_mapping = file_mapping->next;
 			i++;
 		}
 		if(i!=map_cnt) {
+			SHARED_REGION_TRACE(
+				SHARED_REGION_TRACE_CONFLICT,
+				("shared_region: %p: map_shared_file: "
+				 "already mapped with "
+				 "%d mappings instead of %d\n",
+				 current_thread(), i, map_cnt));
+			shared_region_dump_file_entry(
+				SHARED_REGION_TRACE_INFO,
+				file_entry);
+			shared_region_dump_mappings(
+				SHARED_REGION_TRACE_INFO,
+				mappings, map_cnt, base_offset);
+
 			mutex_unlock(&shared_file_header->lock);
 			return KERN_INVALID_ARGUMENT;
 		}
@@ -1249,6 +1490,13 @@ map_shared_file(
 				 * requested address too ?
 				 */
 				ret = KERN_FAILURE;
+				SHARED_REGION_TRACE(
+					SHARED_REGION_TRACE_CONFLICT,
+					("shared_region: %p: "
+					 "map_shared_file: already mapped, "
+					 "would need to slide 0x%llx\n",
+					 current_thread(),
+					 slide));
 			} else {
 				/*
 				 * The file is already mapped at the correct
@@ -1473,7 +1721,7 @@ static load_struct_t  *
 lsf_hash_lookup(
 	queue_head_t			*hash_table,
 	void				*file_object,
-  vm_offset_t                           recognizableOffset,
+	vm_offset_t			recognizableOffset,
 	int				size,
 	boolean_t			regular,
 	boolean_t			alternate,
@@ -1617,6 +1865,7 @@ lsf_remove_regions_mappings(
 
 static load_struct_t *
 lsf_hash_delete(
+	load_struct_t	*target_entry,	/* optional:  NULL if not relevant */
 	void		*file_object,
 	vm_offset_t	base_offset,
 	shared_region_task_mappings_t	sm_info)
@@ -1625,8 +1874,8 @@ lsf_hash_delete(
 	shared_file_info_t	*shared_file_header;
 	load_struct_t		*entry;
 
-	LSF_DEBUG(("lsf_hash_delete(file=%p,base=0x%x,sm_info=%p)\n",
-		   file_object, base_offset, sm_info));
+	LSF_DEBUG(("lsf_hash_delete(target=%p,file=%p,base=0x%x,sm_info=%p)\n",
+		   target_entry, file_object, base_offset, sm_info));
 
 	shared_file_header = (shared_file_info_t *)sm_info->region_mappings;
 
@@ -1638,8 +1887,10 @@ lsf_hash_delete(
 		entry = (load_struct_t *)queue_next(&entry->links)) {
 		if((!(sm_info->self)) || ((shared_region_mapping_t)
 				sm_info->self == entry->regions_instance)) {
-			if ((entry->file_object == (int) file_object)  &&
-				(entry->base_address == base_offset)) {
+			if ((target_entry == NULL ||
+			     entry == target_entry) &&
+			    (entry->file_object == (int) file_object)  &&
+			    (entry->base_address == base_offset)) {
 				queue_remove(bucket, entry, 
 						load_struct_ptr_t, links);
 				LSF_DEBUG(("lsf_hash_delete: found it\n"));
@@ -1800,6 +2051,10 @@ start_over:
 	wiggle_room = base_offset;
 
 	for (i = (signed) map_cnt - 1; i >= 0; i--) {
+		if (mappings[i].sfm_size == 0) {
+			/* nothing to map here... */
+			continue;
+		}
 		if (mappings[i].sfm_init_prot & VM_PROT_COW) {
 			/* copy-on-write mappings are in the data submap */
 			map = data_map;
@@ -1969,6 +2224,7 @@ lsf_map(
 	kern_return_t		kr;
 	int			i;
 	mach_vm_offset_t	original_base_offset;
+	mach_vm_size_t		total_size;
 
 	/* get the VM object from the file's memory object handle */
 	file_object = memory_object_control_to_vm_object(file_control);
@@ -1991,7 +2247,11 @@ restart_after_slide:
 		   map_cnt, file_object,
 		   sm_info, entry));
 	if (entry == NULL) {
-		printf("lsf_map: unable to allocate memory\n");
+		SHARED_REGION_TRACE(
+			SHARED_REGION_TRACE_ERROR,
+			("shared_region: %p: "
+			 "lsf_map: unable to allocate entry\n",
+			 current_thread()));
 		return KERN_NO_SPACE;
 	}
 	shared_file_available_hash_ele--;
@@ -2011,7 +2271,7 @@ restart_after_slide:
 	tptr = &(entry->mappings);
 
 	entry->base_address = base_offset;
-
+	total_size = 0;
 
 	/* establish each requested mapping */
 	for (i = 0; i < map_cnt; i++) {
@@ -2026,8 +2286,20 @@ restart_after_slide:
 			    (((mappings[i].sfm_address + base_offset +
 			       mappings[i].sfm_size - 1)
 			      & GLOBAL_SHARED_SEGMENT_MASK) != 0x10000000)) {
-				lsf_unload(file_object, 
-					entry->base_address, sm_info);
+				SHARED_REGION_TRACE(
+					SHARED_REGION_TRACE_ERROR,
+					("shared_region: %p: lsf_map: "
+					 "RW mapping #%d not in segment",
+					 current_thread(), i));
+				shared_region_dump_mappings(
+					SHARED_REGION_TRACE_ERROR,
+					mappings, map_cnt, base_offset);
+
+				lsf_deallocate(entry,
+					       file_object, 
+					       entry->base_address,
+					       sm_info,
+					       TRUE);
 				return KERN_INVALID_ARGUMENT;
 			}
 		} else {
@@ -2038,15 +2310,41 @@ restart_after_slide:
 			    ((mappings[i].sfm_address + base_offset +
 			      mappings[i].sfm_size - 1)
 			     & GLOBAL_SHARED_SEGMENT_MASK)) {
-				lsf_unload(file_object, 
-					entry->base_address, sm_info);
+				SHARED_REGION_TRACE(
+					SHARED_REGION_TRACE_ERROR,
+					("shared_region: %p: lsf_map: "
+					 "RO mapping #%d not in segment",
+					 current_thread(), i));
+				shared_region_dump_mappings(
+					SHARED_REGION_TRACE_ERROR,
+					mappings, map_cnt, base_offset);
+
+				lsf_deallocate(entry,
+					       file_object, 
+					       entry->base_address,
+					       sm_info,
+					       TRUE);
 				return KERN_INVALID_ARGUMENT;
 			}
 		}
 		if (!(mappings[i].sfm_init_prot & VM_PROT_ZF) &&
 		    ((mappings[i].sfm_file_offset + mappings[i].sfm_size) >
 		     (file_size))) {
-			lsf_unload(file_object, entry->base_address, sm_info);
+			SHARED_REGION_TRACE(
+				SHARED_REGION_TRACE_ERROR,
+				("shared_region: %p: lsf_map: "
+				 "ZF mapping #%d beyond EOF",
+				 current_thread(), i));
+			shared_region_dump_mappings(SHARED_REGION_TRACE_ERROR,
+						    mappings, map_cnt,
+						    base_offset);
+
+
+			lsf_deallocate(entry,
+				       file_object,
+				       entry->base_address,
+				       sm_info,
+				       TRUE);
 			return KERN_INVALID_ARGUMENT;
 		}
 		target_address = entry->base_address +
@@ -2058,7 +2356,13 @@ restart_after_slide:
 		}
 		region_entry = (vm_named_entry_t) region_handle->ip_kobject;
 
-		if (mach_vm_map(region_entry->backing.map,
+		total_size += mappings[i].sfm_size;
+		if (mappings[i].sfm_size == 0) {
+			/* nothing to map... */
+			kr = KERN_SUCCESS;
+		} else {
+			kr = mach_vm_map(
+				region_entry->backing.map,
 				&target_address,
 				vm_map_round_page(mappings[i].sfm_size),
 				0,
@@ -2070,8 +2374,18 @@ restart_after_slide:
 				 (VM_PROT_READ|VM_PROT_EXECUTE)),
 				(mappings[i].sfm_max_prot &
 				 (VM_PROT_READ|VM_PROT_EXECUTE)),
-				VM_INHERIT_DEFAULT) != KERN_SUCCESS) {
-			lsf_unload(file_object, entry->base_address, sm_info);
+				VM_INHERIT_DEFAULT);
+		}
+		if (kr != KERN_SUCCESS) {
+			vm_offset_t old_base_address;
+
+			old_base_address = entry->base_address;
+			lsf_deallocate(entry,
+				       file_object,
+				       entry->base_address,
+				       sm_info,
+				       TRUE);
+			entry = NULL;
 
 			if (slide_p != NULL) {
 				/*
@@ -2080,25 +2394,65 @@ restart_after_slide:
 				 * shared region, so let's try and slide it...
 				 */
 
+				SHARED_REGION_TRACE(
+					SHARED_REGION_TRACE_CONFLICT,
+					("shared_region: %p: lsf_map: "
+					 "mapping #%d failed to map, "
+					 "kr=0x%x, sliding...\n",
+					 current_thread(), i, kr));
+				shared_region_dump_mappings(
+					SHARED_REGION_TRACE_INFO,
+					mappings, map_cnt, base_offset);
+				shared_region_dump_conflict_info(
+					SHARED_REGION_TRACE_CONFLICT,
+					region_entry->backing.map,
+					(old_base_address +
+					 ((mappings[i].sfm_address)
+					  & region_mask)),
+					vm_map_round_page(mappings[i].sfm_size));
+
 				/* lookup an appropriate spot */
 				kr = lsf_slide(map_cnt, mappings,
 					       sm_info, &base_offset);
 				if (kr == KERN_SUCCESS) {
 					/* try and map it there ... */
-					entry->base_address = base_offset;
 					goto restart_after_slide;
 				}
 				/* couldn't slide ... */
 			}
-
+			       
+			SHARED_REGION_TRACE(
+				SHARED_REGION_TRACE_CONFLICT,
+				("shared_region: %p: lsf_map: "
+				 "mapping #%d failed to map, "
+				 "kr=0x%x, no sliding\n",
+				 current_thread(), i, kr));
+			shared_region_dump_mappings(
+				SHARED_REGION_TRACE_INFO,
+				mappings, map_cnt, base_offset);
+			shared_region_dump_conflict_info(
+				SHARED_REGION_TRACE_CONFLICT,
+				region_entry->backing.map,
+				(old_base_address +
+				 ((mappings[i].sfm_address)
+				  & region_mask)),
+				vm_map_round_page(mappings[i].sfm_size));
 			return KERN_FAILURE;
 		}
 
 		/* record this mapping */
 		file_mapping = (loaded_mapping_t *)zalloc(lsf_zone);
 		if (file_mapping == NULL) {
-			lsf_unload(file_object, entry->base_address, sm_info);
-			printf("lsf_map: unable to allocate memory\n");
+			lsf_deallocate(entry,
+				       file_object,
+				       entry->base_address,
+				       sm_info,
+				       TRUE);
+			SHARED_REGION_TRACE(
+				SHARED_REGION_TRACE_ERROR,
+				("shared_region: %p: "
+				 "lsf_map: unable to allocate mapping\n",
+				 current_thread()));
 			return KERN_NO_SPACE;
 		}
 		shared_file_available_hash_ele--;
@@ -2124,14 +2478,20 @@ restart_after_slide:
 		*slide_p = base_offset - original_base_offset;
 	}
 
-	if (sm_info->flags & SHARED_REGION_STANDALONE) {
+	if ((sm_info->flags & SHARED_REGION_STANDALONE) ||
+	    (total_size == 0)) {
 		/*
-		 * We have a standalone and private shared region, so we
+		 * Two cases:
+		 * 1. we have a standalone and private shared region, so we
 		 * don't really need to keep the information about each file
 		 * and each mapping.  Just deallocate it all.
+		 * 2. the total size of the mappings is 0, so nothing at all
+		 * was mapped.  Let's not waste kernel resources to describe
+		 * nothing.
+		 *
 		 * XXX we still have the hash table, though...
 		 */
-		lsf_deallocate(file_object, entry->base_address, sm_info,
+		lsf_deallocate(entry, file_object, entry->base_address, sm_info,
 			       FALSE);
 	}
 
@@ -2150,7 +2510,7 @@ lsf_unload(
 	vm_offset_t	        base_offset,
 	shared_region_task_mappings_t	sm_info)
 {
-	lsf_deallocate(file_object, base_offset, sm_info, TRUE);
+	lsf_deallocate(NULL, file_object, base_offset, sm_info, TRUE);
 }
 
 /*
@@ -2162,6 +2522,7 @@ lsf_unload(
  */
 static void
 lsf_deallocate(
+	load_struct_t		*target_entry,
 	void			*file_object,
 	vm_offset_t		base_offset,
 	shared_region_task_mappings_t	sm_info,
@@ -2170,11 +2531,15 @@ lsf_deallocate(
 	load_struct_t		*entry;
 	loaded_mapping_t	*map_ele;
 	loaded_mapping_t	*back_ptr;
+	kern_return_t		kr;
 
-	LSF_DEBUG(("lsf_deallocate(file=%p,base=0x%x,sm_info=%p,unload=%d)\n",
-		   file_object, base_offset, sm_info, unload));
-	entry = lsf_hash_delete(file_object, base_offset, sm_info);
-	if(entry) {
+	LSF_DEBUG(("lsf_deallocate(target=%p,file=%p,base=0x%x,sm_info=%p,unload=%d)\n",
+		   target_entry, file_object, base_offset, sm_info, unload));
+	entry = lsf_hash_delete(target_entry,
+				file_object,
+				base_offset,
+				sm_info);
+	if (entry) {
 		map_ele = entry->mappings;
 		while(map_ele != NULL) {
 			if (unload) {
@@ -2191,10 +2556,11 @@ lsf_deallocate(
 				region_entry = (vm_named_entry_t)
 					region_handle->ip_kobject;
 				
-				vm_deallocate(region_entry->backing.map,
-					      (entry->base_address + 
-					       map_ele->mapping_offset),
-					      map_ele->size);
+				kr = vm_deallocate(region_entry->backing.map,
+						   (entry->base_address + 
+						    map_ele->mapping_offset),
+						   map_ele->size);
+				assert(kr == KERN_SUCCESS);
 			}
 			back_ptr = map_ele;
 			map_ele = map_ele->next;
@@ -2203,14 +2569,14 @@ lsf_deallocate(
 				   back_ptr, back_ptr->mapping_offset,
 				   back_ptr->size));
 			zfree(lsf_zone, back_ptr);
-		        shared_file_available_hash_ele++;
+			shared_file_available_hash_ele++;
 		}
 		LSF_DEBUG(("lsf_deallocate: freeing entry %p\n", entry));
 		LSF_ALLOC_DEBUG(("lsf_deallocate: entry=%p", entry));
 		zfree(lsf_zone, entry);
 	        shared_file_available_hash_ele++;
 	}
-	LSF_DEBUG(("lsf_unload: done\n"));
+	LSF_DEBUG(("lsf_deallocate: done\n"));
 }
 
 /* integer is from 1 to 100 and represents percent full */

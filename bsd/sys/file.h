@@ -76,9 +76,7 @@
 #include <sys/kernel_types.h>
 #endif
 
-#if __DARWIN_ALIGN_POWER
-#pragma options align=power
-#endif
+#pragma pack(4)
 
 /* for the compat sake;  */
 struct extern_file {
@@ -93,9 +91,7 @@ struct extern_file {
 	caddr_t	f_data;		/* vnode or socket or SHM or semaphore */
 };
 
-#if __DARWIN_ALIGN_POWER
-#pragma options align=reset
-#endif
+#pragma pack()
 
 #ifdef KERNEL
 __BEGIN_DECLS

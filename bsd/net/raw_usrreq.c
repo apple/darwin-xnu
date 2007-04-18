@@ -85,13 +85,9 @@ raw_init()
 {
 	raw_mtx_grp_attr = lck_grp_attr_alloc_init();
 
-	lck_grp_attr_setdefault(raw_mtx_grp_attr);
-
 	raw_mtx_grp = lck_grp_alloc_init("rawcb", raw_mtx_grp_attr);
 
 	raw_mtx_attr = lck_attr_alloc_init();
-
-	lck_attr_setdefault(raw_mtx_attr);
 
 	if ((raw_mtx = lck_mtx_alloc_init(raw_mtx_grp, raw_mtx_attr)) == NULL) {
 		printf("raw_init: can't alloc raw_mtx\n");

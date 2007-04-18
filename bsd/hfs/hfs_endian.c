@@ -33,8 +33,6 @@
  * volume format.
  */
 
-#include <architecture/byte_order.h>
-
 #include "hfs_endian.h"
 #include "hfs_dbg.h"
 #include "hfscommon/headers/BTreesPrivate.h"

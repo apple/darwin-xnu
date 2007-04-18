@@ -714,7 +714,7 @@ in_control(
         */
 		if (ifp->if_flags & IFF_MULTICAST) {
 			struct in_addr addr;
-			struct in_multi *inm;
+			struct in_multi *inm = NULL;
 
 			TAILQ_FOREACH(ifa, &ifp->if_addrhead, ifa_link) 
 				if (ifa->ifa_addr->sa_family == AF_INET)

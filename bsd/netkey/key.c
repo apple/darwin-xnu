@@ -526,7 +526,6 @@ key_init(void)
 	sadb_mutex_grp_attr = lck_grp_attr_alloc_init();
 	sadb_mutex_grp = lck_grp_alloc_init("sadb", sadb_mutex_grp_attr);
 	sadb_mutex_attr = lck_attr_alloc_init();
-	lck_attr_setdefault(sadb_mutex_attr);
 
 	if ((sadb_mutex = lck_mtx_alloc_init(sadb_mutex_grp, sadb_mutex_attr)) == NULL) {
 		printf("key_init: can't alloc sadb_mutex\n");

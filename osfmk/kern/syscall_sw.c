@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -136,7 +136,7 @@ mach_trap_t	mach_trap_table[MACH_TRAP_TABLE_COUNT] = {
 /* 41 */	MACH_TRAP(init_process, 0, NULL, NULL),
 /* 42 */	MACH_TRAP(kern_invalid, 0, NULL, NULL),
 /* 43 */	MACH_TRAP(map_fd, 5, munge_wwwww, munge_ddddd),
-/* 44 */	MACH_TRAP(kern_invalid, 0, NULL, NULL),
+/* 44 */	MACH_TRAP(task_name_for_pid, 3, munge_www, munge_ddd),
 /* 45 */ 	MACH_TRAP(task_for_pid, 3, munge_www, munge_ddd),
 /* 46 */	MACH_TRAP(pid_for_task, 2, munge_ww,munge_dd),
 /* 47 */	MACH_TRAP(kern_invalid, 0, NULL, NULL),
@@ -188,7 +188,7 @@ mach_trap_t	mach_trap_table[MACH_TRAP_TABLE_COUNT] = {
 /* 92 */	MACH_TRAP(mk_timer_destroy_trap, 1, munge_w, munge_d),
 /* 93 */	MACH_TRAP(mk_timer_arm_trap, 3, munge_wl, munge_dd),
 /* 94 */	MACH_TRAP(mk_timer_cancel_trap, 2, munge_ww, munge_dd),		
-/* 95 */	MACH_TRAP(mk_timebase_info_trap, 5, munge_wwwww, munge_ddddd),		
+/* 95 */	MACH_TRAP(kern_invalid, 0, NULL, NULL),		
 /* traps 64 - 95 reserved (debo) */
 /* 96 */	MACH_TRAP(kern_invalid, 0, NULL, NULL),
 /* 97 */	MACH_TRAP(kern_invalid, 0, NULL, NULL),

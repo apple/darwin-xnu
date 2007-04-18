@@ -97,11 +97,9 @@ BTReserveSetup()
 	nr_hashtbl = hashinit(NR_CACHE, M_HFSMNT, &nr_hashmask);
 
 	nr_lck_grp_attr= lck_grp_attr_alloc_init();
-	lck_grp_attr_setstat(nr_lck_grp_attr);
 	nr_lck_grp  = lck_grp_alloc_init("btree_node_reserve", nr_lck_grp_attr);
 
 	nr_lck_attr = lck_attr_alloc_init();
-	lck_attr_setdebug(nr_lck_attr);
 
 	lck_mtx_init(&nr_mutex, nr_lck_grp, nr_lck_attr);
 }

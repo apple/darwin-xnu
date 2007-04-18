@@ -94,7 +94,11 @@ typedef	long long		int64_t;
 #endif
 typedef	unsigned long long	u_int64_t;
 
+#if __LP64__
+typedef int64_t			register_t;
+#else
 typedef int32_t			register_t;
+#endif
 
 #ifndef _INTPTR_T
 #define _INTPTR_T
@@ -108,14 +112,17 @@ typedef unsigned long int	uintptr_t;
 /* These types are used for  reserving the largest possible size. */
 // LP64todo - typedef mach_vm_address_t	user_addr_t;	/* varying length pointers from user space */ 
 // LP64todo - typedef mach_vm_size_t		user_size_t;	/* varying length values from user space (unsigned) */
-typedef u_int32_t		user_addr_t;	
-typedef u_int32_t		user_size_t;	
-typedef int32_t			user_ssize_t;
-typedef int32_t			user_long_t;
-typedef u_int32_t		user_ulong_t;
-typedef int32_t			user_time_t;
+typedef u_int64_t		user_addr_t;	
+typedef u_int64_t		user_size_t;	
+typedef int64_t			user_ssize_t;
+typedef int64_t			user_long_t;
+typedef u_int64_t		user_ulong_t;
+typedef int64_t			user_time_t;
 #define USER_ADDR_NULL	((user_addr_t) 0)
-#define CAST_USER_ADDR_T(a_ptr)   ((user_addr_t)(a_ptr))
+#define CAST_USER_ADDR_T(a_ptr)   ((user_addr_t)((uintptr_t)(a_ptr)))
+
+/* This defines the size of syscall arguments after copying into the kernel: */
+typedef u_int64_t		syscall_arg_t;
 
 #ifndef __offsetof
 #define __offsetof(type, field) ((size_t)(&((type *)0)->field))

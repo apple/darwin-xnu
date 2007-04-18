@@ -37,6 +37,7 @@
 #include <mach-o/reloc.h>
 #if !KERNEL
 #include <mach-o/swap.h>
+#include <libkern/OSByteOrder.h>
 #endif
 
 #if KERNEL
@@ -630,13 +631,13 @@ kld_macho_swap(struct mach_header * mh)
             cmd < ncmds;
             cmd++, seg = (struct segment_command *)(((vm_offset_t)seg) + seg->cmdsize))
     {
-        if (NXSwapLong(LC_SYMTAB) == seg->cmd) {
+        if (OSSwapConstInt32(LC_SYMTAB) == seg->cmd) {
 	    swap_symtab_command((struct symtab_command *) seg, hostOrder);
 	    swap_nlist((struct nlist *) (((vm_offset_t) mh) + ((struct symtab_command *) seg)->symoff),
 		       ((struct symtab_command *) seg)->nsyms, hostOrder);
 	    continue;
 	}
-        if (NXSwapLong(LC_SEGMENT) != seg->cmd) {
+        if (OSSwapConstInt32(LC_SEGMENT) != seg->cmd) {
 	    swap_load_command((struct load_command *) seg, hostOrder);
             continue;
 	}
@@ -750,21 +751,21 @@ static Boolean findBestArch(struct fileRecord *file, const char *pathName)
 	unsigned long i;
 	struct fat_arch *arch;
 
-	fat->nfat_arch = NXSwapBigLongToHost(fat->nfat_arch);
+	fat->nfat_arch = OSSwapBigToHostInt32(fat->nfat_arch);
 	return_if(file->fMapSize < sizeof(struct fat_header)
 				    + fat->nfat_arch * sizeof(struct fat_arch),
 	    false, ("%s is too fat\n", file->fPath));
 
 	arch = (struct fat_arch *) &fat[1];
 	for (i = 0; i < fat->nfat_arch; i++) {
-	    arch[i].cputype    = NXSwapBigLongToHost(arch[i].cputype);
-	    arch[i].cpusubtype = NXSwapBigLongToHost(arch[i].cpusubtype);
-	    arch[i].offset     = NXSwapBigLongToHost(arch[i].offset);
-	    arch[i].size       = NXSwapBigLongToHost(arch[i].size);
-	    arch[i].align      = NXSwapBigLongToHost(arch[i].align);
+	    arch[i].cputype    = OSSwapBigToHostInt32(arch[i].cputype);
+	    arch[i].cpusubtype = OSSwapBigToHostInt32(arch[i].cpusubtype);
+	    arch[i].offset     = OSSwapBigToHostInt32(arch[i].offset);
+	    arch[i].size       = OSSwapBigToHostInt32(arch[i].size);
+	    arch[i].align      = OSSwapBigToHostInt32(arch[i].align);
 	}
 
-	magic = NXSwapBigLongToHost(fat->magic);
+	magic = OSSwapBigToHostInt32(fat->magic);
     }
 
     // Now see if we can find any valid architectures
@@ -1301,7 +1302,7 @@ relocateSection(const struct fileRecord *file, struct sectionRecord *sectionRec)
 	    void * addr = *entry;
 #if !KERNEL
 	    if (file->fSwapped)
-		addr = (void *) NXSwapLong((long) addr);
+		addr = (void *) OSSwapInt32((uint32_t) addr);
 #endif
 	    symbol = findSymbolByAddress(file, addr);
 	}
@@ -1332,7 +1333,7 @@ findSymbolRefAtLocation(const struct fileRecord *file,
 	    void * addr = *loc;
 #if !KERNEL
 	    if (file->fSwapped)
-		addr = (void *) NXSwapLong((long) addr);
+		addr = (void *) OSSwapInt32((uint32_t) addr);
 #endif
 	    result = findSymbolByAddress(file, addr);
 	    if (!result)
@@ -1732,7 +1733,7 @@ static Boolean resolveKernelVTable(struct metaClassRecord *metaClass)
 	void * addr = *curEntry;
 #if !KERNEL
 	if (file->fSwapped)
-	    addr = (void *) NXSwapLong((long) addr);
+	    addr = (void *) OSSwapInt32((uint32_t) addr);
 #endif
 	curPatch->fSymbol = (struct nlist *) 
 	    findSymbolByAddress(file, addr);

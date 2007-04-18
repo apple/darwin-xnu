@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -202,6 +202,11 @@ extern kern_return_t task_for_pid(
 				int pid,
 				mach_port_name_t *t);
 
+extern kern_return_t task_name_for_pid(
+				mach_port_name_t target_tport,
+				int pid,
+				mach_port_name_t *tn);
+
 extern kern_return_t pid_for_task(
 				mach_port_name_t t,
 				int *x);
@@ -223,13 +228,8 @@ extern kern_return_t map_fd(
 #ifdef	XNU_KERNEL_PRIVATE
 
 /* Syscall data translations routines */
-#ifdef __ppc__
 #define	PAD_(t)	(sizeof(uint64_t) <= sizeof(t) \
  		? 0 : sizeof(uint64_t) - sizeof(t))
-#else
-#define	PAD_(t)	(sizeof(register_t) <= sizeof(t) \
- 		? 0 : sizeof(register_t) - sizeof(t))
-#endif
 
 #if BYTE_ORDER == LITTLE_ENDIAN
 #define	PADL_(t)	0
@@ -412,6 +412,14 @@ struct task_for_pid_args {
 extern kern_return_t task_for_pid(
 				struct task_for_pid_args *args);
 
+struct task_name_for_pid_args {
+	PAD_ARG_(mach_port_name_t, target_tport);
+	PAD_ARG_(int, pid);
+	PAD_ARG_(user_addr_t, t);
+};
+extern kern_return_t task_name_for_pid(
+				struct task_name_for_pid_args *args);
+
 struct pid_for_task_args {
 	PAD_ARG_(mach_port_name_t, t);
 	PAD_ARG_(user_addr_t, pid);
@@ -524,17 +532,6 @@ struct mk_timer_cancel_trap_args {
 };
 extern kern_return_t mk_timer_cancel_trap(
 				struct mk_timer_cancel_trap_args *args);
-
-/* no user-level prototype for this one */
-struct mk_timebase_info_trap_args {
-	PAD_ARG_(uint32_t *, delta);
-	PAD_ARG_(uint32_t *, abs_to_ns_numer);
-	PAD_ARG_(uint32_t *, abs_to_ns_denom);
-	PAD_ARG_(uint32_t *, proc_to_abs_numer);
-	PAD_ARG_(uint32_t *, proc_to_abs_denom);
-};
-extern void mk_timebase_info_trap(
-				struct mk_timebase_info_trap_args *args);
 
 /* not published to LP64 clients yet */
 struct iokit_user_client_trap_args {

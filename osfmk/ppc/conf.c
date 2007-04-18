@@ -77,10 +77,10 @@ extern	struct clock_ops	sysclk_ops, calend_ops;
 struct	clock	clock_list[] = {
 
 	/* SYSTEM_CLOCK */
-	{ &sysclk_ops,		0,	0,	0 },
+	{ &sysclk_ops, 0, 0 },
 
 	/* CALENDAR_CLOCK */
-	{ &calend_ops,		0,	0,	0 },
+	{ &calend_ops, 0, 0 },
 };
 int	clock_count = sizeof(clock_list) / sizeof(clock_list[0]);
 

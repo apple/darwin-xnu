@@ -113,6 +113,11 @@ typedef uint32_t		ast_t;
 
 #endif  /* MACHINE_AST */
 
+#define AST_CHUD_URGENT     0x800
+#define AST_CHUD            0x400
+
+#define AST_CHUD_ALL        (AST_CHUD_URGENT|AST_CHUD)
+
 /* Initialize module */
 extern void		ast_init(void);
 

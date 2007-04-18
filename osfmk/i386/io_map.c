@@ -69,9 +69,7 @@ extern vm_offset_t	virtual_avail;
  * Mach VM is running.
  */
 vm_offset_t
-io_map(phys_addr, size)
-	vm_offset_t	phys_addr;
-	vm_size_t	size;
+io_map(vm_offset_t phys_addr, vm_size_t size, unsigned int flags)
 {
 	vm_offset_t	start;
 
@@ -83,19 +81,21 @@ io_map(phys_addr, size)
 	    virtual_avail += round_page(size);
 
 	    (void) pmap_map_bd(start, phys_addr, phys_addr + round_page(size),
-			       VM_PROT_READ|VM_PROT_WRITE);
+			       VM_PROT_READ|VM_PROT_WRITE,
+			       flags);
 	}
 	else {
 	    (void) kmem_alloc_pageable(kernel_map, &start, round_page(size));
 	    (void) pmap_map(start, phys_addr, phys_addr + round_page(size),
-			    VM_PROT_READ|VM_PROT_WRITE);
+			    VM_PROT_READ|VM_PROT_WRITE,
+			    flags);
 	}
 	return (start);
 }
 
 /* just wrap this since io_map handles it */
 
-vm_offset_t io_map_spec(vm_offset_t phys_addr, vm_size_t size)
+vm_offset_t io_map_spec(vm_offset_t phys_addr, vm_size_t size, unsigned int flags)
 {
-  return (io_map(phys_addr, size));
+  return (io_map(phys_addr, size, flags));
 }

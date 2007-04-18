@@ -68,7 +68,6 @@ int CheckReadQueue(sp)		/* (CCBPtr sp) */
     register CCBPtr sp;
 {
     register struct adspcmd *pb;
-    int s;
     unsigned short cnt;
     char eom = 0;
     register gbuf_t *mp;
@@ -78,7 +77,6 @@ int CheckReadQueue(sp)		/* (CCBPtr sp) */
     dPrintf(D_M_ADSP, D_L_TRACE, ("CheckReadQueue: sp=0x%x\n", (unsigned)sp));
     KERNEL_DEBUG(DBG_ADSP_READ, 0, sp, sp->rbuf_mb, sp->rpb, sp->delay);
     trace_mbufs(D_M_ADSP_LOW, "    bCQR m", sp->rbuf_mb);
-    ATDISABLE(s, sp->lock);
 
     while (sp->rData && (pb = sp->rpb)) {		/* have data */
         dPrintf(D_M_ADSP, D_L_TRACE, 
@@ -239,7 +237,6 @@ int CheckReadQueue(sp)		/* (CCBPtr sp) */
 	sp->sendDataAck = 1;
 	sp->callSend = 1;
     }
-    ATENABLE(s, sp->lock);
 
     KERNEL_DEBUG(DBG_ADSP_READ, 0x11, sp, 0, 0, 0);
     trace_mbufs(D_M_ADSP_LOW, "    eCQR m", sp->rbuf_mb);
@@ -263,14 +260,12 @@ int CheckAttn(sp, pb)		/* (CCBPtr sp) */
     register CCBPtr sp;
     register struct adspcmd *pb;
 {
-    int s;
     gbuf_t *mp;
     gref_t *gref;
 	
     dPrintf(D_M_ADSP, D_L_TRACE, 
 	    ("CheckAttn: sp=0x%x, pb=0x%x\n", (unsigned)sp, (unsigned)pb));
 
-    ATDISABLE(s, sp->lock);
     if (mp = sp->attn_mb) {
 
 	/*
@@ -302,7 +297,6 @@ int CheckAttn(sp, pb)		/* (CCBPtr sp) */
     if (mp) {
 	SndMsgUp(gref, mp);
 	}
-    ATENABLE(s, sp->lock);
     return 0;
 }
 
@@ -328,7 +322,6 @@ int adspRead(sp, pb)		/* (DSPPBPtr pb) */
     register struct adspcmd *pb;
 {
     register gbuf_t *mp;
-    int	s;
 
     dPrintf(D_M_ADSP, D_L_TRACE, 
 	    ("adspRead: sp=0x%x, pb=0x%x\n", (unsigned)sp, (unsigned)pb));
@@ -343,19 +336,15 @@ int adspRead(sp, pb)		/* (DSPPBPtr pb) */
     /*
      * It's OK to read on a closed, or closing session
      */
-    ATDISABLE(s, sp->lock);
     if (sp->state != sOpen && sp->state != sClosing && sp->state != sClosed) {
-	ATENABLE(s, sp->lock);
 	pb->ioResult = errState;
 	return EINVAL;
     }
     if (sp->rData && (sp->rpb == 0)) { /* if data, and no queue of pbs */
 	qAddToEnd(&sp->rpb, pb); /* deliver data to user directly */
-	ATENABLE(s, sp->lock);
 	CheckReadQueue(sp);
     } else if ((pb->u.ioParams.reqCount == 0) && (sp->rpb == 0)) {
 	    /* empty read */
-	    ATENABLE(s, sp->lock);
 	    pb->ioResult = 0;
 	    adspioc_ack(0, pb->ioc, pb->gref);
 	    return 0;
@@ -367,9 +356,7 @@ int adspRead(sp, pb)		/* (DSPPBPtr pb) */
 		pb->ioc = 0;
 		pb->mp = mp;
 		qAddToEnd(&sp->rpb, pb); /* and queue it for later */
-		ATENABLE(s, sp->lock);
 	} else {
-		ATENABLE(s, sp->lock);
 		pb->ioResult = errDSPQueueSize;
 		return ENOBUFS;
 	}

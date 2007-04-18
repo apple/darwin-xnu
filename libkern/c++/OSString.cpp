@@ -164,7 +164,7 @@ OSString *OSString::stringWithFormat(const char *format, ...)
 void OSString::free()
 {
     if ( !(flags & kOSStringNoCopy) && string) {
-        kfree((vm_offset_t)string, (vm_size_t)length);
+        kfree(string, (vm_size_t)length);
         ACCUMSIZE(-length);
     }
 

@@ -42,6 +42,32 @@ void IOPMinformeeList::initialize ( void )
     length = 0;
 }
 
+//******************************************************************************
+// getSharedRecursiveLock
+//
+//******************************************************************************
+IORecursiveLock *IOPMinformeeList::getSharedRecursiveLock( void )
+{
+    static IORecursiveLock *sharedListLock = NULL;
+    
+    /* A running system could have 50-60+ instances of IOPMInformeeList. 
+     * They'll share this lock, since list insertion and removal is relatively
+     * rare, and generally tied to major events like device discovery.
+     *
+     * getSharedRecursiveLock() is called from IOStartIOKit to initialize
+     * the sharedListLock before any IOPMinformeeLists are instantiated.
+     *
+     * The IOPMinformeeList class will be around for the lifetime of the system,
+     * we don't worry about freeing this lock.
+     */
+
+    if ( NULL == sharedListLock )
+    {
+        sharedListLock = IORecursiveLockAlloc();
+    }
+    return sharedListLock;
+}
+
 //*********************************************************************************
 // addToList
 //
@@ -50,16 +76,78 @@ void IOPMinformeeList::initialize ( void )
 IOReturn IOPMinformeeList::addToList ( IOPMinformee * newInformee )
 {
     IOPMinformee * nextInformee;
-    nextInformee = firstItem;				// Is new object already in the list?
-    while (  nextInformee != NULL ) {
-        if ( nextInformee->whatObject == newInformee->whatObject ) {
-            return IOPMNoErr;				// yes, just return
+    IORecursiveLock    *listLock = getSharedRecursiveLock();
+
+    if(!listLock)
+        return kIOReturnError;
+
+    IORecursiveLockLock(listLock);
+    nextInformee = firstItem;				
+    
+    // Is new object already in the list?
+    while (  nextInformee != NULL ) 
+    {
+        if ( nextInformee->whatObject == newInformee->whatObject ) 
+        {
+            // object is present; just exit
+            goto unlock_and_exit;
         }
         nextInformee = nextInList(nextInformee);
     }
-    newInformee->nextInList = firstItem;		// add it to list
+
+    // add it to the front of the list
+    newInformee->nextInList = firstItem;
     firstItem = newInformee;
-    length += 1;
+    length++;
+
+unlock_and_exit:
+    IORecursiveLockUnlock(listLock);
+    return IOPMNoErr;
+}
+
+
+//*********************************************************************************
+// removeFromList
+//
+// Find the item in the list, unlink it, and free it.
+//*********************************************************************************
+
+IOReturn IOPMinformeeList::removeFromList ( IOService * theItem )
+{
+    IOPMinformee * item = firstItem;
+    IOPMinformee * temp;
+    IORecursiveLock    *listLock = getSharedRecursiveLock();
+
+    if ( NULL == item ) 
+        return IOPMNoErr;
+    if(!listLock) 
+        return kIOReturnError;
+
+    IORecursiveLockLock( listLock );
+    
+    if ( item->whatObject == theItem ) 
+    {
+        firstItem = item->nextInList;
+        length--;
+        item->release();
+        goto unlock_and_exit;
+    }
+    
+    while ( item->nextInList != NULL ) 
+    {
+        if ( item->nextInList->whatObject == theItem ) 
+        {
+            temp = item->nextInList;
+            item->nextInList = temp->nextInList;
+            length--;
+            temp->release();
+            goto unlock_and_exit;
+        }
+        item = item->nextInList;
+    }
+
+unlock_and_exit:
+    IORecursiveLockUnlock(listLock);
     return IOPMNoErr;
 }
 
@@ -118,38 +206,6 @@ IOPMinformee * IOPMinformeeList::findItem ( IOService * driverOrChild )
     return NULL;
 }
 
-
-//*********************************************************************************
-// removeFromList
-//
-// Find the item in the list, unlink it, and free it.
-//*********************************************************************************
-
-IOReturn IOPMinformeeList::removeFromList ( IOService * theItem )
-{
-    IOPMinformee * item = firstItem;
-    IOPMinformee * temp;
-
-    if ( item != NULL ) {
-        if ( item->whatObject == theItem ) {
-            firstItem = item->nextInList;
-            length--;
-            item->release();
-            return IOPMNoErr;
-        }
-        while ( item->nextInList != NULL ) {
-            if ( item->nextInList->whatObject == theItem ) {
-                temp = item->nextInList;
-                item->nextInList = temp->nextInList;
-                length--;
-                temp->release();
-                return IOPMNoErr;
-            }
-            item = item->nextInList;
-        }
-    }
-    return IOPMNoErr;
-}
 
 
 //*********************************************************************************

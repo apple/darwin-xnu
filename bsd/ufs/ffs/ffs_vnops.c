@@ -92,7 +92,6 @@
 #include <ufs/ffs/ffs_extern.h>
 #if REV_ENDIAN_FS
 #include <ufs/ufs/ufs_byte_order.h>
-#include <architecture/byte_order.h>
 #endif /* REV_ENDIAN_FS */
 
 #define VOPFUNC int (*)(void *)
@@ -173,7 +172,6 @@ struct vnodeopv_entry_desc ffs_specop_entries[] = {
 	{ &vnop_pathconf_desc, (VOPFUNC)spec_pathconf },		/* pathconf */
 	{ &vnop_advlock_desc, (VOPFUNC)err_advlock },		/* advlock */
 	{ &vnop_bwrite_desc, (VOPFUNC)vn_bwrite },
-	{ &vnop_devblocksize_desc, (VOPFUNC)spec_devblocksize },	/* devblocksize */
 	{ &vnop_pagein_desc, (VOPFUNC)ffs_pagein },		/* Pagein */
 	{ &vnop_pageout_desc, (VOPFUNC)ffs_pageout },		/* Pageout */
 	{ &vnop_copyfile_desc, (VOPFUNC)err_copyfile },		/* Copy File */
